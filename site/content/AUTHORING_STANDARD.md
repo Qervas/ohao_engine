@@ -19,12 +19,12 @@ even called. Two earlier drafts of the exemplar cited real, uniquely-resolving
 lines and were still wrong:
 
 - They attributed the deferred pipeline's multi-scatter compensation to the path
-  tracer. In fact `brdf_ggx.glsl`'s `evaluateBRDF` is called only from
-  `forward.frag` / `deferred_lighting.frag`; the path tracer includes
-  `ggx_aniso.glsl` instead and has no such term.
+  tracer. In fact `brdf_ggx.glsl`'s `evaluateBRDF` was then called only from the
+  raster lighting shaders; the path tracer included `ggx_aniso.glsl` instead and
+  had no such term.
 - They called a `(r+1)²/8` remap "dead code" because the *named* function
-  `geometrySchlickGGX` has no callers — while the identical formula is inlined
-  in every NEE branch of all three raygen shaders. Function unused ≠ formula unused.
+  `geometrySchlickGGX` had no callers — while the identical formula was inlined
+  in every NEE branch of the raygen shaders of the time. Function unused ≠ formula unused.
 
 **Therefore, before you claim anything:**
 
@@ -32,10 +32,12 @@ lines and were still wrong:
   fact worth stating, but check for inlined copies of the same math first.
 - For a shader claim, trace the `#include` graph: which stage pulls this file?
   `grep -rn "include.*<file>" shaders/`
-- For "the path tracer does X", know *which* raygen. The default offline
-  `PathTracer` binds `pt_raygen.rgen` (see `ohao/render/rt/path_tracer.hpp`);
-  `pt_raygen_realtime.rgen` and `pt_raygen_offline.rgen` are different profiles
-  and genuinely differ in behaviour.
+- For "the path tracer does X", know *which* shader set. `PathTracerShaderSet`'s
+  default, which `RTOfflineRenderer` uses, is the Slang reference
+  `shaders/rt/path_tracer.slang` (see `ohao/render/rt/path_tracer.hpp`);
+  `RTRealtimeRenderer` binds the GLSL `pt_raygen_realtime.rgen` with
+  `pt_closesthit`/`pt_anyhit`/`pt_miss` (`ohao/render/rt/rt_profile_renderer.hpp`).
+  They are different integrators and genuinely differ in behaviour.
 - If you cannot verify a claim, **do not make it**. A shorter true page beats a
   longer plausible one. Say "not verified here" or omit.
 - Where the code has a real limitation, say so. Honest gaps are the most
@@ -108,7 +110,7 @@ Body constructs:
 
 - The substring must appear **exactly once** in that file, or the build fails.
   Extend the substring to disambiguate — never hand-write a line number.
-- Path is relative to repo root: `shaders/rt/pt_raygen.rgen`, `ohao/...`.
+- Path is relative to repo root: `shaders/rt/path_tracer.slang`, `ohao/...`.
 - Cite the line your sentence is *about*. Put the citation right after the
   sentence it supports.
 - Do not cite a line you have not read in context.

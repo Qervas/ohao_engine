@@ -80,14 +80,15 @@ copy reached the CPU three `render()` calls later, and these loops ran
 `samples + 3` frames to land on the right one.
 
 What accumulates is not the push-constant sample index. `pc.params.z` carries
-`m_sampleIndex`, which seeds the sampler and nothing else. The accumulation
+`m_sampleIndex`, which seeds the random numbers (and, in accumulate mode, weighs
+the denoiser AOVs' running mean). The accumulation
 weight is `pc.control.y`, holding `m_historyFrameCount`, and the running sample
 count lives in the alpha channel of the accumulation image, incremented by the
 raygen itself. The two counters advance together at the bottom of every
 dispatch, which is why the distinction stays invisible until something resets
 one of them.
 
-{{cite shaders/rt/pt_raygen.rgen "imageStore(accumBuffer, pixel, vec4(acc, count));"}}
+{{cite shaders/rt/path_tracer.slang "accumBuffer[pixel] = float4(acc, count);"}}
 
 Take `DenoiseMode::None` for the moment. Call $k$ (zero-based) leaves an image
 carrying $k+1$ accumulated samples. With $N$ `render()` calls and the last one
@@ -123,7 +124,7 @@ mean of every sample so far.
 
 Accumulation splits the set along a different seam. `Atrous` and `DLSSRR` are
 flagged `wants_fresh_sample`: the host forces `pc.control.y = 0` every frame,
-the raygen takes its no-history branch, and the accumulation image is stored
+the raygen skips its history read, and the accumulation image is stored
 with `count = 1.0` forever. Those denoisers own temporal accumulation
 themselves, so handing them a converged image would double-filter it.
 
@@ -131,7 +132,7 @@ themselves, so handing them a converged image would double-filter it.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = freshSample ? 0u : m_historyFrameCount;"}}
 
-{{cite shaders/rt/pt_raygen.rgen "if (historyFrameCount == 0u) {"}}
+{{cite shaders/rt/path_tracer.slang "float count = 1.0;"}}
 
 So under `None` and under `OIDN`, the shipped offline default, the saved frame
 holds exactly `samples` samples. Under `Atrous` or `DLSSRR` the saved PNG is

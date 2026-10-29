@@ -61,8 +61,8 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">addSimulate(&quot;fly_controller&quot;, [](World&amp; w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); });</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world.cpp#L58" target="_blank" rel="noopener">ohao/ecs/world.cpp:58</a></div>
 <p>No renderer reads the basis through these accessors either — it round-trips through the view matrix. `glm::lookAt` packs the three axes into the rotation block:</p>
 <div class="citation-chip"><code class="citation-code">viewMatrix = glm::lookAt(position, position + front, up);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L41" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:41</a></div>
-<p>and the path tracer&#x27;s raygen pulls them straight back out of the inverse, column by column, to build the pinhole ray:</p>
-<div class="citation-chip"><code class="citation-code">vec3 fwd = -vec3(pc.invView[2]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L161" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:161</a></div>
+<p>and the path tracer&#x27;s raygen (`rt/path_tracer.slang` for the reference, the GLSL `pt_raygen_realtime.rgen` for the realtime profile) pulls them straight back out of the inverse, column by column, to build the pinhole ray:</p>
+<div class="citation-chip"><code class="citation-code">const float3 fwd = -pc.invView[2].xyz;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L464" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:464</a></div>
 <p>So the accessors are a gameplay convenience; the vectors they expose are what the renderer actually consumes.</p>
 </div>
 <div class="section-rule"><h2 id="two-projections-from-one-camera">Two projections from one camera</h2></div>
@@ -87,8 +87,8 @@ $$</div>
 <div class="math-block">$$
 P_{22} = \frac{1}{\tan(\phi/2)} \quad\Longrightarrow\quad \left(P^{-1}\right)_{22} = \tan(\phi/2)
 $$</div>
-<p>GLSL addresses that same element as the 0-indexed `[1][1]` of a column-major `mat4`, and that is the one the raygen reads. $P_{11}$, and the aspect baked into it, is never touched:</p>
-<div class="citation-chip"><code class="citation-code">float tanFovY = abs(pc.invProj[1][1]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L166" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:166</a></div>
+<p>The push constants carry the matrix as its four columns, so that element is the `.y` of the 0-indexed column `[1]`, and that is the one the reference raygen reads (the realtime GLSL raygen reads the same element as `invProj[1][1]` of a `mat4`). $P_{11}$, and the aspect baked into it, is never touched:</p>
+<div class="citation-chip"><code class="citation-code">const float tanY = abs(pc.invProj[1].y);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L467" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:467</a></div>
 </div>
 <div class="section-rule"><h2 id="the-near-plane-is-twice-what-it-says">The near plane is twice what it says</h2></div>
 <div class="prose reveal">
@@ -97,7 +97,7 @@ $$</div>
 z_{\text{eye}} = \frac{2fn}{f+n}
 $$</div>
 <p>the harmonic mean of the near and far distances — with the camera&#x27;s permanent $n = 0.1$, $f = 100$ that is 0.1998. The GBuffer pipeline runs with depth clamping off, so that slab is clipped rather than flattened:</p>
-<div class="citation-chip"><code class="citation-code">rasterizer.depthClampEnable = VK_FALSE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L766" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:766</a></div>
+<div class="citation-chip"><code class="citation-code">rasterizer.depthClampEnable = VK_FALSE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L775" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:775</a></div>
 <p>The deferred pipeline&#x27;s effective near plane is therefore twice its nominal one, and the depth buffer only ever receives the outer half of GL&#x27;s depth mapping. CSM escapes: it is the single raster pipeline in the engine that enables depth clamp, so its slab is flattened rather than clipped:</p>
 <div class="citation-chip"><code class="citation-code">rasterizer.depthClampEnable = VK_TRUE; // Clamp depth to [0, 1]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L442" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:442</a></div>
 <p>Worse, the scalars travelling beside the matrix disagree with it. `renderDeferred` announces a 0.1–1000 range while handing over a matrix that ends at 100:</p>
@@ -121,7 +121,7 @@ $$</div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/camera/camera.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/world.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>

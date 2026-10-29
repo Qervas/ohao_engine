@@ -8,17 +8,17 @@ figures: [deferred-sky-composite-order]
 
 ## Pixels no light touched
 
-Of the GBuffer's four colour clears only two are all-zero — position/metallic and velocity. The octahedral-normal target clears to mid-grey and the albedo target clears its AO channel to 1.0, so "the GBuffer starts black" is not true of the attachments as a whole.
+Of the GBuffer's seven colour clears, five are all-zero — position/metallic, velocity, emission and OpenPBR's two targets (specular, base). The octahedral-normal target clears to mid-grey and the albedo target clears its AO channel to 1.0, so "the GBuffer starts black" is not true of the attachments as a whole.
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[1].color"}}
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[2].color"}}
 
-What fills an uncovered pixel is one early-out in deferred lighting, gated on the position target alone: zero RGB *and* zero alpha. It fires above the lines that unpack albedo, normal and roughness, so the values those targets were cleared to are never read. With an environment bound (IBL, flag bit 0) it writes the environment along the view ray, level 0 of the prefiltered image (the source itself), times its intensity: what the path tracer's camera rays see when they miss. Without one it writes black.
+What fills an uncovered pixel is one early-out in deferred lighting, gated on the position target alone: zero RGB *and* zero alpha. It fires above the lines that unpack albedo, normal, roughness and OpenPBR's specular and base targets, so the values those targets were cleared to are never read. With an environment bound (IBL, flag bit 0) it writes the environment along the view ray, level 0 of the prefiltered image (the source itself), times its intensity: what the path tracer's camera rays see when they miss. Without one it writes black.
 
-{{cite shaders/core/deferred_lighting.frag "if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {"}}
+{{cite shaders/core/deferred_lighting.slang "if (all(g0 == float4(0.0)))"}}
 
-{{cite shaders/core/deferred_lighting.frag "outColor = vec4(pc.envIntensity * textureLod(envPrefiltered, equirectUV(viewDir), 0.0).rgb, 1.0);"}}
+{{cite shaders/core/deferred_lighting.slang "o.color = float4(pc.envIntensity * envPrefiltered.SampleLevel(equirectUV(viewDir), 0.0).rgb, 1.0);"}}
 
 The sky pass runs only in a scene without an environment, so the procedural sky never stands in front of an HDRI that lights the scene:
 

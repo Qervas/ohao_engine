@@ -163,11 +163,16 @@ resolution, so post-processing always reads the lighting output:
 
 The sky still comes first. It draws into the lighting image, and SSS's blur
 and SSR's reflections should see what it drew: an SSS pass recorded before the sky
-would blur skin edges against a black background, and SSR would reflect none. Since
-`deferred_lighting.frag` sets `outColor = vec4(0.0)` wherever the GBuffer position
-sample is exactly zero, and `sky.frag` fills whatever the GBuffer left at far depth
-(it discards every depth below the cleared 1.0), the sky pass is the whole sky, and until it runs the
-background those taps and hits would read is black. The sky writes through a render pass as a colour
+would blur skin edges against a black background, and SSR would reflect none. Without an environment,
+`core/deferred_lighting.slang` writes zero wherever the GBuffer position sample is exactly
+zero, and `sky.frag` fills whatever the GBuffer left at far depth (it discards every depth
+below the cleared 1.0), so the sky pass is the whole sky, and until it runs the background
+those taps and hits would read is black. With one, lighting writes the environment into
+those pixels itself, as the path tracer's missing camera rays see it:
+
+{{cite shaders/core/deferred_lighting.slang "o.color = float4(pc.envIntensity * envPrefiltered.SampleLevel(equirectUV(viewDir), 0.0).rgb, 1.0);"}}
+
+ The sky writes through a render pass as a colour
 attachment, which no compute read is ordered against, so when it ran a memory
 barrier from colour-attachment output to the compute and fragment stages comes
 before SSS:

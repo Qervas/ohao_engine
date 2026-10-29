@@ -151,15 +151,14 @@ surface that looks like a deliberate material.
 
 Black is the roughness/metallic default, and `gbuffer.frag` multiplies the sampled
 channels into the scalar parameters, so a silently-defaulted rough-metal map drives
-`ao`, `roughness` and `metallic` to zero on three consecutive lines. The roughness
-floor two lines further down clamps that back to `0.04`:
+`roughness` and `metallic` to zero. The G-buffer stores the roughness as authored;
+OpenPBR's module holds it at its floor (`kMinSpecularRoughness`, 0.01) when it shades:
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "roughness *= rm.g;  // G channel = Roughness"}}
-{{cite shaders/includes/scene/gbuffer_body.glsl "roughness = max(roughness, 0.04);"}}
+{{cite shaders/material/openpbr.slang "static const float kMinSpecularRoughness = 0.01;"}}
 
-The result is not a fully occluded dielectric but a fully occluded *near-mirror* — the
-zeroed roughness is the more visible artifact of the two, and it is on the adjacent
-source line. **Nothing in the tree defends against it.** The defence is available —
+The result is a *mirror* dielectric where the artist painted a rough one — the zeroed
+roughness is the visible artifact. **Nothing in the tree defends against it.** The defence is available —
 `BindlessTextureHandle` defaults its `operator<=>`, so a caller can compare a
 returned handle against `getDefaultWhiteTexture()` and refuse it. No caller does.
 
@@ -247,17 +246,21 @@ every other slot gets the manager's default one.
 
 The path tracer writes those into binding 12 of its own descriptor set. The binding
 is sized to the manager's capacity — `ensureRTRenderer` passes `getMaxTextures()` —
-and is a variable-count, update-after-bind array, with every element below the
-capacity written (entries past the table's views repeat view 0) so no index reads an
-unwritten descriptor.
+and is a partially bound, update-after-bind array visible to the raygen as well as the
+hit and miss stages (the reference path tracer's raygen samples the environment
+itself), with every element below the capacity written (entries past the table's views
+repeat view 0) so no index reads an unwritten descriptor.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "slot->setBindlessCapacity(m_textureManager ? m_textureManager->getMaxTextures()"}}
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,"}}
 {{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 12) uniform sampler2D textures[];"}}
+{{cite shaders/rt/path_tracer.slang "[[vk::binding(12, 0)]] Sampler2D textures[4096];"}}
 
 Both pipelines use `nonuniformEXT` and the same `0xFFFFFFFF` sentinel, and — unlike a
 separate layered image — they share one slot numbering: an index meaning "brick
-albedo" in the G-buffer means the same image in closest-hit. What differs is the
+albedo" in the G-buffer means the same image in either path tracer's closest hit (the
+Slang reference spells the qualifier `NonUniformResourceIndex` and treats any index at
+or past 4096 as none). What differs is the
 descriptor, not the identity. Two sets name the same images, and a texture upload
 reaches the path tracer only when the next RT frame rebuilds the array.
 

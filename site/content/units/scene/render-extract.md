@@ -88,6 +88,6 @@ The skip is final until something re-dirties the entity. Step 4 clears `RenderDi
 ## Contracts
 
 - The `RenderScene` must outlive the `World`. Destroying the world releases its slots and clears its lights through the scene. `VulkanRenderer::shutdown()` only shuts the scene down; the object lives, inert, until the renderer is destroyed, so a world released after an explicit shutdown is safe.
-- `MeshRenderer`, `Light`, `EmissiveProxyLight` and `GiMaterialLegacy` are seen only through EnTT signals: write them with `patch` or `replace` (or emplace/remove them). A write through `get<>()` never reaches the scene.
+- `MeshRenderer`, `Light` and `EmissiveProxyLight` are seen only through EnTT signals: write them with `patch` or `replace` (or emplace/remove them). A write through `get<>()` never reaches the scene.
 - At most one extract per world. One `RenderScene` may serve several worlds, but each world's light rebuild replaces the whole light list, so only one of them can own lights.
 - A slot is released at the start of the next `render_extract` run, not when the entity is destroyed. A frame rendered between the two still draws and traces the instance at its last pose; the `LiveHost` loop destroys in its hooks (or a request it pumped) and runs `World::sync()` before every `render()`, so it never renders in that gap.

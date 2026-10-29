@@ -140,7 +140,7 @@ read by nothing in the shipping shader.
 
 `GLM_FORCE_DEPTH_ZERO_TO_ONE` is not defined anywhere in this repository, so GLM's
 default projections are OpenGL-convention, with NDC depth in $[-1, 1]$. Vulkan clips
-against $0 \le z_c \le w_c$ and the lighting shader rejects any `projCoords.z` below 0
+against $0 \le z_c \le w_c$ and the lighting shader treats any `proj` coordinate below 0
 as "lit", so a $[-1, 1]$ light projection would leave the near half of every cascade —
 the half holding the occluders closest to the light — unshadowed. The light's
 orthographic projection therefore names the Vulkan range explicitly, with GLM's `_ZO`
@@ -165,16 +165,16 @@ There is no CSM sampling include: what runs is written directly into the deferre
 lighting shader, which defines its own `selectCascade` over the live UBO and its own
 3×3 box PCF over nine taps — no Poisson disk, no normal bias, no cascade blend:
 
-{{cite shaders/core/deferred_lighting.frag "float calculateShadowCSM(vec3 fragPos, float viewDepth) {"}}
+{{cite shaders/core/deferred_lighting.slang "float shadowCSM(float3 p, float viewDepth)"}}
 
 Each tap is a hardware depth comparison. The cascade array is declared
-`sampler2DArrayShadow` and bound with the pass's comparison sampler
-(`compareEnable`, `VK_COMPARE_OP_LESS_OR_EQUAL`, white border), so `texture()` with a
-`vec4(uv, layer, reference)` returns 1 where the biased reference depth is at or in
-front of the stored one; with linear filtering the driver may blend the four
+`Sampler2DArrayShadow` and bound with the pass's comparison sampler
+(`compareEnable`, `VK_COMPARE_OP_LESS_OR_EQUAL`, white border), so `SampleCmpLevelZero`
+with `(uv, layer)` and the reference depth returns 1 where the biased reference depth is
+at or in front of the stored one; with linear filtering the driver may blend the four
 comparisons of a tap.
 
-{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;"}}
+{{cite shaders/core/deferred_lighting.slang "[[vk::binding(6, 0)]] Sampler2DArrayShadow shadowMap;"}}
 
 {{cite ohao/render/deferred/csm_pass.cpp "samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;"}}
 
@@ -233,7 +233,7 @@ cascades the plain loop is the portable choice.
 
 The same matrices also go to the *sampling* side: `execute` memcpys `m_cascadeData`
 into the persistently-mapped cascade UBO, and `DeferredRenderer` hands that buffer
-to the lighting pass, where binding 12 feeds `calculateShadowCSM`.
+to the lighting pass, where binding 12 feeds `shadowCSM`.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "setCascadeBuffer(m_csmPass->getCascadeBuffer())"}}
 

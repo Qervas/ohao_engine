@@ -1,7 +1,7 @@
 ---
 module: path-tracer
 id: bindings
-title: Descriptor map 0–37
+title: Descriptor map 0–38
 standard: v2
 ---
 
@@ -12,17 +12,25 @@ any-hit and miss all execute inside a single `vkCmdTraceRaysKHR` against whateve
 was bound before it. OHAO takes that literally. The RT pipeline layout declares
 one descriptor set and one push-constant range, so every buffer, image and
 acceleration structure any RT stage can reach must occupy a numbered slot in
-set 0. The set runs from binding 0 to binding 37: the path tracer's own images
-and history at 0–35, and the two `RenderScene` tables the hit shaders add at 36
-and 37.
+set 0. The set runs from binding 0 to binding 38: the path tracer's own images
+and history at 0–35, the two `RenderScene` tables the hit shaders add at 36
+and 37, and OpenPBR's energy tables at 38.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "layoutInfo.setLayoutCount = 1;"}}
 
 `createDescriptorResources` builds the layout once at init, collecting bindings
-and their flags in two parallel vectors, and ends the list with the instance
-tables:
+and their flags in two parallel vectors, and ends the list with the energy
+tables the reference path tracer's raygen reads:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(37, BUFFER, HIT);   // instance material refs"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(38, BUFFER, RGEN);  // OpenPBR's energy tables (rt/path_tracer.slang)"}}
+
+That buffer is a `render::OpenPBRTablesBuffer`, created once at init and written from the
+generated `render::kOpenPBRTables` (the Kulla-Conty and dielectric albedo tables
+`material/openpbr.slang` looks up); it never changes:
+
+{{cite ohao/render/rt/path_tracer.cpp "if (!m_openpbrTables.create(m_device, m_physicalDevice)) {"}}
+
+{{cite ohao/render/material/openpbr_tables_buffer.cpp "std::memcpy(mapped, kOpenPBRTables, bytes);"}}
 
 The set is duplicated per frame in flight. The pool holds `MAX_FRAMES_IN_FLIGHT`
 sets, and `render()` takes the one for the frame slot it was given — a slot whose
@@ -48,17 +56,19 @@ instance, mesh, slot and material chain from inside the any-hit shader:
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "constexpr VkShaderStageFlags HIT = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;"}}
 
-The bindless texture array is visible to closest-hit, any-hit and miss — miss
-samples the equirectangular environment map out of the same array — and
-deliberately not to raygen:
+The bindless texture array is visible to closest-hit, any-hit, miss and raygen.
+The hit shaders sample material textures from it; the realtime miss shader
+samples the equirectangular environment map out of the same array; and the
+reference raygen (`rt/path_tracer.slang`) samples the environment itself, both
+for a missed ray and for an environment light sample, because its miss shader
+only reports the miss:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,"}}
+{{cite shaders/rt/path_tracer.slang "return textures[NonUniformResourceIndex(tex)].SampleLevel(uv, 0.0).rgb * envScale();"}}
 
-So none of the path tracer's raygen shaders can sample a texture: not one of
-`pt_raygen.rgen`, `pt_raygen_offline.rgen` or `pt_raygen_realtime.rgen` declares
-a `sampler2D`, and shaded colour has to arrive through the ray payload. That is a
-property of *this* layout, not of the engine — the deferred pipeline's RT passes
-have no raygen at all. RT GI and RT shadows are compute passes of inline ray
+Surface colour still arrives through the ray payload: no raygen samples a
+material texture. That is a property of *this* layout, not of the engine — the
+deferred pipeline's RT passes have no raygen at all. RT GI and RT shadows are compute passes of inline ray
 queries, each with its own set 0, and they read the GBuffer straight from the
 thread that launches the rays:
 
@@ -93,6 +103,12 @@ room for the set's other resources. The shaders learn the final size through a
 specialization constant, so an index at or past it reads as "no texture":
 
 {{cite shaders/rt/pt_closesthit.rchit "layout(constant_id = 1) const uint OHAO_BINDLESS_COUNT = 4096u;"}}
+
+The Slang reference declares the array at a fixed 4096 instead (Slang decorates
+an unsized resource array with a stride spirv-val rejects) and treats an index
+at or past 4096 as "no texture":
+
+{{cite shaders/rt/path_tracer.slang "[[vk::binding(12, 0)]] Sampler2D textures[4096];"}}
 
 Two descriptor binding flags apply to binding 12.
 
@@ -151,13 +167,13 @@ and writes the header on the first frame:
 {{cite ohao/render/scene/light_table.cpp "m_dirty = true;   // the first frame writes the header"}}
 
 A scene with no lights therefore binds a valid buffer whose header says
-`count = 0`. All three path-tracer raygens and the miss shader statically read
-binding 11; in the raygens the guard `if (lightBuf.lightCount > 0u)` is itself a
-load from that buffer, and the miss shader reads `lightBuf.envMapTexIdx` with no
-guard at all, which is why the header's env slot holds `0xFFFFFFFF` ("none") rather
-than uninitialised memory:
+`count = 0`. Both raygens and the realtime miss shader statically read
+binding 11: the light count and the environment's texture index are its first
+two header words, read with no guard, which is why the header's env slot holds
+`0xFFFFFFFF` ("none") rather than uninitialised memory:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "layout(set = 0, binding = 11) readonly buffer LightBuffer {"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "layout(set = 0, binding = 11) readonly buffer LightBuffer {"}}
+{{cite shaders/rt/path_tracer.slang "uint lightCount() { return asuint(lightData[0].x); }"}}
 
 This is exercised, not hypothetical: `env_demo --lighting=none` builds a scene
 with no light entities and leans on the HDR environment alone.
@@ -168,13 +184,13 @@ The writes are packed rather than sparse: a running `writeCount` skips the
 optional bindings (12 when the table is empty, 17 and 18 without CDF buffers), so
 the write index and the binding number diverge. The array is sized three entries
 above the maximum the function can emit — five unconditional writes for bindings
-0, 1, 2, 6 and 7, the eight `RenderScene` buffers (4, 5, 8, 9, 10, 11, 36, 37) in
-a loop, the three optional ones, fourteen more for 13–16 and 19–28, and seven for
-29–35 — thirty-seven writes in a 40-entry array:
+0, 1, 2, 6 and 7, nine buffers (4, 5, 8, 9, 10, 11, 36, 37 and the energy tables
+at 38) in a loop, the three optional ones, fourteen more for 13–16 and 19–28, and
+seven for 29–35 — thirty-eight writes in a 41-entry array:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[40] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[41] = {};"}}
 
-Add four more unconditional bindings to that function without raising the 40, and
+Add four more unconditional bindings to that function without raising the 41, and
 the last write lands past the end of a stack array. Nothing checks `writeCount`
 against the array size.
 
@@ -206,7 +222,7 @@ documentation — Vulkan requires it to match the format of the bound image view
 The layout file no longer annotates the formats beside the image bindings, so the
 authority is the image creation code and the shaders, and they have to agree
 with each other. Binding 21 is the roughness AOV; the image is created
-`R16_SFLOAT`, and all three raygen variants declare it `r16f`:
+`R16_SFLOAT`, and both raygens declare it so (`r16f`):
 
 {{cite ohao/render/rt/path_tracer_images.cpp "imageInfo.format = VK_FORMAT_R16_SFLOAT;"}}
 
@@ -223,14 +239,14 @@ mode, so the packed normal-roughness AOV can be handed to REBLUR without a repac
 {{cite external/cmake/nrd.cmake "set(NRD_NORMAL_ENCODING"}}
 
 Shader and image agree in both cases, so nothing renders wrong today; what is
-unsafe is adding binding 38 and trusting a qualifier copied from a neighbour.
+unsafe is adding binding 39 and trusting a qualifier copied from a neighbour.
 
 ## The pool has no slack either
 
-The pool reserves, per frame-slot set, 26 storage images and 10 storage buffers,
+The pool reserves, per frame-slot set, 26 storage images and 11 storage buffers,
 which is exactly what the layout consumes: 19 output, AOV and history images (the
 accumulation pair among them), the six reservoir planes and the hit-distance guide;
-and the seven scene tables, the light buffer and the two CDFs.
+and the seven scene tables, the light buffer, the two CDFs and the energy tables.
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},"}}
 
@@ -255,32 +271,32 @@ The engine ships two RT profiles and no more — the enum has `Realtime` and
 {{cite ohao/render/rt/rt_settings.hpp "enum class RTRenderProfile {"}}
 
 They are two separate `PathTracer` instances of the same class, and they differ in
-more than the raygen: bounce count, sampler, firefly clamp, internal denoise,
+more than the shaders: bounce count, sampler, firefly clamp, internal denoise,
 external denoiser and denoise mode are all set per profile.
 
 {{cite ohao/render/rt/rt_settings.hpp ".samplerType = SamplerType::PCG,"}}
 
 The descriptor code is the one thing they do not differ in: neither
 `createDescriptorResources` nor the per-frame write function branches on the
-profile. That is what the 0–37 union buys. A third raygen file,
-`pt_raygen.rgen`, survives as the struct default in `PathTracerShaderSet`,
+profile. That is what the 0–38 union buys. The offline profile takes
+`PathTracerShaderSet`'s default, the Slang reference with its four named entry
+points, and the realtime profile names its GLSL files:
 
-{{cite ohao/render/rt/path_tracer.hpp "raygenSpv{"}}
-
-but both profile classes pass an explicit shader set to the base constructor, so
-nothing in a shipping path binds it:
-
+{{cite ohao/render/rt/path_tracer.hpp "rt_path_tracer.slang.raygen.spv"}}
 {{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
+
+Both are built against the one layout: the GLSL set never reads 38, the Slang set
+never reads 13–16 or 29–35.
 
 :::why
 One layout for both profiles, rather than one per profile. Per-profile layouts
 would keep each set minimal and make "declared but never written" impossible to
 express — the realtime set would carry 29–35 and the offline set, whose raygen
-does not declare them, would not — at the cost of two descriptor code paths, two
+does not declare them, would carry 38 instead — at the cost of two descriptor code paths, two
 pools, and two per-frame write functions to keep in step. The union buys exactly
 one property: the host descriptor code never has to know which profile it is
-serving, so adding a profile is a subclass plus a raygen, not a third descriptor
-path. Everything this page keeps running into — a texture array sized to the whole
+serving, so adding a profile is a subclass plus a shader set, not a third
+descriptor path. Everything this page keeps running into — a texture array sized to the whole
 table whatever the scene holds, seven realtime-only bindings written every frame for
 a profile that never reads them, a variable-count flag stranded in the middle of
 the set — is the bill for that property.
@@ -297,7 +313,7 @@ forced the writes in.
 
 - The layout's `UPDATE_AFTER_BIND_POOL` flag and the pool's `UPDATE_AFTER_BIND` flag must be set together, but dropping one is not symmetrical with dropping the other: without the pool flag, `vkAllocateDescriptorSets` is the invalid call; without the layout flag, `vkCreateDescriptorSetLayout` already is, because binding 12 carries `UPDATE_AFTER_BIND_BIT`. Only binding 12 uses the capability.
 - Every `layout(set = 0, binding = N)` across the four RT stages must match the number *and* the descriptor type in `createDescriptorResources`, and for storage images the format qualifier must match the view format.
-- Bindings 4, 5, 8, 9, 10, 36 and 37 are hit-stage only (closest-hit and any-hit), and 12 excludes raygen. Reading them from the wrong stage is a layout mismatch at pipeline creation, not a compile error in the shader.
-- Binding 12's size is a specialization constant on miss, closest-hit and any-hit as well as a layout count. The two must come from the same `bindlessCapacity()`; a shader built with a larger constant than the layout would index past the array.
+- Bindings 4, 5, 8, 9, 10, 36 and 37 are hit-stage only (closest-hit and any-hit), and 38 is raygen only. Reading them from the wrong stage is a layout mismatch at pipeline creation, not a compile error in the shader.
+- Binding 12's size is a specialization constant on the GLSL miss, closest-hit and any-hit as well as a layout count; the two must come from the same `bindlessCapacity()`. The Slang reference declares a fixed 4096, so the layout's count must be at least that or its shaders index past the array.
 - Binding 11 is always backed: `LightTable` owns the buffer and writes a header with `count = 0` when there are no lights. Bindings 17 and 18 are backed by one-float dummies when there is no environment map.
 - There is one descriptor set per frame in flight (`MAX_FRAMES_IN_FLIGHT = 3`). `render()` writes only the set of the slot it is given, after that slot's fence wait, so the writes never touch a set a pending submission reads. Every binding except 12 must be written in every set, the realtime-only 29–35 included.

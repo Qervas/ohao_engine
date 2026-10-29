@@ -37,9 +37,10 @@ and its term in the `&&` chain is dead.
 
 One number in the pipeline create-info is worth pausing on. It declares a maximum
 ray recursion depth of two, with a comment that path tracing "needs bounce
-recursion" — but the bounce loop in every raygen variant is iterative, and no
-closest-hit, any-hit or miss shader in `shaders/rt/` calls `traceRayEXT`. Every ray
-is launched from the raygen, so the pipeline never recurses past depth one.
+recursion" — but the bounce loop in both raygens is iterative, and no
+closest-hit, any-hit or miss shader in `shaders/rt/` traces a ray (`traceRayEXT` in
+GLSL, `TraceRay` in Slang). Every ray is launched from the raygen, so the pipeline
+never recurses past depth one.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "pipelineInfo.maxPipelineRayRecursionDepth = 2;"}}
 
@@ -105,12 +106,12 @@ backend's real header.
 ## One descriptor set per frame slot, rewritten every frame
 
 There is no descriptor caching: the pool holds one set per frame in flight, and
-`render()` rebuilds up to thirty-seven writes from scratch into the set of the frame
+`render()` rebuilds up to thirty-eight writes from scratch into the set of the frame
 slot it is given before every trace. The array is sized with three entries of slack
 above the worst case, so adding more than three unconditional bindings without
 growing it overruns a stack buffer.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[40] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[41] = {};"}}
 
 The scene bindings are not owned here. `setSceneBuffers` copies the handles the
 `RenderScene` currently exposes — TLAS, arenas, tables, instance buffers and the
@@ -129,7 +130,7 @@ they read their own sets. The write lands on a set whose last user has completed
 
 {{cite ohao/render/frame/frame_resources.hpp "waitForFrame(currentFrame) - blocks until frame N-3 completes"}}
 
-Of the 37 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
+Of the 39 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
 that per-slot ordering. The one place the ordering does not reach is a buffer the
 set *points at*: a handle that `RenderScene` replaces mid-flight stays alive in its
 retire queue for `MAX_FRAMES_IN_FLIGHT` frames, so a set still bound by an earlier
@@ -144,19 +145,22 @@ limit.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);"}}
 
-Only the realtime raygen unpacks the high half and loops on it; the base and offline
-raygens mask it off and trace one path per dispatch. The same push constant means two
-different things depending on which SPIR-V the profile loaded.
+Only the realtime raygen unpacks the high half and loops on it; the reference
+raygen (`rt/path_tracer.slang`) masks it off and traces one path per dispatch. The
+same push constant means two different things depending on which SPIR-V the profile
+loaded.
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "uint samplesPerFrame = max(pc.params.w >> 16, 1u);"}}
 
 ## The jitter is computed on the host
 
-No mode samples at pixel centre. Every raygen already draws its own stochastic
-sub-pixel offset per sample — `getSample2D(dimIdx) - 0.5` — and adds it to the
+No mode samples at pixel centre. Each raygen draws its own stochastic sub-pixel
+offset per sample — the realtime one `getSample2D(dimIdx) - 0.5` about the centre,
+the reference a uniform point of the pixel from its PCG stream — and adds it to the
 primary-ray UV in all denoise modes.
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);"}}
+{{cite shaders/rt/path_tracer.slang "const float2 uv = (float2(pixel) + jit + pc.jitter.xy) / float2(size);"}}
 
 What the host contributes, and only when the mode is NRD or DLSS-RR, is the second
 term in that sum: `pc.jitter.xy`, a *deterministic* offset. Determinism is the whole
@@ -202,7 +206,7 @@ The accumulation is never cleared. It is a ping-pong pair: each frame writes one
 image whole, so its barrier declares the old layout `UNDEFINED` every frame,
 licensing the driver to discard the contents, and reads the other — the previous
 frame's — through a `GENERAL → GENERAL` acquire of that write. Before the pair is
-written once, the history image is `UNDEFINED` too, and the raygens read history
+written once, the history image is `UNDEFINED` too, and both raygens read history
 only once a frame has accumulated.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "accumBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;"}}
@@ -216,7 +220,7 @@ a stale "already transitioned".
 
 ## Seven images only one raygen reads
 
-The descriptor set layout declares 37 bindings, numbered 0–37 with 3 unused. Bindings 29–34 are the ReSTIR GI
+The descriptor set layout declares 39 bindings, 0–38, none unused. Bindings 29–34 are the ReSTIR GI
 reservoir ping-pong and 35 is the DLSS specular hit-distance guide; all seven images
 are created and destroyed with the rest, and only the realtime raygen declares them.
 It cannot store to all of them: 29–31 are the *prev* half of the ping-pong, declared
@@ -254,4 +258,4 @@ because freeing them here would double-free.
 - `setSceneBuffers` must run every frame after `RenderScene::recordUpdates`. A handle cached from an earlier frame may belong to a buffer or TLAS that has since been replaced and retired.
 - `destroy()` waits for device idle, tears down the denoisers, nulls the borrowed CDF handles, and only then destroys the SBT, pipeline, descriptors and images. The destructor calls it, so an object outliving its `VkDevice` is a use-after-free.
 - Switching to or from a DLSS upscaling preset reallocates every render target, so `setRenderSettings()` is safe only between frames — never inside a command buffer.
-- The `PathTracerShaderSet` defaults name `rt_pt_raygen.rgen.spv`, but both shipped profiles pass explicit sets (`..._realtime`, `..._offline`), so the default never loads in-tree.
+- The `PathTracerShaderSet` default is the Slang reference (`rt_path_tracer.slang.<entry>.spv`, entries `raygen`, `closestHit`, `anyHit`, `miss`), which `RTOfflineRenderer` uses; `RTRealtimeRenderer` passes the GLSL set with `main` entries. The pipeline takes each stage's entry name from the set, so a set whose names do not match its SPIR-V fails at pipeline creation.

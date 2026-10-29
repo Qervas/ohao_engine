@@ -23,15 +23,16 @@ byte first), 0 = shadowed, 255 = lit:
 {{cite ohao/render/rt/rt_shadow_technique.cpp "constexpr VkFormat kVisFormat = VK_FORMAT_R32G32_UINT;"}}
 
 The deferred lighting fragment shader reads it once, at binding 14, before its
-light loop — an integer `texelFetch` at the fragment's own pixel, since the image
-is the lighting pass's size:
+light loop — an integer `Load` at the fragment's own pixel, since the image is the
+lighting pass's size — into the `LightVisibility` it hands the shared light loop
+(`includes/lighting/clustered_lights.slang`'s `directLight`):
 
-{{cite shaders/core/deferred_lighting.frag "texelFetch(rtShadowVisibility, ivec2(gl_FragCoord.xy), 0).xy"}}
+{{cite shaders/core/deferred_lighting.slang "vis.rtWords = vis.rt ? rtShadowVisibility.Load(int3(int2(fragCoord.xy), 0)).xy : uint2(0u);"}}
 
 Inside the loop each light picks its own byte by the slot stored in its
-`params.w`, and the BRDF result is multiplied by it over 255.
+`params.w`, and the BSDF result is multiplied by it over 255.
 
-{{cite shaders/core/deferred_lighting.frag "shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);"}}
 
 Binding the view is also what switches the pipeline. `setRTShadowMask` only stores
 it; `execute` zeroes the whole flag word and rebuilds it from the bound views every
@@ -45,10 +46,14 @@ are mutually exclusive by construction rather than by convention.
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "else if (m_shadowMapView != VK_NULL_HANDLE)"}}
 
-The fragment shader repeats the structure, branching on bit 5 first and reaching
-CSM only through the `else`.
+The shaders repeat the structure. The lighting shader samples the cascades only
+when bit 5 is clear and bit 2 is set, and the light loop takes the RT channel when
+`vis.rt` is set and reaches the CSM value only through the `else`, for a directional
+light.
 
-{{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
+{{cite shaders/core/deferred_lighting.slang "vis.directional = !vis.rt && (pc.flags & 4u) != 0u ? shadowCSM(P, viewDepth) : 1.0;"}}
+
+{{cite shaders/includes/lighting/clustered_lights.slang "shadow = vis.directional;"}}
 
 The renderer goes one step further and does not draw the cascades at all in a
 frame that traces: whether RT shadows run is decided before the graph is built, and
@@ -80,11 +85,11 @@ proxy, which sits inside its own mesh.
 
 {{cite ohao/render/scene/light_table.cpp "light.params = glm::vec4(0.0f, 0.0f, 0.0f, kShadowNever);   // inside its own mesh: never shadowed; a point"}}
 
-The lighting shader reads the two cases directly. A negative slot is never
+The shared light loop reads the two cases directly. A negative slot is never
 occluded; any other slot takes its channel when the RT bit is set, and without it
 a directional light gets CSM.
 
-{{cite shaders/core/deferred_lighting.frag "int slot = int(round(light.params.w));"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "const int slot = int(round(light.params.w));"}}
 
 The lights with a channel, in channel order, are `RenderScene::shadowLights()`,
 which the dispatch hands to the deferred renderer each frame (none for a scene
@@ -387,13 +392,15 @@ visibility:
 Inside the integral that would cost nothing — those directions carry zero cosine
 weight anyway. But a skipped sample still counts as a sample, so what reaches the
 channel is a binary horizon *indicator* averaged over the jitter, and the lighting
-pass multiplies it into a BRDF that already applies exactly one
-$\mathbf{n}\cdot\bar\omega$, at the unjittered direction.
+pass multiplies it into OpenPBR's BSDF, whose `eval` returns the BSDF times exactly one
+$\mathbf{n}\cdot\bar\omega$, at the unjittered direction:
 
-{{cite shaders/includes/brdf/brdf_ggx.glsl "return (diffuse + specular) * lightColor * NdotL;"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "return s.bsdf.eval(s.wo, s.toLocal(L), t) * radiance;"}}
+
+{{cite shaders/material/openpbr.slang "    // BSDF x cos(wi)."}}
 
 The product is indicator × cosine: a step-shaped second falloff riding on the
-cosine, darkening a band near the terminator by an amount no BRDF term accounts
+cosine, darkening a band near the terminator by an amount no BSDF term accounts
 for.
 
 Finally the ray mask. The trace queries with `kRayMaskScene`; the `RenderScene`

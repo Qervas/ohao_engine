@@ -12,16 +12,16 @@ from monograph.paths import ROOT  # noqa: E402
 class ResolveCitationTest(unittest.TestCase):
     def test_unique_match_returns_line_and_text(self):
         line, text = cite.resolve_citation(
-            "shaders/includes/brdf/brdf_ggx.glsl",
-            "float Ems = (1.0 - E_o) * (1.0 - E_i);",
+            "shaders/material/openpbr.slang",
+            "float ggxD(float3 m, float a2)",
         )
-        self.assertEqual(line, 159)
-        self.assertIn("Ems", text)
+        self.assertEqual(line, 116)
+        self.assertIn("ggxD", text)
 
     def test_missing_substring_raises(self):
         with self.assertRaises(cite.CitationError):
             cite.resolve_citation(
-                "shaders/includes/brdf/brdf_ggx.glsl",
+                "shaders/material/openpbr.slang",
                 "this text does not exist anywhere zzz",
             )
 

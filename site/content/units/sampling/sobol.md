@@ -8,7 +8,7 @@ figures: [sampling-sobol-pad0-scramble]
 
 ## Four dimensions, and a path that wants forty
 
-The offline tracer needs a stream of uniform numbers per pixel: two for the
+A path tracer needs a stream of uniform numbers per pixel: two for the
 camera jitter, one to pick a light, two for the light's surface, two more for the
 next bounce, and on down the path. A low-discrepancy sequence buys convergence
 closer to $O(N^{-1})$ than white noise's $O(N^{-1/2})$ — but only across the
@@ -42,18 +42,16 @@ scramble seed so consecutive pads decorrelate.
 
 {{cite shaders/includes/rt/sampler_sobol.glsl "uint pad = dim >> 2;"}}
 
-Three raygen shaders include the sampler. `pt_raygen.rgen` is the set
-`PathTracer` binds by default and `pt_raygen_offline.rgen` is what the offline
-profile binds; the two consume dimensions in the same order, and the citations
-here are from the default one. Neither resets its dimension counter along a path,
-so the pad number climbs monotonically: dims 0–1 go to the camera jitter, and the
-first NEE block immediately takes dim 2 to select a light and dims 3–4 for the
-light sample — so the very first light-sampling pair already straddles a pad
-boundary.
+One shader includes the sampler: `pt_raygen_realtime.rgen`, the realtime
+profile's raygen. (The offline profile's reference, `rt/path_tracer.slang`, draws
+from its own PCG stream and has no dimension index.) The realtime raygen never
+resets its dimension counter along a path, so the pad number climbs monotonically:
+dims 0–1 go to the camera jitter, and the first NEE block immediately takes dim 2
+to select a light and dims 3–4 for the light sample — so the very first
+light-sampling pair already straddles a pad boundary.
 
-{{cite shaders/rt/pt_raygen.rgen "// ==== Analytic direct NEE at bounce 0 ===="}}
-{{cite ohao/render/rt/path_tracer.hpp "rt_pt_raygen.rgen.spv"}}
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "// ==== Analytic direct NEE at bounce 0 ===="}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
 :::key
 Only the pad-local pair (0, 1) is a genuine 2D (0,2)-net. Replaying the shader's
@@ -93,7 +91,7 @@ golden-ratio constant times the pad index.
 The seed depends on pixel and pad, and deliberately **not** on the sample index —
 the sample index is the Sobol index instead.
 
-{{cite shaders/rt/pt_raygen.rgen "samplerInit(uvec2(pixel), frameIdx);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "samplerInit(uvec2(pixel), frameIdx);"}}
 
 Folding the frame number into the seed is the obvious "more random" choice, and
 it destroys the entire point: each frame would draw an independently scrambled
@@ -161,9 +159,9 @@ below one — but it is the one that costs no instructions.
 {{cite ohao/render/rt/sobol_generator.cpp "cast of values near 0xFFFFFFFF rounds up to exactly 1.0 in IEEE-754."}}
 
 A returned 1.0 would put a consumer that truncates $\lfloor u \cdot n \rfloor$ one
-index past the end. The raygens do not lean on the sampler for that: every NEE
+index past the end. The raygen does not lean on the sampler for that: every NEE
 block clamps its light index with `min(selectedLightIdx, lightBuf.lightCount - 1u)`
-two lines after the divide, three times in `pt_raygen.rgen` alone. What guards the
+two lines after the divide, four times in `pt_raygen_realtime.rgen`. What guards the
 conversion itself is a host regression test, at index $2^{31}$ in dimension 1,
 whose direction number is `0xFFFFFFFF`.
 
@@ -172,7 +170,7 @@ whose direction number is `0xFFFFFFFF`.
 The sibling sampler in the same include directory does the thing this one avoids:
 `getSample1D_pcg` divides the raw 32-bit output by `4294967296.0`. The top 128
 outputs round to $2^{32}$ and return exactly 1.0 — and that is the sampler the
-realtime profile ships.
+realtime profile's settings ask for.
 
 {{cite shaders/includes/rt/sampler_pcg.glsl "float getSample1D_pcg(uint dim) {"}}
 
@@ -185,9 +183,12 @@ creation, so the PCG/Sobol choice costs nothing at runtime.
 {{cite shaders/includes/rt/sampler_api.glsl "layout(constant_id = 0) const uint SAMPLER_TYPE = SAMPLER_SOBOL;"}}
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "uint32_t samplerTypeVal = static_cast<uint32_t>(m_renderSettings.samplerType);"}}
 
-The offline profile selects Sobol; the realtime profile stays on the older PCG
-sampler, where per-frame temporal reuse and a denoiser matter more than
-per-pixel stratification.
+The realtime profile's settings ask for the PCG sampler and the offline
+profile's for Sobol. Neither request is what decides it: the pipeline is built
+before the profile's settings reach the tracer, from the member default, which is
+the offline table's Sobol — so the realtime raygen runs Sobol, and the offline
+profile's reference raygen declares no sampler constant at all (*Sampler API*
+traces the ordering).
 
 {{cite ohao/render/rt/rt_settings.hpp ".samplerType = SamplerType::Sobol,"}}
 
@@ -196,14 +197,12 @@ The sharp edge: `PathTracer::createRTPipeline()` runs once, from `init()`, and
 Assigning a different `samplerType` after init changes the struct and nothing
 else — the SPIR-V still carries the old constant.
 
-`pt_raygen_realtime.rgen` is the only raygen that loops several samples inside a
-frame. Each iteration re-seeds with `frameIdx * samplesPerFrame + s` and rewinds
-the dimension counter to 2, past the per-frame camera jitter consumed before the
-loop. On the shipped realtime profile the sampler is PCG, which ignores `dim`
-entirely, so what the re-seed advances there is a PCG stream, not the Sobol
-sequence; the rewind only starts to matter if that profile is switched to Sobol.
-`pt_raygen.rgen` and `pt_raygen_offline.rgen` call `samplerInit` once and rely on
-frame accumulation.
+`pt_raygen_realtime.rgen` loops several samples inside a frame. Each iteration
+re-seeds with `frameIdx * samplesPerFrame + s` — the Sobol index — and rewinds the
+dimension counter to 2, past the per-frame camera jitter consumed before the loop,
+so every sample of the frame shares that jitter and starts its path at the same
+dimension. With the default of one sample a frame the re-seed is the index the
+jitter was drawn at.
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "samplerInit(uvec2(pixel), frameIdx * samplesPerFrame + s);"}}
 {{cite shaders/rt/pt_raygen_realtime.rgen "dimIdx = 2u;"}}
@@ -211,10 +210,10 @@ frame accumulation.
 ## Two copies of one table, and nothing that checks them
 
 The 128 direction numbers exist twice: a `constexpr` array in the CPU reference,
-and a `const uint[128]` compiled into each raygen module that includes the
-sampler — `pt_raygen`, `pt_raygen_offline` and `pt_raygen_realtime`, but not
-the Slang RT GI and RT shadow passes, which import only the shared layout and
-hash their samples with PCG; none of them carries a copy. There is no descriptor binding and no upload; the 512 bytes ride in the
+and a `const uint[128]` compiled into the one raygen module that includes the
+sampler, `pt_raygen_realtime` — not into the reference path tracer or the Slang
+RT GI and RT shadow passes, which hash their samples with PCG; none of them
+carries a copy. There is no descriptor binding and no upload; the 512 bytes ride in the
 SPIR-V.
 
 {{cite shaders/includes/rt/sampler_sobol_tables.glsl "const uint OHAO_SOBOL_DIRS[128] = uint[128]("}}

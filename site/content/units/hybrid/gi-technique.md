@@ -9,14 +9,14 @@ standard: v2
 
 Without RT GI the deferred pipeline's indirect diffuse light is a guess: the
 environment's irradiance when one is bound, and with none a constant, one push-constant
-scalar times the diffuse albedo (none for a metal) times AO (the baked AO, and SSAO when
+scalar times the surface's diffuse directional albedo (none for a metal) times AO (the baked AO, and SSAO when
 it is on). Neither can know that a red wall stands beside a white floor, so the floor
 stays white. `RTGITechnique` replaces that guess with traced rays, one bounce deep:
 light that leaves a lit surface, lands on another and is reflected once more toward the
 camera. With it the constant is not applied at all — the walls are lit by direct light
 and GI's rays only, as in the path tracer, which has no such term:
 
-{{cite shaders/core/deferred_lighting.frag "else if (!ibl) ambient += vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.slang "else if (!ibl) ambient += pc.ambientIntensity * diffuseAlbedo * ao * ssao;"}}
 
 On the helmet room that took the helmet against its left wall to 0.534 (the path
 tracer's 0.534) and the wall itself from 0.645 to 0.523 (the path tracer: 0.610, with
@@ -74,11 +74,15 @@ two rays a pixel, the pair always lands in opposite halves of the hemisphere.
 {{cite shaders/rt/gi_trace.slang "const float phi = kTwoPi * (float(s) + rand01(key, s, 1u)) / float(rays);"}}
 
 $\rho$ is applied at the very end, at full resolution, by the lighting pass, and it is
-the *diffuse* albedo, the G-buffer albedo times one minus metallic, so a fully metallic
-surface receives no diffuse bounce at all. The radiance itself still reaches it: the
+the *diffuse* directional albedo toward the viewer: OpenPBR's EON diffuse under the
+specular layer, scaled by what the specular lets through, for the G-buffer's base colour
+and metalness (`OpenPBRBase::diffuseAlbedo`). A fully metallic surface has none, so it
+receives no diffuse bounce at all. The radiance itself still reaches it: the
 specular IBL reads it for what the reflection sees where the environment is occluded.
 
-{{cite shaders/core/deferred_lighting.frag "if (rtGI) ambient += gi.rgb * (albedo * (1.0 - metallic)) * ao;"}}
+{{cite shaders/core/deferred_lighting.slang "const float3 diffuseAlbedo = s.bsdf.diffuseAlbedo(s.wo, tables);"}}
+
+{{cite shaders/core/deferred_lighting.slang "if (rtGI) ambient += gi.rgb * diffuseAlbedo * ao;"}}
 
 Keeping albedo out of the half-resolution chain is deliberate. Everything the
 denoiser averages is incoming light, which varies smoothly across a surface; the
@@ -87,22 +91,26 @@ sample.
 
 ## What a ray brings back
 
-A ray that hits a surface returns that surface's bounce albedo over $\pi$ times the
-direct light the hit point receives — its own one-bounce $L_i$:
+A ray that hits a surface returns what that surface reflects over $\pi$ times the
+direct light the hit point receives — its own one-bounce $L_i$ — plus what it emits:
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, key, s) * T;"}}
+{{cite shaders/rt/gi_trace.slang "return (albedo * (1.0 / kPi) * directAt(at, -dir, key, s) + hm.emission) * T;"}}
 
-The bounce albedo is not the hit's material. It is the RGB of
-`InstanceGpu::giAlbedoPacked`, loaded from the raw instance table at a byte offset
-the shared layout names, by the instance's custom index, which is its table slot:
+What it reflects is the hit's own material. `hitMaterial` (`rt/alpha_test.slang`) finds
+the hit triangle's material through the instance's material refs and resolves it at the
+hit's uv as the G-buffer and the path tracer's closest hit do: base colour and its
+texture, roughness and metalness and their texture, the specular weight and colour and
+their textures, and the emission:
 
-{{cite shaders/rt/gi_trace.slang "const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));"}}
+{{cite shaders/rt/alpha_test.slang "HitMaterial hitMaterial(uint slot, uint primitive, float2 bary)"}}
 
-The offset and the table's stride are constants of `shaders/shared/layout.json`,
-and the C++ side asserts both against the struct, so moving the field breaks the
-build rather than the bounce:
+The trace then takes that material's OpenPBR directional albedo, the whole base's
+(specular and diffuse together), at normal incidence — the hit's normal taken as facing
+the ray — through OpenPBR's energy tables, which the technique binds at 11:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "static_assert(sizeof(render::InstanceGpu) == shared::kInstanceGpuStride);"}}
+{{cite shaders/rt/gi_trace.slang "const float3 albedo = OpenPBRBase(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);"}}
+
+{{cite ohao/render/rt/rt_gi_technique.cpp "if (!m_openpbrTables.create(device, physicalDevice)) {"}}
 
 The direct light at the hit comes from every light of the frame. The CPU writes them every
 frame from the `RenderScene`'s light list — in scene order, emissive proxies and dark lights
@@ -288,7 +296,7 @@ dropped. The specular IBL stays, and GI decides what it sees: the prefiltered
 environment weighted by the visibility, and the radiance the rays that hit brought back
 for the rest (the lighting unit, "Image-based lighting"):
 
-{{cite shaders/core/deferred_lighting.frag "const vec3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, vec3(0.0)) : vec3(0.0));"}}
+{{cite shaders/core/deferred_lighting.slang "const float3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, float3(0.0)) : float3(0.0));"}}
 
 SSAO multiplies the IBL terms and the constant ambient (when a frame without GI has
 it), never the GI image: a GI ray
@@ -366,13 +374,14 @@ blended surface bounces nothing.
 
 {{cite shaders/rt/gi_trace.slang "RayQuery<RAY_FLAG_NONE> q;"}}
 
-The bounce albedo travels on `InstanceDesc` (default 0.73 grey); nothing derives it
-from the hit's material or texture, so a textured wall bounces one flat colour.
+The bounce is a directional albedo at normal incidence, not the hit's BSDF toward the
+ray's origin: a glossy hit bounces the same light whichever way it is seen from, and its
+specular reflection of the light is spread as if diffuse.
 
 :::key
 The Monte-Carlo layer is textbook: cosine-weighted, stratified, unbiased for the
 hemisphere it samples. Every approximation lives in what a ray may know when it
-lands — one albedo per instance, one light shadowed per hit, a
+lands — one albedo per hit at normal incidence, one light shadowed per hit, a
 normal guessed from the ray — and every frame-to-frame artifact in what the
 denoiser keeps: a history clamped to four frames' range, tested per tap against
 depth and normal.
@@ -380,8 +389,8 @@ depth and normal.
 
 ## Contracts
 
-- The output is diffuse indirect light with the receiver's diffuse albedo (albedo × (1 − metallic)) applied. Any consumer of binding 11 must not multiply by albedo again, and one that also adds unoccluded diffuse IBL counts the environment twice.
-- The bounce albedo is `InstanceGpu::giAlbedoPacked.rgb`, read at `kInstanceGpuGiAlbedoOffset` in the instance at the TLAS custom index, which is the `RenderScene` instance slot. The layout constants and the C++ struct are tied by `static_assert`s in `rt_gi_technique.cpp`; change one, change the other.
+- The output is incoming radiance; the lighting pass applies the receiver's diffuse directional albedo (`OpenPBRBase::diffuseAlbedo`). Any consumer of binding 11 must not multiply by albedo again, and one that also adds unoccluded diffuse IBL counts the environment twice.
+- A hit's material is resolved by `hitMaterial` from the instance at the TLAS custom index, which is the `RenderScene` instance slot, through its material refs; the material rows it reads (0–2, 4–6) must stay what the G-buffer and the path tracer read. The instance stride is tied to the C++ struct by a `static_assert` in `rt_gi_technique.cpp`.
 - Realtime needs the G-buffer velocity view: `render()` returns without tracing when it is null, and then nothing is handed to lighting. `denoise()` must follow `render()` in the same frame and does nothing unless `denoises()`.
 - `setSSGITexture` must run after the per-frame reset and before the lighting pass records, and only when `rendered()` is true — from `rt.gi.denoise`'s callback in realtime, from `rt.gi`'s in reference, both registered before `lighting`.
 - Each pass's descriptor sets are written at record time into the sets for the caller's `frameSlot`, one of `MAX_FRAMES_IN_FLIGHT`, and the slot's light buffer is rewritten in `render()`. Both hold only while the caller passes the frame-ring slot whose fence it has just waited on.

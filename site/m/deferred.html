@@ -121,22 +121,24 @@
 
       <div class="section-rule"><h2 id="gbuf">GBuffer write path</h2></div>
       <div class="prose reveal">
-        <p>Vertex: skinned or static; push constants carry model, viewProj, prevMVP, material params, albedo, emissive indices. Fragment (<code>gbuffer.frag</code>):</p>
+        <p>Vertex: the draw record at <code>firstInstance</code> gives the instance and material slots; it writes world position, normal, tangent, both UVs and current and previous clip positions. Fragment (<code>gbuffer.frag</code>, body in <code>includes/scene/gbuffer_body.glsl</code>) reads the material's 7 rows and writes eight targets:</p>
       </div>
       <div class="algo reveal">
         <div class="algo-bar">gbuffer.frag essentials</div>
         <ol>
-          <li>Sample albedo bindless if index valid</li>
+          <li>Sample albedo bindless if index valid; albedo = base_weight × base_color</li>
           <li>Optional normal map via TBN</li>
-          <li>ORM: ao*=R, rough*=G, metal*=B; rough = max(rough, 0.04)</li>
-          <li>out0 = (worldPos, metallic); out1 = (octNormal, rough, emissiveY); out2 = (albedo, ao)</li>
+          <li>ORM: ao from the occlusion texture, rough*=G, metal*=B; roughness stored as authored (OpenPBR floors it at 0.01)</li>
+          <li>out0 = (worldPos, metallic); out1 = (octNormal, rough, emissive luminance or −subsurface); out2 = (albedo, ao)</li>
           <li>velocity = 0.5 * (ndc_curr − ndc_prev)</li>
+          <li>emission = emission_color × emission_luminance (× the emissive texture)</li>
+          <li>specular (target 6, RGBA8) = (specular_color, specular_weight / 1.5); OpenPBR (target 7, RG8) = (base_diffuse_roughness, (specular_ior − 1) / 2.55)</li>
         </ol>
       </div>
 
       <div class="section-rule"><h2 id="light">Lighting consume path</h2></div>
       <div class="prose reveal">
-        <p><code>deferred_lighting.frag</code> reconstructs surface from GBuffer, loops lights (UBO, max 8), evaluates BRDF (Ch.&nbsp;04), applies CSM and optional RT visibility, multiplies SSAO, adds IBL (equirect LOD ≈ 9·roughness) with analytical BRDF-LUT fallback when the real LUT is zeroed — so chrome is not pure black when only <code>setEnvMap</code> was used.</p>
+        <p><code>deferred_lighting.slang</code> rebuilds OpenPBR's inputs from the eight targets and shades them through <code>material/openpbr.slang</code>, the BSDF the reference path tracer samples. <code>directLight</code> (<code>includes/lighting/clustered_lights.slang</code>, shared with the transparent pass) sums the pixel's froxel's lights, shadowed by RT visibility channels or, for a directional light, the CSM. Indirect diffuse is RT GI, else the environment's irradiance, else the constant ambient, times the diffuse's directional albedo; indirect specular is the split sum: the prefiltered environment (GI's radiance where its rays hit) times <code>OpenPBRBase.specularAlbedo</code> from OpenPBR's energy tables (binding 20), with SSAO and specular occlusion on the ambient terms.</p>
       </div>
       <div class="math-block reveal">\[
         L_o=\sum_k f(v,l_k)\,L_k\,(n\!\cdot\!l_k)\,V_k + L_{\mathrm{IBL}}
@@ -150,7 +152,8 @@
         <div class="row"><code>deferred_renderer.cpp</code><span class="desc">Graph + inject</span></div>
         <div class="row"><code>gbuffer_pass.* / gbuffer.frag</code><span class="desc">MRT</span></div>
         <div class="row"><code>csm_pass.*</code><span class="desc">Cascades</span></div>
-        <div class="row"><code>deferred_lighting_pass.*</code><span class="desc">PBR + IBL</span></div>
+        <div class="row"><code>deferred_lighting_pass.* / deferred_lighting.slang</code><span class="desc">OpenPBR + IBL</span></div>
+        <div class="row"><code>clustered_lights.slang</code><span class="desc">Light loop (directLight)</span></div>
         <div class="row"><code>post_processing_pipeline.*</code><span class="desc">SSAO bloom TAA</span></div>
         <div class="row"><code>render/graph/*</code><span class="desc">Barriers</span></div>
         <div class="row"><code>render_dispatch.cpp</code><span class="desc">Host frame</span></div>
@@ -182,7 +185,7 @@
         <a class="tree-card" href="deferred/lighting.html">
           <div class="num">lighting</div>
           <h3>Deferred lighting</h3>
-          <p>The froxel&#x27;s light loop, IBL, SSAO, shadows, BRDF eval.</p>
+          <p>The froxel&#x27;s light loop through OpenPBR&#x27;s base, split-sum IBL, SSAO, shadows.</p>
         </a>
         <a class="tree-card" href="deferred/clustered-lighting.html">
           <div class="num">clustered-lighting</div>

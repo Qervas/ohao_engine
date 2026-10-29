@@ -79,10 +79,11 @@ rotation block:
 
 {{cite ohao/render/camera/camera.cpp "viewMatrix = glm::lookAt(position, position + front, up);"}}
 
-and the path tracer's raygen pulls them straight back out of the inverse, column by
-column, to build the pinhole ray:
+and the path tracer's raygen (`rt/path_tracer.slang` for the reference, the GLSL
+`pt_raygen_realtime.rgen` for the realtime profile) pulls them straight back out of the
+inverse, column by column, to build the pinhole ray:
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 fwd = -vec3(pc.invView[2]);"}}
+{{cite shaders/rt/path_tracer.slang "const float3 fwd = -pc.invView[2].xyz;"}}
 
 So the accessors are a gameplay convenience; the vectors they expose are what the
 renderer actually consumes.
@@ -144,11 +145,12 @@ that element in place:
 
 $$P_{22} = \frac{1}{\tan(\phi/2)} \quad\Longrightarrow\quad \left(P^{-1}\right)_{22} = \tan(\phi/2)$$
 
-GLSL addresses that same element as the 0-indexed `[1][1]` of a column-major `mat4`,
-and that is the one the raygen reads. $P_{11}$, and the aspect baked into it, is never
+The push constants carry the matrix as its four columns, so that element is the `.y`
+of the 0-indexed column `[1]`, and that is the one the reference raygen reads (the
+realtime GLSL raygen reads the same element as `invProj[1][1]` of a `mat4`). $P_{11}$, and the aspect baked into it, is never
 touched:
 
-{{cite shaders/rt/pt_raygen.rgen "float tanFovY = abs(pc.invProj[1][1]);"}}
+{{cite shaders/rt/path_tracer.slang "const float tanY = abs(pc.invProj[1].y);"}}
 
 ## The near plane is twice what it says
 

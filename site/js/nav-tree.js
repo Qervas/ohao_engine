@@ -345,7 +345,7 @@ window.OHAO_NAV_TREE = [
       },
       {
         "id": "path-tracer/bindings",
-        "title": "Descriptor map 0\u201337",
+        "title": "Descriptor map 0\u201338",
         "href": "m/path-tracer/bindings.html"
       },
       {

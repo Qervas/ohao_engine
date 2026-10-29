@@ -130,7 +130,7 @@ value 2) when it holds one. Each full-resolution pixel takes the four nearest
 half-resolution samples, weighted bilinearly and by the same 5 % distance match; where
 none is the same surface it takes the closest instead of blurring across the edge:
 
-{{cite shaders/core/deferred_lighting.frag "return wsum > 1e-3 ? sum / wsum : best;"}}
+{{cite shaders/core/deferred_lighting.slang "return wsum > 1e-3 ? sum / wsum : best;"}}
 
 ## What it darkens
 
@@ -139,14 +139,16 @@ environment map, the IBL terms, and the constant ambient term, which lighting ap
 only to a frame with neither RT GI nor an environment. Direct light is occluded by RT
 shadows or CSM, and RT GI's rays already see what is in the way, so neither is touched:
 
-{{cite shaders/core/deferred_lighting.frag "else if (!ibl) ambient += vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.slang "else if (!ibl) ambient += pc.ambientIntensity * diffuseAlbedo * ao * ssao;"}}
 
-{{cite shaders/core/deferred_lighting.frag "const float occlusion = ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.slang "const float occlusion = ao * ssao;"}}
 
 `ao` there is the G-buffer's baked occlusion (albedo alpha: 1, or the red channel of the
 material's glTF occlusion texture); `ssao` multiplies on top of it. The diffuse IBL takes
 the product as it is, the specular IBL through `specularOcclusion`, which occludes a
-reflection's narrower lobe less. Test 5 in
+reflection's narrower lobe less. The constant ambient is weighted by the surface's diffuse
+directional albedo (OpenPBR's diffuse under its specular layer, `diffuseAlbedo`), not by
+the raw base colour. Test 5 in
 `engine_tests` checks both halves: with only ambient light (RT GI off, so the fallback
 applies), a crease frame has pixels darker with SSAO on and none brighter; lit by a
 point light with zero ambient and RT GI, the frame is unchanged (max_abs 0). A second test renders an SSAO frame from two fresh

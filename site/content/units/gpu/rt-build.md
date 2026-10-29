@@ -177,7 +177,7 @@ is given `FORCE_NO_OPAQUE` in the TLAS, so only its triangles invoke the shader.
 
 {{cite shaders/rt/pt_anyhit.rahit "if (alpha < alphaRow.y) ignoreIntersectionEXT;"}}
 
-## What an edit costs, and the one word RT GI still needs
+## What an edit costs
 
 There is no material-patching entry point: the material table is append-only, and a
 material is immutable once registered. The edits a caller can make are on the instance,
@@ -188,22 +188,20 @@ and each has a distinct cost:
 - A **material list** change uploads the instance's 64-entry reference row and records
   no TLAS work, because the TLAS entry is byte-identical.
 
-RT global illumination still needs one value the material table does not hold. Its
-trace reads the bounce albedo from the instance, not the material row, as the RGB of
-a legacy word on `InstanceGpu`, loaded from the raw instance buffer at a byte offset
-the shared layout names and a `static_assert` in `rt_gi_technique.cpp` pins to the
-C++ struct:
+RT global illumination reads the same tables. Its trace resolves a hit's material from
+the instance slot, the triangle's slot and the material rows, as the path tracer's closest
+hit does (`hitMaterial` in `rt/alpha_test.slang`), and takes its OpenPBR albedo:
 
-{{cite shaders/rt/gi_trace.slang "const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));"}}
+{{cite shaders/rt/gi_trace.slang "const HitMaterial hm = hitMaterial(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),"}}
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "static_assert(offsetof(render::InstanceGpu, giAlbedoPacked) == shared::kInstanceGpuGiAlbedoOffset);"}}
+The instance row's last word, `emitterLight`, is zero on every instance but a light's
+emitter mesh, where `RenderScene` stores the light's radiance in `.rgb` and its index in
+the RT light list in `.w`: the G-buffer and both path tracers' closest hits take the
+radiance, the reference path tracer the index.
 
-Its alpha is a sign-and-magnitude packing — sign carries metallic, magnitude carries
-roughness, and a ±10 bias tags meshes with more than 100 vertices — produced on the
-host and uploaded to an instance word that nothing in `shaders/` reads; the trace
-loads three floats and stops short of it.
+{{cite ohao/render/scene/render_scene_types.hpp "glm::vec4 emitterLight;"}}
 
-{{cite ohao/render/scene/model_upload.cpp "float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;"}}
+{{cite ohao/render/scene/render_scene.cpp "d.emitterLight = glm::vec4(want[i].radiance, static_cast<float>(rtIndex[i]));"}}
 
 ## Contracts
 

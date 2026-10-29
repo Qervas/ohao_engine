@@ -9,7 +9,7 @@
   <rect x="20" y="54" width="340" height="66" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="34" y="76" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">samplerType</text>
   <text x="34" y="96" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">PCG (realtime) / Sobol (offline)</text>
-  <text x="34" y="112" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">declared per profile</text>
+  <text x="34" y="112" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">declared per profile; only the GLSL raygen reads it</text>
 
   <line x1="360" y1="87" x2="386" y2="87" stroke="#c4784a" stroke-width="1.5"/>
   <path d="M386 87 l-7 -4 v8 z" fill="#c4784a"/>

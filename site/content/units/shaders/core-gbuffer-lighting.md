@@ -7,15 +7,16 @@ standard: v2
 
 ## The decision that shapes the rest: position lives in the buffer
 
-`gbuffer.frag` writes four colour attachments plus depth, and the first one
-settles the character of the whole pipeline: it stores the interpolated **world
-position**, verbatim, with metallic in alpha.
+`gbuffer.frag` writes seven colour outputs plus depth, and the first one settles the
+character of the whole pipeline: it stores the interpolated **world position**,
+verbatim, with metallic in alpha.
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
 
-The lighting pass reads it straight back and never touches the depth buffer.
+The lighting pass, `core/deferred_lighting.slang`, reads it straight back and never
+touches the depth buffer.
 
-{{cite shaders/core/deferred_lighting.frag "vec3 fragPos = gBuffer0Sample.rgb;"}}
+{{cite shaders/core/deferred_lighting.slang "const float3 P = g0.rgb;"}}
 
 That target is `R16G16B16A16_SFLOAT` — IEEE binary16, an 11-bit significand. In
 the binade $[2^e, 2^{e+1})$ the spacing between representable values is
@@ -30,18 +31,19 @@ scene the error is geometric rather than a banding artefact.
 
 :::why
 The alternative is to store nothing and recover position from depth via
-`invViewProj * vec4(ndc, depth, 1)`. Both ingredients are present and correct:
-the `D32_SFLOAT` depth image goes into descriptor binding 4 every frame, and
-`invViewProj` occupies the first 64 bytes of the lighting push-constant block.
-Neither is read — the shader declares no sampler at binding 4, and `invViewProj`
-appears exactly once in the file, in its own declaration.
+`invViewProj * (ndc, depth, 1)`. Both ingredients are present: the `D32_SFLOAT`
+depth image is still a combined-image-sampler slot in the pass's layout (binding 4),
+and `invViewProj` occupies the first 64 bytes of the lighting push-constant block.
+The shader declares nothing at binding 4, and uses `invViewProj` once, for the sky:
+a pixel with no geometry builds its view ray from the far plane to look up the
+environment.
 
-{{cite shaders/core/deferred_lighting.frag "    mat4 invViewProj;"}}
+{{cite shaders/core/deferred_lighting.slang "const float4 far = mulColumns(pc.invViewProj, float4(uv * 2.0 - 1.0, 1.0, 1.0));"}}
 
 Storing position buys simplicity — no matrix, no NDC bookkeeping, no near/far
 dependence — for 6 bytes per pixel plus the precision above. Every other reader made
 the same call: SSAO, SSR, SSS and both RT techniques read the stored position too,
-and `reconstruction.glsl`, the depth-to-position helper, now has no includer at all.
+and `reconstruction.glsl`, the depth-to-position helper, has no includer at all.
 :::
 
 ## What the fragment shader packs
@@ -51,24 +53,22 @@ Normals are octahedron-encoded to two channels and then remapped into $[0,1]$.
 {{cite shaders/includes/scene/gbuffer_body.glsl "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
 
 That remap is a UNORM convention, left from when the target was
-`R10G10B10A2_UNORM` and could not hold negatives. The allocator's comment still
-says `RGB10A2` and the shared header still calls itself the `A2R10G10B10`
-encoder, but the image is half-float now; the remap survives only because
-`decodeNormalOctahedron` undoes it symmetrically on the read side. That decoder
-lives in `includes/common/encoding.glsl`, and `deferred_lighting.frag` is now its only
-consumer; the Slang passes — SSAO, SSR, RT shadows and RT GI — each carry their own
-`decodeOctahedron` with the same remap.
+`R10G10B10A2_UNORM` and could not hold negatives. The image is half-float now; the
+remap survives only because every reader undoes it symmetrically. Each reader
+carries its own decoder: the lighting pass its `decodeNormalOctahedron`, and SSAO,
+SSR and GI's denoiser a `decodeOctahedron` with the same remap.
+
+{{cite shaders/core/deferred_lighting.slang "const float2 f = e * 2.0 - 1.0;"}}
+
+`includes/common/encoding.glsl` still holds a GLSL decoder and an
+`encodeNormalOctahedron` with the same math as the one `gbuffer_body.glsl` defines
+locally, but no shader includes it any more: the lighting pass that was its last
+consumer is Slang now.
 
 {{cite shaders/includes/common/encoding.glsl "vec2 f = encoded * 2.0 - 1.0;"}}
 
-The header also carries an `encodeNormalOctahedron` with the same math as the one
-`gbuffer.frag` defines locally, and it has zero callers anywhere in `shaders/`:
-the only encode in the tree is the local one. Nothing structural forces that
-duplication — `gbuffer.frag` enables `GL_GOOGLE_include_directive` and includes
-`scene_data.glsl` and the generated `shared/layout.glsl`, just not `encoding.glsl`.
-The pair that must stay in
-lockstep is `gbuffer.frag`'s encoder against the header's *decoder*; the header's
-encoder is dead weight.
+The pair that must stay in lockstep is the G-buffer's encoder against each reader's
+decoder; the header is dead weight.
 
 Where the material comes from is part of the same story. The draws are indirect, and a
 command's `firstInstance` is the draw's index in `RenderScene`'s draw table, so
@@ -79,11 +79,17 @@ shader as a flat varying.
 {{cite shaders/core/gbuffer.vert "const uint slot = d.draw.w;"}}
 
 The fragment shader takes that submesh material slot, resolves it through the instance's
-material-reference list into a row of `RenderScene`'s material table, and loads three
-`vec4`s from it: base colour and albedo texture, roughness, metallic, normal and emissive
-textures, and the rough/metal texture with the emissive and subsurface strengths. The same table feeds the
-path tracer, so the two renderers cannot disagree about which material a triangle has.
-A slot the instance has no reference for falls back to material 0.
+material-reference list into a row of `RenderScene`'s material table, and loads six of
+its seven `vec4` rows (row 3, alpha, only under `OHAO_GBUFFER_MASK`): base colour and
+albedo texture; roughness, metallic, normal and emissive textures; the rough/metal
+texture, emission luminance, subsurface and occlusion texture; and OpenPBR's specular,
+base and emission rows.
+
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec4 row5 = matRows[m * kMaterialRows + 5u];   // specular_ior, base_diffuse_roughness, base_weight, specularTex"}}
+
+The same table feeds the path tracer, so the two renderers cannot disagree about which
+material a triangle has. A slot the instance has no reference for falls back to
+material 0.
 
 Bindless texture indices reach the shader by bit-copy rather than conversion; the table
 packer reinterprets each uint32 as a float:
@@ -91,49 +97,59 @@ packer reinterprets each uint32 as a float:
 {{cite ohao/render/scene/material_table.cpp "const auto bits = [](uint32_t u) { return std::bit_cast<float>(u); };"}}
 
 so `UINT32_MAX` arrives as a quiet NaN and is recovered with `floatBitsToUint`.
-Nothing does arithmetic on the lane, so the pattern survives intact — but the two
-"no texture" tests are not the same test. Albedo and normal compare against the
-sentinel; rough/metal and emissive compare against the array capacity.
+Nothing does arithmetic on the lane, so the pattern survives intact — but the
+"no texture" tests are not all the same test. Albedo and normal compare against the
+sentinel; rough/metal, occlusion, emissive and the two specular textures compare
+against the array capacity.
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "if (roughMetalTexIdx < 4096u) {"}}
 
 4096 is the descriptor count the renderer asks `BindlessTextureManager` for at
-init — the value that becomes the variable-length array's `descriptorCount` — so
-the second form is strictly safer: it also rejects a stale but in-range-looking
-index that would otherwise read past the end of the array.
+init, so the second form is strictly safer: it also rejects a stale but
+in-range-looking index that would otherwise read past the end of the array.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,"}}
 
-That sample is then
-read as ORM — R occlusion, G roughness, B metallic — though glTF defines only G
-and B, so an asset that packs nothing into R darkens by whatever sits there.
+The rough/metal sample is read for G (roughness) and B (metallic) only, as glTF
+defines them; occlusion comes from glTF's own occlusion texture. Roughness is stored as
+authored, with no floor: OpenPBR's module holds it at `kMinSpecularRoughness` (0.01)
+when it shades, in the lighting pass and the path tracer alike.
+
+{{cite shaders/material/openpbr.slang "rough = clamp(m.specularRoughness, kMinSpecularRoughness, 1.0);"}}
+
+## OpenPBR's inputs: two more targets
+
+OpenPBR's base needs more than albedo, roughness and metallic, so the G-buffer has two
+targets for the rest. `kSpecular` (output 5, `RGBA8_UNORM`) holds `specular_color` and
+`specular_weight / 1.5`, with the KHR specular textures applied; `kOpenPBR` (output 6,
+`RG8_UNORM`) holds `base_diffuse_roughness` and `(specular_ior - 1) / 2.55`. The scales
+are chosen so the defaults are exact codes: a weight of 1 is 170, an IOR of 1.5 is 50.
+
+{{cite shaders/includes/scene/gbuffer_body.glsl "outSpecular = vec4(clamp(specularColor, 0.0, 1.0), clamp(specularWeight / 1.5, 0.0, 1.0));"}}
+
+{{cite shaders/includes/scene/gbuffer_body.glsl "outOpenPBR = vec2(clamp(row5.y, 0.0, 1.0), clamp((row5.x - 1.0) / 2.55, 0.0, 1.0));"}}
+
+The albedo target carries `base_weight × base_color`, which is OpenPBR's diffuse albedo
+and a metal's F0 at once; the lighting pass therefore passes a base weight of 1. The
+lighting pass undoes both encodings and rebuilds `MaterialInputs`:
+
+{{cite shaders/core/deferred_lighting.slang "mi.specularIor = 1.0 + pbr.g * 2.55;"}}
 
 ## The emissive attachment
 
-Emission is the G-buffer's fifth colour output, an `RGBA16F` attachment of its own:
-the emissive texture's colour (sRGB-decoded by the bindless sampler) times the
-material's emissive strength, the same radiance the path tracer's closest-hit shader
-emits:
+Emission is an `RGBA16F` attachment of its own (`kEmissive`, output 4):
+`emission_color × emission_luminance`, times the emissive texture's colour when there is
+one (sRGB-decoded by the bindless sampler), the same radiance the path tracer's closest
+hit resolves:
 
-{{cite shaders/includes/scene/gbuffer_body.glsl "emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec3 emissive = row6.rgb * row2.y;"}}
 
-{{cite shaders/rt/pt_closesthit.rchit "emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb * matParams2.y;"}}
+{{cite shaders/rt/path_tracer.slang "float3 emission = row6.rgb * row2.y;"}}
 
-Lighting adds it unlit, in its own colour. It used to arrive as one luminance scalar in
-the normal target's alpha, re-tinted with the albedo, so an emitter glowed in its base
-colour: DamagedHelmet's cyan ring rendered dim grey. The alpha still carries that
-luminance, only to keep an emissive surface out of the SSS blur. Emission cannot glow
-*hard* unless the file says so: the strength lane, `row2.y`, is the material's
-`KHR_materials_emissive_strength` (1 without it) for any material that has an emissive
-texture and 0 otherwise, and the bindless textures it multiplies are 8-bit, so the
-radiance is bounded by that strength.
-
-{{cite ohao/render/scene/model_upload.cpp "mats[i].emissiveStrength = i < model.materialEmissionStrength.size() ? model.materialEmissionStrength[i] : 1.0f;"}}
-
-The sharper limitation is upstream of the shader: a material has no emissive colour
-factor at all, only a texture index and that strength. The shader gates on the
-*index*, so a material without a resolvable emissive map contributes nothing here
-regardless of what the source asset's emissive factor said.
+Lighting adds it unlit, in its own colour. The normal target's alpha keeps only its
+luminance, to keep an emissive surface out of the SSS blur. Because the colour is a
+material factor (row 6) and the texture only multiplies it, a material with an emission
+colour and no emissive map still emits.
 
 ## Velocity: right about Vulkan, and about objects
 
@@ -175,35 +191,38 @@ blend from 0.9 to about 0.89. Off the floor, and not by much.
 
 ## The lighting pass edits the material it just unpacked
 
-Before any BRDF work, `deferred_lighting.frag` rewrites albedo, roughness and
+Before it builds the surface, `deferred_lighting.slang` rewrites albedo, roughness and
 metallic in place through a weather stack — wetness, snow, mud, frost — each
 gated on its own push-constant scalar. Three of the four are keyed off `N.y`:
-wetness and mud through `clamp(N.y * 2, 0, 1)`, snow through a steeper
-`clamp((N.y - 0.3) / 0.7, 0, 1)`, so water pools and snow settles only on
+wetness and mud through `saturate(N.y * 2)`, snow through a steeper
+`saturate((N.y - 0.3) / 0.7)`, so water pools and snow settles only on
 upward-facing surfaces.
 
-{{cite shaders/core/deferred_lighting.frag "roughness  = mix(roughness, max(roughness * 0.15, 0.02), w);"}}
+{{cite shaders/core/deferred_lighting.slang "roughness = lerp(roughness, max(roughness * 0.15, 0.02), w);"}}
 
 Frost is the exception, and it reads as an oversight rather than a choice: its
 block computes no slope factor at all, so a nonzero `frostCover` lays its smooth
 pale-blue coating over every surface in the frame with no attenuation whatever —
 ceilings, undersides and vertical walls included.
 
-{{cite shaders/core/deferred_lighting.frag "if (pc.frostCover > 0.001) {"}}
+{{cite shaders/core/deferred_lighting.slang "if (pc.frostCover > 0.001)"}}
 
 This is a real authoring feature of the raster path with no counterpart in the RT
 shaders: the path tracer reads its material from the SSBO and never sees wetness
-or snow. Only after the stack runs is `initBRDFSurface` called, where the
-metallic slider gets its `smoothstep(0.35, 0.65)` sharpening.
+or snow. Only after the stack runs does `makeSurface` build the surface's frame and
+its `OpenPBRBase` from the edited inputs.
+
+{{cite shaders/core/deferred_lighting.slang "const Surface s = makeSurface(P, N, V, mi);"}}
 
 ## The froxel's lights, and a falloff engineered not to pop
 
-The loop runs over the pixel's froxel's light list, the indices the `lights.cluster`
-pass wrote for the froxel the pixel's screen tile and view depth fall in (the
-clustered-lighting unit), so a pixel shades the lights that can reach it out of a table
-of up to 65,536:
+The pixel's light list comes from `lightList` in `clustered_lights.slang`: the indices
+the `lights.cluster` pass wrote for the froxel the pixel's screen tile and view depth fall
+in (the clustered-lighting unit), so a pixel shades the lights that can reach it out of a
+table of up to 65,536. `directLight` then walks the list and shades each light through
+OpenPBR's base:
 
-{{cite shaders/core/deferred_lighting.frag "lightCount = clusterData[cluster];"}}
+{{cite shaders/core/deferred_lighting.slang "const float3 Lo = directLight(s, lights, clusters, list, clustered, vis, tables);"}}
 
 Point and spot lights use a windowed inverse-square:
 
@@ -218,30 +237,31 @@ $C^1$ there, so a light does not visibly snap off at its range boundary. Past
 $d = r$ the clamp makes it exactly 0, and the loop skips such a light; that hard zero
 is why the froxel lists, which leave out lights out of range, change no pixel.
 
-{{cite shaders/core/deferred_lighting.frag "return invSq * windowing * windowing;"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "return invSq * windowing * windowing;"}}
 
 ## What is bound, and what is actually read
 
-Shadowing resolves to one scalar per light iteration, and RT visibility, when
-present, wins outright over cascaded shadow maps — the CSM branch is `else if`,
-not an extra multiply. The RT visibility is an `R32G32_UINT` image of eight 8-bit
-channels, one per shadow-casting light (x: lights 0-3, y: 4-7), bound as a
-`usampler2D` and fetched once at `gl_FragCoord` before the loop; each light then
-picks its own byte by the slot the light table wrote into its `params.w`:
+Shadowing resolves to one scalar per light iteration, carried in a `LightVisibility`,
+and RT visibility, when present, wins outright over cascaded shadow maps: the pass
+computes the CSM term only when RT shadows are off. The RT visibility is an
+`R32G32_UINT` image of eight 8-bit channels, one per shadow-casting light (x: lights
+0-3, y: 4-7), fetched once at the pixel before the loop; each light then picks its own
+byte by the slot the light table wrote into its `params.w`:
 
-{{cite shaders/core/deferred_lighting.frag "texelFetch(rtShadowVisibility, ivec2(gl_FragCoord.xy), 0).xy"}}
+{{cite shaders/core/deferred_lighting.slang "vis.rtWords = vis.rt ? rtShadowVisibility.Load(int3(int2(fragCoord.xy), 0)).xy : uint2(0u);"}}
 
-{{cite shaders/core/deferred_lighting.frag "const uint word = slot < 4 ? rtShadow.x : rtShadow.y;"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "const uint word = slot < 4 ? vis.rtWords.x : vis.rtWords.y;"}}
 
-A slot of -1 (the light casts no shadows, is an emissive proxy, or is a caster past
-the first eight) is never occluded; slots 0 to 7 go to the first eight casters in
-light order.
+A slot of -1 (the light casts no shadows or is a caster past the first eight) is never
+occluded; slots 0 to 7 go to the first eight casters in light order.
 
 CSM picks a cascade by positive view-space depth and takes a 3×3 PCF of hardware
-depth comparisons (a `sampler2DArrayShadow`); it neither blends between cascades nor applies a normal-offset bias, though
-the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that. It
-also runs only for `lightType == 0` with a non-negative slot: point and spot lights
-cast no shadow without RT.
+depth comparisons (a `Sampler2DArrayShadow`); it neither blends between cascades nor
+applies a normal-offset bias, though the cascade UBO carries `cascadeBlendWidth` and
+`normalBias` for exactly that. It also shadows only directional lights with a
+non-negative slot: point and spot lights cast no shadow without RT.
+
+{{cite shaders/core/deferred_lighting.slang "vis.directional = !vis.rt && (pc.flags & 4u) != 0u ? shadowCSM(P, viewDepth) : 1.0;"}}
 
 Ambient is defensive because every input can legitimately be absent. IBL runs under
 flag bit 0, which the pass raises only when both of `EnvPrefilter`'s images are bound:
@@ -253,19 +273,22 @@ branch never runs.
 
 Inside the branch the split sum reads the prefiltered level for the pixel's roughness
 along the reflection, weighted by RT GI's environment visibility with GI's bounce
-radiance for the occluded rest, times the reflection weight: Karis's analytic
-environment BRDF with the material's `ao` and SSAO applied through a
-specular-occlusion term (the deferred lighting unit, "Image-based lighting"). The
-weight is computed before the branch, for every pixel, because SSR's resolve weights
-its reflections by it too; the pass writes it and the environment's specular beside
-the lit image for that resolve (the SSR and SSS unit):
+radiance for the occluded rest, times the reflection weight. That weight is the specular
+lobes' own directional albedo toward the viewer, from OpenPBR's energy tables (binding
+20) rather than a fitted environment BRDF, times a specular-occlusion term built from the
+material's `ao` and SSAO (the deferred lighting unit, "Image-based lighting"). It is
+computed before the branch, for every pixel, because SSR's resolve weights its
+reflections by it too; the pass writes it and the environment's specular beside the lit
+image for that resolve (the SSR and SSS unit):
 
-{{cite shaders/core/deferred_lighting.frag "const vec3 specularWeight = (surface.F0 * ab.x + ab.y) * specularOcclusion(NdotV, occlusion, roughness);"}}
+{{cite shaders/core/deferred_lighting.slang "const float3 specularWeight = specularAlbedo * specularOcclusion(NdotV, occlusion, roughness);"}}
 
-The constant ambient term ahead of it is the last resort, applied only when the frame
-has neither RT GI nor an environment, and diffuse only, `albedo * (1 - metallic)`: on
-a metal it used to add a flat F0-tinted glow, and on every wall a flat floor of light
-under RT GI's bounce, neither of which the path tracer has.
+Every indirect diffuse term is weighted by the diffuse's directional albedo beneath the
+specular (`diffuseAlbedo`: EON's, scaled by what the specular lets through, zero for a
+metal). The constant ambient is the last resort, applied only when the frame has neither
+RT GI nor an environment; it has no counterpart in the path tracer.
+
+{{cite shaders/core/deferred_lighting.slang "else if (!ibl) ambient += pc.ambientIntensity * diffuseAlbedo * ao * ssao;"}}
 
 The prefiltered images are the deferred frame's own; the env image the path tracer and
 RT GI sample keeps its single mip level and its base-level sampler, so nothing here can
@@ -283,23 +306,24 @@ and the shader samples binding 10 under that bit, upsampling the (occlusion, dis
 pairs against its own distance from the camera — the four nearest samples weighted
 bilinearly and by a 5 % distance match, the closest one where none matches:
 
-{{cite shaders/core/deferred_lighting.frag "float ssaoAt(ivec2 pixel, float dist) {"}}
+{{cite shaders/core/deferred_lighting.slang "float ssaoAt(int2 pixel, float dist)"}}
 
 The result multiplies the constant ambient and the IBL terms, on top of the material
 occlusion channel in GBuffer2's alpha; direct light and RT GI never see it. The deferred
 SSAO unit covers the pass that produces it.
 
 :::key
-This GBuffer is not a compressed encoding of a surface but a lossy
-*re-authoring* of one: position quantised to half-float, emission reduced to a
-luminance the lighting pass re-tints with albedo, then albedo/roughness/metallic
-edited again for weather before the BRDF runs. The deferred image is not showing
-the material the path tracer receives.
+This GBuffer is a lossy re-encoding of the material the path tracer receives, not the
+material itself: position quantised to half-float, OpenPBR's specular and base inputs
+quantised to 8 bits, then albedo/roughness/metallic edited again for weather before the
+BSDF runs. Without weather the BSDF is the same `OpenPBRBase` the path tracer samples;
+what differs is how light reaches it.
 :::
 
 ## Contracts
 
-- Background is detected by exact float equality — `gBuffer0.rgb == vec3(0)` **and** `.a == 0`, matching the clear value. Geometry landing on the world origin with metallic exactly 0 is discarded as sky.
-- `gbuffer.frag`'s local `encodeNormalOctahedron` and `encoding.glsl`'s `decodeNormalOctahedron` are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates. The header's own `encodeNormalOctahedron` is not part of that contract — it has no callers, and editing it changes nothing.
-- `LightingParams` (C++) and the GLSL push-constant block must stay byte-identical at 184 bytes, including the unread `invViewProj` and `screenSize` fields.
+- Background is detected by exact float equality — all four channels of `gBuffer0` zero, matching the clear value. Geometry landing on the world origin with metallic exactly 0 is drawn as sky.
+- `gbuffer_body.glsl`'s `encodeNormalOctahedron` and each reader's decoder are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates. `encoding.glsl` is not part of that contract — nothing includes it.
+- The `kSpecular` and `kOpenPBR` encodings (`/ 1.5`, `(ior - 1) / 2.55`) are written in `gbuffer_body.glsl` and undone in `deferred_lighting.slang`; change one without the other and every dielectric's reflectance moves.
+- `LightingParams` (C++) and the Slang push-constant block must stay byte-identical at 184 bytes, field for field.
 - Double-sided materials rasterise with `VK_CULL_MODE_NONE` (one-sided ones cull back faces) and the shader has no `gl_FrontFacing` flip, so the visible back faces of a double-sided material store outward-pointing normals and shade dark. `gbuffer.vert` also transforms the tangent by the inverse-transpose normal matrix, correct only under uniform scale.

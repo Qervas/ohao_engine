@@ -126,14 +126,17 @@
         <p>Multi-material GLBs would thrash descriptor sets per draw. One array + indices scales to thousands of textures with one layout.</p>
       </div>
 
-      <div class="section-rule"><h2 id="pack">MaterialGpuPack — 48 bytes / material</h2></div>
-      <div class="listing reveal"><div class="listing-bar"><span>layout_meta.hpp · rt_build · closesthit</span></div>
-<pre>// matColors[matID * 3 + …]
-+0  vec4(baseColor.rgb, asfloat(diffuseTexIdx))
-+1  vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
-+2  vec4(roughMetalTexIdx, unused, unused, unused)
-// kNoTexture = 0xFFFFFFFFu
-// static_assert pack == 48 bytes</pre></div>
+      <div class="section-rule"><h2 id="pack">MaterialGpuPack — 112 bytes / material</h2></div>
+      <div class="listing reveal"><div class="listing-bar"><span>material_table.hpp · gbuffer_body.glsl · path_tracer.slang</span></div>
+<pre>// materials[m * kMaterialRows + …], kMaterialRows = 7
++0  vec4(baseColor.rgb, asfloat(albedoTex))
++1  vec4(roughness, metallic, normalTex, emissiveTex)
++2  vec4(roughMetalTex, emissiveStrength, subsurface, occlusionTex)
++3  vec4(alpha mode, cutoff, opacity, base alpha)
++4  vec4(specular_color, specular_weight)
++5  vec4(specular_ior, base_diffuse_roughness, base_weight, specularTex)
++6  vec4(emission_color, specularColorTex)
+// kNoTexture = 0xFFFFFFFFu</pre></div>
       <div class="prose reveal">
         <p>Texture indices are bit-cast through floats so a single vec4 stream stays std430-friendly. <code>OHAO_ASSERT_GPU_LAYOUT</code> / concepts catch C++ vs GLSL drift at compile time.</p>
       </div>
@@ -153,22 +156,22 @@
           <li>albedoColor.rgb + normalTexIdx in .a</li>
           <li>emissive tex index + strength</li>
         </ul>
-        <p><code>gbuffer.frag</code> then: sample albedo; optional normal map; if ORM index &lt; 4096 multiply ao/rough/metal (R/G/B); <code>rough = max(rough, 0.04)</code>; write MRT packing (Ch.&nbsp;05).</p>
+        <p><code>gbuffer.frag</code> then: sample albedo; optional normal map; if ORM index &lt; 4096 multiply ao/rough/metal (R/G/B); roughness kept as authored (OpenPBR floors it at 0.01); write the eight-target MRT packing (Ch.&nbsp;05).</p>
       </div>
 
       <div class="section-rule"><h2 id="ggx">GGX / Cook-Torrance as shipped</h2></div>
       <div class="prose reveal">
-        <p>File: <code>shaders/includes/brdf/brdf_ggx.glsl</code>. Specular:</p>
+        <p>File: <code>shaders/material/openpbr.slang</code> (OpenPBR's base). Specular D, with \(\alpha=\mathrm{roughness}^2\) floored at roughness 0.01:</p>
       </div>
       <div class="math-block reveal">\[
         D_{\mathrm{GGX}}(h)=\frac{\alpha^{2}}{\pi\bigl((n\!\cdot\!h)^{2}(\alpha^{2}-1)+1\bigr)^{2}},\quad \alpha=\mathrm{roughness}^{2}
       \]</div>
       <div class="math-block reveal">\[
-        F_0=\mathrm{lerp}(0.04,c,m),\quad
-        F=F_0+(1-F_0)(1-v\!\cdot\!h)^{5}
+        F_{0,\mathrm{metal}}=w\,c,\quad
+        F_{0,\mathrm{dielectric}}=\left(\frac{\eta-1}{\eta+1}\right)^{2}
       \]</div>
       <div class="prose reveal">
-        <p>Geometry: height-correlated Smith (Frostbite-style). Diffuse: Lambert \(c/\pi\) energy-scaled by \((1-m)(1-F)\). Path-tracer NEE evaluates a compatible GGX path in raygen (including optional anisotropy helper). Roughness floor exists so mirrors do not NaN and NRD sign-bits survive.</p>
+        <p>Geometry: height-correlated Smith G2. Metals take F82-tint Fresnel; dielectrics the exact Fresnel of <code>specular_ior</code> (modulated by <code>specular_weight</code>), over EON diffuse scaled by what the specular lets through. Kulla-Conty's multiple-scattering lobe, from tabulated energies, makes a white furnace return what it receives. Sampling is bounded VNDF. The reference path tracer, deferred lighting, the transparent pass and RT GI hits all evaluate this one module; the realtime GLSL path tracer (<code>pt_raygen_realtime.rgen</code>) keeps its own GGX in <code>includes/material/ggx_aniso.glsl</code> (Schlick F, F0 0.04).</p>
       </div>
       <div class="why-callout reveal"><div class="why-label">Why GGX</div>
         <p>Industry default for real-time + offline PBR assets. Matches glTF expectations so DamagedHelmet-class models look “right” without custom artist tuning.</p>
@@ -178,14 +181,14 @@
       <table class="data-table compact reveal">
         <thead><tr><th></th><th>Path tracer</th><th>Deferred</th></tr></thead>
         <tbody>
-          <tr><td>Struct</td><td><code>GPULight</code> 80 B (5×vec4)</td><td><code>LightData</code> 128 B (+ light-space matrix)</td></tr>
-          <tr><td>Count</td><td>up to 64 SSBO</td><td>up to 8 UBO</td></tr>
-          <tr><td>Types</td><td>sphere, dir, spot, area</td><td>dir / point / spot (+ CSM)</td></tr>
-          <tr><td>Env</td><td>miss + CDF IS + MIS</td><td>equirect IBL LOD</td></tr>
+          <tr><td>Struct</td><td><code>GPULight</code> 80 B (5×vec4)</td><td><code>LightGpu</code> 64 B</td></tr>
+          <tr><td>Count</td><td>SSBO behind a 16-byte header</td><td>up to 65,536, storage buffer, froxel lists</td></tr>
+          <tr><td>Types</td><td>sphere, dir, spot, area</td><td>dir / point / spot / area (+ CSM)</td></tr>
+          <tr><td>Env</td><td>CDF sampling + MIS</td><td>split-sum IBL (prefiltered + irradiance)</td></tr>
         </tbody>
       </table>
       <div class="prose reveal">
-        <p>Same scene lights are repacked differently. Realtime budget is intentional — many-light PT uses NEE sampling; deferred loops a small UBO.</p>
+        <p>Same scene lights are repacked differently: the path tracer samples one light per vertex; deferred lighting walks the pixel's froxel list (<code>directLight</code> in <code>clustered_lights.slang</code>).</p>
       </div>
 
       <div class="section-rule"><h2 id="fail">Failure modes</h2></div>
@@ -197,7 +200,7 @@
       </div>
       <div class="file-map reveal">
         <div class="row"><code>layout_meta.hpp</code><span class="desc">Pack + byte sizes</span></div>
-        <div class="row"><code>brdf/brdf_ggx.glsl</code><span class="desc">D/F/G eval</span></div>
+        <div class="row"><code>material/openpbr.slang</code><span class="desc">OpenPBR base: eval, pdf, sample</span></div>
         <div class="row"><code>gbuffer.frag</code><span class="desc">Deferred sample + MRT</span></div>
         <div class="row"><code>pt_closesthit.rchit</code><span class="desc">RT sample → payload</span></div>
         <div class="row"><code>gpu_light.hpp / light_upload.cpp</code><span class="desc">Lights</span></div>
@@ -215,7 +218,7 @@
         <a class="tree-card" href="materials/ggx.html">
           <div class="num">ggx</div>
           <h3>GGX implementation</h3>
-          <p>D/F/G terms, Smith correlated, energy helpers.</p>
+          <p>D/F/G terms, Smith correlated, VNDF sampling, energy compensation.</p>
         </a>
         <a class="tree-card" href="materials/pack.html">
           <div class="num">pack</div>

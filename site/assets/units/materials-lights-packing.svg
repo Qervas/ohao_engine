@@ -21,7 +21,7 @@
   <text x="36"  y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">count</text>
   <text x="80"  y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">envIdx</text>
   <text x="124" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">envScale</text>
-  <text x="168" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6e685c">pad</text>
+  <text x="168" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6e685c">alpha</text>
   <text x="36"  y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">u32</text>
   <text x="80"  y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">u32</text>
   <text x="124" y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">f32</text>

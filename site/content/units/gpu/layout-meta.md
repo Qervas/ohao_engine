@@ -21,7 +21,7 @@ pack implies:
 {{cite ohao/gpu/layout_meta.hpp "kMaterialVec4s * sizeof(glm::vec4);"}}
 
 Nor is the header purely declarative: `MaterialGpuPack` adds two constexpr accessors
-for the four-`vec4` material stride and pins them with static asserts against
+for the seven-`vec4` material stride and pins them with static asserts against
 hand-computed answers, so an edit to `kMaterialVec4s` fails here rather than in a
 shader.
 
@@ -127,8 +127,8 @@ declaration is shared across shaders but not across the language boundary.
 ## One packer, two readers
 
 The material rows are where the deferred and path-traced pipelines meet. The G-buffer
-pass and the path tracer read the same 64-byte rows out of one storage buffer, and
-one function writes them:
+pass, the transparent pass and both path tracers read the same rows — seven `vec4`s, 112
+bytes a material — out of one storage buffer, and one function writes them:
 
 {{cite ohao/render/scene/material_table.cpp "d.roughness, d.metallic, bits(d.normalTex), bits(d.emissiveTex),"}}
 
@@ -141,14 +141,15 @@ its own decode — in `gbuffer.frag`:
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "vec4 row1 = matRows[m * kMaterialRows + 1u];   // roughness, metallic, normalTex, emissiveTex"}}
 
-and in the closest-hit shader:
+and in the realtime path tracer's closest-hit shader:
 
 {{cite shaders/rt/pt_closesthit.rchit "vec4 matParams  = matColorBuf.matColors[matID * kMaterialRows + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)"}}
 
-All three agree today. Because there is a single packer the two pipelines cannot
-disagree about lane order, but the agreement is three hand-written copies of one
-diagram, with the size assert as the only mechanical witness. A reordered row needs
-three coordinated edits and fails only as wrong pixels.
+The reference path tracer's closest hit (`rt/path_tracer.slang`) and the transparent pass
+decode the same lanes again by hand. They agree today. Because there is a single packer the
+pipelines cannot disagree about lane order, but the agreement is hand-written copies of one
+diagram in several shaders, with the size assert as the only mechanical witness. A reordered
+row needs coordinated edits in every reader and fails only as wrong pixels.
 
 ## Two sentinel decoders in one shader
 
@@ -219,12 +220,12 @@ Sizes are pinned from a constants header rather than derived from the shaders. T
 alternative — one declaration shared by both sides, either a header the GLSL
 `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable,
 not just totals. The toolchain already supports the include half, and the render
-world uses it: `scene_data.glsl` is included by six shaders. A third route goes
+world uses it: `scene_data.glsl` is included by five shaders. A third route goes
 further: `shaders/shared/layout.json` describes a struct once and `tools/gen_layout.py`
 generates its GLSL, Slang and C++ copies, the C++ one with an assert on every
 field's offset. The deferred light record, `LightGpu`, is declared there, and both
-its readers, `deferred_lighting.frag` and `light_cluster.slang`, take it from the
-generated headers. The cost of sharing declarations is that every C++ struct becomes
+its readers, the shared light loop `clustered_lights.slang` (deferred lighting and the
+forward passes) and `light_cluster.slang`, take it from the generated modules. The cost of sharing declarations is that every C++ struct becomes
 downstream of shader preprocessing or a generator, and layout questions become
 build-step failures. The older structs on this page took the cheap half — one place to
 edit a size, review for everything else.
@@ -245,7 +246,7 @@ changed meaning, a shader block written against an older struct — passes it.
 - Nothing queries `maxPushConstantsSize`, and the path tracer's block exceeds Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
 - Three structs carry `OHAO_ASSERT_GPU_LAYOUT` (`LightData`, `GPULight`, `PTPushConstants`); `InstanceGpu`, `MeshGpu`, `Vertex`, `CameraUBO` and `DrawPushConstant` are size-checked with a bare `static_assert`. A layout edit must update the C++ struct, its GLSL twin and the assert together.
 - `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; six shaders read the GLSL copy. Only the C++ side is size-checked.
-- `MaterialTable::pack` is the only writer of the four-`vec4` material row; `gbuffer.frag` and `pt_closesthit.rchit` each decode it by hand. The row size is asserted, the lane order is not.
+- `MaterialTable::pack` is the only writer of the seven-`vec4` material row; `gbuffer_body.glsl`, `pt_closesthit.rchit`, `rt/path_tracer.slang` and the transparent pass each decode it by hand. The row size is asserted, the lane order is not.
 - `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track the texture manager's `maxTextures` by hand; the path tracer's equivalent is a specialisation constant.
 - `Material` in `material.hpp` has no GPU consumer; add a field to `MaterialDesc`, not to `Material`, to reach a shader.
 - `PBRMaterialParams` is guarded only by `sizeof % 16 == 0`. If a shader ever binds it, replace that with an exact-byte `OHAO_ASSERT_GPU_LAYOUT` first.

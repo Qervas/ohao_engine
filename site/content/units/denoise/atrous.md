@@ -162,23 +162,24 @@ dispatches would be invalid.
 Atrous mode forces `historyFrameCount = 0` in the raygen push constants every
 frame, so the engine's cross-frame accumulation is bypassed and the denoiser owns
 temporal integration. (How many paths it carries is a separate control,
-`samplesPerFrame`, averaged in-raygen.) Two of the three raygen variants gate
-motion-vector output on that same zeroed counter:
+`samplesPerFrame`, averaged in-raygen.) The reference path tracer, the offline
+profile's raygen, gates motion-vector output on that same zeroed counter: the
+vector starts at zero and is computed only while history frames are counted.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "if (firstHitDist > 0.0 && historyFrameCount > 0u) {"}}
+{{cite shaders/rt/path_tracer.slang "float2 motion = float2(0.0);"}}
 
-With the offline profile bound it is false on every Atrous frame, so the
+With the offline profile bound the counter is 0 on every Atrous frame, so the
 motion-vector AOV is identically zero and reprojection degenerates to
 `prevPixel == pixel` — the smaller problem there. That profile also resets
 accumulation on view change, which raises `pc.reset` and makes Pass 1 discard
 *all* history unconditionally — not per-pixel, not by geometry test — for every
-frame the camera moves. The realtime raygen was fixed by gating on the frame
-index, which advances in all modes:
+frame the camera moves. The realtime raygen gates on the frame index instead,
+which advances in all modes:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "if (firstHitDist > 0.0 && frameIdx > 0u) {"}}
 
-So an `rt_realtime --denoise=atrous` run gets correct vectors; the other two
-raygens do not.
+So an `rt_realtime --denoise=atrous` run gets correct vectors; an offline one does
+not.
 
 ## Two compiled shaders that nothing runs
 

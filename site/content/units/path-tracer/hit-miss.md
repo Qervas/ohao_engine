@@ -5,293 +5,192 @@ title: Hit and miss shaders
 standard: v2
 ---
 
-## Everything a hit knows must fit in one payload
+## Two hit-shader sets
 
-The path tracer's bindless texture array is declared for closest-hit, any-hit and
-miss only — no raygen stage appears in binding 12's mask, and none of the three
-raygen profiles declares a sampler of its own.
+The path tracer's pipeline holds four stages, and each profile brings its own four.
+The offline profile's are entry points of `rt/path_tracer.slang` (`closestHit`,
+`anyHit`, `miss`, beside `raygen`); the realtime profile's are the GLSL files
+`pt_closesthit.rchit`, `pt_anyhit.rahit` and `pt_miss.rmiss`. Both sets read the same
+descriptor set, so both resolve a hit from the same RenderScene tables. They differ
+in what the hit hands back.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,"}}
+## The reference's payload: a whole surface
 
-Every material fact the integrator needs is therefore squeezed through a single
-`RayPayload`, redeclared field-for-field in five files: the three raygen profiles,
-`pt_closesthit.rchit` and `pt_miss.rmiss`. There is no shared header, so a field
-added to one copy and not the others does not fail to compile — it reinterprets
-the neighbouring floats.
+In `path_tracer.slang` the closest hit resolves every OpenPBR input the raygen needs
+and hands it back in one `PathPayload`: position, distance, geometric and shading
+normals, base colour and weight, specular colour, weight, roughness and IOR,
+metalness, diffuse roughness, emission, and for an emitter mesh its light.
 
-One field is already write-only. The closest-hit publishes the instance's custom
-index, which here holds the instance-table slot, and nothing reads it back:
+{{cite shaders/rt/path_tracer.slang "// What a ray brings back: a surface's place and its OpenPBR inputs (resolved from its material"}}
 
-{{cite shaders/rt/pt_closesthit.rchit "payload.hitInstance = gl_InstanceCustomIndexEXT;"}}
+The struct is declared once, in the file that holds all four stages, so the stages
+cannot disagree about its layout. The raygen turns it into `MaterialInputs` and builds
+`OpenPBRBase` from that; nothing about the surface is decoded in the raygen.
 
-A single payload also imposes an ordering rule. Shadow rays reuse miss index 0 —
-the same `pt_miss.rmiss` — so a visibility test that *escapes* overwrites
-`payload.color`, `payload.hitDist` and `payload.envPdf`. An occluded one runs no
-shader at all: the shadow trace carries `TerminateOnFirstHit | Opaque |
-SkipClosestHitShader`, so a hit invokes nothing and `payload.hitDist` keeps the
-`999.0` sentinel the raygen wrote one line earlier — which is precisely how the
-caller tells the two outcomes apart.
+The triangle is found through the instance slot (`InstanceID()`, the TLAS custom
+index), the mesh table and the index arena; its material through the triangle's slot
+and the instance's material references:
 
-{{cite shaders/rt/pt_raygen.rgen "hitPos + N * 0.01, 0.001, L, shadowDist, 0);"}}
+{{cite shaders/rt/path_tracer.slang "c.material = triSlot < info.z ? materialRefs[info.y + triSlot] : 0u;"}}
 
-Either way the raygen must snapshot the hit into locals before it fires anything:
+Both normals are built in world space and turned toward the ray. The geometric normal
+comes from the triangle's corners by the inverse transpose; the shading normal is the
+interpolated vertex normal, flipped to the geometric normal's side. Which side the
+winding faces is kept, because an emitter emits from its front only.
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 emissive = payload.color;"}}
+{{cite shaders/rt/path_tracer.slang "const bool front = dot(geo, dir) < 0.0;   // the side the winding faces (emitters emit from it)"}}
 
-Move a shadow ray above that line and the first escaping one turns the surface's
-own emission into the sky.
+### Normal maps in the tangents' frame
 
-## Rebuilding a surface from three indices
+A normal map is applied in the frame of the vertex tangents, Gram-Schmidt
+orthogonalised against the shading normal, with the bitangent's sign from the tangent's
+`w` — the frame the G-buffer uses, so one normal map perturbs a surface the same way in
+both renderers. A mesh without tangents falls back to a basis built from the normal
+alone (Duff et al.).
 
-The closest-hit receives barycentrics and a primitive id, nothing else. It resolves
-the triangle through the instance slot, the mesh table and the shared index arena,
-reads UVs and vertex normals in place from the vertex arena as 25-float records,
-interpolates them, and rotates the result to world space. When the interpolated normal
-is degenerate — squared length under 1e-4, what a mesh carrying no vertex normals
-produces — it falls back to a box normal built from the sign of the dominant
-object-space coordinate:
+{{cite shaders/rt/path_tracer.slang "T = normalize(tw - n * dot(n, tw));"}}
 
-{{cite shaders/rt/pt_closesthit.rchit "else localN = vec3(0, 0, sign(hitLocal.z));"}}
+A mapped normal that ends up at or below the geometric surface is pushed back just
+above it, so a BSDF sampled about it cannot point every direction into the surface.
 
-A box normal is right for an axis-aligned quad and wrong for anything curved,
-which is why the two-sided flip is gated on that same branch. In the shipped
-scenes neither ever runs. Each Cornell wall is a `QuadPrim` carrying an explicit
-inward unit normal, which `PrimitiveMeshGenerator::generateQuad` copies into all
-four of its vertices when the instantiate system builds the mesh; the primitive
-sphere uses its normalised position, and the shader reads `Vertex::normal` verbatim
-out of the arena — so the squared length is 1, the interpolated branch always wins,
-and the fallback is dead code on the reference scene rather than the thing that
-makes it work.
+{{cite shaders/rt/path_tracer.slang "if (dot(n, geo) < 1e-3) n = normalize(n + geo * (1e-3 - dot(n, geo)));"}}
 
-{{cite ohao/scene/asset/primitive_mesh_generator.cpp "v.normal = normal;"}}
-{{cite ohao/scene/asset/primitive_mesh_generator.cpp "vertex.normal = {x, y, z};"}}
-{{cite shaders/rt/pt_closesthit.rchit "vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }"}}
+### The material's rows
 
-The loaders leave a zero normal where a file carries none — OBJ, Assimp, and `ufbx`,
-which writes the vertex normal only when the mesh has a normal layer — and
-`ModelLoader` then gives every such vertex its faces' smooth normal, so a loaded
-model cannot reach the fallback either.
+A material is `kMaterialRows` (7) `vec4`s. The closest hit reads rows 0, 1, 2, 4, 5
+and 6: base colour, roughness and metalness, the texture handles, specular weight and
+colour, specular IOR, diffuse roughness, base weight, and emission colour. Texture
+handles are float bit patterns; an index at or past 4096 means none. Roughness and
+metalness are multiplied by the G and B channels of the roughness-metallic texture,
+the specular weight by the specular texture's alpha, the specular colour by its
+texture, and emission is `emission_color × emission_luminance`, times the emissive
+texture when there is one.
 
-{{cite ohao/scene/asset/model.cpp "vertex.normal = glm::vec3(0.0f);"}}
-{{cite ohao/scene/asset/model_fbx.cpp "if (mesh->vertex_normal.exists)"}}
-{{cite ohao/scene/asset/model_loader.cpp "// Post-load: give vertices the file left without a normal their faces' smooth normal"}}
+{{cite shaders/rt/path_tracer.slang "float3 emission = row6.rgb * row2.y;"}}
 
-Real meshes therefore get no flip, and every TLAS instance disables triangle
-culling, so a hit from behind keeps its outward normal.
+Hit shaders have no derivatives, so every fetch samples level 0. Nothing in either RT
+path computes ray differentials, so minified textures alias.
 
-{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |"}}
+### An emitter mesh
 
-Nothing goes negative — every NEE branch clamps `N·V` to 0.001 — but `N·L` is
-clamped at zero, so every light on the far side contributes exactly nothing and
-the back face renders black rather than wrongly lit.
+A light's emitter mesh (`kInstanceEmitter`) returns its radiance on the front side,
+black behind, and its light index, which RenderScene stores in the instance's
+`emitterLight.w`. The raygen uses the index to weigh a bounce ray's hit against
+light sampling of the same light.
 
-{{cite shaders/rt/pt_raygen.rgen "float NdotL = max(dot(N, L), 0.0);"}}
+{{cite shaders/rt/path_tracer.slang "payload.light = uint(c.instanceRow9.w + 0.5);"}}
+{{cite ohao/render/scene/render_scene.cpp "d.emitterLight = glm::vec4(want[i].radiance, static_cast<float>(rtIndex[i]));"}}
 
-From the same three vertex normals the shader derives a curvature proxy: the total
-angular disagreement between them, scaled by eight and clamped.
+## The realtime payload: a few decoded numbers
 
-$$\kappa = \operatorname{clamp}\!\Big(8\sum_{i<j}\big(1-\hat{n}_i\cdot\hat{n}_j\big),\,0,\,1\Big)$$
+The GLSL closest hit returns less: emission in `color`, roughness, metallic and a
+curvature proxy in `attenuation`, position, normal, albedo and hit distance. The
+`RayPayload` struct is written out in `pt_closesthit.rchit`, `pt_miss.rmiss` and
+`pt_raygen_realtime.rgen` with no shared header, so a field added to one copy and not
+the others reinterprets its neighbours.
 
-$\hat{n}_0,\hat{n}_1,\hat{n}_2$ are the triangle's normalised vertex normals and
-the sum runs over their three distinct pairs. Read literally, that is the spread
-of one triangle's normals — edge length times curvature — so it tracks tessellation
-as much as shape. The comment above it calls the value near zero on smoothly-curved
-regions; the engine's own sphere contradicts that. At 32 sectors by 16 stacks
-adjacent vertex normals differ by $\pi/16 \approx 0.196$ rad, so on an equatorial
-face the three pair terms sum to about $0.077$ and $\kappa \approx 0.6$ —
-arithmetic on those two constants, not a measurement.
+{{cite shaders/rt/pt_closesthit.rchit "payload.attenuation = vec3(roughness, clamp(metallic, 0.0, 1.0), curv);"}}
 
-{{cite ohao/scene/asset/primitive_mesh_generator.hpp "static void generateSphere(Model& model, float radius = 0.5f, int sectors = 32, int stacks = 16);"}}
-{{cite shaders/rt/pt_closesthit.rchit "curv = clamp(curv * 8.0, 0.0, 1.0);"}}
-
-It fails the other direction too: a hard crease authored with split per-face
-normals presents three identical vertex normals, giving $\kappa = 0$ exactly. So
-what the closest-hit computes is a tessellation-weighted smoothness estimate, not
-the corner detector the comment describes — a usable knob, not geometry.
-
-The value rides in `payload.attenuation.z`, computed once in the closest-hit for
-all three profiles, and has exactly one reader — the offline profile's subsurface
-term, which uses it to widen the diffusion kernel:
-
-{{cite shaders/rt/pt_raygen_offline.rgen "float curvature = clamp(payload.attenuation.z, 0.0, 1.0);"}}
-
-The shared decoder every raygen runs on that payload touches `.x` and `.y` only,
-so under the default and realtime profiles the field is written and never read.
-
-{{cite shaders/rt/includes/pbr_unpack.glsl "void unpackHitPbr(vec3 att, out float roughness, out float metallic) {"}}
-
-## A tangent frame that does not know about UVs
-
-The vertex arena holds the full 100-byte `Vertex`, tangent included, but the
-closest-hit loads only the normal and the UV out of it, so normal mapping builds
-an orthonormal basis from the shading normal alone — Frisvad's
-$a = 1/(1+n_z)$ construction, which buys its speed by avoiding a normalisation and
-a square root, not a branch. The branch is unavoidable: the form is singular at
-$n_z = -1$, and the shader guards it explicitly.
-
-{{cite shaders/rt/pt_closesthit.rchit "if (worldNormal.z < -0.9999) {"}}
-
-The tangent-space normal is then applied in that basis:
+It builds a normal map's frame from the normal alone (Frisvad's construction), not from
+the tangents, so directional detail (brushed metal, scratches) rotates per pixel in
+the realtime image and does not match the deferred frame or the reference.
 
 {{cite shaders/rt/pt_closesthit.rchit "worldNormal = normalize(T * mapN.x + B * mapN.y + worldNormal * mapN.z);"}}
 
-The engine already documents why that basis is poor when direction matters:
-`ggx_aniso.glsl` rejected Frisvad for its anisotropy tangent for exactly this
-reason.
+When the interpolated normal is degenerate it falls back to a box normal from the sign
+of the dominant object-space coordinate, and only then flips it toward the ray.
+Loaders fill normals a file lacks (`ModelLoader`), so a loaded mesh does not reach the
+fallback.
 
-{{cite shaders/includes/material/ggx_aniso.glsl "varies discontinuously with N — neighbouring pixels on a sphere see totally"}}
+{{cite shaders/rt/pt_closesthit.rchit "else localN = vec3(0, 0, sign(hitLocal.z));"}}
 
-The rasteriser has the real thing — a per-vertex tangent with handedness,
-Gram-Schmidt orthogonalised against the shading normal:
+The curvature proxy, $\kappa = \operatorname{clamp}(8\sum_{i<j}(1-\hat n_i\cdot\hat n_j), 0, 1)$
+over the triangle's three vertex normals, is written to `attenuation.z` and read by no
+raygen.
 
-{{cite shaders/includes/scene/gbuffer_body.glsl "T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));"}}
+## The any-hit: alpha
 
-So one normal map perturbs in a UV-aligned frame under the deferred pipeline and in
-an arbitrary, N-dependent frame under the path tracer. The `mapN.z` component — the
-bulk of most normal maps — survives either way, which is why RT renders still look
-bumpy. Directional detail does not: brushed metal, scratches and woven cloth rotate
-per pixel in the RT path and will not match the raster preview.
+Both any-hit shaders implement the alpha modes from material row 3 (mode, cutoff,
+opacity, base alpha). Coverage is the base alpha times opacity times the albedo
+texture's alpha. `Mask` ignores a hit below the cutoff; `Blend` is stochastically
+present, accepted with probability equal to the coverage by a hash of the launch
+pixel, the ray and the triangle, so samples converge to the blend.
 
-## One descriptor array, one texture table
+{{cite shaders/rt/path_tracer.slang "// Blended: stochastically present, by a hash of the ray and the triangle."}}
+{{cite shaders/rt/pt_anyhit.rahit "if (mode == kAlphaMask) {"}}
 
-The material row is three `vec4`s indexed by material id, with texture handles
-smuggled through float bit patterns and `0xFFFFFFFF` meaning "none". The id itself
-is not stored per triangle: the triangle's slot is looked up in the slot stream
-and the instance's reference list turns the slot into a material:
+The stage runs only for instances the TLAS marks non-opaque (an alpha material), and
+only while rays trace without forcing opacity. The light buffer's header word 3 says
+whether any such instance exists; when none does, every ray forces opacity and no
+any-hit runs.
 
-{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * kMaterialRows + 2u];"}}
+{{cite shaders/rt/path_tracer.slang "uint traceFlags() { return alphaRays() ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE; }"}}
 
-The texture indices are slots in the one bindless table the G-buffer also reads.
-Albedo and emissive textures live in it as `R8G8B8A8_SRGB`, so the sampler decodes
-them to linear and the colour fetch needs no manual transfer function; normal and
-roughness-metallic textures are `UNORM`:
+## The miss
 
-{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "if (type == BindlessTextureType::Albedo || type == BindlessTextureType::Emissive) {"}}
+The reference's miss shader only clears the hit flag; the raygen looks up the
+environment itself (`envRadiance`) and evaluates its density (`envPdf`) when it needs
+them. That keeps a shadow ray's miss to one store.
 
-Hit shaders have no derivatives, so every fetch is a `textureLod` at level 0 at
-native resolution. The albedo is the base colour, multiplied by the albedo texture
-when the material has one; an untextured surface is its base colour, applied once.
-The third row's last two lanes are unused.
+{{cite shaders/rt/path_tracer.slang "payload.flags = 0u;"}}
 
-{{cite shaders/rt/pt_closesthit.rchit "albedo *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).rgb;"}}
-
-The HDR environment map sits in the *same* GLSL array as an `R32G32B32A32_SFLOAT`
-image — legal because combined-image-sampler descriptors are independent — which is
-how the miss shader reads values above 1.0 from a binding whose other entries are
-clamped to `[0,1]`. Nothing in the RT path computes ray differentials, so minified
-textures alias.
-
-## The miss shader is both the sky and the shadow test
-
-`pt_miss.rmiss` signals escape by writing a negative distance, and that one float
-is the entire occlusion protocol:
+The realtime miss shader does more. It signals escape by a negative distance, fetches
+the environment, and evaluates `pdfEnvMap` for the escaping direction, so an
+environment shadow ray that escapes is also the radiance fetch:
 
 {{cite shaders/rt/pt_miss.rmiss "payload.hitDist = -1.0;  // signal miss"}}
-
-This is what lets environment next-event estimation cost one ray instead of two.
-The raygen draws a direction from the environment CDF, traces a shadow ray along
-it, and if the ray escapes it consumes the radiance the miss shader just wrote —
-visibility and the light's emission resolved in a single traversal:
-
-{{cite shaders/rt/pt_raygen.rgen "vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;"}}
-
-The same economy is a cost on every other shadow ray that escapes: area-light NEE
-traces through the identical miss shader, which fetches the environment texel and
-then evaluates `pdfEnvMap` — an `acos`, an `atan2` and up to four indexed CDF loads — to
-report a PDF that caller never reads. The expensive half is not shared: the two
-binary searches live in `sampleEnvMap`, which only the raygen calls.
-
 {{cite shaders/rt/pt_miss.rmiss "payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));"}}
 
+Every other escaping shadow ray pays for that density too: an `acos`, an `atan2` and up
+to four CDF loads it never reads.
+
 :::why
-With no environment map the miss returns black, not a constant ambient. A fake sky
-term is the cheaper-looking choice and it is wrong for closed scenes: GI rays that
-slip through a wall seam pick it up and carry sky light — and its grain — back into
-a sealed room. Indoor scenes are lit only by their own lights.
+With no environment map both misses return black, not a constant ambient. A fake sky
+term is wrong for closed scenes: rays that slip through a wall seam would carry sky
+light, and its grain, into a sealed room. Indoor scenes are lit by their own lights.
 {{cite shaders/rt/pt_miss.rmiss "payload.color = vec3(0.0);"}}
 :::
 
-## One equirectangular convention, one texture
+## One equirectangular convention
 
-The miss shader and the environment importance sampler both map directions to
-equirectangular UVs, and they must agree, because the sampler picks a texel and the
-miss shader shades the ray it becomes. `EnvCDF::build` consumes the same `stbi_loadf`
-array that is memcpy'd unflipped into the image, so row 0 of both is the file's first
-row, the zenith:
+The miss shaders, the environment sampler and every other environment lookup map a
+direction to equirectangular UVs with row 0 at the zenith, the way `stbi_loadf` loads
+the file. The realtime miss writes
 
-{{cite ohao/gpu/vulkan/env_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
-
-For a unit direction $d$ the miss shader uses
-
-$$v_{\text{miss}} = \frac{1}{2} - \frac{\arcsin d_y}{\pi}$$
+$$v = \frac{1}{2} - \frac{\arcsin d_y}{\pi}$$
 
 {{cite shaders/rt/pt_miss.rmiss "return vec2(phi / 6.2831853 + 0.5, 0.5 - theta / 3.1415926);"}}
 
-while `env_sampling.glsl`, which turns CDF texels into directions and inverts the
-map for MIS, uses
-
-$$v_{\text{cdf}} = \frac{\arccos d_y}{\pi}$$
+and `env_sampling.glsl`, which turns CDF texels into directions, uses
+$v = \arccos(d_y)/\pi$. Since $\arccos x = \tfrac{\pi}{2} - \arcsin x$ these are the same
+number. The reference's `envPdf` and `sampleEnv` use the $\arccos$ form against the
+same CDF buffers.
 
 {{cite shaders/includes/rt/env_sampling.glsl "float theta = v * OHAO_PI;"}}
+{{cite shaders/rt/path_tracer.slang "const float theta = acos(clamp(dir.y, -1.0, 1.0));"}}
 
-Since $\arccos x = \tfrac{\pi}{2} - \arcsin x$, the two are the same number; both
-derive $u$ from $\operatorname{atan2}(d_z, d_x)$. Every other lookup of the
-environment in the engine writes the miss shader's expression, the deferred lighting
-pass's among them:
-
-{{cite shaders/core/deferred_lighting.frag "return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.1415926);"}}
-
-The estimator underneath is still not unbiased. `sampleEnvMap` throws away the residual of $u_1,u_2$ after the two
-searches and returns `equirectPixelToDir`, which resolves the texel *centre* — so
-the procedure draws from a discrete set of $W \times H$ directions while reporting
-a continuous solid-angle density.
+The two samplers differ in one respect. The realtime `sampleEnvMap` returns the centre
+of the chosen texel, so it draws from $W \times H$ directions while reporting a
+continuous density, a quadrature error no sample count removes. The reference's
+`sampleEnv` draws a point uniformly inside the texel, which matches the piecewise
+constant density `envPdf` reports.
 
 {{cite shaders/includes/rt/env_sampling.glsl "float u = (float(x) + 0.5) / float(W);"}}
-
-The env-NEE term is thus a midpoint Riemann sum over texel centres, evaluated
-against the bilinearly filtered radiance the miss shader fetches: a systematic
-quadrature error that no sample count removes, sitting on top of an importance
-distribution the mirrored $v$ leaves anti-correlated with the radiance it exists to
-track. Both are read from the code, not measured.
-
-## The any-hit that traversal never calls
-
-`pt_anyhit.rahit` implements a hard 0.5 cutout, and the shader itself is sound: it
-takes alpha from the diffuse texture, so any textured cutout material would be
-tested correctly if the stage ever ran.
-
-{{cite shaders/rt/pt_anyhit.rahit "uint diffuseTexIdx = floatBitsToUint(matColor.a);"}}
-
-It never runs. That is the whole of what makes it inert: every BLAS is built with
-`VK_GEOMETRY_OPAQUE_BIT_KHR` and every `traceRayEXT` passes `gl_RayFlagsOpaqueEXT`,
-either of which alone suppresses the stage.
-
-A second, independent gap sits behind that one. The material row has no alpha slot
-— the `.a` lane of the base-colour row is where the diffuse texture index lives —
-so an untextured material with a transparent base colour could not be cut out even
-with traversal fixed. No loader records an alpha mode either: glTF's `alphaMode` and
-`alphaCutoff` go through Assimp and are never read, and `MaterialData` has no field
-for them.
-
-What ships instead is deletion at load time — the OBJ path drops alpha-card
-triangles by material name:
-
-{{cite ohao/scene/asset/model.cpp "// Filter alpha-card geometry that lacks proper alpha textures"}}
+{{cite shaders/rt/path_tracer.slang "const float u = (float(x) + rng.next()) / float(W);"}}
 
 :::key
-Read the any-hit as a specification, not as behaviour. Making it run takes three
-independent changes — clear the geometry opaque bit, drop the per-ray opaque flag,
-and add an alpha or alpha-mode field to the material row — and any one of them
-alone changes nothing.
+The reference's closest hit does all the material work and hands the raygen a complete
+OpenPBR surface; its miss does nothing but say "missed". The realtime set keeps the
+older split: a small decoded payload, a Frisvad frame for normal maps, and a miss
+shader that doubles as the environment lookup.
 :::
 
 ## Contracts
 
-- `RayPayload` is duplicated across `pt_closesthit.rchit`, `pt_miss.rmiss` and all three raygen profiles with no shared header. Edit one and you must edit all five; a mismatch is silent.
-- Shadow rays use miss index 0, so one that escapes clobbers `payload.color`, `payload.hitDist` and `payload.envPdf`; an occluded one runs no shader and leaves the payload alone. Read albedo, normal, position and emission into locals before tracing anything.
-- `payload.hitDist < 0.0` is the only occlusion signal. A miss that stops writing it turns every shadow ray into a hit and every surface black.
-- `pt_miss.rmiss` declares a `vec4 jitter` it never reads, purely so its push-constant block size matches the layout the raygen defines. Trimming it invalidates the layout.
-- Only degenerate-normal geometry is flipped two-sided, and no shipped scene produces one; culling is disabled TLAS-wide, so a real mesh hit from behind keeps its outward normal and renders black through the `N·L` clamp.
-- Normal maps use a Frisvad basis in the path tracer and a UV-derived tangent basis in the GBuffer. Directional detail will not match between the two.
-- The material table is three `vec4`s per material (`layout::MaterialGpuPack`). A shader that indexes it with a stride of two reads the neighbouring material's colour as its own parameters.
-- The instance slot is the hit shaders' only handle on a hit: `gl_InstanceCustomIndexEXT` indexes the instance table, which carries the mesh and the material references. A TLAS built with any other custom index breaks every lookup silently.
+- `PathPayload` is declared once in `path_tracer.slang`; `RayPayload` is written out in `pt_closesthit.rchit`, `pt_miss.rmiss` and `pt_raygen_realtime.rgen`. Edit one GLSL copy and you must edit all three; a mismatch is silent.
+- The instance slot is the hit shaders' only handle on a hit: the TLAS custom index indexes the instance table, which carries the mesh and the material references. A TLAS built with any other custom index breaks every lookup.
+- A material is `kMaterialRows` (7) `vec4`s. A shader that indexes the table with another stride reads the neighbouring material.
+- An emitter instance's `emitterLight.w` is its light's index in the RT light buffer; the reference's MIS reads it through `payload.light`.
+- Any-hit runs only for non-opaque instances and only while header word 3 is set; a new trace must not force opacity while it is, or it shadows through every cut-out.
+- A realtime shadow ray's escape is `payload.hitDist < 0.0`; a reference shadow ray's is `kHit` cleared. Both depend on the closest hit being skipped and the caller presetting the payload.
+- `pt_miss.rmiss` declares a `vec4 jitter` it never reads so its push-constant block matches the pipeline layout. Trimming it invalidates the layout.

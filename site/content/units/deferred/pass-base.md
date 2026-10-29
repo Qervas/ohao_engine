@@ -65,10 +65,10 @@ base class, shared by every pass and defaulted to a relative path:
 {{cite ohao/render/deferred/render_pass_base.hpp "static inline std::string s_shaderBasePath"}}
 
 `VulkanRenderer`'s constructor probes seven candidate directories for
-`core_deferred_lighting.frag.spv` and, during `initialize()`, pushes the winner into the
+`core_deferred_lighting.slang.spv` (the lighting pass's Slang fragment shader) and, during `initialize()`, pushes the winner into the
 base before the deferred renderer — and therefore any pass — is constructed:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "core_deferred_lighting.frag.spv"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "core_deferred_lighting.slang.spv"}}
 
 {{cite ohao/gpu/vulkan/renderer.cpp "RenderPassBase::setShaderBasePath(m_shaderBasePath);"}}
 

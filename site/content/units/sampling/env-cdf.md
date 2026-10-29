@@ -26,7 +26,9 @@ upload:
 
 Out come a conditional CDF per row (W floats × H rows) and a marginal CDF over
 rows (H floats), handed to every RT profile with the map's width, height and
-unnormalised integral.
+unnormalised integral. Two samplers read them: `env_sampling.glsl`, which the
+realtime raygen and the miss shader include, and the reference path tracer's own
+`sampleEnv` and `envPdf` in `rt/path_tracer.slang`.
 
 ## The sinθ that has to be there
 
@@ -59,7 +61,7 @@ leaving a solid-angle density proportional to luminance alone. Note what is
 
 {{cite shaders/includes/rt/env_sampling.glsl "void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,"}}
 
-It is not dead weight. The three raygen profiles hand over `pc.tuning.z`, and
+It is not dead weight. The realtime raygen hands over `pc.tuning.z`, and
 it is kept in the signature because inverting the chain above needs it — a
 next-event estimator that wants RADIANCE rather than a density has to undo the
 normalisation the builder applied. Rearranging p_ω = P·WH / (2π²sinθ_y) with
@@ -85,8 +87,13 @@ over that row's conditional to choose a column:
 {{cite shaders/includes/rt/env_sampling.glsl "if (envMarg.data[uint(mid)] < u) lo = mid + 1;"}}
 
 For a 4096×2048 HDRI that is 11 plus 12 dependent, warp-divergent SSBO loads to
-locate the texel, and `pt_raygen.rgen` takes one such sample at bounce 0 plus one
-per bounce of each of its specular and diffuse chains. The density is then
+locate the texel, and `pt_raygen_realtime.rgen` takes one such sample at bounce 0
+plus one per bounce of each of its specular and diffuse chains. The reference
+takes one per vertex of its single path, with the same two searches:
+
+{{cite shaders/rt/path_tracer.slang "const uint x = searchCdf(envConditional, y * W, W, rng.next());"}}
+
+In `env_sampling.glsl` the density is then
 reconstructed by differencing the two tables — four further loads, 27 per
 environment sample away from the tables' first entries — rather than read from a
 separate PDF image. The same
@@ -159,10 +166,10 @@ binning by hand:
 
 ## One latitude convention: the file's
 
-`sampleEnvMap` returns a direction, never a radiance. The raygen fires an
+`sampleEnvMap` returns a direction, never a radiance. The realtime raygen fires an
 occlusion ray along it and takes whatever colour the miss shader hands back:
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 envContribution = envRadiance * (diff + spec) * NdotL_env * w / envPdf;"}}
 
 That leaves two functions responsible for one texel↔direction map:
 `equirectPixelToDir` and its inverse `envTexelPdfUV` — the shared binning behind
@@ -174,7 +181,7 @@ first row over:
 
 {{cite shaders/includes/rt/env_sampling.glsl "float theta = acos(clamp(dir.y, -1.0, 1.0));"}}
 
-The miss shader, and every other lookup of the environment (deferred lighting, the
+The miss shader, the reference's `envRadiance`, and every other lookup of the environment (deferred lighting, the
 prefiltered and irradiance images, RT GI's escaped rays, the forward and particle
 passes, the cinematic composite), takes arcsine and writes v = ½ − asin(y)/π, which is
 the same number, since acos(y)/π = ½ − asin(y)/π:
@@ -193,23 +200,39 @@ it blue.
 {{cite tests/renderer/check_env_orientation.py "MIN_RATIO = 1.5"}}
 
 :::key
-Env-IS is not an unbiased estimator. `sampleEnvMap` returns `equirectPixelToDir(x, y, W, H)` unmodified —
+The realtime tracer's env-IS is not an unbiased estimator. `sampleEnvMap` returns `equirectPixelToDir(x, y, W, H)` unmodified —
 the exact texel centre, with no intra-texel jitter — so the strategy draws from
 W·H fixed directions and the expectation of its NEE term is a texel-by-texel
 midpoint quadrature of L·f·cosθ·w rather than the integral. That error is set by
 the map's resolution and does not shrink with spp.
 :::
 
-{{cite shaders/rt/pt_raygen.rgen "if (payload.envPdf > 0.0 && pc.control.w > 0u && !specLastBounceWasDelta) {"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "if (payload.envPdf > 0.0 && pc.control.w > 0u && !specLastBounceWasDelta) {"}}
 {{cite shaders/includes/rt/env_sampling.glsl "dir = equirectPixelToDir(x, y, W, H);"}}
 
-The same env-NEE block carries a second biasing operation, in all three raygen
-profiles, gated on the `PT_FLAG_ENABLE_FIREFLY_CLAMP` bit of `control.x`:
+The reference does not share either defect. Its `sampleEnv` places the direction
+uniformly inside the chosen texel in $(u, v)$,
+
+{{cite shaders/rt/path_tracer.slang "const float u = (float(x) + rng.next()) / float(W);"}}
+
+so its expectation is the integral over the whole texel, and its `envPdf` divides by
+sinθ of the direction itself — the exact solid-angle density of that sampling,
+piecewise constant in $(u, v)$ — and is the one function both sides of its MIS
+weight evaluate:
+
+{{cite shaders/rt/path_tracer.slang "return max(cond * marg * float(W) * float(H) / (kTwoPi * kPi * max(sin(theta), 1e-4)), 0.0);"}}
+
+The realtime env-NEE block carries a second biasing operation, gated on the `PT_FLAG_ENABLE_FIREFLY_CLAMP` bit of `control.x`:
 `envContribution` and its diffuse and specular AOV splits are each scaled down to
 the `pc.tuning.x` luminance ceiling. `kOfflineRTSettings` clears that bit;
 `kRealtimeRTSettings` sets it.
 
-{{cite shaders/rt/pt_raygen.rgen "float lumD = dot(envDiffuse"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "float lumD = dot(envDiffuse"}}
+
+The reference clamps under the same flag, once, on the whole path's radiance
+rather than per term:
+
+{{cite shaders/rt/path_tracer.slang "if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;"}}
 {{cite ohao/render/rt/rt_settings.hpp "    .enableFireflyClamp = true,"}}
 
 ## What happens with no environment map
@@ -225,7 +248,9 @@ HDRI at all.
 Rather than compile a second pipeline (or specialise the raygen) for the no-env
 case, the upload path binds a one-float dummy and signals "no environment"
 out-of-band through push constants: width, height and integral all go out as
-zero, and the shaders gate every env-IS block on `pc.control.w > 0u`. One
+zero, and the shaders gate every env-IS block on `pc.control.w > 0u` (the
+reference's `envSampled()` checks the width, the height and the environment's
+texture index). One
 pipeline, one layout, two four-byte allocations — against the alternative of
 doubling the shader permutation count to save eight bytes.
 :::
@@ -275,5 +300,5 @@ replaces both tables rather than leaking them. The same two calls run at shutdow
 
 - Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, so a stale handle cannot survive a frame — but the write is *skipped* when the handle is null, and raygen and miss reference those bindings statically. A scene that reaches its first render without `setEnvCDFBuffers` ever having run would dispatch against two descriptors that were never written. The dummy pair `env_upload.cpp` allocates is what makes that unreachable.
 - Width, height and integral travel in push constants (`control.w`, `tuning.y`, `tuning.z`), not in the buffers. A `control.w` of 0 means "skip env importance sampling entirely", not "the map is 0 wide".
-- `sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row's centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so for the RT pipeline's own pairing the balance weights do not sum to exactly one for BSDF-sampled directions. The fault is in the *pairing*, not in either function: route both sides of a balance weight through the same `pdfEnvMap` and the weights do sum to one. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness.
+- `sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row's centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so for the RT pipeline's own pairing the balance weights do not sum to exactly one for BSDF-sampled directions. The fault is in the *pairing*, not in either function: route both sides of a balance weight through the same `pdfEnvMap` and the weights do sum to one. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness. The reference's `sampleEnv` and `envPdf` agree everywhere: both sides of its weights call `envPdf`.
 - The CDF is rebuilt only when the environment *path* changes, so `envIntensity` relighting never touches it — correctly, since a uniform scale leaves the normalised distribution identical.

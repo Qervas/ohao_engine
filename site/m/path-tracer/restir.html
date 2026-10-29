@@ -110,16 +110,16 @@ $$</div>
 <div class="section-rule"><h2 id="the-host-wiring-and-the-switches-nothing-sets">The host wiring, and the switches nothing sets</h2></div>
 <div class="prose reveal">
 <p>The layout reserves 29–34 and the host now fills them every frame. Inside the one `vkUpdateDescriptorSets` in `PathTracer::render`, the *prev* planes (index `1 - m_giReservoirWriteIndex`) go to 29–31 and the *curr* planes to 32–34, in binding order:</p>
-<div class="citation-chip"><code class="citation-code">for (uint32_t i = 0; i &lt; 6; ++i) addImage(29u + i, &amp;giReservoirInfo[i]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L407" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:407</a></div>
+<div class="citation-chip"><code class="citation-code">for (uint32_t i = 0; i &lt; 6; ++i) addImage(29u + i, &amp;giReservoirInfo[i]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L408" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:408</a></div>
 <p>This is not optional plumbing. The realtime raygen touches all six planes on every frame whatever its flags say, so a set with these bindings unwritten loses the device — which is how their absence was found. Before the trace a barrier moves each plane to `VK_IMAGE_LAYOUT_GENERAL`, from `UNDEFINED` until that half of the ping-pong has been written once (tracked by `m_giReservoirInitialized`), from `GENERAL` with a shader-write source after that. Once the frame is recorded the pair swaps:</p>
-<div class="citation-chip"><code class="citation-code">m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L1292" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:1292</a></div>
+<div class="citation-chip"><code class="citation-code">m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L1293" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:1293</a></div>
 <p>Recreating the planes, or a render-settings change that alters the buffer dimensions, clears both initialized flags and the write index; `resetAccumulation` alone does not touch them. Either way the first frame&#x27;s *prev* planes hold undefined content, and what keeps it out of the estimate is the shader side: both `giReuse` and `spatialOn` require `historyFrameCount &gt; 0`, which the reset zeroes.</p>
 <p>What the host still does not drive are the shader&#x27;s four `PT_FLAG_RESTIRGI_*` bits, 5–8 of `pc.control.x`: nothing in the tree sets them, so the off, GI-only, legacy and no-spatial modes are reachable only by editing the push constants.</p>
 </div>
 <div class="section-rule"><h2 id="a-sharp-edge-in-the-layout">A sharp edge in the layout</h2></div>
 <div class="prose reveal">
 <p>The storage-image pool is sized to exactly the 26 storage-image bindings, six of them reservoir planes:</p>
-<div class="citation-chip"><code class="citation-code">{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},  // 1-3,6,7,13-16,19-35</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L111" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:111</a></div>
+<div class="citation-chip"><code class="citation-code">{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},  // 1-3,6,7,13-16,19-35</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L112" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:112</a></div>
 <p>No slack: a 27th storage image added without editing that literal fails `vkAllocateDescriptorSets` with `VK_ERROR_OUT_OF_POOL_MEMORY` at startup, nowhere near the cause.</p>
 <p>A second edge, which the reservoir block widened, is gone since sub-project 2b step 5: the bindless array at 12 carried `VARIABLE_DESCRIPTOR_COUNT`, which Vulkan allows only on the set&#x27;s highest-numbered binding, with 25 bindings above it.</p>
 <div class="citation-chip"><code class="citation-code">// (VUID 03004), and every set is allocated at the full capacity anyway.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L67" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:67</a></div>
@@ -146,7 +146,7 @@ $$</div>
         <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
       </div>
 
-<nav class="pager"><a href="bindings.html"><div class="label">← Prev</div><div class="title">Descriptor map 0–37</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+<nav class="pager"><a href="bindings.html"><div class="label">← Prev</div><div class="title">Descriptor map 0–38</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

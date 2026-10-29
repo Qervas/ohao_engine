@@ -21,7 +21,7 @@ header, the GLSL include and the Slang module, so the TLAS staging and every
 trace read the same numbers. Bit 0 is scene geometry, bit 1 a light's emitter
 mesh, bit 2 a first-person gun:
 
-{{cite shaders/shared/layout.json "TLAS instance mask of a light's emitter mesh: only camera rays and a near-mirror's first specular ray see it"}}
+{{cite shaders/shared/layout.json "TLAS instance mask of a light's emitter mesh: the path tracer's camera and bounce rays"}}
 
 {{cite shaders/shared/layout.json "TLAS instance mask of a first-person gun's mesh (ViewModel)"}}
 
@@ -46,29 +46,37 @@ visible instances, agrees. A visible instance carries `kTlasMaskScene` (`0x01`),
 a light's emitter mesh `kTlasMaskEmitter` (`0x02`), a mesh under a `ViewModel`
 (the first-person gun, drawn shrunk toward the eye) `kTlasMaskViewModel` (`0x04`).
 
-Two values reach a trace. The path tracer's camera ray passes `kRayMaskCamera`
-(`0x07`) and sees all three; every other ray, the path tracer's light samples,
-bounces and specular chains and the deferred frame's RT shadow and GI queries,
-passes `kRayMaskScene`:
+Three values reach a trace. The path tracer's camera ray passes `kRayMaskCamera`
+(`0x07`) and sees all three. The reference path tracer's bounce rays pass
+`kRayMaskScene | kTlasMaskEmitter`, scene and lights but no gun. Every other ray,
+the path tracers' shadow rays, the realtime tracer's bounces and specular chains
+and the deferred frame's RT shadow and GI queries, passes `kRayMaskScene`:
 
 {{cite shaders/rt/shadow_trace.slang "q.TraceRayInline(scene, 0, kRayMaskScene, ray);"}}
 
 That split is what makes an emitter mesh safe. The light it shows is the
 analytic light the shaders sample; a shadow ray towards that light would
-otherwise hit the mesh around it and the light would shadow itself, and a
-bounce that reached the mesh would add the light's radiance a second time on
-top of its samples. With the mask, the mesh is only ever what the camera sees.
+otherwise hit the mesh around it and the light would shadow itself. A bounce
+that reaches the mesh is wanted only where the trace knows how to weigh it. The
+reference does: its bounce ray reads the light's index off the emitter instance and
+weighs the hit against light sampling of the same light by the power heuristic,
+so the light is counted once at any roughness.
+
+{{cite shaders/rt/path_tracer.slang "const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);"}}
+
+For every other trace the mesh is only ever what the camera sees.
 The gun takes the same way out for a different reason: its drawn pose is not where
 it is in the world, so a shadow or GI ray that met it would shadow the room with a
 gun-sized box beside the camera.
 
-One more ray passes `kRayMaskCamera`: the first specular ray of a near-mirror first hit
+The realtime tracer has no such weighting, and uses a threshold instead. One more
+of its rays passes `kRayMaskCamera`: the first specular ray of a near-mirror first hit
 (roughness below `ptMirrorRoughness`, 0.05). Sampling a light's surface all but never
 lands in a lobe that narrow, so that hit takes its specular light from the ray, which
 returns the mesh's radiance, and its light samples drop their GGX term: the light's
 reflection is counted once, and it is the mesh.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "bounce == 1u && firstHitMirror ? kRayMaskCamera : kRayMaskScene, 0, 0, 0,"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "bounce == 1u && firstHitMirror ? kRayMaskCamera : kRayMaskScene, 0, 0, 0,"}}
 
 :::key
 A new class of geometry that some rays must not see is a new bit in
@@ -79,12 +87,13 @@ instance selects nothing.
 
 ## A trace that trusts the traversal
 
-The GI trace does not second-guess the cull mask. Its query is forced opaque, so
-no candidate is ever handed back to the shader to accept or reject; once traversal
-ends, it reads the committed instance's custom index (the instance slot) and loads
-that instance's bounce albedo from the `RenderScene` instance table at binding 4:
+The GI trace does not second-guess the cull mask. Its query hands back only the
+candidates of non-opaque triangles (an alpha material's), which `rt/alpha_test.slang`
+accepts or rejects by coverage; every opaque triangle traversal reaches is committed
+as found. Once traversal ends, it resolves the committed hit's material from the
+instance slot, primitive and barycentrics:
 
-{{cite shaders/rt/gi_trace.slang "const uint slot = q.CommittedInstanceID();"}}
+{{cite shaders/rt/gi_trace.slang "const HitMaterial hm = hitMaterial(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),"}}
 
 There is no software re-implementation of the visibility test in it. Whether a
 ray may reach an instance is decided entirely in traversal — an `AND` of the
@@ -103,8 +112,8 @@ views, what that feature needs besides (camera matrices for reflections and AO;
 for shadows the scene's shadow lights, the sample seeds, the velocity view the filter
 reprojects with, the camera position, the `RenderQuality` and the per-pixel light
 cap; for GI the same seeds, velocity view, camera position and quality, plus the
-scene's lights, the instance table the bounce albedo is read from and the
-environment map) and a nullable `VkAccelerationStructureKHR`, an `Output` struct — one view for
+scene's lights, the instance table and the material tables a hit's material is
+resolved from, and the environment map) and a nullable `VkAccelerationStructureKHR`, an `Output` struct — one view for
 shadows, an image plus its view for the other three — and a uniform lifecycle —
 `init / resize / render / getOutput / destroy`, plus `getName()` and `needsRT()`
 for introspection. Four interfaces are declared: shadows, GI, reflections, AO.
@@ -244,9 +253,9 @@ handover keeps the handle valid — it cannot fix the resolution.
 
 - Instance mask and ray mask must be non-disjoint or the instance is invisible: `(m_r & m_i) != 0`. A hidden or released instance carries 0 and is invisible to every ray.
 - Instance masks are written once, by the `RenderScene`, into the one TLAS both the deferred renderer and the path tracer consume. A mask change is not scoped to the hybrid passes.
-- Scene instances carry `kTlasMaskScene`, light emitter meshes `kTlasMaskEmitter`, first-person gun meshes `kTlasMaskViewModel`. Only the path tracer's camera ray and a near-mirror first hit's specular ray pass `kRayMaskCamera`; every other trace passes `kRayMaskScene`, so no shadow, GI, bounce or other specular ray ever hits an emitter mesh or the gun. The mirror's light samples drop their GGX term to match. A new trace that passed the camera mask would shadow lights by their own meshes and count them twice.
+- Scene instances carry `kTlasMaskScene`, light emitter meshes `kTlasMaskEmitter`, first-person gun meshes `kTlasMaskViewModel`. Only the path tracers' camera rays and the realtime tracer's near-mirror first specular ray pass `kRayMaskCamera`; the reference's bounce rays add `kTlasMaskEmitter` to `kRayMaskScene` and MIS-weight what they meet; every other trace passes `kRayMaskScene`, so no shadow or GI ray ever hits an emitter mesh or the gun. A new trace that let emitters in without weighing them against light sampling would count lights twice, and a shadow ray that let them in would shadow lights by their own meshes.
 - The masks live in `shaders/shared/layout.json` alone; the C++, GLSL and Slang copies are generated from it (`tools/gen_layout.py`).
-- `rt/gi_trace.slang` filters nothing: the cull is the ray mask against the instance mask alone, and a hit reads `giAlbedoPacked.rgb` of whatever slot traversal commits.
+- `rt/gi_trace.slang` adds no visibility test of its own: the cull is the ray mask against the instance mask, plus `rt/alpha_test.slang`'s coverage on non-opaque candidates, and a hit resolves the material of whatever slot traversal commits.
 - Technique outputs reach the lighting pass only through the per-frame handover in each RT pass's callback, and only when `rendered()` is true. The graph does not track this dependency; it holds because the RT passes are added before `lighting` and the graph records in insertion order.
 - `DeferredRenderer::onResize` must forward the new extent to every RT technique it owns. It forwards to both `m_rtGI` and `m_rtShadow`; a technique added without a forward keeps its `init()` extent while the dispatch grid follows the window.
 - `init()` failure is non-fatal by design — the renderer resets the `unique_ptr` and continues on the CSM path, so a null `m_rtShadow` is a valid steady state, not an error.

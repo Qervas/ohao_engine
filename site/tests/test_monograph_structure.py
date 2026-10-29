@@ -100,16 +100,16 @@ class MonographStructureTest(unittest.TestCase):
     def test_path_tracer_nee_sphere_walk(self) -> None:
         html = (M / "path-tracer.html").read_text(encoding="utf-8")
         self.assertIn('id="nee-walk"', html)
-        self.assertIn("lightType", html)
-        self.assertIn("pt_raygen.rgen", html)
-        # Side-by-side dual pane + honest line anchors
+        self.assertIn("l.type", html)
+        self.assertIn("path_tracer.slang", html)
+        # Side-by-side dual pane + honest line anchors (sampleLight in path_tracer.slang)
         self.assertIn("dual-pane", html)
-        self.assertIn("L305", html)  # if (lightCount) — not the comment as the branch
-        self.assertIn('class="ln">305</span>', html)
-        self.assertIn('class="ln">310</span>', html)  # GPULight once
+        self.assertIn("L241", html)  # const uint n = lightCount();
+        self.assertIn('class="ln">243</span>', html)  # the uniform pick
+        self.assertIn('class="ln">278</span>', html)  # the cone's 1 - cos without cancellation
         self.assertIn("sphere", html.lower())
-        # Distance d=lightDist in weight formula — not sphere radius r²
-        self.assertIn("lightDist", html)
+        # The shadow ray stops at the sphere's near side; the sphere delivers I/d², not I/r²
+        self.assertIn("s.dist", html)
         self.assertIn("d^{2}", html)
         self.assertNotIn(
             r"w=\frac{|\mathbf{n}_L\!\cdot\!(-\omega)|\,A}{r^{2}}",
@@ -120,7 +120,7 @@ class MonographStructureTest(unittest.TestCase):
         self.assertIn("Jargon · PDF", html)
         # Why callouts
         self.assertIn("why-callout", html)
-        self.assertIn("Why multiply by light count", html)
+        self.assertIn("Why uniform over lights", html)
         # Formula blocks
         self.assertIn("math-block", html)
         self.assertIn("L_{\\mathrm{NEE}}", html.replace(" ", ""))

@@ -70,8 +70,8 @@ effect on the frame are the deferred SSAO unit's subject.
 
 It runs one 64-thread workgroup per froxel, 3,456 workgroups in a one-dimensional
 dispatch, and imports its `LightGpu` record, its `ClusterPush` block and every
-`kCluster*` constant from the generated `shared.layout` module, the same description
-`deferred_lighting.frag` reads through `shared/layout.glsl`. The kernel and why its lists
+`kCluster*` constant from the generated `shared.layout` module, the same module
+`deferred_lighting.slang` and the shared light loop import. The kernel and why its lists
 leave the lit image unchanged are the deferred clustered-lighting unit's subject.
 
 {{cite shaders/compute/light_cluster.slang "[numthreads(kClusterGroupSize, 1, 1)]"}}
@@ -120,7 +120,7 @@ it.
 {{cite .gitignore "external/DLSS/"}}
 
 Where it does run, it takes `RGBA16F` linear to `RGBA8` with the same ACES curve
-and the same 0.5 exposure prescale as `pt_raygen.rgen`, so switching denoisers
+and the same 0.5 exposure prescale as the path tracers' raygens, so switching denoisers
 does not shift the tone curve underneath a comparison.
 
 {{cite shaders/compute/dlss_tonemap.comp "vec3 ldr = ACES(hdr * 0.5);"}}

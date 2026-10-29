@@ -17,11 +17,13 @@ view-depth-and-roughness formula. Get either of the first two wrong and the fail
 is not subtle noise — it is a hue shift; get the third wrong and REBLUR quietly
 filters at the wrong radius.
 
-Only one of the three round-trips inside a single file. The 43-line
-`nrd_frontend.glsl`, included by two raygens and the compose pass, holds both
-directions of the YCoCg rotation, but only the forward direction of the
-hit-distance map — and neither half of the demodulation, whose divide is in the
-raygen and whose matching multiply is in `nrd_compose.comp`.
+Two producers write those inputs. The realtime raygen includes the 43-line
+`nrd_frontend.glsl`, which the compose pass includes too and which holds both
+directions of the YCoCg rotation but only the forward direction of the
+hit-distance map. The reference path tracer, `path_tracer.slang`, is Slang and
+cannot include GLSL, so it carries its own copies of the two packing functions.
+Neither half of the demodulation lives in a shared file: the divide is in each
+raygen and the matching multiply is in `nrd_compose.comp`.
 
 {{figure denoise-nrd-aov-flow "Conceptual data flow with the real binding numbers and formats from path_tracer_render.cpp — not a captured render. The dashed band marks the region in which radiance is YCoCg; crossing that boundary in the wrong direction is what turns a denoiser bug into a hue shift."}}
 
@@ -29,18 +31,21 @@ raygen and whose matching multiply is in `nrd_compose.comp`.
 
 Temporal filters smooth *lighting*, and lighting is smooth; albedo is not. Radiance
 that still carries texture detail makes the filter fight the texture, so the
-diffuse channel is divided by first-hit albedo before packing, with a floor to
-survive metals, where diffuse albedo is zero:
+diffuse channel is divided by first-hit diffuse albedo before packing, with a floor
+to survive metals, where diffuse albedo is zero. The reference tracer:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "vec3 diffDemod = diffContrib / max(firstHitDiffAlbedo, vec3(0.03));"}}
+{{cite shaders/rt/path_tracer.slang "const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));"}}
+{{cite shaders/rt/path_tracer.slang "diffAlbedo = base.rho * (1.0 - base.metalness);"}}
 
-The specular channel is *not* divided by anything — which looks like an omission
-until you find the other half. The indirect specular ray carries a throughput that
-is white for dielectrics and base-colour for metals, and the AOV compose multiplies
-back is built to be its complement:
+The specular channel is divided by nothing in either producer; compose multiplies
+it by binding 25 regardless. What binding 25 holds is where the two producers
+differ. The realtime raygen's AOV was built as the complement of a specular chain
+whose throughput is white for dielectrics and base-colour for metals — what its
+`OHAO_CRUDE_GLOSSY` baseline sets at the first bounce and what every later specular
+bounce multiplies in:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "specThroughput = mix(vec3(1.0), albedo, metallic);"}}
-{{cite shaders/rt/pt_raygen_offline.rgen "firstHitSpecColor  = mix(F0, vec3(1.0), metallic);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "firstHitSpecColor  = mix(F0, vec3(1.0), metallic);"}}
 
 Writing $\mathbf{a}$ for base colour and $m$ for metallic, the two lerps multiply
 to a single application of the Fresnel colour at both endpoints of the slider:
@@ -49,30 +54,44 @@ $$\underbrace{\mathrm{lerp}(1,\mathbf{a},m)}_{\text{applied inside the path}}\ti
 
 and because a metal's $F_0$ *is* its base colour, both branches equal $F_0$.
 
+The reference tracer writes the OpenPBR base's directional albedo toward the viewer
+minus its diffuse part:
+
+{{cite shaders/rt/path_tracer.slang "specColor = max(a - diffAlbedo, float3(0.0));"}}
+
+Its specular radiance comes from sampling the whole BSDF, Fresnel included, so the
+NRD composite of the reference applies the specular albedo twice: once in the path
+and once in compose. The reference's own image (the running mean, below and in the
+OIDN unit) is unaffected; only the NRD composite is.
+
 ## Where the lerp pair stops being exact
 
-That identity holds for the indirect chain, which is the only thing
-`specThroughput` scales. It does not hold for the bounce-0 direct lobe. The
-analytic NEE and env-MIS terms at the primary hit run with throughput 1 and fold a
-full Schlick $F$ into the BRDF before adding to `specContrib`:
+In the realtime raygen the identity holds only where the chain's throughput is that
+lerp. It does not hold for the bounce-0 direct lobe. The
+analytic NEE at the primary hit runs with throughput 1 and folds a full Schlick $F$
+into the BRDF before adding to `specContrib`:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "vec3 neeSpecular = neeCommon * spec * NdotL;"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 neeSpecular = neeCommon * spec;"}}
 
 For metals that is still one application: $F\approx F_0=\mathbf{a}$ inside the ray,
 $\times 1$ in compose. For dielectrics it is two — the radiance already carries $F$,
-and compose multiplies by $F_0\approx 0.04$ a second time. Primary dielectric
-highlights are therefore darker in the NRD composite than in the beauty buffer,
-which applies the same `spec` term exactly once. The realtime raygen widens the gap:
-its live VNDF branch sets `specThroughput` to true Fresnel rather than
+and compose multiplies by $F_0\approx 0.04$ a second time. Its live first-bounce
+branch, a GGX VNDF sample, also sets `specThroughput` to true Fresnel rather than
 $\mathrm{lerp}(1,\mathbf{a},m)$, so its *indirect* dielectric specular is
 double-counted as well.
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);"}}
 
-The comment sitting on the specColor line records what the lerp is defending
-against:
+The reference tracer splits differently: everything its primary hit gathers (the
+light and environment samples at depth 0, whichever lobe reflects them) goes to the
+diffuse channel and is divided by diffuse albedo, and every later vertex goes to the
+channel of the lobe the first bounce sampled:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "doing so double-darkened metals to near-black"}}
+{{cite shaders/rt/path_tracer.slang "if (firstLobe == 1u) diffuseOut += add;"}}
+
+The comment on the realtime specColor line records what the lerp defends against:
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "double-darkened metals to near-black in NRD"}}
 
 :::why
 The lerp pair was written to fix metals, not dielectrics. The rejected alternative
@@ -90,6 +109,10 @@ The forward transform is the standard reversible luma/chroma rotation ported fro
 
 $$Y=\tfrac14 R+\tfrac12 G+\tfrac14 B,\qquad C_o=\tfrac12(R-B),\qquad C_g=-\tfrac14 R+\tfrac12 G-\tfrac14 B$$
 
+The reference tracer writes the same three dot products inline:
+
+{{cite shaders/rt/path_tracer.slang "return float4(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5))"}}
+
 The inverse is done without a matrix: $t=Y-C_g$ recovers $(R+B)/2$, so
 $G=Y+C_g$, $R=t+C_o$, $B=t-C_o$. Algebraically exact — but the unpack still
 clamps, because a spatio-temporal filter reconstructs a value that was never in
@@ -97,16 +120,16 @@ the original gamut and can land slightly negative:
 
 {{cite shaders/includes/rt/nrd_frontend.glsl "return max(r, vec3(0.0));"}}
 
-Two distinct mistakes produce the same magenta symptom, and the code carries a
-comment for each. Skip the pack, and REBLUR reads red as luma and green/blue as
-chroma; compose then rotates an already-linear triple through the inverse basis:
+Two distinct mistakes produce the same magenta symptom. Skip the pack, and REBLUR
+reads red as luma and green/blue as chroma; compose then rotates an already-linear
+triple through the inverse basis, which its header warns about:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "REBLUR treats RGB as YCoCg and compose remodulates garbage"}}
+{{cite shaders/rt/nrd_compose.comp "REBLUR OUT is YCoCg (NRD.hlsli Pack/Unpack)"}}
 
 Pack correctly but skip demodulation, and the input is in the right basis but the
 wrong space — the filter's cross-channel behaviour drifts on albedo-coloured
-radiance, and compose applies surface colour a second time. The recorded symptom
-there was a blue-to-magenta shift *plus* a visible darkening.
+radiance, and compose applies surface colour a second time: a hue shift plus a
+visible darkening.
 
 :::key
 Magenta in the NRD path is almost never a denoiser bug. It means a producer and a
@@ -123,60 +146,60 @@ term:
 
 $$f=(A+|z|B)\cdot\mathrm{lerp}(C,1,s),\qquad \hat d=\mathrm{clamp}\!\left(\tfrac{d}{f},0,1\right)$$
 
-Nothing reads $z$ back from binding 20. The raygen computes it at the primary hit,
+Nothing reads $z$ back from binding 20. Each raygen computes it at the primary hit,
 keeps it in a local, and writes it to that binding for NRD's separate `IN_VIEWZ`
 slot; the normalization uses the local:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "firstHitViewZ = -viewPos.z;"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "firstHitViewZ = -viewPos.z;"}}
+{{cite shaders/rt/path_tracer.slang "viewZ = dot(hit.position - camPos, fwd);"}}
 
-The constants are NRD's `ReblurHitDistanceParameters` defaults, hardcoded in GLSL:
+The constants are NRD's `ReblurHitDistanceParameters` defaults, hardcoded in GLSL
+and again, as literals, in the Slang copy:
 
 {{cite shaders/includes/rt/nrd_frontend.glsl "const vec3 NRD_HIT_DIST_PARAMS = vec3(3.0, 0.1, 20.0);"}}
+{{cite shaders/rt/path_tracer.slang "const float f = (3.0 + abs(viewZ) * 0.1) * lerp(20.0, 1.0, smc);"}}
 
 $s$ is where OHAO knowingly diverges. NRD derives it from a richer function of
-roughness; the shader substitutes $\text{roughness}^2$ and says so:
+roughness; both producers substitute $\text{roughness}^2$:
 
 {{cite shaders/includes/rt/nrd_frontend.glsl "float smc = roughness * roughness; // lobe-spread proxy"}}
 
-Diffuse and specular also *measure* $d$ differently. Diffuse records only the
-first secondary hit — one segment, the local occluder. Specular sums the whole
-chain while it stays specular, so a mirror reports the distance to the virtual
-image rather than to the mirror:
+The producers also *measure* $d$ differently. The realtime raygen's diffuse records
+only the first secondary hit — one segment, the local occluder — while its specular
+sums the whole chain while it stays specular, so a mirror reports the distance to
+the virtual image rather than to the mirror:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "specHitDist += payload.hitDist;"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "specHitDist += payload.hitDist;"}}
 
-The sharp edge is that $A$ exists twice. The shader hardcodes it at 3.0; the C++
-profile re-declares it and pushes it into `ReblurSettings` — while $B$ and $C$ are
-left at NRD's defaults and have no C++ knob at all:
+The reference tracer records one segment for both: the length of the first bounce
+ray, given to the channel of the lobe that drew it, and 0 to the other.
+
+{{cite shaders/rt/path_tracer.slang "if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;"}}
+
+The sharp edge is that $A$ exists three times. Both shaders hardcode it at 3.0; the
+C++ profile re-declares it and pushes it into `ReblurSettings` — while $B$ and $C$
+are left at NRD's defaults and have no C++ knob at all:
 
 {{cite ohao/render/rt/denoise/nrd_denoise.cpp "s.hitDistanceParameters.A         = p.hitDistanceParamA;"}}
 
-Change `hitDistanceParamA` and the two halves normalize against different scales,
-with no build-time check that they agree.
+Change `hitDistanceParamA` and the halves normalize against different scales, with
+no build-time check that they agree.
 
-## Which raygen actually speaks NRD
+## Which raygen feeds NRD
 
-Three raygen shaders write bindings 22/23; only two of them include the front-end.
-`pt_raygen.rgen` still writes the pre-NRD layout — linear RGB with a raw,
-unnormalized distance in alpha:
+Each profile renderer names its own shaders. The realtime one passes the GLSL
+raygen explicitly; the offline one takes `PathTracerShaderSet`'s default, the Slang
+reference:
 
-{{cite shaders/rt/pt_raygen.rgen "AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));"}}
-
-That is the *default* member of `PathTracerShaderSet`, and it is exactly the
-magenta configuration. Nothing shipped reaches it — `VulkanRenderer` constructs
-only the realtime and offline profile renderers, each passing an explicit shader
-set naming its own raygen — but anyone reusing `PathTracer` directly will.
-
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
+{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};"}}
 
 A second gate matters before profiling: REBLUR, compose and the cinematic chain run
 only in NRD mode, on top of the denoiser existing and auxiliary AOVs being on:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
-Until sub-project 2b step 5 the mode was not part of it, so the whole chain ran on
-every RT frame under `--denoise=oidn` or `none` too, writing an image only an NRD
-readback reads. Each piece of the chain writes its descriptor sets at record time,
+Each piece of the chain writes its descriptor sets at record time,
 so each keeps one set per frame in flight, selected by the frame slot the tracer
 passes in.
 
@@ -235,12 +258,14 @@ change:
 
 {{cite ohao/render/rt/denoise/nrd_denoise.hpp "NRD default 30; we bump to 63"}}
 
-The "multi-sample" part is a running mean written by the raygen itself: in NRD
-mode each of the five AOV bindings is blended with its previous value at weight
+The "multi-sample" part is a running mean written by the raygen itself: in
+accumulate mode each AOV binding is blended with its previous value at weight
 $1/(n{+}1)$, so after $N$ samples the image is intended to hold their mean rather
-than the last sample.
+than the last sample. The realtime raygen does it in a macro, the reference tracer
+with a `lerp` whose weight is 1 on the first sample:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "_ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "_ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);"}}
+{{cite shaders/rt/path_tracer.slang "const bool blendAOVs = accumulateAOVs && pc.params.z > 0u;"}}
 
 That is an `imageLoad` of the previous dispatch's contents, and the mean is only as
 good as those contents. Every `render()` re-records the AOV transition block with
@@ -281,8 +306,8 @@ binding 30 — which is what the host reads back.
 ## Contracts
 
 - Bindings 22/23 are YCoCg + normalized hit distance, and 27/28 come back the same way. A consumer that reads them as linear RGB — a debug visualizer, say — shows scrambled hue, not an obvious error.
-- `NRD_HIT_DIST_PARAMS.x` (3.0, in GLSL) must match `NrdReblurProfile::hitDistanceParamA`. Changing one desynchronizes the normalization silently; nothing checks.
+- `NRD_HIT_DIST_PARAMS.x` (3.0, in GLSL), the 3.0 literal in `path_tracer.slang`'s pack and `NrdReblurProfile::hitDistanceParamA` must agree. Changing one desynchronizes the normalization silently; nothing checks.
 - `setCommonSettings()` must run before every `denoise()` — it carries the frame index and the previous view/projection NRD reprojects from. `setInputResources()` only stashes handles into the impl and they persist across frames, so the per-frame call is redundant; what breaks is failing to re-stash after any AOV image is recreated, since `denoise()` forwards whatever is there with no validation.
-- `specColor` (binding 25) is `lerp(F0, 1, metallic)`, not `F0`. The `1` at the metal end is what stops metals being darkened twice. The `F0` at the dielectric end is the single correct application only for the offline raygen's indirect chain, where `specThroughput` is 1 — bounce-0 direct specular already carries Schlick `F` on both raygens, and the realtime indirect chain carries it too.
+- The realtime raygen's `specColor` (binding 25) is `lerp(F0, 1, metallic)`, not `F0`. The `1` at the metal end is what stops metals being darkened twice; bounce-0 direct specular and the live VNDF indirect chain already carry Schlick `F`, so dielectrics get it twice. The reference tracer's binding 25 is its specular albedo, and its specular radiance carries Fresnel too: its NRD composite applies specular twice.
 - The multi-sample AOV mean assumes the previous dispatch's image contents survive an `UNDEFINED`→`GENERAL` transition. Nothing in the API promises that; a driver that discards turns the mean into the last sample.
-- The REBLUR + compose + cinematic chain runs whenever auxiliary AOVs are enabled, whatever the denoise mode. It is fixed per-frame cost in every RT profile, not something `--denoise=none` avoids.
+- The REBLUR + compose + cinematic chain runs only when the denoiser exists, auxiliary AOVs are on and the denoise mode is NRD. The raygen still writes the AOVs whenever they are on.

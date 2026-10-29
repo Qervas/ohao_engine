@@ -43,7 +43,9 @@ implementation that is compiled, self-consistent, and currently unreachable on t
 
 No example parses a `--sampler` flag; switching sampler is supposed to mean switching
 profile, which also switches raygen, bounce budget and denoiser. This implementation has
-exactly one consumer — `sampler_api.glsl`. The deferred pipeline's RT shadow passes
+exactly one consumer — `sampler_api.glsl`, which only the realtime raygen includes. The
+offline profile's reference path tracer, `rt/path_tracer.slang`, runs its own stream on the
+same permutation (*The reference's own stream*, below). The deferred pipeline's RT shadow passes
 (`rt/shadow_trace.slang`, `rt/shadow_filter.slang`) and the RT GI trace (`rt/gi_trace.slang`) carry their own copies
 of the same PCG permutation, with the same constants, as a stateless integer hash of seed,
 frame, pixel and sample, and never touch this interface.
@@ -177,7 +179,7 @@ Near $2^{32}$ the spacing of `float32` is 256, so the 128 largest uint outputs r
 to exactly $2^{32}$ and the quotient is exactly 1.0 — probability $2^{-25}$, one sample
 in 33.5 million. Nothing downstream would break if that value were ever produced, because
 the three kinds of site that turn a uniform into an index are all bounded: every
-light-selection site in all three raygen shaders follows `uint(u * lightCount)` with a
+light-selection site in the realtime raygen follows `uint(u * lightCount)` with a
 `min(..., lightCount - 1u)` clamp; the environment CDF lookup is a binary search with a
 pre-clamped upper bound; and ReSTIR-GI's spatial-reuse tap clamps its neighbour offset to
 the framebuffer.
@@ -204,11 +206,38 @@ exactly one stage.
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pSpecializationInfo = &samplerSpecInfo;"}}
 
 Stage 0 is the raygen, which is currently sufficient: `sampler_api.glsl` is included
-by exactly three files — `pt_raygen.rgen`, `pt_raygen_offline.rgen`,
-`pt_raygen_realtime.rgen` — and by no closest-hit, miss or any-hit shader. Note also
+by exactly one file, `pt_raygen_realtime.rgen`, and by no closest-hit, miss or any-hit
+shader. Note also
 that the GLSL default is `SAMPLER_SOBOL` while the C++ enum gives PCG the value 0: an
 *absent* specialization yields Sobol, a *zero-filled* one yields PCG. The specialization
 written here is never absent — it is simply always read one step too early.
+
+## The reference's own stream
+
+The offline profile's raygen does not go through `sampler_api.glsl`. It applies the same
+PCG function — the LCG step and the RXS-M-XS permutation, with the same constants — as a
+hash, and seeds with nested hashes of the pixel and the sample index instead of a plane:
+
+{{cite shaders/rt/path_tracer.slang "rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));"}}
+
+Each draw replaces the state by its own hash and keeps the top 24 bits, so the
+reference's uniforms lie in $[0, 1)$, as Sobol's do:
+
+{{cite shaders/rt/path_tracer.slang "return float(state >> 8u) * (1.0 / 16777216.0);"}}
+
+Feeding the output back as the state changes what the period argument above covers. The
+Hull–Dobell conditions speak of the LCG alone; here the state walks the composed map. Every
+piece of it is invertible — the LCG step, the random xorshift (its shift distance is set by
+the top four bits, which the shift leaves untouched), the odd multiply, the final fold — so
+the map permutes the 32-bit words and two states never merge into one, but how long the
+cycle through a given seed is has not been established here. A path draws a few uniforms a
+vertex, far below any plausible cycle.
+
+The nested seed is what the plane above lacks: a change of one pixel or one sample index
+goes through a full permutation before it reaches the state, so the lattice of colliding
+(pixel, sample) pairs that $1973x + 9277y + 26699i$ has does not exist for it. The reference
+draws in call order and has no dimension index, which suits a stream: there is nothing to
+keep in step.
 
 ## Contracts
 

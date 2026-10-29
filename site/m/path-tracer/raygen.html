@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>06 · Path tracer · Raygen integrator — OHAO Monograph</title>
-  <meta name="description" content="Stages A/B/C, NEE, dual-lobe, AOV writes." />
+  <meta name="description" content="The OpenPBR reference: NEE + BSDF sampling under MIS, AOV writes." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
@@ -30,140 +30,138 @@
       </header>
       <div class="thesis-box reveal">
         <div class="label">Design unit</div>
-        <p>Stages A/B/C, NEE, dual-lobe, AOV writes.</p>
+        <p>The OpenPBR reference: NEE + BSDF sampling under MIS, AOV writes.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-file-that-documents-itself-wrong">The file that documents itself wrong</a></li><li><a href="#one-primary-ray-two-sub-paths">One primary ray, two sub-paths</a></li><li><a href="#the-light-estimator-and-the-shadow-ray-that-carries-no-boolean">The light estimator, and the shadow ray that carries no boolean</a></li><li><a href="#weighting-the-environment-against-itself">Weighting the environment against itself</a></li><li><a href="#where-the-three-files-stop-agreeing">Where the three files stop agreeing</a></li><li><a href="#two-fields-in-one-word-because-the-push-constant-is-full">Two fields in one word, because the push constant is full</a></li><li><a href="#sampler-dimensions-are-padded-not-budgeted">Sampler dimensions are padded, not budgeted</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#two-raygens-one-per-profile">Two raygens, one per profile</a></li><li><a href="#the-reference-one-path-a-sample">The reference: one path a sample</a></li><li><a href="#choosing-a-light">Choosing a light</a></li><li><a href="#weighting-the-strategies">Weighting the strategies</a></li><li><a href="#the-environment">The environment</a></li><li><a href="#the-next-direction-and-when-the-path-ends">The next direction, and when the path ends</a></li><li><a href="#shadow-rays-carry-no-boolean">Shadow rays carry no boolean</a></li><li><a href="#what-the-reference-writes">What the reference writes</a></li><li><a href="#the-realtime-raygen">The realtime raygen</a></li><li><a href="#two-fields-in-one-word-because-the-push-constant-is-full">Two fields in one word, because the push constant is full</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="the-file-that-documents-itself-wrong">The file that documents itself wrong</h2></div>
+<div class="section-rule"><h2 id="two-raygens-one-per-profile">Two raygens, one per profile</h2></div>
 <div class="prose reveal">
-<p>`pt_raygen.rgen` opens by declaring that it is a brute-force tracer with no next-event estimation. Underneath that comment sit three complete NEE blocks, environment importance sampling with MIS, Russian roulette, and twelve storage images.</p>
-<div class="citation-chip"><code class="citation-code">// No NEE, no tricks. Just trace rays, bounce off surfaces, hit the light.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L8" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:8</a></div>
-<p>That comment is a fossil, and it is not the only misleading thing here. `PathTracerShaderSet` names `rt_pt_raygen.rgen.spv` as the default raygen module, which is where the &quot;pt_raygen.rgen is the path tracer&quot; belief comes from:</p>
-<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_pt_raygen.rgen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L61" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:61</a></div>
-<p>but every `PathTracer` instance in the engine is owned by an `RTProfileRendererBase`, and that base overwrites the shader set on `init()` with the profile&#x27;s own before the pipeline is built:</p>
+<p>Each ray-tracing profile binds its own ray-generation program. `RTOfflineRenderer` takes `PathTracerShaderSet`&#x27;s default, the reference path tracer in `rt/path_tracer.slang`, whose four stages are entry points of one Slang file:</p>
+<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_path_tracer.slang.raygen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L65" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:65</a></div>
+<div class="citation-chip"><code class="citation-code">PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L199" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:199</a></div>
+<p>`RTRealtimeRenderer` names the GLSL set, `pt_raygen_realtime.rgen` with its closest-hit, any-hit and miss, every entry `main`:</p>
+<div class="citation-chip"><code class="citation-code">&quot;main&quot;, &quot;main&quot;, &quot;main&quot;, &quot;main&quot;}) {}   // GLSL: every stage&#x27;s entry is main</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L188" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:188</a></div>
+<p>The base installs the profile&#x27;s set on the `PathTracer` before the pipeline is built, so the set a profile names is the one that runs:</p>
 <div class="citation-chip"><code class="citation-code">m_pathTracer.setShaderSet(m_shaderSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L93" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:93</a></div>
-<p>Both concrete profiles supply a different raygen — `RTOfflineRenderer` binds `pt_raygen_offline.rgen`, `RTRealtimeRenderer` binds `pt_raygen_realtime.rgen`.</p>
-<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L199" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:199</a></div>
-<p>So `pt_raygen.rgen` still compiles to SPIR-V and is still the cleanest reading of the algorithm, but nothing you render comes out of it.</p>
+<p>The two raygens are different integrators. The reference one is the estimator the deferred frame is judged by; the realtime one trades bias for a frame budget.</p>
 </div>
-<div class="section-rule"><h2 id="one-primary-ray-two-sub-paths">One primary ray, two sub-paths</h2></div>
+<div class="section-rule"><h2 id="the-reference-one-path-a-sample">The reference: one path a sample</h2></div>
 <div class="prose reveal">
-<p>A textbook path tracer picks one BSDF lobe per vertex with some probability and divides the throughput by that probability. This raygen refuses to do that at the first hit. It forks: Stage B walks a specular-lobe direction, Stage C walks a cosine-hemisphere direction, each with its own throughput, bounce loop, NEE, Russian roulette and accumulator.</p>
-<figure class="unit-figure reveal"><img src="../../assets/units/path-tracer-raygen-dual-path.svg" alt="Conceptual path topology of one raygen launch — not a captured render. Ray counts and binding numbers are read from pt_raygen.rgen; the geometry is schematic." loading="lazy" /><figcaption>Conceptual path topology of one raygen launch — not a captured render. Ray counts and binding numbers are read from pt_raygen.rgen; the geometry is schematic.</figcaption></figure>
-<div class="why-callout reveal"><div class="why-label">Why</div><p>The fork exists for the denoisers, not for the integrator. REBLUR and DLSS Ray Reconstruction consume diffuse and specular radiance as two separate images. A stochastic lobe choice would leave one of the two channels with zero samples in most pixel-frames, which a denoiser cannot tell from black — so the engine pays for a second secondary chain per pixel instead of splitting a single one after the fact.</p></div>
-<p>The bill is paid in estimator rigour. At the fork the specular chain carries `mix(1, albedo, metallic)` and the diffuse chain carries `albedo`; neither divides by a sampling pdf, and the specular one has no Fresnel and no shadowing term at all. The code says as much:</p>
-<div class="citation-chip"><code class="citation-code">// Material throughput factor (f*cos/pdf for the specular lobe, simplified).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L540" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:540</a></div>
-<div class="citation-chip"><code class="citation-code">specThroughput = mix(vec3(1.0), albedo, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L541" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:541</a></div>
-<p>For a dielectric that means the indirect specular chain leaves the first hit at unit throughput regardless of incidence angle or roughness. Direct light is untouched — bounce-0 NEE still evaluates full analytic Cook-Torrance.</p>
-<p>The approximation does not stop at the fork. From bounce 2 Stage B does restore stochastic lobe selection, but when it picks the specular lobe it multiplies by that same `mix(1, albedo, metallic)` and then divides only by `specProb` — the discrete lobe-choice probability. Nothing restores the missing $f\cos\theta/\text{pdf}$, so every specular vertex carries the approximation, not just the seed one.</p>
-<div class="citation-chip"><code class="citation-code">specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L803" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:803</a></div>
-<div class="citation-chip"><code class="citation-code">specThroughput /= max(specProb, 0.01);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L804" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:804</a></div>
-<p>The diffuse lobe needs no such correction: cosine-hemisphere sampling of a Lambertian BRDF gives $f\cos\theta/\text{pdf} = \rho$, which is exactly the albedo the code multiplies in, at the fork and at every later diffuse bounce.</p>
+<p>`path_tracer.slang`&#x27;s raygen traces one path per pixel per dispatch through OpenPBR&#x27;s base BSDF (`material/openpbr.slang`). At every surface vertex it does three things: next-event estimation to one light, next-event estimation to the environment, and one BSDF sample for the next direction.</p>
+<div class="citation-chip"><code class="citation-code">// Next-event estimation: a light, then the environment, each weighed against the BSDF.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L589" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:589</a></div>
+<p>The camera ray traces with `kRayMaskCamera` (scene, light emitters, first-person guns); every later ray with the scene and the emitters only:</p>
+<div class="citation-chip"><code class="citation-code">const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L483" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:483</a></div>
+<p>So a bounce ray can meet a light&#x27;s emitter mesh. That is how every light is found twice, by light sampling and by BSDF sampling, and why the two strategies are weighted against each other at any roughness. A ray that misses ends the path with the environment&#x27;s radiance; one that meets an emitter ends it with the light&#x27;s.</p>
 </div>
-<div class="section-rule"><h2 id="the-light-estimator-and-the-shadow-ray-that-carries-no-boolean">The light estimator, and the shadow ray that carries no boolean</h2></div>
+<div class="section-rule"><h2 id="choosing-a-light">Choosing a light</h2></div>
 <div class="prose reveal">
-<p>One light is chosen uniformly per NEE event, then dispatched on `positionAndType.w` into four branches — sphere, directional, spot, area rect. Only the sphere branch matches the textbook form, sampling a point and folding the solid-angle Jacobian into a scalar the code calls `weight`:</p>
+<p>`sampleLight` picks one light uniformly from the RT light buffer and draws a direction by the light&#x27;s shape:</p>
+<ul>
+<li>a **sphere** (point and spot lights) uniformly inside its cone of directions,</li>
+</ul>
+<p>with the solid-angle density $1/(2\pi(1-\cos\theta_{\max}))$ times the choice probability $1/N$;</p>
+<ul>
+<li>a **rectangle** (area lights) by area, converted to solid angle by</li>
+</ul>
+<p>$d^2/(\cos\theta_\ell A)$;</p>
+<ul>
+<li>a **sun** (directional) as a delta: its irradiance divided by the choice</li>
+</ul>
+<p>probability, with no density to weigh.</p>
+<div class="citation-chip"><code class="citation-code">s.pdf = choose / (kTwoPi * oneMinusCosMax);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L290" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:290</a></div>
+<div class="citation-chip"><code class="citation-code">s.pdf = choose * d2 / (cosL * l.area);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L266" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:266</a></div>
+<div class="citation-chip"><code class="citation-code">s.radiance = l.radiance / choose;   // a delta: no density to weigh</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L252" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:252</a></div>
+<p>The radiances are the deferred frame&#x27;s: a point light of intensity $I$ is a sphere of radius $r$ (at least 1 cm) and radiance $I/(\pi r^2)$, windowed by its range, a spot the same times its cone toward the shaded point, a rectangle $I/(4\pi r^2)$. `1 - cos` is computed as $\sin^2/(1+\sqrt{1-\sin^2})$, which keeps a distant small sphere from cancelling to zero.</p>
+<div class="citation-chip"><code class="citation-code">const float oneMinusCos = sin2 / (1.0 + sqrt(1.0 - sin2));   // 1 - cos without cancellation</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L218" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:218</a></div>
+<p>The shadow ray stops at the sphere&#x27;s near side (or 1 mm short of the rectangle&#x27;s point), so a light never occludes its own sample.</p>
+</div>
+<div class="section-rule"><h2 id="weighting-the-strategies">Weighting the strategies</h2></div>
+<div class="prose reveal">
+<p>Light sampling and BSDF sampling estimate the same light, so each contribution is weighted by the power heuristic. For a light sample drawn with density $p_\ell$ in direction $\omega_i$:</p>
 <div class="math-block">$$
-\hat{L}_{\text{NEE}} \;=\; N_\ell \cdot L_e \cdot \bigl(f_d + f_s\bigr)\,(n\!\cdot\!\omega_i)\,\underbrace{\frac{(-\omega_i\!\cdot\!n_\ell)\,A}{d^2}}_{\text{weight}}\;V
+C_{\text{NEE}} = T\,\frac{f(\omega_o,\omega_i)\cos\theta_i\,L(\omega_i)}{p_\ell}\,\frac{p_\ell^2}{p_\ell^2 + p_f^2}
 $$</div>
-<p>$N_\ell$ is the light count, undoing the uniform $1/N_\ell$ selection probability. $A = 4\pi r^2$ is the sphere&#x27;s area, $n_\ell$ the outward normal at the sampled point, $d$ the distance to it, and $V$ visibility. $L_e$ is radiant exitance, colour × intensity divided by $\max(A,\,0.01)$, so an artist&#x27;s &quot;intensity&quot; is total power, not per-unit-area radiance. Above $r \approx 0.028$ that clamp is inert and $L_e A$ collapses back to colour × intensity; below it the light silently stops scaling with its own area. The whole product is one line:</p>
-<div class="citation-chip"><code class="citation-code">vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L426" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:426</a></div>
-<p>$L_e$ is computed once *before* the branch, from the sphere formula, using `dirAndParam.w` as a radius. An area rect stores its true area separately in `extra2.w` and uses that in `weight` — so its radiance is normalised by a $4\pi r^2$ that describes no part of its geometry, and the $L_e A$ cancellation does not occur. Directional lights sample no point at all and set `weight = 1`.</p>
-<p>$V$ never becomes a variable. The shadow ray reuses payload location 0, with `payload.hitDist` pre-set to a 999.0 sentinel and traced under `TerminateOnFirstHit | Opaque | SkipClosestHitShader`. On a hit no shader runs, so the 999.0 survives and reads as occluded; on a miss the miss shader stamps a negative distance. &quot;hitDist went negative&quot; *is* the unoccluded test, and the sentinel is the load-bearing half of it.</p>
-<div class="citation-chip"><code class="citation-code">payload.hitDist = -1.0;  // signal miss</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L62" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:62</a></div>
-<p>Skipping closest-hit is a cost decision, not a correctness one. Closest-hit also writes `payload.hitDist`, and `gl_HitTEXT` is never negative, so removing the flag would leave the visibility test intact and merely pay for a full material decode on every shadow ray.</p>
-<div class="citation-chip"><code class="citation-code">payload.hitDist = gl_HitTEXT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L53" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:53</a></div>
-<p>The env-MIS block exploits the same call twice over: the miss shader also fills `payload.color` with environment radiance for that direction, so a visibility ray toward an importance-sampled environment direction *is* the radiance fetch. The flip side is a real ordering hazard. A shadow ray that misses overwrites `payload.color`, and the first hit&#x27;s emissive lives in exactly that field, so it has to be read into a local before the first NEE trace or it is gone. `hitNormal` and `hitAlbedo` survive — the miss shader never touches them, and the hit branch runs no shader at all.</p>
-<div class="citation-chip"><code class="citation-code">vec3 emissive = payload.color;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L273" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:273</a></div>
-<p>Shadow `tmax` for the three positional branches is the distance to the sampled surface point minus 0.02, not the light radius; sampling a sphere&#x27;s surface and tracing to its centre distance would make every sphere light self-occlude. Directional lights and every env-MIS visibility ray have no sampled point to aim at and use a flat 10000.0 instead.</p>
+<p>$T$ is the path throughput, $f\cos\theta_i$ is what `OpenPBRBase::eval` returns, and $p_f$ is the BSDF&#x27;s density for the same direction (`OpenPBRBase::pdf`, the mixture of its GGX and EON lobes). A bounce ray that meets the light&#x27;s emitter, or escapes to the environment, takes the mirror weight $p_f^2/(p_f^2 + p_\ell^2)$, with $p_f$ the density the last bounce was drawn with and $p_\ell$ what light or environment sampling would have had for that direction.</p>
+<div class="citation-chip"><code class="citation-code">add = throughput * le * powerHeuristic(lastPdf, lightPdf);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L506" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:506</a></div>
+<div class="citation-chip"><code class="citation-code">const float w = depth == 0u ? 1.0 : powerHeuristic(lastPdf, envPdf(dir));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L490" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:490</a></div>
+<p>Two cases skip the weight. A sun is a delta, found only by light sampling. A light without an emitter mesh (`LightTable::setEmitterLights` did not flag it) is also found only by light sampling, so it is taken at full weight:</p>
+<div class="citation-chip"><code class="citation-code">const float w = ls.pdf &gt; 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L599" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:599</a></div>
+<p>A bounce ray that meets an emitter learns which light it is from the emitter instance&#x27;s `emitterLight.w`, which the closest hit returns as `payload.light`; `emitterRadiance` then recomputes the light&#x27;s radiance toward the ray&#x27;s origin and the light-sampling density it would have had.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The power heuristic, not the balance heuristic: when one strategy&#x27;s density is much larger than the other&#x27;s (a mirror against a large light, a small light against a diffuse surface), the power heuristic gives the better one almost all the weight and leaves less variance from the weaker one. Because the emitter meshes are in the bounce ray&#x27;s mask, no roughness threshold is needed to decide which strategy owns a glossy reflection of a light.</p></div>
+<p>Emissive surfaces are not in the light list (the raster frame&#x27;s emissive proxies are left out of the RT buffer); a path finds them by BSDF sampling only, at full weight.</p>
+<div class="citation-chip"><code class="citation-code">add = throughput * hit.emission;   // emissive surfaces: found by BSDF sampling only</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L512" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:512</a></div>
 </div>
-<div class="section-rule"><h2 id="weighting-the-environment-against-itself">Weighting the environment against itself</h2></div>
+<div class="section-rule"><h2 id="the-environment">The environment</h2></div>
 <div class="prose reveal">
-<p>Environment light arrives by two strategies — an explicit CDF-driven sample at each vertex, and whatever a BSDF-sampled ray hits when it escapes — so both need MIS weights or the sky is counted twice. The miss shader returns the environment pdf of the escape direction; the loop weighs it against the pdf the BSDF sampler used for that bounce:</p>
-<div class="citation-chip"><code class="citation-code">envMisWeight = misBalanceHeuristic(specLastBsdfPdf, payload.envPdf);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L574" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:574</a></div>
-<div class="citation-chip"><code class="citation-code">return pdfA / max(pdfA + pdfB, 1e-6);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/mis.glsl#L8" target="_blank" rel="noopener">shaders/includes/rt/mis.glsl:8</a></div>
-<p>The balance heuristic is used, not the power heuristic, although both are available in the header. Below roughness 0.05 the bounce is flagged as a delta lobe and MIS is skipped entirely (weight 1) — a mirror direction has no comparable density, and dividing by a fabricated one darkens chrome.</p>
+<p>When the environment has a CDF, each vertex draws one direction from it (`sampleEnv`: a row by the marginal, a texel by the conditional, a point uniformly in the texel) and weighs it against the BSDF in the same way. `envPdf` evaluates the density of any direction from the same two tables, so the miss of a bounce ray is weighted against exactly the density the sampler used. Its map is row 0 at the zenith, as every environment lookup in the engine is:</p>
+<div class="citation-chip"><code class="citation-code">const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L325" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:325</a></div>
 </div>
-<div class="section-rule"><h2 id="where-the-three-files-stop-agreeing">Where the three files stop agreeing</h2></div>
+<div class="section-rule"><h2 id="the-next-direction-and-when-the-path-ends">The next direction, and when the path ends</h2></div>
 <div class="prose reveal">
-<p>`pt_raygen_offline.rgen` began as a copy of `pt_raygen.rgen`, and its header now says it is a fork. It has not been a copy for a long time.</p>
-<div class="citation-chip"><code class="citation-code">// Forked from pt_raygen.rgen (the default shader set&#x27;s raygen); it differs in the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L8" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:8</a></div>
-<p>Four divergences matter when reading a render:</p>
-<ul>
-<li>**Sphere-light sampling.** The reference and offline files sample a uniform</li>
-</ul>
-<p>point on the sphere surface, whose weight $\cos\theta_\ell A / d^2$ diverges as the shading point approaches the light. The realtime file replaces it with pbrt&#x27;s subtended-cone sampling, whose weight is the bounded solid angle $2\pi(1-\cos\theta_{\max})$ — same expectation, no overlapping-light firefly.</p>
-<div class="citation-chip"><code class="citation-code">weight = 6.2831853 * (1.0 - cosThetaMax);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L180" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:180</a></div>
-<ul>
-<li>**Glossy bounce, first one only.** The crude sampler — jitter the mirror</li>
-</ul>
-<p>direction by a roughness-scaled cosine vector — lives in all three files. Realtime replaces it at the bounce-1 fork alone, sampling the GGX distribution of visible normals (Heitz 2018), which collapses the estimator weight to Fresnel times a height-correlated Smith ratio. Its Stage B loop from bounce 2 on is byte-identical to the reference file&#x27;s: same jitter, same un-Fresnelled `mix(1, albedo, metallic)` throughput.</p>
-<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L820" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:820</a></div>
-<ul>
-<li>**Stage C.** In the realtime file the diffuse sub-path is no longer a plain</li>
-</ul>
-<p>bounce loop but a ReSTIR GI reservoir over the secondary vertex, with temporal and spatial reuse.</p>
-<div class="citation-chip"><code class="citation-code">giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1540" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1540</a></div>
-<ul>
-<li>**Skin.** The offline file grew a second sharp GGX &quot;oil&quot; lobe and a</li>
-</ul>
-<p>Christensen-Burley diffusion wrap, both in the bounce-0 direct block and neither behind a material flag — but they are gated differently. The oil lobe fires on any non-metal whenever the global SSS strength `pc.tuning.w` is non-zero, and is scaled by that strength alone.</p>
-<div class="citation-chip"><code class="citation-code">if (pc.tuning.w &gt; 0.001 &amp;&amp; metallic &lt; 0.5) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L432" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:432</a></div>
-<p>Only the diffusion wrap is narrowed to warm-tinted albedo, by multiplying that same strength with a `skinHint` term.</p>
-<div class="citation-chip"><code class="citation-code">float skinHint = clamp((albedo.r - albedo.b) * 3.0, 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L453" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:453</a></div>
-<p>The AOV encoding splits two ways, and this is the one place the profiles do *not* diverge from each other. The reference file writes linear RGB and a raw hit distance into bindings 22/23; both shipped profiles run the same NRD front end first, demodulating the diffuse by first-hit albedo and converting to YCoCg with a hit distance normalized against view depth and roughness — the identical `nrdPackRadianceHitDist` call in both.</p>
-<div class="citation-chip"><code class="citation-code">AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L1192" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:1192</a></div>
-<div class="citation-chip"><code class="citation-code">vec3 ycocg = nrdLinearToYCoCg(max(linearRadiance, vec3(0.0)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/nrd_frontend.glsl#L39" target="_blank" rel="noopener">shaders/includes/rt/nrd_frontend.glsl:39</a></div>
-<p>Only the diffuse is demodulated. `specContrib` goes into the packer raw:</p>
-<div class="citation-chip"><code class="citation-code">vec4 specPacked = nrdPackRadianceHitDist(specContrib, specHitDist, firstHitViewZ, firstHitRough);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1229" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1229</a></div>
-<p>The compositor nevertheless re-multiplies the denoised specular by the F0 AOV, so the diffuse channel round-trips (divide, then multiply) while the specular is multiplied by a factor no raygen ever divided out. That asymmetry is live on every NRD frame.</p>
+<p>`OpenPBRBase::sample` picks the specular lobe with the probability of its share of the albedo&#x27;s luminance, samples GGX&#x27;s bounded visible normals or EON&#x27;s diffuse lobe, and returns $f\cos\theta/p$ with $p$ the mixture density. That weight multiplies the throughput, and the density is kept for the next vertex&#x27;s MIS.</p>
+<div class="citation-chip"><code class="citation-code">const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L624" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:624</a></div>
+<p>A sample below the geometric surface ends the path (the base has no transmission). From the third vertex on, Russian roulette continues with probability $q = \min(\max(T_r, T_g, T_b), 0.95)$ and divides the throughput by it, which keeps the estimator unbiased:</p>
+<div class="citation-chip"><code class="citation-code">const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L635" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:635</a></div>
+<p>The bounce cap is `params.w`&#x27;s low 16 bits; the offline profile asks for 32, which roulette rarely reaches. A cap of 0 still adds the emitter or environment a direct light sample&#x27;s companion BSDF ray meets, so 0 is direct light, both strategies weighted.</p>
+<div class="citation-chip"><code class="citation-code">if (stop || depth &gt; bounces) break;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L561" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:561</a></div>
+<p>Random numbers are one PCG stream per pixel and sample, seeded from the pixel and the sample index; the reference does not use the GLSL sampler API.</p>
+<div class="citation-chip"><code class="citation-code">rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L454" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:454</a></div>
+</div>
+<div class="section-rule"><h2 id="shadow-rays-carry-no-boolean">Shadow rays carry no boolean</h2></div>
+<div class="prose reveal">
+<p>A visibility ray starts its payload as a hit, skips the closest-hit shader and stops at the first hit; only the miss shader clears the flag. &quot;The flag is clear&quot; is the unoccluded test.</p>
+<div class="citation-chip"><code class="citation-code">p.flags = kHit;   // the closest hit is skipped: only the miss shader clears it</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L396" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:396</a></div>
+<p>Rays leave 1 mm off the surface along the geometric normal on the side the ray came from, and a light or environment sample on the other side of that normal is rejected.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-reference-writes">What the reference writes</h2></div>
+<div class="prose reveal">
+<p>Besides radiance, the raygen writes the running mean of every sample since the last reset (binding 1, read from the previous frame&#x27;s image at binding 3: the offline camera is still, and a view change resets), the ACES image at exposure 0.5 (binding 2), OIDN&#x27;s albedo and normal, and NRD&#x27;s and DLSS&#x27;s guides.</p>
+<div class="citation-chip"><code class="citation-code">acc = (prev.rgb * prev.w + radiance) / count;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L654" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:654</a></div>
+<p>The NRD split is by the lobe the first vertex sampled: everything after a diffuse first bounce goes to the diffuse image, after a specular one to the specular image. Direct light at the first vertex goes to the diffuse image whole. The diffuse radiance is demodulated by the first hit&#x27;s diffuse albedo (floored at 0.03) and the specular is not:</p>
+<div class="citation-chip"><code class="citation-code">const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L659" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:659</a></div>
 <div class="citation-chip"><code class="citation-code">vec3 composed = diffRad * diffAlbedo + specRad * specColor;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/nrd_compose.comp#L32" target="_blank" rel="noopener">shaders/rt/nrd_compose.comp:32</a></div>
-<p>One more thing about the accumulation: it is two images. Every raygen writes this frame&#x27;s at binding 1 and reads history only from the previous frame&#x27;s at binding 3, so the realtime profile&#x27;s reprojection, which reads a *neighbour* pixel, never reads a texel a sibling invocation is writing. The offline profile reads only its own pixel: its camera is still, and any view change resets the accumulation.</p>
-<div class="citation-chip"><code class="citation-code">const vec4 prev = imageLoad(accumHistory, pixel);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1207" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1207</a></div>
+<p>Read from the code: a metal&#x27;s diffuse albedo is 0, so its direct specular, which sits in the diffuse image, is multiplied by 0 when the compositor remodulates. The OIDN path and the plain accumulation are not affected.</p>
+</div>
+<div class="section-rule"><h2 id="the-realtime-raygen">The realtime raygen</h2></div>
+<div class="prose reveal">
+<p>`pt_raygen_realtime.rgen` keeps the GLSL design: at the first hit it forks a specular and a diffuse sub-path, each with its own throughput, so REBLUR and DLSS-RR get both channels every frame. Sphere lights are sampled by their subtended cone, the first glossy bounce by GGX&#x27;s visible normals, and the diffuse sub-path is a ReSTIR GI reservoir with temporal and spatial reuse.</p>
+<div class="citation-chip"><code class="citation-code">weight = 6.2831853 * (1.0 - cosThetaMax);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L180" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:180</a></div>
+<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L820" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:820</a></div>
+<div class="citation-chip"><code class="citation-code">giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1540" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1540</a></div>
+<p>Past the first bounce its specular chain still jitters the mirror direction by a roughness-scaled cosine vector and carries `mix(1, albedo, metallic)` without a density, so it is not an estimator of any BSDF; it is a fast approximation that the reference exists to check.</p>
+<div class="citation-chip"><code class="citation-code">vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L768" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:768</a></div>
 </div>
 <div class="section-rule"><h2 id="two-fields-in-one-word-because-the-push-constant-is-full">Two fields in one word, because the push constant is full</h2></div>
 <div class="prose reveal">
-<p>`params.w` carries `maxBounces` in its low 16 bits and the realtime per-frame sample count in its high 16 — not a micro-optimisation. The push-constant block is three `mat4`s, two `uvec4`s and two `vec4`s, exactly 256 bytes, and a static assert holds it there. That 256 is a device limit, not a spec floor: core Vulkan only guarantees a `maxPushConstantsSize` of 128 bytes, so the block is already twice the portable budget and a new field would have to displace an old one.</p>
-<div class="citation-chip"><code class="citation-code">OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L479" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:479</a></div>
-<div class="citation-chip"><code class="citation-code">const uint32_t packedBouncesAndSpf = (spf &lt;&lt; 16) | (m_maxBounces &amp; 0xFFFFu);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L680" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:680</a></div>
-<p>The realtime raygen unpacks the high half and loops N decorrelated paths per dispatch, re-seeding the sampler with `frameIdx * N + s` so the sub-samples do not repeat a sequence; the pixel jitter is computed once outside that loop, so NRD and DLSS still see exactly one sub-pixel offset per frame.</p>
+<p>`params.w` carries `maxBounces` in its low 16 bits and the realtime per-frame sample count in its high 16. The push-constant block is three `mat4`s, two `uvec4`s and two `vec4`s, exactly 256 bytes, and a static assert holds it there. That 256 is a device limit, not a spec floor: core Vulkan only guarantees 128 bytes.</p>
+<div class="citation-chip"><code class="citation-code">OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L489" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:489</a></div>
+<div class="citation-chip"><code class="citation-code">const uint32_t packedBouncesAndSpf = (spf &lt;&lt; 16) | (m_maxBounces &amp; 0xFFFFu);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L681" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:681</a></div>
+<p>The realtime raygen loops that many decorrelated paths per dispatch; the reference masks the high half off and traces one.</p>
 <div class="citation-chip"><code class="citation-code">uint samplesPerFrame = max(pc.params.w &gt;&gt; 16, 1u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L296" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:296</a></div>
-</div>
-<div class="section-rule"><h2 id="sampler-dimensions-are-padded-not-budgeted">Sampler dimensions are padded, not budgeted</h2></div>
-<div class="prose reveal">
-<p>`dimIdx` advances by a *path-dependent* amount — the below-horizon fallback in the glossy sampler consumes two extra dimensions only on the pixels that need it — so no fixed dimension budget exists. The Sobol sampler absorbs this by padding: dimension `d` selects Owen-scramble pad `d &gt;&gt; 2` and Sobol dimension `d &amp; 3` within it.</p>
-<div class="citation-chip"><code class="citation-code">uint pad = dim &gt;&gt; 2;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_sobol.glsl#L69" target="_blank" rel="noopener">shaders/includes/rt/sampler_sobol.glsl:69</a></div>
-<p>Stratification is therefore guaranteed only inside groups of four consecutive dimensions, and two neighbouring pixels that took different branches are no longer aligned in dimension space — the price of not tracking a per-path dimension budget.</p>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Read `pt_raygen.rgen` to learn the algorithm; read the profile you actually render with to learn the pixels, because the reference file produces none. The two shipped raygens have diverged from it and from each other in light sampling, first-bounce glossy sampling, diffuse-path structure and the offline-only skin lobes — and only the offline file&#x27;s stale header still claims otherwise.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The offline profile&#x27;s pixels come from `path_tracer.slang`: one path a sample, next-event estimation to one light and to the environment, BSDF sampling of OpenPBR&#x27;s base, every strategy weighted by the power heuristic, Russian roulette from the third vertex. The realtime profile&#x27;s come from `pt_raygen_realtime.rgen`, a split diffuse and specular tracer built for the denoisers.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>Every `PathTracer` gets its raygen from the owning profile; `PathTracerShaderSet`&#x27;s default `rt_pt_raygen.rgen.spv` is compiled but never bound at runtime.</li>
-<li>A shadow ray&#x27;s result is `payload.hitDist &lt; 0.0`, which holds only because the caller pre-sets `payload.hitDist = 999.0` before every trace. With closest-hit skipped nothing writes the payload on a hit, so drop the pre-set and an occluded ray inherits the previous trace&#x27;s result — a preceding env-MIS miss leaves −1.0 and the next shadow test reports &quot;unoccluded&quot;. `gl_RayFlagsSkipClosestHitShaderEXT` itself is only a cost saving; closest-hit writes a non-negative `gl_HitTEXT` and would test the same.</li>
-<li>The first hit&#x27;s emissive must be read out of `payload.color` into a local before the first NEE trace; a shadow ray that misses overwrites that field with environment radiance. `payload.hitNormal` and `payload.hitAlbedo` are not at risk — no shader on the shadow-ray path writes them.</li>
-<li>Shadow `tmax` is the distance to the sampled point minus 0.02 for the sphere, spot and area branches, and a flat 10000.0 for directional lights and every env-MIS ray. Tracing a sphere light to its centre distance instead of the sampled point makes every sphere light self-occlude.</li>
-<li>`Le` is derived from `4πr²` before the light-type branch, but the area-rect branch weights by the stored `extra2.w`. Changing either without the other silently rescales area lights only.</li>
-<li>The realtime ReSTIR escape hatches (`PT_FLAG_RESTIRGI_OFF`, `_GIONLY`, `_LEGACY`, `_NOSPATIAL`, bits 5-8) are unreachable: the host only ever sets bits 0-4, so temporal and spatial reuse are always on and the legacy Stage C path is dead. {{cite ohao/render/rt/path_tracer_render.cpp &quot;constexpr uint32_t kPTFlagDLSSRR = 1u &lt;&lt; 4;&quot;}}</li>
-<li>Bindings 22/23 hold linear RGB in `pt_raygen.rgen` and YCoCg in both shipped profiles. Anything reading them must know which raygen produced the frame.</li>
+<li>A profile&#x27;s raygen is the one its `PathTracerShaderSet` names: the default (the Slang reference) for `RTOfflineRenderer`, the GLSL realtime set for `RTRealtimeRenderer`. A set&#x27;s entry names must match its SPIR-V (`raygen`, `closestHit`, `anyHit`, `miss` for Slang; `main` for GLSL).</li>
+<li>A light found by both strategies must be weighted on both sides. A bounce ray meets an emitter only when its mask includes `kTlasMaskEmitter`; a light with no emitter mesh must not be flagged by `LightTable::setEmitterLights`, or its light sampling is halved for a hit that never comes.</li>
+<li>An emitter instance&#x27;s `emitterLight.w` is its light&#x27;s index in the RT light buffer. If the two orders differ, a bounce ray weighs one light&#x27;s emission against another&#x27;s density.</li>
+<li>Emissive surfaces reach the reference by BSDF sampling only. Putting proxy lights for them back into the RT buffer counts their light twice.</li>
+<li>A shadow ray&#x27;s payload must start with `kHit` set; with the closest hit skipped, nothing else sets it on a hit.</li>
+<li>The bounce cap lives in `params.w`&#x27;s low 16 bits; the high 16 are the realtime samples per frame.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/rt/mis.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/rt/nrd_frontend.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/nrd_compose.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/rt/sampler_sobol.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/material/openpbr.slang</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

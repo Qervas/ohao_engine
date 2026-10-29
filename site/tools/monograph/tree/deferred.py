@@ -28,7 +28,7 @@ MODULE = {
             'GBuffer pass',
             'GPU-culled early/late passes, MRT packing, bindless, velocity.',
             files=['ohao/render/deferred/gbuffer_pass.hpp', 'ohao/render/deferred/gbuffer_pass.cpp', 'shaders/core/gbuffer.vert', 'shaders/core/gbuffer.frag'],
-            design=['Five timed parts: cull.instances, gbuffer.early, hiz.build, cull.late, gbuffer.late; indirect draws, one-sided materials back-face culled.', 'Vertex: the draw record at firstInstance gives the instance and material slots; world pos, normal, tangent, dual UV, current+prev clip for velocity.', 'Fragment MRT: position, packed normal, albedo, motion vectors; bindless textures via nonuniformEXT, indices from the material row.'],
+            design=['Five timed parts: cull.instances, gbuffer.early, hiz.build, cull.late, gbuffer.late; indirect draws, one-sided materials back-face culled.', 'Vertex: the draw record at firstInstance gives the instance and material slots; world pos, normal, tangent, dual UV, current+prev clip for velocity.', 'Fragment MRT, eight targets: position, packed normal, albedo (base_weight x base_color), motion vectors, depth, emission (emission_color x emission_luminance), specular (specular_color, specular_weight / 1.5), OpenPBR (base_diffuse_roughness, (specular_ior - 1) / 2.55); bindless textures via nonuniformEXT, indices from the material row.'],
         ),
         page(
             'csm',
@@ -40,15 +40,15 @@ MODULE = {
         page(
             'lighting',
             'Deferred lighting',
-            'The froxel\'s light loop, IBL, SSAO, shadows, BRDF eval.',
-            files=['ohao/render/deferred/deferred_lighting_pass.hpp', 'ohao/render/deferred/deferred_lighting_pass.cpp', 'shaders/core/deferred_lighting.frag'],
-            design=['Fullscreen pass reads world position from GBuffer0 (no depth reconstruction).', 'Sums the pixel\'s froxel\'s lights (GGX); IBL; SSAO on ambient terms; RT shadow visibility or CSM; RT GI.'],
+            'The froxel\'s light loop through OpenPBR\'s base, split-sum IBL, SSAO, shadows.',
+            files=['ohao/render/deferred/deferred_lighting_pass.hpp', 'ohao/render/deferred/deferred_lighting_pass.cpp', 'shaders/core/deferred_lighting.slang', 'shaders/includes/lighting/clustered_lights.slang', 'shaders/material/openpbr.slang'],
+            design=['Fullscreen Slang pass reads world position from GBuffer0 (no depth reconstruction) and rebuilds OpenPBR\'s inputs from the eight targets.', 'directLight (clustered_lights.slang) sums the pixel\'s froxel\'s lights through OpenPBRBase.evalLobes, shadowed by RT visibility or the CSM; the split-sum weight is OpenPBRBase.specularAlbedo from OpenPBR\'s energy tables (binding 20), the diffuse fill diffuseAlbedo; SSAO on the ambient terms; RT GI.'],
         ),
         page(
             'clustered-lighting',
             'Clustered lighting',
             'Froxel light lists, built every frame, exact against summing every light.',
-            files=['ohao/render/deferred/light_clusters.hpp', 'ohao/render/deferred/light_clusters.cpp', 'shaders/compute/light_cluster.slang', 'shaders/core/deferred_lighting.frag', 'tests/renderer/light_cluster_gpu_test.cpp'],
+            files=['ohao/render/deferred/light_clusters.hpp', 'ohao/render/deferred/light_clusters.cpp', 'shaders/compute/light_cluster.slang', 'shaders/includes/lighting/clustered_lights.slang', 'tests/renderer/light_cluster_gpu_test.cpp'],
             design=['16x9 tiles x 24 exponential slices (0.1 m to the far plane) = 3,456 froxels; lists of at most 256 light indices in light order.', 'lights.cluster: one 64-thread workgroup per froxel, sphere vs conservative view-space box, ordered groupshared compaction, no atomics across workgroups.', 'Light table: a LightGpu storage buffer per frame slot, rewritten only when the version changes; overflow into render.stats lightsOverflow.'],
             workflow=['setLights', 'lights.cluster', 'lighting', 'collect overflow'],
         ),

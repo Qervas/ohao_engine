@@ -252,8 +252,9 @@ corrupts member offsets at runtime.
 
 `shaders/` owns no library and no include relationship with C++; it is a custom
 target that flattens each source path into one SPIR-V file, mangling the directory
-separator into an underscore, so `shaders/rt/pt_raygen.rgen` becomes
-`rt_pt_raygen.rgen.spv`:
+separator into an underscore, so `shaders/rt/pt_raygen_realtime.rgen` becomes
+`rt_pt_raygen_realtime.rgen.spv`, and a Slang file with several entry points adds the
+entry's name (`rt/path_tracer.slang`'s `raygen` is `rt_path_tracer.slang.raygen.spv`):
 
 {{cite shaders/CMakeLists.txt "SHADER_FLAT_NAME ${SHADER_REL}"}}
 
@@ -265,14 +266,14 @@ does not match `.glsl` files sitting *directly* in `shaders/includes/`:
 
 Second, there are two independent answers to "where are the SPIR-V files". Raster
 passes probe a candidate list at `VulkanRenderer` construction, using
-`core_deferred_lighting.frag.spv` as the sentinel and then broadcasting the winner to
+`core_deferred_lighting.slang.spv` as the sentinel and then broadcasting the winner to
 `RenderPassBase`:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "std::ifstream test(path + "}}
 
 The RT pipeline ignores that result entirely — `PathTracerShaderSet` hardcodes
-relative `bin/shaders/` paths, and `RTRealtimeRenderer` / `RTOfflineRenderer` pass
-their own hardcoded variants:
+relative `bin/shaders/` paths (its default, the reference path tracer's, is what
+`RTOfflineRenderer` uses), and `RTRealtimeRenderer` passes its own hardcoded GLSL set:
 
 {{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv"}}
 

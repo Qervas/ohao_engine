@@ -108,14 +108,14 @@ skipped rough dielectric write zero:
 
 The lighting pass has already lit every pixel's reflection: the environment and RT
 GI's bounce light along it, $\text{incoming}$, times the split-sum weight with
-specular occlusion, $W$ (the deferred lighting unit, "Image-based lighting"). A trace
+specular occlusion, $W$ (the specular lobes' directional albedo from OpenPBR's energy tables times `specularOcclusion`; the deferred lighting unit, "Image-based lighting"). A trace
 hit is a better estimate of that same incoming light, so adding it on top would count
 the reflected energy twice; that is what an earlier tonemap-time `+=` did, and on the
 helmet room it brightened the helmet against its left wall from 0.676 to 0.734. The
 lighting pass therefore writes two more attachments beside the lit image, $E = W \cdot
 \text{incoming}$ and $W$:
 
-{{cite shaders/core/deferred_lighting.frag "outEnvSpecular = vec4(envSpecular, 0.0);"}}
+{{cite shaders/core/deferred_lighting.slang "o.envSpecular = float4(envSpecular, 0.0);"}}
 
 and `resolve` (`postprocess/ssr_resolve.slang`, full resolution, the lit image in
 `GENERAL` and back) blends the reflection toward the trace by the confidence, under

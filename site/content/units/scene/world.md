@@ -43,7 +43,6 @@ Runtime components:
 - `Children` — the hierarchy's other direction.
 - `MeshRenderer` — a `MeshHandle`, one `MaterialHandle` per submesh, a `visible` flag.
 - `EmissiveProxyLight` — a point light standing in for a mesh's emissive texture, in model space.
-- `GiMaterialLegacy` — the RT GI bounce-albedo word copied into each instance.
 - `RenderSlot`, `CreationOrder`, `InstantiateError`, `PreservedComponents` (unknown components a file carried, written back on save).
 
 and the empty tags `TransformDirty`, `RenderDirty`, `MovedLastFrame` and `InstantiateDirty`.

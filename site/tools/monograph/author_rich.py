@@ -285,26 +285,26 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "materials/pbr-model": {
         "what": [
-            "Metallic-roughness PBR: baseColor, metallic, roughness map to diffuse lobe + specular F0. ORM packing follows glTF (occlusion/roughness/metal).",
+            "OpenPBR's base (material/openpbr.slang) for the path tracer and deferred lighting, from glTF's metallic-roughness plus specular colour/weight, IOR and diffuse roughness. ORM packing follows glTF (occlusion/roughness/metal).",
         ],
         "how": [
-            "pbr_unpack.glsl expands packed rows/textures into shading parameters.",
-            "Dielectric F0 ≈ 0.04; metals use baseColor as F0 with zero diffuse.",
-            "Roughness floor kills zero-width specular fireflies in path tracing.",
+            "The 7-row material table carries the inputs; the path tracer's closest hit and the G-buffer resolve them from rows and textures (pbr_unpack.glsl serves the realtime GLSL tracer).",
+            "OpenPBR's base: a dielectric's F0 from specular_ior (1.5 gives 0.04); metals use base colour as F0 under F82-tint, with zero diffuse.",
+            "OpenPBR floors specular roughness at 0.01; the G-buffer stores it as authored.",
         ],
         "why": "One material language for deferred and PT means artist assets look consistent across modes.",
         "math": [
-            "F_{0,\\mathrm{dielectric}} \\approx 0.04",
-            "F_0 = \\mathrm{lerp}(0.04,\\, c_{\\mathrm{base}},\\, m)",
+            "F_{0,\\mathrm{dielectric}} = \\left(\\frac{\\eta-1}{\\eta+1}\\right)^2",
+            "F_{0,\\mathrm{metal}} = w_{\\mathrm{base}}\\, c_{\\mathrm{base}}",
         ],
     },
     "materials/ggx": {
         "what": [
-            "GGX/Trowbridge-Reitz microfacet BRDF with Schlick Fresnel and Smith correlated geometry — shared by deferred lighting and path-tracer lobes.",
+            "GGX/Trowbridge-Reitz microfacet BRDF in OpenPBR's base (openpbr.slang): height-correlated Smith, F82-tint and exact dielectric Fresnel, Kulla-Conty compensation — shared by deferred lighting, the transparent pass, RT GI and the reference path tracer.",
         ],
         "how": [
-            "brdf_ggx.glsl: D, F, G terms; brdf_common helpers; ggx_aniso for anisotropic roughness.",
-            "material_sampling uses VNDF/cosine for importance sampling in PT.",
+            "openpbr.slang: ggxD, ggxSingle, ggxSampleBounded/ggxPdfBounded, msFresnel; energy tables at the binding each pass names.",
+            "ggx_aniso.glsl: the realtime GLSL path tracer's GGX (anisotropic roughness, Schlick F).",
         ],
         "why": "Two BRDFs = two lookdevs. One GGX is a product decision.",
         "math": [
@@ -364,7 +364,7 @@ KNOWLEDGE: dict[str, dict] = {
             "Cascaded shadow maps into a depth array; splits from the camera frustum. Uses unjittered camera when TAA is active for stable cascades.",
         ],
         "how": [
-            "csm_pass culls each cascade on the GPU and records depth from the light's view with indirect draws; deferred_lighting.frag samples with a 3x3 PCF.",
+            "csm_pass culls each cascade on the GPU and records depth from the light's view with indirect draws; deferred_lighting.slang samples with a 3x3 PCF.",
         ],
         "why": "Single shadow map cannot cover large outdoor views without swimming or acne.",
     },
@@ -373,7 +373,7 @@ KNOWLEDGE: dict[str, dict] = {
             "Fullscreen deferred lighting reads world position from the G-buffer, sums its froxel's lights (GGX), adds IBL, SSAO on the ambient terms, RT shadow visibility or CSM, RT GI.",
         ],
         "how": [
-            "deferred_lighting.frag + deferred_lighting_pass.hpp; the light table (binding 5) and froxel lists (binding 16) from LightClusters.",
+            "deferred_lighting.slang + deferred_lighting_pass.hpp; the light table (binding 5) and froxel lists (binding 16) from LightClusters, walked by clustered_lights.slang's directLight.",
         ],
         "why": "All shading in one pass over screen-sized buffers; with clustered lighting a pixel pays for the lights that reach it.",
     },
@@ -461,20 +461,20 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "path-tracer/raygen": {
         "what": [
-            "Raygen integrator family: pt_raygen.rgen (brute-force reference), realtime/offline variants with NEE, dual-lobe BRDF, MIS, AOV packing for denoisers.",
+            "Offline reference path_tracer.slang: one path a sample estimating OpenPBR's base BSDF, NEE to lights and the environment under the power heuristic, AOV packing for denoisers; the realtime profile keeps pt_raygen_realtime.rgen.",
         ],
         "how": [
-            "Primary ray from camera UBO; closest-hit payload carries throughput.",
-            "NEE: sample light (sphere solid angle), shadow ray with Tmax = lightDist (not radius).",
-            "BRDF sample next direction; Russian roulette / max bounce.",
-            "Write beauty + AOVs; NRD path packs YCoCg + norm hit-dist via nrd_frontend.glsl.",
+            "Camera ray from the inverse view/projection push constants; the closest hit resolves OpenPBR inputs into the payload.",
+            "NEE: one light (sphere by its cone, rectangle by area, sun as a delta) and one environment CDF direction, shadow ray to the light's near side.",
+            "OpenPBRBase::sample picks the next direction; emitter and environment hits weighed against light sampling; Russian roulette from the third vertex.",
+            "Write beauty + AOVs; NRD radiance packed as YCoCg + normalized hit distance in raygen.",
         ],
-        "why": "One integrator family; profile swaps spp/sampler without forking the host API. Hub NEE walk anchors L305+ line pedagogy.",
+        "why": "One correct estimator is the reference the deferred frame is judged by. Hub NEE walk anchors L241+ line pedagogy.",
         "workflow": [
             "Camera primary ray",
             "Closest-hit payload",
-            "NEE + shadow ray",
-            "BRDF sample bounce",
+            "NEE + shadow rays + MIS",
+            "BSDF sample bounce",
             "RR / max depth",
             "Accum + AOV writes",
         ],
@@ -483,7 +483,7 @@ KNOWLEDGE: dict[str, dict] = {
             "\\hat{L}_{\\mathrm{NEE}} = \\frac{f_r L_e |n\\cdot w_i|}{p_{\\mathrm{light}}} V",
         ],
         "contracts": [
-            "Shadow Tmax uses distance to light sample, not sphere radius",
+            "Shadow Tmax is the distance to the light's near side along the sample, not the radius",
             "NRD inputs are YCoCg+hitDist, not linear RGB",
         ],
     },
@@ -492,16 +492,16 @@ KNOWLEDGE: dict[str, dict] = {
             "closesthit: barycentrics → material → PBR payload; anyhit: alpha cutout; miss: environment contribution.",
         ],
         "how": [
-            "pt_closesthit.rchit, pt_anyhit.rahit, pt_miss.rmiss share material unpack with raygen.",
+            "Offline: path_tracer.slang's closestHit, anyHit and miss entries; realtime: pt_closesthit.rchit, pt_anyhit.rahit, pt_miss.rmiss.",
         ],
         "why": "Split shader stages keep anyhit cheap and miss free of material state.",
     },
     "path-tracer/bindings": {
         "what": [
-            "Descriptor set 0 map bindings 0–37: TLAS, accum, materials, lights, env CDF, AOVs, ReSTIR 29–34, DLSS hit-dist 35, RenderScene tables 36–37.",
+            "Descriptor set 0 map bindings 0–38: TLAS, accum, materials, lights, env CDF, AOVs, ReSTIR 29–34, DLSS hit-dist 35, RenderScene tables 36–37, OpenPBR tables 38.",
         ],
         "how": [
-            "path_tracer_descriptors.cpp writes all slots; GLSL layout(set=0,binding=N) must match exactly.",
+            "path_tracer_descriptors.cpp writes all slots; the shaders' binding numbers (Slang [[vk::binding]], GLSL layout) must match exactly.",
         ],
         "why": "Wrong binding = silent black. Plate SVG documents the shipped map.",
         "contracts": [
@@ -514,23 +514,23 @@ KNOWLEDGE: dict[str, dict] = {
             "ReSTIR GI reservoirs as set-0 storage images for realtime light sample reuse.",
         ],
         "how": [
-            "Ping-pong planes on bindings 29–34; offline may skip and use Sobol spp instead.",
+            "Ping-pong planes on bindings 29–34; the offline reference (path_tracer.slang) does not read them.",
         ],
         "why": "Realtime GI needs temporal reuse; reservoirs keep it inside the same descriptor set as PT.",
     },
     "sampling/sampler-api": {
         "what": ["Unified next1D/next2D sampler API; backend selected by profile specialization."],
-        "how": ["sampler_api.glsl dispatches; sampler_types.hpp mirrors host enum."],
+        "how": ["sampler_api.glsl dispatches for the GLSL realtime raygen; sampler_types.hpp mirrors host enum. path_tracer.slang does not use it."],
         "why": "Integrator code should not branch on RNG brand at every sample site.",
     },
     "sampling/sobol": {
-        "what": ["Sobol + Owen scramble for offline low-discrepancy sampling."],
+        "what": ["Sobol + Owen scramble low-discrepancy sampling behind sampler_api.glsl (the GLSL raygen); the offline reference uses its own PCG stream."],
         "how": ["Host tables + sampler_sobol.glsl; owen_scramble.cpp."],
-        "why": "Lower discrepancy → faster offline convergence than white noise.",
+        "why": "Lower discrepancy → faster convergence than white noise.",
     },
     "sampling/pcg": {
         "what": ["PCG hash RNG for interactive path tracing."],
-        "how": ["sampler_pcg.glsl — cheap per-pixel streams."],
+        "how": ["sampler_pcg.glsl — cheap per-pixel streams; path_tracer.slang has its own PCG Rng."],
         "why": "Interactive budgets cannot afford full Sobol table traffic every frame.",
     },
     "sampling/mis": {
@@ -619,12 +619,12 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "shaders/includes-lighting": {
         "what": ["light_attenuation.glsl, which no stage includes, against the falloff, IBL and LightGpu record the deferred pass actually uses."],
-        "how": ["deferred_lighting.frag declares its own windowed inverse square (exactly zero past the range) and split-sum IBL; LightGpu comes from shared/layout.json."],
+        "how": ["clustered_lights.slang holds the windowed inverse square (exactly zero past the range) and the light loop; deferred_lighting.slang adds the split-sum IBL weighted by OpenPBR's specular albedo; LightGpu comes from shared/layout.json."],
         "why": "The two falloff laws have different units; the deferred one's hard zero is what clustered lighting relies on.",
     },
     "shaders/includes-shadow": {
         "what": ["How shadows reach deferred lighting: RT visibility channels, or the CSM fallback for directional lights."],
-        "how": ["deferred_lighting.frag reads an RG32UI image of eight 8-bit channels by params.w, else a 3x3 hardware-compare PCF on the cascade array; shadow_csm.vert writes the cascades."],
+        "how": ["deferred_lighting.slang reads an RG32UI image of eight 8-bit channels by params.w, else a 3x3 hardware-compare PCF on the cascade array; shadow_csm.vert writes the cascades."],
         "why": "One visibility per light from whichever technique the frame runs, exclusive per frame.",
     },
     "shaders/postprocess-chain": {
@@ -644,7 +644,7 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "GPU prep work that is not full-screen fragment shading.",
     },
     "shaders/core-gbuffer-lighting": {
-        "what": ["Core raster pair: gbuffer.vert/frag MRT contract and deferred_lighting.frag."],
+        "what": ["Core raster pair: gbuffer.vert/frag's eight-target MRT contract and deferred_lighting.slang."],
         "how": ["Bindless nonuniformEXT; lighting reconstructs position from depth."],
         "why": "These two shaders are the deferred product surface.",
     },

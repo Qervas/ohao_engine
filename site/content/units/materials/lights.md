@@ -18,15 +18,17 @@ whose `LightKind` repeats those four and adds a fifth, `EmissiveProxy`:
 
 {{cite ohao/render/scene/render_scene_types.hpp "enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };"}}
 
-Neither light buffer ends up holding only the authored lights. Model upload also
-derives one point-like stand-in per model whose material carries an emissive texture
-(`EmissiveProxyLight`, resolved to `EmissiveProxy`), and the light table writes it into
-both buffers after the real lights — the ray-traced side stamps it in as a sphere at the
-mesh centre, the deferred side as a point light — so every count on this page is scene
-lights plus emissive stand-ins:
+The raster buffer does not hold only the authored lights. Model upload also derives one
+point-like stand-in per model whose material carries an emissive texture
+(`EmissiveProxyLight`, resolved to `EmissiveProxy`), and the light table writes it into the
+deferred buffer after the real lights, as a point light at the mesh centre:
 
-{{cite ohao/render/scene/light_table.cpp "gl.positionAndType = glm::vec4(d.position, 0.0f);  // sphere type"}}
 {{cite ohao/render/scene/light_table.cpp "light.position = glm::vec4(d.position, 1.0f);  // type 1 = point light"}}
+
+The ray-traced buffer leaves them out. The path tracer meets the emissive surfaces
+themselves, and a stand-in beside them would count their light twice:
+
+{{cite ohao/render/scene/light_table.cpp "// meets the surfaces themselves, and a proxy light beside them would count their light twice."}}
 
 The path tracer takes the kind unmodified — the enum value is cast straight to float and
 dropped into `positionAndType.w`:
@@ -44,12 +46,14 @@ so `LightTable::set` swaps 0 and 1 on the way in, and gives AreaRect type 3 in b
 
 The deferred frame lights a type 3 light as the path tracer does, as a rectangle of
 uniform radiance `I / (4 pi r^2)` emitting one-sided toward `edge1 x edge2`, with no range
-and no `1/d^2`. Its diffuse term is the rectangle's exact irradiance, Lambert's edge
-integral (the polygon's vector form factor); its specular the representative point, the
-reflection ray where it meets the rectangle, with the lobe widened by the rectangle's
-projected size:
+and no `1/d^2`, through OpenPBR's base like every other light (`evaluateRect` in
+`includes/lighting/clustered_lights.slang`). Its diffuse lobe is evaluated toward the
+polygon's vector form factor $J$ and scaled by the rectangle's exact irradiance
+$n\cdot J$, the edge integral; its specular lobe at the representative point, the
+reflection ray where it meets the rectangle, widened by the rectangle's size as a disc of
+equal area:
 
-{{cite shaders/includes/brdf/brdf_ggx.glsl "vec3 evaluateBRDFRect(BRDFSurface surface, vec3 P, vec3 center, vec3 e1, vec3 e2, vec3 Le) {"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, OpenPBRTables t)"}}
 
 Clustered lighting lists a rectangle in every froxel, as it does a directional light: with
 no range there is no sphere to cull by.
@@ -72,19 +76,17 @@ Read either code with the other table in hand and every point light becomes a su
 ## Eighty bytes and sixty-four
 
 The ray-traced pack is the small one. `GPULight` is five `vec4`s, std430, with a static
-assert pinning the size so a stray member cannot silently desynchronise it from the GLSL
-mirror:
+assert pinning the size so a stray member cannot silently desynchronise it from the shader
+mirrors:
 
 {{cite ohao/render/rt/gpu_light.hpp "// 5 vec4s = 80 bytes per light, std430 layout"}}
 
 `LightData` is 128 bytes on the host, and 64 of those are a per-light shadow matrix that
-no shader reads: the light table fills it only for the one light it picks as shadow-map
-caster (the first Point or Spot) and writes identity into every other slot, and the GPU
-copy drops it. `LightClusters` uploads each light as a 64-byte `LightGpu`, the four
-`vec4`s alone:
+no shader reads: the light table writes identity into every slot, and the GPU copy drops
+it. `LightClusters` uploads each light as a 64-byte `LightGpu`, the four `vec4`s alone:
 
 {{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)"}}
-{{cite shaders/shared/layout.json "{"name": "LightGpu", "doc": "one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)","}}
+{{cite shaders/shared/layout.json "{"name": "LightGpu", "doc": "one raster light of the light table (core/deferred_lighting.slang, compute/light_cluster.slang)","}}
 
 Both buffers are capped, and the caps are different kinds of number. The raster table
 holds `MAX_LIGHTS = 65536`, and both loops that fill it — authored lights first, then the
@@ -114,128 +116,132 @@ hot loop of both pipelines.
 ## The sixteen bytes std430 hands over
 
 `GPULight` has `vec4` alignment, so std430 rounds the array base of any buffer that begins
-with a `uint` counter up to 16 regardless. The light table spends three of those four words —
-the light count, the bindless environment-map index at offset 4, an HDRI intensity scale at
-offset 8 — and fills the last with an all-ones constant rather than leaving it as padding:
+with a `uint` counter up to 16 regardless. The light table spends all four of those words:
+the light count, the bindless environment-map index, an HDRI intensity scale, and a flag
+saying whether any TLAS instance has an alpha material (the rays then stop forcing opacity):
 
 {{cite ohao/render/scene/light_table.cpp "const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,"}}
 
-The environment-map slot defaults to the no-texture sentinel, `0xFFFFFFFF` — the value the
-miss shader tests for "no HDRI":
+The environment-map slot defaults to the no-texture sentinel, `0xFFFFFFFF` — the value
+every reader tests for "no HDRI":
 
 {{cite ohao/render/scene/light_table.hpp "uint32_t m_envMapTexIdx{kNoTexture};"}}
 
-Binding 11 is declared four times across the ray-tracing stages, in two shapes. All three
-raygen shaders name only `lightCount` and let std430 alignment skip the rest of the header.
-`pt_miss.rmiss` spells the header out in full — `lightCount`, `envMapTexIdx`, `envIntensity`,
-then a `uint _pad` it never reads — because it is the stage that samples the environment, and
-it needs the third word as much as the second: the index selects the HDRI, the scale
-multiplies it.
+Binding 11 is read in three shapes. The reference path tracer, `rt/path_tracer.slang`,
+declares it as a plain `float4` array and reads each header word by its index, the scale
+with the same `<= 0` means 1 rule as the miss shader:
 
-{{cite shaders/rt/pt_miss.rmiss "float envIntensity;   // HDRI scale"}}
+{{cite shaders/rt/path_tracer.slang "float envScale() { const float s = lightData[0].z; return s > 0.0 ? s : 1.0; }"}}
+{{cite shaders/rt/path_tracer.slang "bool alphaRays() { return asuint(lightData[0].w) == 1u; }"}}
+
+The realtime raygen names all four words in a GLSL block, the last as `alphaRays`;
+`pt_miss.rmiss`, the realtime profile's miss shader, names the first three and calls the
+fourth `_pad`, because it is the stage that samples the environment and needs only the
+index and the scale:
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "uint alphaRays;   // 1: an instance is non-opaque"}}
 {{cite shaders/rt/pt_miss.rmiss "payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb * envS;"}}
 
-That side channel is owned by the table, not by the upload. The index and the scale are held
-as members, `setEnvMapTextureIndex` and `setEnvIntensity` mark the table dirty only when the
-value actually changes, and the header is rewritten whole with the stored values whenever
-anything is dirty. A light edit therefore re-uploads the header with the sky still in it, and
-there is no re-stamping step to forget.
+That side channel is owned by the table, not by the upload. The index, the scale and the
+flag are held as members, their setters mark the table dirty only when the value actually
+changes, and the header is rewritten whole with the stored values whenever anything is
+dirty. A light edit therefore re-uploads the header with the sky still in it, and there is
+no re-stamping step to forget.
 
-## Radiance divided by a sphere the light may not be
+## What a light's radiance is
 
 `dirAndParam.w` is overloaded: the packer fills it with the sphere radius, then, two lines
-later, overwrites it with the inner cone angle in degrees when the kind is Spot.
+later, overwrites it with the inner cone angle in degrees when the kind is Spot. A spot's
+radius moves to `extra2.y`.
 
 {{cite ohao/render/scene/light_table.cpp "float dirParam = d.radius;"}}
-
-The bounce-0 next-event-estimation block of the default `pt_raygen.rgen` converts intensity
-to radiance *before* it branches on type, using the surface area of a sphere of that radius:
-
-{{cite shaders/rt/pt_raygen.rgen "// ==== Analytic direct NEE at bounce 0 ===="}}
-
-Write $c$ and $I$ for the packed colour and intensity, $r=\max(\texttt{dirAndParam.w},0.01)$,
-$d$ for the distance from the shading point to the sampled light point, $\theta_\ell$ for the
-angle at the light between its normal and the incoming direction, $s$ for the clamped spot
-cone falloff, and $A$ for the rectangle area in `extra2.w`. The block forms
-$L_e = cI/\max(4\pi r^2, 0.01)$ once, then each branch multiplies by its own geometric
-weight, giving
-
-$$L_e w = \frac{cI\cos\theta_\ell}{d^2},\quad \frac{cI}{4\pi r^2},\quad \frac{cI s^2}{d^2},\quad \frac{cI A\cos\theta_\ell}{4\pi r^2 d^2}$$
-
-for sphere, directional, spot and area respectively. The $4\pi r^2$ reappears inside the
-sphere and spot weights and cancels, which is why growing a sphere light softens its shadow
-without brightening it. It does not cancel for the other two: a directional light's
-brightness and a rect light's brightness both scale as $1/r^2$ in a radius that means
-nothing for either shape. The component's default radius is 0.1, which makes the divisor
-$4\pi r^2 \approx 0.126$ — so out of the box both shapes are quietly *brightened* roughly
-eightfold relative to the intensity that was authored:
-
-{{cite ohao/ecs/components.hpp "float radius{0.1f};"}}
-
-The spot branch is worse than a scale factor. It reads `dirAndParam.w` twice in the same
-block — once through `cos(radians(...))` as an angle, which is correct, and once unconverted
-as the radius of the sphere it jitters the sampled light point over. The C++ struct is the
-only place in the tree where both meanings are written down. `pt_raygen.rgen` and
-`pt_raygen_offline.rgen` copy the comment but keep only the `sphere:radius` half;
-`pt_raygen_realtime.rgen` carries no member comments at all. Anyone reading a shader alone
-sees one meaning:
-
 {{cite ohao/render/rt/gpu_light.hpp "glm::vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius, spot:innerAngle)"}}
-{{cite shaders/rt/pt_raygen.rgen "vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius)"}}
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec4 dirAndParam;"}}
 
-A default-constructed spot, inner cone 30°, therefore has its sample point scattered over a
-sphere of radius 30 world units, so its direction and its shadow ray are close to
-meaningless. Sphere, directional and area lights do not share the fault — but every raygen
-does. The same clamp-then-jitter pairing sits in each next-event block of all three: three
-in `pt_raygen.rgen`, three in `pt_raygen_offline.rgen`, four in `pt_raygen_realtime.rgen`.
+Both tracers resolve the overload before using a radius: the reference in `loadLight`, the
+realtime raygen through `ptLightRadius` in `pt_lights.glsl`. The radius is clamped at 1 cm.
 
-## One light per shadow ray, and the factor that pays for it
+{{cite shaders/rt/path_tracer.slang "l.radius = max(l.type == 2u ? f.y : d.w, 0.01);"}}
+
+The reference gives each kind the radiance the deferred frame measures. Write $c$ and $I$
+for the packed colour and intensity, $r$ for the radius, $W(d)=\big(1-(d/\text{range})^4\big)^2$
+clamped for the range window, and $s$ for a spot's cone falloff toward the shading point:
+
+$$L_\text{point}=\frac{cI}{\pi r^2}W(d),\qquad L_\text{spot}=\frac{cI}{\pi r^2}W(d)\,s,\qquad L_\text{area}=\frac{cI}{4\pi r^2},\qquad E_\text{sun}=cI$$
+
+A sphere of radiance $cI/\pi r^2$ has radiant intensity $cI$ (its projected area is
+$\pi r^2$), so a point light lights a surface $d$ away with $cI/d^2$ whatever its radius:
+growing the sphere softens its shadow without brightening it. A sun is a direction and an
+irradiance, with no radius in it. The area light keeps its own convention, uniform radiance
+over the rectangle with $r$ as a parameter, which both renderers share.
+
+{{cite shaders/rt/path_tracer.slang "float3 le = l.radiance / (kPi * r * r);"}}
+{{cite shaders/rt/path_tracer.slang "s.radiance = l.radiance / (4.0 * kPi * l.radius * l.radius);"}}
+
+The realtime raygen reaches the same irradiances through `ptEmitterArea`, which divides by
+$\pi r^2$ for a sphere, $4\pi r^2$ for a spot and an area light (whose estimator weights
+carry $4\pi r^2$ back), and 1 for a sun:
+
+{{cite shaders/includes/rt/pt_lights.glsl "float ptEmitterArea(float type, float r) {"}}
+
+## One light per shadow ray, and the density that pays for it
 
 Each next-event sample picks a single light uniformly rather than looping over all of them.
-With $N_\ell$ entries in the buffer — scene lights plus the synthesised emissive ones — the
-selection density is $p(\ell)=1/N_\ell$, and an unbiased estimator divides by it, so the
-contribution is multiplied by the light count:
+With $N_\ell$ entries in the buffer the selection density is $1/N_\ell$. The reference folds
+it into each sample's solid-angle density: a sphere is sampled uniformly over its cone of
+directions, a rectangle uniformly over its area,
 
-$$\hat L_d = \frac{L_e\,w\,f_r\cos\theta_s}{p(\ell)} = N_\ell\,L_e\,w\,f_r\cos\theta_s$$
+$$p_\text{sphere}(\omega)=\frac{1}{N_\ell}\,\frac{1}{2\pi(1-\cos\theta_\text{max})},\qquad p_\text{area}(\omega)=\frac{1}{N_\ell}\,\frac{d^2}{A\cos\theta_\ell}$$
 
-where $f_r$ is the Cook-Torrance value evaluated inline in the same block and $\theta_s$ is
-the angle at the shading point. That `* float(lightBuf.lightCount)` is the visible half of
-the division:
+where $\sin\theta_\text{max}=r/d$ to the sphere's centre, $A$ is the rectangle's area in
+`extra2.w` and $\theta_\ell$ the angle at the rectangle between its normal and the
+direction back. The contribution is $f\cos\theta_s\,L\,w/p$, with $f$ OpenPBR's BSDF and $w$
+the MIS weight below. A sun is a delta: no density, its irradiance divided by the choice
+alone.
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);"}}
+{{cite shaders/rt/path_tracer.slang "s.pdf = choose / (kTwoPi * oneMinusCosMax);"}}
+{{cite shaders/rt/path_tracer.slang "s.pdf = choose * d2 / (cosL * l.area);"}}
+{{cite shaders/rt/path_tracer.slang "s.radiance = l.radiance / choose;   // a delta: no density to weigh"}}
 
-The whole decode-and-sample block appears three times in `pt_raygen.rgen` — once at the
-primary hit and once inside each of the two indirect bounce paths, where the identical
-expression is pre-multiplied by that path's specular or diffuse throughput. It was then
-copied wholesale into the two profile raygens: three more blocks in `pt_raygen_offline.rgen`,
-four in `pt_raygen_realtime.rgen`. Neither file is dead — both are bound by a live render
-profile:
+Point, spot and area lights are also meshes (`RenderScene`'s emitter instances), and a
+reference bounce ray traces the emitter mask with the scene, so it can meet a light that
+light sampling also finds. Each such light is weighed by the power heuristic on both sides.
+The table learns which lights have a mesh from `RenderScene`, which passes their indices in
+the RT buffer; at upload the table flags a sphere in `extra2.z` and a rectangle in
+`extra.w`:
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
+{{cite ohao/render/scene/render_scene.cpp "lights.setEmitterLights(rtIndex);"}}
+{{cite ohao/render/scene/light_table.cpp "if (rt[i].positionAndType.w > 2.5f) rt[i].extra.w = 1.0f;   // a rectangle"}}
+{{cite shaders/rt/path_tracer.slang "l.emitter = l.type == 3u ? e.w > 0.5 : (l.type != 1u && f.z > 0.5);"}}
 
-The ten copies are not clones — the realtime sphere branch has since been replaced with
-solid-angle sampling, and the offline block's primary hit wraps the diffuse `NdotL` with a
-subsurface term the specular half does not get — but the header decode, the type dispatch
-and the `dirAndParam.w` overload are the same in all of them. A light-layout change lands in
-ten places across three files.
+A light without a mesh (emitters off, or a light whose mesh could not be built) is found by
+light sampling alone, at full weight; a sun always is:
 
-The shadow ray uses the sampled point's distance, not the light's radius, as `Tmax`, and the
-three positional branches shorten it by 0.02 so the ray stops just short of the light's own
-geometry; the origin is pushed 0.01 along the shading normal and `Tmin` is 0.001:
+{{cite shaders/rt/path_tracer.slang "const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;"}}
 
-{{cite shaders/rt/pt_raygen.rgen "hitPos + N * 0.01, 0.001, L, shadowDist, 0);"}}
+On the other side, the emitter instance carries its light's index, and the bounce ray that
+hits it evaluates that light's radiance toward the ray's origin and its light-sampling
+density for that direction:
 
-Directional lights get a hard-coded `Tmax` of 10000 instead, which is a scene-scale
-assumption rather than a computed bound.
+{{cite shaders/rt/path_tracer.slang "add = throughput * le * powerHeuristic(lastPdf, lightPdf);"}}
+
+The realtime raygen keeps the older arrangement: uniform selection with the factor written
+out as `* float(lightBuf.lightCount)`, its bounce rays tracing `kRayMaskScene` alone so they
+never meet an emitter.
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);"}}
+
+The reference's shadow ray leaves from the hit point pushed 10⁻³ along the geometric
+normal, with `TMin` 10⁻⁴, and stops 10⁻³ short of the light: at the sphere's near side
+along the sampled direction, at the sampled point of a rectangle, at 10⁴ for a sun.
+
+{{cite shaders/rt/path_tracer.slang "s.dist = max(dc - sqrt(max(r * r - d2 + dc * dc, 0.0)), 0.0) - 1e-3;   // to the sphere's near side"}}
 
 ## The constants that name only one table
 
 `constants.glsl` defines three light-type macros, and they are the raster codes:
-directional 0, point 1, spot 2. The deferred lighting shader reaches the header through
-its BRDF includes but compares `position.w` against bare integers, and no ray-tracing
-stage includes it.
+directional 0, point 1, spot 2. No shader that runs reaches the header: only
+`common.glsl` and `math.glsl` include it, and nothing includes those two. The raster readers (`clustered_lights.slang`'s `lightAt`, the cluster build)
+compare `position.w` against bare integers.
 
 {{cite shaders/includes/common/constants.glsl "#define LIGHT_TYPE_POINT       1"}}
 
@@ -247,8 +253,9 @@ types in the engine.
 ## Contracts
 
 - `positionAndType.w` is the raw `LightKind`; `LightData.position.w` is the remapped raster code. Anything reading a light type must know which buffer it came from.
-- `dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot. Every spot branch in all three raygens reads both meanings; only the angle reading is correct.
-- Both buffers are filled from authored `Light`s *and* from emissive stand-ins. `lightCount` — and therefore the estimator's $N_\ell$ — counts both, and the raster table's capacity is shared between them.
+- `dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot; a spot's radius is `extra2.y`. Every reader resolves the radius through `loadLight` or `ptLightRadius`, never from `dirAndParam.w` alone.
+- Emissive stand-ins are in the raster table only. Adding them to the RT buffer counts an emissive surface's light twice in the path tracer.
 - The raster table holds 65,536 lights and the RT SSBO 64; both truncate with a one-time log. Past the eighth shadow caster a raster light renders unshadowed (no RT channel), and a froxel keeps at most 256 lights, the overflow reported as `lightsOverflow` in `render.stats`.
-- The environment-map index and intensity scale are members of the light table, and the 16-byte header is rewritten whole whenever any of them, or the light list, changes. Code that writes binding 11 by any other route would have to reproduce that header.
-- The estimator multiplies by `lightCount` because it selects one light uniformly. Replacing uniform selection with importance sampling means replacing that factor with the real inverse density.
+- The environment-map index, intensity scale and alpha-rays flag are members of the light table, and the 16-byte header is rewritten whole whenever any of them, or the light list, changes. Code that writes binding 11 by any other route would have to reproduce that header.
+- The emitter flags (`extra2.z`, `extra.w`) must name exactly the lights with an emitter mesh in the TLAS. A flagged light without a mesh is under-counted (its MIS weight assumes a bounce ray could find it); an unflagged light with one is counted twice.
+- Both tracers select one light uniformly. Replacing uniform selection with importance sampling means replacing the $1/N_\ell$ in the reference's densities, and the realtime raygen's `lightCount` factor, with the real inverse density.

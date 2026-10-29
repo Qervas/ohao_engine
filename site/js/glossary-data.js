@@ -32,7 +32,7 @@ window.OHAO_GLOSSARY = {
   },
   GGX: {
     expand: "Trowbridge–Reitz / GGX normal distribution",
-    def: "Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in brdf_ggx.glsl.",
+    def: "Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in material/openpbr.slang (ggx_aniso.glsl for the realtime GLSL path tracer).",
     group: "Materials",
   },
   NDF: {

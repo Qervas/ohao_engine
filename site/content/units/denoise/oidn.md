@@ -14,28 +14,28 @@ back through a staging buffer along with the albedo and normal AOVs.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);"}}
 
-Which raygen wrote that image is not readable off `PathTracer`, whose default
-shader set names `rt_pt_raygen.rgen.spv`. Nothing ever runs it: the only code
-that constructs a `PathTracer` is `RTProfileRendererBase`, and its `init()`
-replaces the shader set unconditionally — with the realtime or the offline
-raygen, the only two profiles the renderer hands out. `pt_raygen.rgen` is
-compiled by the shader directory's `GLOB_RECURSE` and never loaded.
+Which shader wrote that image is the profile's choice. The only code that
+constructs a `PathTracer` is `RTProfileRendererBase`, and its `init()` hands the
+tracer the profile's shader set: the realtime profile names the GLSL raygen, the
+offline profile takes `PathTracerShaderSet`'s default, the Slang reference path
+tracer.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
+{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};"}}
 
-So the shader that produces OIDN's input is `pt_raygen_offline.rgen`. What it
-writes is not a radiance *sum*: `.rgb` holds a running mean and `.w` the sample
+So the shader that produces OIDN's input is `path_tracer.slang`'s `raygen`. What
+it writes is not a radiance *sum*: `.rgb` holds a running mean and `.w` the sample
 count, one dispatch per sample, folded in as a plain progressive average over the
 pixel's own history.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "acc = (prev.rgb * prev.w + radiance) / count;"}}
-{{cite shaders/rt/pt_raygen_offline.rgen "imageStore(accumBuffer, pixel, vec4(acc, count));"}}
+{{cite shaders/rt/path_tracer.slang "acc = (prev.rgb * prev.w + radiance) / count;"}}
+{{cite shaders/rt/path_tracer.slang "accumBuffer[pixel] = float4(acc, count);"}}
 
 The history is this pixel's alone, read from the previous frame's image of a
 ping-pong pair: the offline camera is still, and any view change resets the
 accumulation.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "// The offline camera is still (a view change resets), so the history is this pixel's."}}
+{{cite shaders/rt/path_tracer.slang "// The running mean of every sample since the last reset (the offline camera is still)."}}
 
 So OIDN receives the Monte-Carlo mean at whatever spp has accrued, in linear HDR,
 pre-tonemap — which is precisely the input its `RT` filter is trained on. The
@@ -112,9 +112,9 @@ and auxiliary AOVs default to on.
 {{cite ohao/render/rt/rt_settings.hpp "bool enableAuxiliaryAOVs{true};"}}
 
 Two things about those guides do not match what OIDN documents. First, the normal
-AOV is stored in a half-range encoding:
+AOV is stored in a half-range encoding unless DLSS-RR is the denoiser:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));"}}
+{{cite shaders/rt/path_tracer.slang "normalAOV[pixel] = (flags & kFlagDLSSRR) != 0u ? float4(n, hit.specularRoughness) : float4(n * 0.5 + 0.5, 1.0);"}}
 
 and it is passed to the filter with no decode step anywhere between the readback
 and `setImage`:
@@ -128,22 +128,26 @@ all-positive, half-scale vector field — still edge-correlated, so it is not
 useless, but not the signal the network was trained on. The fix is one decode,
 either in the raygen's AOV write or between readback and `setImage`.
 
-The same raygen already writes true $[-1,1]$ normals into binding 7 — with
-perceptual roughness in `.w` — but only behind the `PT_FLAG_DLSSRR` bit. The
-encoding is therefore selected by `DenoiseMode`, not by render profile:
-`RTRenderProfile` has exactly two values, `Realtime` and `Offline`, and DLSS-RR
-is not one of them. OIDN is simply on the wrong side of that gate.
-
-{{cite shaders/rt/pt_raygen_offline.rgen "imageStore(normalAOV, pixel, vec4(N, roughness));"}}
+The same line writes true $[-1,1]$ normals — with specular roughness in `.w` —
+behind the DLSS-RR flag. The encoding is therefore selected by `DenoiseMode`, not
+by render profile: `RTRenderProfile` has exactly two values, `Realtime` and
+`Offline`, and DLSS-RR is not one of them. OIDN is simply on the wrong side of that
+gate.
 
 Second, the guides are not accumulated. Bindings 6 and 7 are overwritten by every
 sample, while the camera jitters within the pixel each sample, so the guide that
 survives to readback is the *last* sample's first hit rather than the pixel's
-average — OIDN's manual asks for anti-aliased, accumulated features. On a primary
-miss the albedo AOV is filled with environment radiance, which for an HDRI
-routinely exceeds the $[0,1]$ range the albedo guide is specified over.
+average — OIDN's manual asks for anti-aliased, accumulated features. The albedo
+guide at a surface is the OpenPBR base's directional albedo toward the viewer,
+specular included:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));"}}
+{{cite shaders/rt/path_tracer.slang "const float3 a = base.albedo(wo, tables);"}}
+
+On a primary miss, or a hit on a light's emitter mesh, it is filled with what the
+camera ray brought back — environment or emitter radiance, which for an HDRI or a
+light routinely exceeds the $[0,1]$ range the albedo guide is specified over.
+
+{{cite shaders/rt/path_tracer.slang "albedoAOV[pixel] = float4(add, 1.0);"}}
 
 Neither defect is compensated for. `cleanAux` — the hint that would tell OIDN
 these guides are already clean — appears nowhere in the tree: it is not left at
@@ -159,10 +163,10 @@ Narkowicz ACES fit
 $$\text{ACES}(x) = \operatorname{clamp}\!\left(\frac{x\,(a x + b)}{x\,(c x + d) + e},\, 0,\, 1\right),\quad (a,b,c,d,e) = (2.51,\,0.03,\,2.43,\,0.59,\,0.14)$$
 
 to exposure-scaled linear radiance $x = 0.5\,L$, then encode with $\gamma = 2.2$.
-The coefficients live once in C++ and once in GLSL:
+The coefficients live once in C++ and once in the Slang tracer:
 
 {{cite ohao/render/rt/denoise/oidn_denoise.cpp "float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;"}}
-{{cite shaders/rt/pt_raygen_offline.rgen "vec3 ldr = ACES(acc * 0.5);"}}
+{{cite shaders/rt/path_tracer.slang "outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);"}}
 
 and the exposure the denoised path passes is the same 0.5 the shader hard-codes.
 
@@ -199,7 +203,7 @@ using such diffs as a regression signal.
 
 - `oidnDenoise` reads the accumulation image, whose `.rgb` is already a running mean. Anything that changes that to a raw sum breaks the denoise path silently: OIDN's HDR filter would see radiance scaled by the sample count.
 - The frame to denoise is requested (`requestReadback()` before its `render()`) and read with `readback()` before the next `render()`, which clears the denoise cache. The readback re-submits on the graphics queue with a device-wide wait.
-- The normal guide is `N * 0.5 + 0.5`, not the `[-1,1]` OIDN specifies. Adding a decode is a quality fix that no test will notice: the only committed regression corpus, `tests/golden/manifest.json`, renders both its scenes with `--denoise=none`, so no golden image in the tree has ever passed through OIDN.
-- Three tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++, plus the one in each live raygen, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen`. Editing `pt_raygen.rgen` changes nothing at runtime — no renderer binds it.
+- The normal guide is `N * 0.5 + 0.5`, not the `[-1,1]` OIDN specifies. Adding a decode is a quality fix that no test will notice: the only committed regression corpus, `tests/golden/manifest.json`, names OIDN for none of its scenes, so no golden image in the tree has ever passed through OIDN.
+- Three tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++, plus the one in each raygen, `path_tracer.slang`'s `aces` and `pt_raygen_realtime.rgen`'s `ACES`.
 - The build takes whatever OIDN the host provides — `find_package(OpenImageDenoise REQUIRED)` pins no version — so a host-side OIDN upgrade changes the filter under unchanged source.
 - The LDR path (`hdr = false`) has no in-engine caller; every call site passes `hdr = true`.

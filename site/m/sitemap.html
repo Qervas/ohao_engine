@@ -81,7 +81,7 @@
 <h2 class="gloss-group">04 · Materials</h2><ul class="prose">
 <li><a href="materials.html"><strong>Hub</strong> — materials.html</a></li>
 <li><a href="materials/pbr-model.html">PBR metallic-roughness</a> — F0, ORM convention, roughness floors.</li>
-<li><a href="materials/ggx.html">GGX implementation</a> — D/F/G terms, Smith correlated, energy helpers.</li>
+<li><a href="materials/ggx.html">GGX implementation</a> — D/F/G terms, Smith correlated, VNDF sampling, energy compensation.</li>
 <li><a href="materials/pack.html">GPU material pack</a> — 3×vec4 matColors, texture bit-cast indices.</li>
 <li><a href="materials/lights.html">Lights dual packing</a> — GPULight SSBO (64 lights) vs the deferred LightGpu table (65,536).</li>
 </ul>
@@ -91,7 +91,7 @@
 <li><a href="deferred/pass-base.html">RenderPassBase</a> — Shared init/cleanup/shader path helpers for passes.</li>
 <li><a href="deferred/gbuffer.html">GBuffer pass</a> — GPU-culled early/late passes, MRT packing, bindless, velocity.</li>
 <li><a href="deferred/csm.html">CSM shadows</a> — Cascade split, depth array, unjittered camera.</li>
-<li><a href="deferred/lighting.html">Deferred lighting</a> — The froxel&#x27;s light loop, IBL, SSAO, shadows, BRDF eval.</li>
+<li><a href="deferred/lighting.html">Deferred lighting</a> — The froxel&#x27;s light loop through OpenPBR&#x27;s base, split-sum IBL, SSAO, shadows.</li>
 <li><a href="deferred/clustered-lighting.html">Clustered lighting</a> — Froxel light lists, built every frame, exact against summing every light.</li>
 <li><a href="deferred/ssao.html">SSAO</a> — Half-resolution horizon AO, blurred, upsampled into the ambient terms.</li>
 <li><a href="deferred/ssr-sss.html">SSR &amp; SSS</a> — Half-resolution reflections; subsurface blur on classified tiles.</li>
@@ -104,15 +104,15 @@
 <li><a href="path-tracer/host.html">Host lifecycle</a> — ensureRTRenderer, images, pipeline, SBT, descriptors.</li>
 <li><a href="path-tracer/profiles.html">Profiles &amp; meta</a> — RTRenderSettings, Realtime vs Offline traits.</li>
 <li><a href="path-tracer/as.html">Acceleration structures</a> — BLAS/TLAS API, rebuild vs update.</li>
-<li><a href="path-tracer/raygen.html">Raygen integrator</a> — Stages A/B/C, NEE, dual-lobe, AOV writes.</li>
+<li><a href="path-tracer/raygen.html">Raygen integrator</a> — The OpenPBR reference: NEE + BSDF sampling under MIS, AOV writes.</li>
 <li><a href="path-tracer/hit-miss.html">Hit &amp; miss shaders</a> — closesthit materials, anyhit alpha, miss env.</li>
-<li><a href="path-tracer/bindings.html">Descriptor map 0–37</a> — Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</li>
+<li><a href="path-tracer/bindings.html">Descriptor map 0–38</a> — Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</li>
 <li><a href="path-tracer/restir.html">ReSTIR GI reservoirs</a> — Ping-pong reservoir planes on bindings 29–34.</li>
 </ul>
 <h2 class="gloss-group">07 · Sampling</h2><ul class="prose">
 <li><a href="sampling.html"><strong>Hub</strong> — sampling.html</a></li>
 <li><a href="sampling/sampler-api.html">Sampler API</a> — sampler_api.glsl dispatch, specialization constant.</li>
-<li><a href="sampling/sobol.html">Sobol + Owen</a> — Offline low-discrepancy stream.</li>
+<li><a href="sampling/sobol.html">Sobol + Owen</a> — Low-discrepancy stream behind sampler_api.</li>
 <li><a href="sampling/pcg.html">PCG realtime</a> — Hash-based sampler for interactive path.</li>
 <li><a href="sampling/mis.html">MIS heuristics</a> — Balance and power in mis.glsl.</li>
 <li><a href="sampling/env-cdf.html">Environment CDF</a> — CPU build + GPU sampleEnvMap/pdfEnvMap.</li>
@@ -141,9 +141,9 @@
 <li><a href="shaders/postprocess-chain.html">Postprocess shader chain</a> — Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</li>
 <li><a href="shaders/rt-includes.html">RT shader includes</a> — pbr_unpack and the NRD frontend used by raygen.</li>
 <li><a href="shaders/compute.html">Compute shaders</a> — SSAO, light clustering, capture preview, DLSS display pass, GPU culling and Hi-Z.</li>
-<li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.frag MRT contract.</li>
+<li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.slang, the eight-target MRT contract.</li>
 <li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
-<li><a href="shaders/rt-shaders.html">RT program family</a> — pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.</li>
+<li><a href="shaders/rt-shaders.html">RT program family</a> — path_tracer.slang, pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.</li>
 </ul>
 <h2 class="gloss-group">Camera</h2><ul class="prose">
 <li><a href="camera/index.html"><strong>Hub</strong></a></li>

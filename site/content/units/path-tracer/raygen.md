@@ -3,273 +3,240 @@ module: path-tracer
 id: raygen
 title: Raygen integrator
 standard: v2
-figures: [path-tracer-raygen-dual-path]
 ---
 
-## The file that documents itself wrong
+## Two raygens, one per profile
 
-`pt_raygen.rgen` opens by declaring that it is a brute-force tracer with no
-next-event estimation. Underneath that comment sit three complete NEE blocks,
-environment importance sampling with MIS, Russian roulette, and twelve storage
-images.
+Each ray-tracing profile binds its own ray-generation program. `RTOfflineRenderer`
+takes `PathTracerShaderSet`'s default, the reference path tracer in
+`rt/path_tracer.slang`, whose four stages are entry points of one Slang file:
 
-{{cite shaders/rt/pt_raygen.rgen "// No NEE, no tricks."}}
+{{cite ohao/render/rt/path_tracer.hpp "rt_path_tracer.slang.raygen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
 
-That comment is a fossil, and it is not the only misleading thing here.
-`PathTracerShaderSet` names `rt_pt_raygen.rgen.spv` as the default raygen
-module, which is where the "pt_raygen.rgen is the path tracer" belief comes
-from:
+`RTRealtimeRenderer` names the GLSL set, `pt_raygen_realtime.rgen` with its
+closest-hit, any-hit and miss, every entry `main`:
 
-{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "// GLSL: every stage's entry is main"}}
 
-but every `PathTracer` instance in the engine is owned by an
-`RTProfileRendererBase`, and that base overwrites the shader set on `init()`
-with the profile's own before the pipeline is built:
+The base installs the profile's set on the `PathTracer` before the pipeline is
+built, so the set a profile names is the one that runs:
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
 
-Both concrete profiles supply a different raygen — `RTOfflineRenderer` binds
-`pt_raygen_offline.rgen`, `RTRealtimeRenderer` binds `pt_raygen_realtime.rgen`.
+The two raygens are different integrators. The reference one is the estimator the
+deferred frame is judged by; the realtime one trades bias for a frame budget.
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "rt_pt_raygen_offline.rgen.spv"}}
+## The reference: one path a sample
 
-So `pt_raygen.rgen` still compiles to SPIR-V and is still the cleanest reading
-of the algorithm, but nothing you render comes out of it.
+`path_tracer.slang`'s raygen traces one path per pixel per dispatch through
+OpenPBR's base BSDF (`material/openpbr.slang`). At every surface vertex it does
+three things: next-event estimation to one light, next-event estimation to the
+environment, and one BSDF sample for the next direction.
 
-## One primary ray, two sub-paths
+{{cite shaders/rt/path_tracer.slang "// Next-event estimation: a light, then the environment, each weighed against the BSDF."}}
 
-A textbook path tracer picks one BSDF lobe per vertex with some probability and
-divides the throughput by that probability. This raygen refuses to do that at
-the first hit. It forks: Stage B walks a specular-lobe direction, Stage C walks
-a cosine-hemisphere direction, each with its own throughput, bounce loop, NEE,
-Russian roulette and accumulator.
+The camera ray traces with `kRayMaskCamera` (scene, light emitters, first-person
+guns); every later ray with the scene and the emitters only:
 
-{{figure path-tracer-raygen-dual-path "Conceptual path topology of one raygen launch — not a captured render. Ray counts and binding numbers are read from pt_raygen.rgen; the geometry is schematic."}}
+{{cite shaders/rt/path_tracer.slang "const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);"}}
+
+So a bounce ray can meet a light's emitter mesh. That is how every light is found
+twice, by light sampling and by BSDF sampling, and why the two strategies are
+weighted against each other at any roughness. A ray that misses ends the path with
+the environment's radiance; one that meets an emitter ends it with the light's.
+
+## Choosing a light
+
+`sampleLight` picks one light uniformly from the RT light buffer and draws a
+direction by the light's shape:
+
+- a **sphere** (point and spot lights) uniformly inside its cone of directions,
+  with the solid-angle density $1/(2\pi(1-\cos\theta_{\max}))$ times the choice
+  probability $1/N$;
+- a **rectangle** (area lights) by area, converted to solid angle by
+  $d^2/(\cos\theta_\ell A)$;
+- a **sun** (directional) as a delta: its irradiance divided by the choice
+  probability, with no density to weigh.
+
+{{cite shaders/rt/path_tracer.slang "s.pdf = choose / (kTwoPi * oneMinusCosMax);"}}
+{{cite shaders/rt/path_tracer.slang "s.pdf = choose * d2 / (cosL * l.area);"}}
+{{cite shaders/rt/path_tracer.slang "s.radiance = l.radiance / choose;   // a delta: no density to weigh"}}
+
+The radiances are the deferred frame's: a point light of intensity $I$ is a sphere
+of radius $r$ (at least 1 cm) and radiance $I/(\pi r^2)$, windowed by its range, a
+spot the same times its cone toward the shaded point, a rectangle $I/(4\pi r^2)$.
+`1 - cos` is computed as $\sin^2/(1+\sqrt{1-\sin^2})$, which keeps a distant small
+sphere from cancelling to zero.
+
+{{cite shaders/rt/path_tracer.slang "const float oneMinusCos = sin2 / (1.0 + sqrt(1.0 - sin2));   // 1 - cos without cancellation"}}
+
+The shadow ray stops at the sphere's near side (or 1 mm short of the rectangle's
+point), so a light never occludes its own sample.
+
+## Weighting the strategies
+
+Light sampling and BSDF sampling estimate the same light, so each contribution is
+weighted by the power heuristic. For a light sample drawn with density $p_\ell$ in
+direction $\omega_i$:
+
+$$C_{\text{NEE}} = T\,\frac{f(\omega_o,\omega_i)\cos\theta_i\,L(\omega_i)}{p_\ell}\,\frac{p_\ell^2}{p_\ell^2 + p_f^2}$$
+
+$T$ is the path throughput, $f\cos\theta_i$ is what `OpenPBRBase::eval` returns, and
+$p_f$ is the BSDF's density for the same direction (`OpenPBRBase::pdf`, the mixture
+of its GGX and EON lobes). A bounce ray that meets the light's emitter, or escapes to
+the environment, takes the mirror weight $p_f^2/(p_f^2 + p_\ell^2)$, with $p_f$ the
+density the last bounce was drawn with and $p_\ell$ what light or environment
+sampling would have had for that direction.
+
+{{cite shaders/rt/path_tracer.slang "add = throughput * le * powerHeuristic(lastPdf, lightPdf);"}}
+{{cite shaders/rt/path_tracer.slang "const float w = depth == 0u ? 1.0 : powerHeuristic(lastPdf, envPdf(dir));"}}
+
+Two cases skip the weight. A sun is a delta, found only by light sampling. A light
+without an emitter mesh (`LightTable::setEmitterLights` did not flag it) is also
+found only by light sampling, so it is taken at full weight:
+
+{{cite shaders/rt/path_tracer.slang "const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;"}}
+
+A bounce ray that meets an emitter learns which light it is from the emitter
+instance's `emitterLight.w`, which the closest hit returns as `payload.light`;
+`emitterRadiance` then recomputes the light's radiance toward the ray's origin and
+the light-sampling density it would have had.
 
 :::why
-The fork exists for the denoisers, not for the integrator. REBLUR and DLSS Ray
-Reconstruction consume diffuse and specular radiance as two separate images. A
-stochastic lobe choice would leave one of the two channels with zero samples in
-most pixel-frames, which a denoiser cannot tell from black — so the engine pays
-for a second secondary chain per pixel instead of splitting a single one after
-the fact.
+The power heuristic, not the balance heuristic: when one strategy's density is much
+larger than the other's (a mirror against a large light, a small light against a
+diffuse surface), the power heuristic gives the better one almost all the weight and
+leaves less variance from the weaker one. Because the emitter meshes are in the
+bounce ray's mask, no roughness threshold is needed to decide which strategy owns a
+glossy reflection of a light.
 :::
 
-The bill is paid in estimator rigour. At the fork the specular chain carries
-`mix(1, albedo, metallic)` and the diffuse chain carries `albedo`; neither
-divides by a sampling pdf, and the specular one has no Fresnel and no shadowing
-term at all. The code says as much:
+Emissive surfaces are not in the light list (the raster frame's emissive proxies are
+left out of the RT buffer); a path finds them by BSDF sampling only, at full weight.
 
-{{cite shaders/rt/pt_raygen.rgen "// Material throughput factor (f*cos/pdf for the specular lobe, simplified)."}}
-{{cite shaders/rt/pt_raygen.rgen "specThroughput = mix(vec3(1.0), albedo, metallic);"}}
+{{cite shaders/rt/path_tracer.slang "add = throughput * hit.emission;   // emissive surfaces: found by BSDF sampling only"}}
 
-For a dielectric that means the indirect specular chain leaves the first hit at
-unit throughput regardless of incidence angle or roughness. Direct light is
-untouched — bounce-0 NEE still evaluates full analytic Cook-Torrance.
+## The environment
 
-The approximation does not stop at the fork. From bounce 2 Stage B does restore
-stochastic lobe selection, but when it picks the specular lobe it multiplies by
-that same `mix(1, albedo, metallic)` and then divides only by `specProb` — the
-discrete lobe-choice probability. Nothing restores the missing
-$f\cos\theta/\text{pdf}$, so every specular vertex carries the approximation,
-not just the seed one.
+When the environment has a CDF, each vertex draws one direction from it
+(`sampleEnv`: a row by the marginal, a texel by the conditional, a point uniformly in
+the texel) and weighs it against the BSDF in the same way. `envPdf` evaluates the
+density of any direction from the same two tables, so the miss of a bounce ray is
+weighted against exactly the density the sampler used. Its map is row 0 at the
+zenith, as every environment lookup in the engine is:
 
-{{cite shaders/rt/pt_raygen.rgen "specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);"}}
-{{cite shaders/rt/pt_raygen.rgen "specThroughput /= max(specProb, 0.01);"}}
+{{cite shaders/rt/path_tracer.slang "const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith"}}
 
-The diffuse lobe needs no such correction: cosine-hemisphere sampling of a
-Lambertian BRDF gives $f\cos\theta/\text{pdf} = \rho$, which is exactly the
-albedo the code multiplies in, at the fork and at every later diffuse bounce.
+## The next direction, and when the path ends
 
-## The light estimator, and the shadow ray that carries no boolean
+`OpenPBRBase::sample` picks the specular lobe with the probability of its share of
+the albedo's luminance, samples GGX's bounded visible normals or EON's diffuse lobe,
+and returns $f\cos\theta/p$ with $p$ the mixture density. That weight multiplies the
+throughput, and the density is kept for the next vertex's MIS.
 
-One light is chosen uniformly per NEE event, then dispatched on
-`positionAndType.w` into four branches — sphere, directional, spot, area rect.
-Only the sphere branch matches the textbook form, sampling a point and folding
-the solid-angle Jacobian into a scalar the code calls `weight`:
+{{cite shaders/rt/path_tracer.slang "const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);"}}
 
-$$\hat{L}_{\text{NEE}} \;=\; N_\ell \cdot L_e \cdot \bigl(f_d + f_s\bigr)\,(n\!\cdot\!\omega_i)\,\underbrace{\frac{(-\omega_i\!\cdot\!n_\ell)\,A}{d^2}}_{\text{weight}}\;V$$
+A sample below the geometric surface ends the path (the base has no transmission).
+From the third vertex on, Russian roulette continues with probability
+$q = \min(\max(T_r, T_g, T_b), 0.95)$ and divides the throughput by it, which keeps
+the estimator unbiased:
 
-$N_\ell$ is the light count, undoing the uniform $1/N_\ell$ selection
-probability. $A = 4\pi r^2$ is the sphere's area, $n_\ell$ the outward normal at
-the sampled point, $d$ the distance to it, and $V$ visibility. $L_e$ is radiant
-exitance, colour × intensity divided by $\max(A,\,0.01)$, so an artist's
-"intensity" is total power, not per-unit-area radiance. Above $r \approx 0.028$
-that clamp is inert and $L_e A$ collapses back to colour × intensity; below it
-the light silently stops scaling with its own area. The whole product is one
-line:
+{{cite shaders/rt/path_tracer.slang "const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);"}}
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);"}}
+The bounce cap is `params.w`'s low 16 bits; the offline profile asks for 32, which
+roulette rarely reaches. A cap of 0 still adds the emitter or environment a direct
+light sample's companion BSDF ray meets, so 0 is direct light, both strategies
+weighted.
 
-$L_e$ is computed once *before* the branch, from the sphere formula, using
-`dirAndParam.w` as a radius. An area rect stores its true area separately in
-`extra2.w` and uses that in `weight` — so its radiance is normalised by a
-$4\pi r^2$ that describes no part of its geometry, and the $L_e A$ cancellation
-does not occur. Directional lights sample no point at all and set `weight = 1`.
+{{cite shaders/rt/path_tracer.slang "if (stop || depth > bounces) break;"}}
 
-$V$ never becomes a variable. The shadow ray reuses payload location 0, with
-`payload.hitDist` pre-set to a 999.0 sentinel and traced under
-`TerminateOnFirstHit | Opaque | SkipClosestHitShader`. On a hit no shader runs,
-so the 999.0 survives and reads as occluded; on a miss the miss shader stamps a
-negative distance. "hitDist went negative" *is* the unoccluded test, and the
-sentinel is the load-bearing half of it.
+Random numbers are one PCG stream per pixel and sample, seeded from the pixel and
+the sample index; the reference does not use the GLSL sampler API.
 
-{{cite shaders/rt/pt_miss.rmiss "payload.hitDist = -1.0;  // signal miss"}}
+{{cite shaders/rt/path_tracer.slang "rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));"}}
 
-Skipping closest-hit is a cost decision, not a correctness one. Closest-hit also
-writes `payload.hitDist`, and `gl_HitTEXT` is never negative, so removing the
-flag would leave the visibility test intact and merely pay for a full material
-decode on every shadow ray.
+## Shadow rays carry no boolean
 
-{{cite shaders/rt/pt_closesthit.rchit "payload.hitDist = gl_HitTEXT;"}}
+A visibility ray starts its payload as a hit, skips the closest-hit shader and stops
+at the first hit; only the miss shader clears the flag. "The flag is clear" is the
+unoccluded test.
 
-The env-MIS block exploits the same call twice over: the miss shader also fills
-`payload.color` with environment radiance for that direction, so a visibility
-ray toward an importance-sampled environment direction *is* the radiance fetch.
-The flip side is a real ordering hazard. A shadow ray that misses overwrites
-`payload.color`, and the first hit's emissive lives in exactly that field, so it
-has to be read into a local before the first NEE trace or it is gone.
-`hitNormal` and `hitAlbedo` survive — the miss shader never touches them, and
-the hit branch runs no shader at all.
+{{cite shaders/rt/path_tracer.slang "p.flags = kHit;   // the closest hit is skipped: only the miss shader clears it"}}
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 emissive = payload.color;"}}
+Rays leave 1 mm off the surface along the geometric normal on the side the ray came
+from, and a light or environment sample on the other side of that normal is
+rejected.
 
-Shadow `tmax` for the three positional branches is the distance to the sampled
-surface point minus 0.02, not the light radius; sampling a sphere's surface and
-tracing to its centre distance would make every sphere light self-occlude.
-Directional lights and every env-MIS visibility ray have no sampled point to aim
-at and use a flat 10000.0 instead.
+## What the reference writes
 
-## Weighting the environment against itself
+Besides radiance, the raygen writes the running mean of every sample since the last
+reset (binding 1, read from the previous frame's image at binding 3: the offline
+camera is still, and a view change resets), the ACES image at exposure 0.5 (binding
+2), OIDN's albedo and normal, and NRD's and DLSS's guides.
 
-Environment light arrives by two strategies — an explicit CDF-driven sample at
-each vertex, and whatever a BSDF-sampled ray hits when it escapes — so both need
-MIS weights or the sky is counted twice. The miss shader returns the environment
-pdf of the escape direction; the loop weighs it against the pdf the BSDF sampler
-used for that bounce:
+{{cite shaders/rt/path_tracer.slang "acc = (prev.rgb * prev.w + radiance) / count;"}}
 
-{{cite shaders/rt/pt_raygen.rgen "envMisWeight = misBalanceHeuristic(specLastBsdfPdf, payload.envPdf);"}}
-{{cite shaders/includes/rt/mis.glsl "return pdfA / max(pdfA + pdfB, 1e-6);"}}
+The NRD split is by the lobe the first vertex sampled: everything after a diffuse
+first bounce goes to the diffuse image, after a specular one to the specular image.
+Direct light at the first vertex goes to the diffuse image whole. The diffuse
+radiance is demodulated by the first hit's diffuse albedo (floored at 0.03) and the
+specular is not:
 
-The balance heuristic is used, not the power heuristic, although both are
-available in the header. Below roughness 0.05 the bounce is flagged as a delta
-lobe and MIS is skipped entirely (weight 1) — a mirror direction has no
-comparable density, and dividing by a fabricated one darkens chrome.
-
-## Where the three files stop agreeing
-
-`pt_raygen_offline.rgen` began as a copy of `pt_raygen.rgen`, and its header now
-says it is a fork. It has not been a copy for a long time.
-
-{{cite shaders/rt/pt_raygen_offline.rgen "// Forked from pt_raygen.rgen (the default shader set's raygen); it differs in the"}}
-
-Four divergences matter when reading a render:
-
-- **Sphere-light sampling.** The reference and offline files sample a uniform
-  point on the sphere surface, whose weight $\cos\theta_\ell A / d^2$ diverges as
-  the shading point approaches the light. The realtime file replaces it with
-  pbrt's subtended-cone sampling, whose weight is the bounded solid angle
-  $2\pi(1-\cos\theta_{\max})$ — same expectation, no overlapping-light firefly.
-  {{cite shaders/rt/pt_raygen_realtime.rgen "weight = 6.2831853 * (1.0 - cosThetaMax);"}}
-- **Glossy bounce, first one only.** The crude sampler — jitter the mirror
-  direction by a roughness-scaled cosine vector — lives in all three files.
-  Realtime replaces it at the bounce-1 fork alone, sampling the GGX distribution
-  of visible normals (Heitz 2018), which collapses the estimator weight to
-  Fresnel times a height-correlated Smith ratio. Its Stage B loop from bounce 2
-  on is byte-identical to the reference file's: same jitter, same un-Fresnelled
-  `mix(1, albedo, metallic)` throughput.
-  {{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);"}}
-- **Stage C.** In the realtime file the diffuse sub-path is no longer a plain
-  bounce loop but a ReSTIR GI reservoir over the secondary vertex, with temporal
-  and spatial reuse.
-  {{cite shaders/rt/pt_raygen_realtime.rgen "giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);"}}
-- **Skin.** The offline file grew a second sharp GGX "oil" lobe and a
-  Christensen-Burley diffusion wrap, both in the bounce-0 direct block and
-  neither behind a material flag — but they are gated differently. The oil lobe
-  fires on any non-metal whenever the global SSS strength `pc.tuning.w` is
-  non-zero, and is scaled by that strength alone.
-  {{cite shaders/rt/pt_raygen_offline.rgen "if (pc.tuning.w > 0.001 && metallic < 0.5) {"}}
-  Only the diffusion wrap is narrowed to warm-tinted albedo, by multiplying that
-  same strength with a `skinHint` term.
-  {{cite shaders/rt/pt_raygen_offline.rgen "float skinHint = clamp((albedo.r - albedo.b) * 3.0, 0.0, 1.0);"}}
-
-The AOV encoding splits two ways, and this is the one place the profiles do
-*not* diverge from each other. The reference file writes linear RGB and a raw
-hit distance into bindings 22/23; both shipped profiles run the same NRD front
-end first, demodulating the diffuse by first-hit albedo and converting to YCoCg
-with a hit distance normalized against view depth and roughness — the identical
-`nrdPackRadianceHitDist` call in both.
-
-{{cite shaders/rt/pt_raygen.rgen "AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));"}}
-{{cite shaders/includes/rt/nrd_frontend.glsl "vec3 ycocg = nrdLinearToYCoCg(max(linearRadiance, vec3(0.0)));"}}
-
-Only the diffuse is demodulated. `specContrib` goes into the packer raw:
-
-{{cite shaders/rt/pt_raygen_offline.rgen "vec4 specPacked = nrdPackRadianceHitDist(specContrib, specHitDist, firstHitViewZ, firstHitRough);"}}
-
-The compositor nevertheless re-multiplies the denoised specular by the F0 AOV,
-so the diffuse channel round-trips (divide, then multiply) while the specular is
-multiplied by a factor no raygen ever divided out. That asymmetry is live on
-every NRD frame.
-
+{{cite shaders/rt/path_tracer.slang "const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));"}}
 {{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad * specColor;"}}
 
-One more thing about the accumulation: it is two images. Every raygen writes this
-frame's at binding 1 and reads history only from the previous frame's at binding 3,
-so the realtime profile's reprojection, which reads a *neighbour* pixel, never reads
-a texel a sibling invocation is writing. The offline profile reads only its own
-pixel: its camera is still, and any view change resets the accumulation.
+Read from the code: a metal's diffuse albedo is 0, so its direct specular, which sits
+in the diffuse image, is multiplied by 0 when the compositor remodulates. The OIDN
+path and the plain accumulation are not affected.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "const vec4 prev = imageLoad(accumHistory, pixel);"}}
+## The realtime raygen
+
+`pt_raygen_realtime.rgen` keeps the GLSL design: at the first hit it forks a specular
+and a diffuse sub-path, each with its own throughput, so REBLUR and DLSS-RR get both
+channels every frame. Sphere lights are sampled by their subtended cone, the first
+glossy bounce by GGX's visible normals, and the diffuse sub-path is a ReSTIR GI
+reservoir with temporal and spatial reuse.
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "weight = 6.2831853 * (1.0 - cosThetaMax);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);"}}
+
+Past the first bounce its specular chain still jitters the mirror direction by a
+roughness-scaled cosine vector and carries `mix(1, albedo, metallic)` without a
+density, so it is not an estimator of any BSDF; it is a fast approximation that the
+reference exists to check.
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;"}}
 
 ## Two fields in one word, because the push constant is full
 
-`params.w` carries `maxBounces` in its low 16 bits and the realtime per-frame
-sample count in its high 16 — not a micro-optimisation. The push-constant block
-is three `mat4`s, two `uvec4`s and two `vec4`s, exactly 256 bytes, and a static
-assert holds it there. That 256 is a device limit, not a spec floor: core Vulkan
-only guarantees a `maxPushConstantsSize` of 128 bytes, so the block is already
-twice the portable budget and a new field would have to displace an old one.
+`params.w` carries `maxBounces` in its low 16 bits and the realtime per-frame sample
+count in its high 16. The push-constant block is three `mat4`s, two `uvec4`s and two
+`vec4`s, exactly 256 bytes, and a static assert holds it there. That 256 is a device
+limit, not a spec floor: core Vulkan only guarantees 128 bytes.
 
 {{cite ohao/render/rt/path_tracer.hpp "OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);"}}
 {{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);"}}
 
-The realtime raygen unpacks the high half and loops N decorrelated paths per
-dispatch, re-seeding the sampler with `frameIdx * N + s` so the sub-samples do
-not repeat a sequence; the pixel jitter is computed once outside that loop, so
-NRD and DLSS still see exactly one sub-pixel offset per frame.
+The realtime raygen loops that many decorrelated paths per dispatch; the reference
+masks the high half off and traces one.
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "uint samplesPerFrame = max(pc.params.w >> 16, 1u);"}}
 
-## Sampler dimensions are padded, not budgeted
-
-`dimIdx` advances by a *path-dependent* amount — the below-horizon fallback in
-the glossy sampler consumes two extra dimensions only on the pixels that need
-it — so no fixed dimension budget exists. The Sobol sampler absorbs this by
-padding: dimension `d` selects Owen-scramble pad `d >> 2` and Sobol dimension
-`d & 3` within it.
-
-{{cite shaders/includes/rt/sampler_sobol.glsl "uint pad = dim >> 2;"}}
-
-Stratification is therefore guaranteed only inside groups of four consecutive
-dimensions, and two neighbouring pixels that took different branches are no
-longer aligned in dimension space — the price of not tracking a per-path
-dimension budget.
-
 :::key
-Read `pt_raygen.rgen` to learn the algorithm; read the profile you actually
-render with to learn the pixels, because the reference file produces none. The
-two shipped raygens have diverged from it and from each other in light sampling,
-first-bounce glossy sampling, diffuse-path structure and the offline-only skin
-lobes — and only the offline file's stale header still claims otherwise.
+The offline profile's pixels come from `path_tracer.slang`: one path a sample,
+next-event estimation to one light and to the environment, BSDF sampling of OpenPBR's
+base, every strategy weighted by the power heuristic, Russian roulette from the third
+vertex. The realtime profile's come from `pt_raygen_realtime.rgen`, a split diffuse and
+specular tracer built for the denoisers.
 :::
 
 ## Contracts
 
-- Every `PathTracer` gets its raygen from the owning profile; `PathTracerShaderSet`'s default `rt_pt_raygen.rgen.spv` is compiled but never bound at runtime.
-- A shadow ray's result is `payload.hitDist < 0.0`, which holds only because the caller pre-sets `payload.hitDist = 999.0` before every trace. With closest-hit skipped nothing writes the payload on a hit, so drop the pre-set and an occluded ray inherits the previous trace's result — a preceding env-MIS miss leaves −1.0 and the next shadow test reports "unoccluded". `gl_RayFlagsSkipClosestHitShaderEXT` itself is only a cost saving; closest-hit writes a non-negative `gl_HitTEXT` and would test the same.
-- The first hit's emissive must be read out of `payload.color` into a local before the first NEE trace; a shadow ray that misses overwrites that field with environment radiance. `payload.hitNormal` and `payload.hitAlbedo` are not at risk — no shader on the shadow-ray path writes them.
-- Shadow `tmax` is the distance to the sampled point minus 0.02 for the sphere, spot and area branches, and a flat 10000.0 for directional lights and every env-MIS ray. Tracing a sphere light to its centre distance instead of the sampled point makes every sphere light self-occlude.
-- `Le` is derived from `4πr²` before the light-type branch, but the area-rect branch weights by the stored `extra2.w`. Changing either without the other silently rescales area lights only.
-- The realtime ReSTIR escape hatches (`PT_FLAG_RESTIRGI_OFF`, `_GIONLY`, `_LEGACY`, `_NOSPATIAL`, bits 5-8) are unreachable: the host only ever sets bits 0-4, so temporal and spatial reuse are always on and the legacy Stage C path is dead. {{cite ohao/render/rt/path_tracer_render.cpp "constexpr uint32_t kPTFlagDLSSRR = 1u << 4;"}}
-- Bindings 22/23 hold linear RGB in `pt_raygen.rgen` and YCoCg in both shipped profiles. Anything reading them must know which raygen produced the frame.
+- A profile's raygen is the one its `PathTracerShaderSet` names: the default (the Slang reference) for `RTOfflineRenderer`, the GLSL realtime set for `RTRealtimeRenderer`. A set's entry names must match its SPIR-V (`raygen`, `closestHit`, `anyHit`, `miss` for Slang; `main` for GLSL).
+- A light found by both strategies must be weighted on both sides. A bounce ray meets an emitter only when its mask includes `kTlasMaskEmitter`; a light with no emitter mesh must not be flagged by `LightTable::setEmitterLights`, or its light sampling is halved for a hit that never comes.
+- An emitter instance's `emitterLight.w` is its light's index in the RT light buffer. If the two orders differ, a bounce ray weighs one light's emission against another's density.
+- Emissive surfaces reach the reference by BSDF sampling only. Putting proxy lights for them back into the RT buffer counts their light twice.
+- A shadow ray's payload must start with `kHit` set; with the closest hit skipped, nothing else sets it on a hit.
+- The bounce cap lives in `params.w`'s low 16 bits; the high 16 are the realtime samples per frame.

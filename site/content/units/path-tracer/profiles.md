@@ -16,14 +16,17 @@ difference between the two is a pair of `constexpr` aggregates in
 {{cite ohao/render/rt/rt_settings.hpp "inline constexpr RTRenderSettings kRealtimeRTSettings{"}}
 
 Two differences sit outside the aggregates. Each profile object binds its own
-raygen SPIR-V module, so there genuinely is a separate device code path chosen
-by which profile is constructed; and each answers one virtual differently. Both
-come back below.
+shaders, and they are different integrators: the offline profile runs the Slang
+reference path tracer (`rt/path_tracer.slang`), the realtime one the GLSL
+`pt_raygen_realtime.rgen` and its hit shaders. And each answers one virtual
+differently. Both come back below.
 
 The realtime profile takes two bounces, a PCG sampler, in-shader spatial
-denoising, and a firefly clamp at luminance 10. The offline profile takes four
-bounces, an Owen-scrambled Sobol sampler, no in-shader denoise, no clamp, and
-OIDN as its default post-process.
+denoising, and a firefly clamp at luminance 10. The offline profile takes 32
+bounces (Russian roulette ends most paths long before), no in-shader denoise, no
+clamp, and OIDN as its default post-process. Its aggregate names a Sobol sampler,
+but the reference raygen has no sampler switch: it draws every number from one PCG
+stream per pixel and sample.
 
 The transported 10 is not the operative threshold everywhere. The realtime
 raygen uses `pc.tuning.x` directly at each NEE and environment contribution,
@@ -32,12 +35,17 @@ clamps at 7.5:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "float realtimeClamp = pc.tuning.x * 0.75;"}}
 
+The reference applies it once, to the whole path's radiance, and only when both
+conditions hold:
+
+{{cite shaders/rt/path_tracer.slang "if ((flags & kFlagFireflyClamp) != 0u && pc.tuning.x > 0.0)"}}
+
 The offline constant deserves attention for the opposite reason: it does not
 merely clear the flag, it also zeroes the threshold.
 
 {{cite ohao/render/rt/rt_settings.hpp ".fireflyClampLuminance = 0.0f,"}}
 
-That redundancy is deliberate. Every raygen gates the clamp on *both* the flag
+That redundancy is deliberate. Both raygens gate the clamp on *both* the flag
 bit and a positive threshold, so an offline render stays unbiased even if some
 future caller flips the boolean by accident. Clamping outliers is exactly the
 kind of variance-for-bias trade an interactive preview wants and a reference
@@ -145,7 +153,7 @@ a bet on RT-class hardware that the code makes and never checks.
 {{cite ohao/gpu/layout_meta.hpp "kPTPushConstantsBytes = 256"}}
 
 Only the realtime raygen unpacks the high half and loops on it; the offline
-raygen masks it off and traces one path per dispatch.
+reference masks it off and traces one path per dispatch.
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "uint samplesPerFrame = max(pc.params.w >> 16, 1u);"}}
 
@@ -158,7 +166,9 @@ values, two control bits and the zeroed history count above.
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {"}}
 
 The sampler choice takes the other route. It is a Vulkan specialization
-constant baked into the raygen SPIR-V at pipeline creation:
+constant baked into the GLSL raygen's SPIR-V at pipeline creation (the Slang
+reference declares no such constant, and specializing an id a module does not
+use changes nothing):
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "uint32_t samplerTypeVal = static_cast<uint32_t>(m_renderSettings.samplerType);"}}
 
@@ -190,8 +200,8 @@ its default member initializer, which is the offline profile:
 
 {{cite ohao/render/rt/path_tracer.hpp "RTRenderSettings m_renderSettings{kOfflineRTSettings};"}}
 
-So both profiles specialize `constant_id = 0` to Sobol. `kRealtimeRTSettings`
-declares PCG and that value never reaches SPIR-V. The failure is silent because
+So the realtime raygen is specialized with `constant_id = 0` set to Sobol.
+`kRealtimeRTSettings` declares PCG and that value never reaches SPIR-V. The failure is silent because
 the value that *is* specialized happens to be a usable sampler, not because the
 shader has a safety net: `createRTPipeline` attaches a `VkSpecializationInfo`
 with one map entry to every pipeline it builds, so a supplied value always wins.
@@ -209,23 +219,25 @@ the settings before `init` or recreating the pipeline when `samplerType`
 changes — the same shape of fix `setRenderSettings` already applies to images
 when the DLSS render scale moves.
 
-## A profile is an object, and it owns a raygen
+## A profile is an object, and it owns its shaders
 
 `RTRealtimeRenderer` and `RTOfflineRenderer` are thin finals over a shared base
 that wraps a `PathTracer` and forwards over forty accessors. What they
-genuinely differ on is the constructor's `PathTracerShaderSet`:
+genuinely differ on is the constructor's `PathTracerShaderSet`. The offline
+profile passes the struct's default, the Slang reference, whose four stages are
+named entry points of one file:
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
+{{cite ohao/render/rt/path_tracer.hpp "const char* closestHitEntry{"}}
 
-Because both concrete profiles override the shader set and `PathTracer` is only
-ever instantiated as a member of that base, the struct's default raygen is
-unreachable in the shipping engine:
+The realtime profile names four GLSL modules and gives each the entry `main`:
 
-{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
-`shaders/rt/pt_raygen.rgen` is still compiled — the shader CMake globs the
-directory — but nothing binds its SPIR-V. Treat it as the common ancestor the
-two profile raygens diverged from, not as a live third profile.
+The pipeline takes each stage's entry name from the set, so the same
+`createRTPipeline` builds both:
+
+{{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pName = m_shaderSet.raygenEntry;"}}
 
 ## What the two finals actually decide
 
@@ -292,8 +304,8 @@ afterwards, so the value is overwritten before any raygen can read it.
 The profile constants are authoritative every frame, not just at startup. A
 knob that is not on the explicit preserve list is not a setting, it is a value
 discarded before the next dispatch reads it. The sampler is the mirror image:
-it is authoritative once, at init, and currently authoritative with the wrong
-profile's value.
+it is authoritative once, at init, and for the realtime raygen currently
+authoritative with the wrong profile's value.
 :::
 
 ## Contracts

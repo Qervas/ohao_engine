@@ -143,18 +143,22 @@ the list keeps the lowest indices. The overflow is reported rather than hidden.
 
 ## How lighting reads the lists
 
-The lighting fragment shader finds its pixel's tile from `gl_FragCoord` and its slice from
-the logarithm of its view depth, with the same $S$ and $B$:
+The lookup and the loop live in `includes/lighting/clustered_lights.slang`, which the
+deferred lighting shader and the forward passes import. `lightList` finds the pixel's tile
+from its fragment coordinate and its slice from the logarithm of its view depth, with the
+same $S$ and $B$:
 
-{{cite shaders/core/deferred_lighting.frag "const float s = viewDepth > 0.0 ? floor(log(viewDepth) * pc.sliceScale + pc.sliceBias) : 0.0;"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "const float s = viewDepth > 0.0 ? floor(log(viewDepth) * sliceScale + sliceBias) : 0.0;"}}
 
 clamps the slice to 0..23 (a pixel nearer than 0.1 m uses slice 0; none lies past the
-far plane, which clips it), reads the froxel's count and loops over its indices into the light
-table:
+far plane, which clips it) and returns the froxel's first list index and count.
+`directLight` then loops over those indices into the light table:
 
-{{cite shaders/core/deferred_lighting.frag "const LightGpu light = lights[clustered ? clusterData[listBase + k] : k];"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "float3 directLight(Surface s, StructuredBuffer<LightGpu> lights"}}
 
-With push flag bit 6 the same loop runs over every light in the table instead. The pass
+Without the lists (`clustered` false) `lightList` returns every light, `(0, lightCount)`,
+and the same loop runs over the whole table. The deferred pass asks for that with push
+flag bit 6. The pass
 sets the bit when it has no froxel buffer, which is what `setClusteredLighting(false)`
 arranges: the deferred renderer then hands the lighting pass a null buffer and does not
 add `lights.cluster` to the graph at all.
@@ -164,9 +168,10 @@ add `lights.cluster` to the graph at all.
 ## Why the two loops give the same image
 
 The every-light loop adds, for each light $i$ in index order, a term $t_i$, and skips
-the light when its attenuation or its shadow is exactly zero:
+the light when its attenuated radiance or its shadow is exactly zero (an area light has no
+range and is never left out of a froxel):
 
-{{cite shaders/core/deferred_lighting.frag "if (attenuation == 0.0) continue;   // adds exactly zero: past its range or its cone"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "if (all(radiance == float3(0.0)) && type != 3) continue;   // adds exactly zero: past its range or cone"}}
 
 A light left out of a pixel's froxel has its range sphere entirely outside the froxel's
 padded box, so at that pixel $d > r$ and the attenuation's window is
@@ -175,7 +180,7 @@ too. The clustered loop therefore visits exactly the lights the every-light loop
 skip, plus some it does skip, in the same ascending order, and the two compute the same
 floating-point sum operation for operation.
 
-{{cite shaders/core/deferred_lighting.frag "float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "const float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);"}}
 
 :::key
 Exactness rests on three things: the attenuation is exactly 0, not small, past the range;
@@ -207,9 +212,11 @@ writes after the previous frame's fragment reads in queue order, is enough:
 
 ## What does not read the lists
 
-The deferred lighting pass is the lists' only reader. RT GI shades its bounce with its own
-copy of every light, drawn by power (its hits lie outside the camera's froxels), and the
-effects' expand pass lights each particle at its centre from the same lists:
+Three passes read the lists, all through `clustered_lights.slang`: deferred lighting, the
+forward transparent pass (`directLight`, the same loop) and the effects' expand pass, which
+lights each particle at its centre (`particleLight`). RT GI does not: it shades its bounce
+with its own copy of every light, drawn by power, because its hits lie outside the
+camera's froxels:
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "// The bounce's lights: every light that gives any, emissive proxies out (the emissive surface"}}
 

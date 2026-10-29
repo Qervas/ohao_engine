@@ -22,10 +22,10 @@ raises flag bit 1:
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;"}}
 
-and `deferred_lighting.frag` samples it there, upsampling the half-resolution image
+and `deferred_lighting.slang` samples it there, upsampling the half-resolution image
 against each pixel's distance from the camera, only when that bit is set:
 
-{{cite shaders/core/deferred_lighting.frag "const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;"}}
+{{cite shaders/core/deferred_lighting.slang "const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(int2(fragCoord.xy), distance(P, pc.cameraPos)) : 1.0;"}}
 
 It multiplies the IBL terms (and the constant ambient, in a frame without RT GI or an
 environment) on top of the baked `ao` from the

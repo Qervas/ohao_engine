@@ -171,13 +171,16 @@ appended:
 
 {{cite shaders/CMakeLists.txt "SHADER_FLAT_NAME ${SHADER_REL}"}}
 
-So `shaders/rt/pt_raygen.rgen` becomes `rt_pt_raygen.rgen.spv`, and the C++ hardcodes
-exactly that mangled string as `PathTracer`'s default raygen. Moving a shader between
+So `shaders/rt/pt_raygen_realtime.rgen` becomes `rt_pt_raygen_realtime.rgen.spv`, and
+the C++ hardcodes exactly that mangled string as the realtime profile's raygen. A Slang
+file with several entry points adds the entry's name — `shaders/rt/path_tracer.slang`'s
+`raygen` is `rt_path_tracer.slang.raygen.spv`, the string `PathTracerShaderSet` names as
+its default. Moving a shader between
 directories renames its SPIR-V and every hardcoded path stops resolving — with no
 build error, because the flattening is a string operation the compiler never sees.
 
 The glob has no exclusion filter: it compiles every stage file it finds under
-`shaders/` — forty today — whether or not any C++ loads the result. A syntax error
+`shaders/` — twenty-six GLSL stage files today, besides every Slang entry point — whether or not any C++ loads the result. A syntax error
 in a shader nobody ships fails the whole `shaders` target.
 
 ## The include dependency that isn't tracked
@@ -248,7 +251,7 @@ build, and entry 3 is why `build/Release/cornell_box.exe` does on Windows — bu
 when entry 1 misses, and entry 1 is not a fixed miss. It is the raw `bin/shaders/…`
 string baked into `PathTracerShaderSet`, tried verbatim before any fallback:
 
-{{cite ohao/render/rt/path_tracer.hpp "bin/shaders/rt_pt_raygen.rgen.spv"}}
+{{cite ohao/render/rt/path_tracer.hpp "bin/shaders/rt_path_tracer.slang.raygen.spv"}}
 
 A `bin/shaders/` directory in the working directory therefore outranks the build's
 output. No rule writes a repo-root `bin/`, and a stray one is neither refreshed nor

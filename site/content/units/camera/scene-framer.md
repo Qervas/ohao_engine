@@ -174,64 +174,54 @@ configuration the other three comments exist to rule out.
 
 Those radii travel intact. `spawnFramedLights` makes each one a point-light entity
 whose `radius` is the framer's number, and the light table copies that radius into the
-RT light record's `dirAndParam.w`, which the raygen reads as the sphere radius.
+RT light record's `dirAndParam.w`, which the path tracer reads as a point light's
+sphere radius.
 
 {{cite ohao/render/scene/light_table.cpp "float dirParam = d.radius;"}}
 
-The reason the clearances matter is visible in the next-event estimator — and
-*which* estimator depends on the profile. `RenderMode::RTOffline` selects
-`RTOfflineRenderer`, whose `PathTracer` is constructed with the offline raygen SPV,
-so the shader below is `pt_raygen_offline.rgen`; the `pt_raygen.rgen` named as the
-`PathTracerShaderSet` default is overridden by both profile renderers and never
-dispatched.
+The reason the clearances matter is visible in the next-event estimator of the
+profile that renders these rooms. `RenderMode::RTOffline` selects
+`RTOfflineRenderer`, whose `PathTracer` takes the default shader set: the reference
+path tracer, `rt/path_tracer.slang`.
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
 
-For a sphere light that raygen samples a point uniformly on the surface, converts
-the uniform-area pdf to solid angle in a term it calls `weight`, and multiplies by
-the emitted radiance `Le`. The block occurs three times, once per path stage —
-bounce 0, then once inside each of the Stage-B specular and Stage-C diffuse bounce
-loops — and it computes:
+For a sphere light that raygen samples a direction uniformly inside the cone the
+sphere subtends from the shading point, and the radiance it carries is the sphere's:
 
-$$L_e = \frac{I\,c}{4\pi r^{2}}, \qquad w = \frac{\cos\theta_\ell \cdot 4\pi r^{2}}{d^{2}} \quad\Longrightarrow\quad L_e\,w = \frac{I\,c\,\cos\theta_\ell}{d^{2}}$$
+$$L_e = \frac{I\,c}{\pi r^{2}}\,W(d), \qquad p(\omega) = \frac{1}{2\pi\,(1-\cos\theta_\text{max})}, \qquad \sin\theta_\text{max} = \frac{r}{d}$$
 
-Here $I$ is the authored intensity, $c$ the colour, $r$ the sphere radius,
-$\theta_\ell$ the angle at the sampled point between its outward normal and the
-direction back to the shading point, and $d$ the distance between them. The two
-$4\pi r^2$ factors cancel exactly — which is the fact the framer's comment relies
-on. Brightness is radius-independent, so a radius can be shrunk to clear a wall
-without changing exposure; only shadow and highlight sharpness change. Averaged
-over uniform samples on the whole sphere $\mathbb{E}[\max(\cos\theta_\ell,0)] = 1/4$,
-so a distant receiver sees irradiance $I/(4d^2)$.
+Here $I$ is the authored intensity, $c$ the colour, $r$ the sphere radius, $d$ the
+distance from the shading point to the sphere's centre and $W$ the range window.
+Integrated over the cone, $L_e$ times the cone's projected solid angle is
+$I\,c\,W/d^2$ for a receiver facing the light at $d \gg r$: brightness is
+radius-independent, which is the fact the framer's comments rely on. A radius can be
+shrunk to clear a wall without changing exposure; only shadow and highlight sharpness
+change.
 
-What does not cancel is $1/d^2$. `weight` divides by the squared distance to the
-*sampled point* with no epsilon floor, and the bounce-0 shading line folds it in
-along with a light-count factor that undoes the uniform light pick:
+Both factors stay bounded as a receiver approaches the sphere — $L_e$ is a constant
+and $1/p$ is at most $2\pi$ — so a nearby wall does not draw unbounded samples. What
+the estimator cannot do is light a point inside the sphere. There the cone is
+undefined and the sample is dropped:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "directContribution = Le * (diff * nlDiff + spec * NdotL)"}}
+{{cite shaders/rt/path_tracer.slang "if (sin2 >= 1.0) return s;"}}
 
-The diffuse half of that line is scaled by `nlDiff` — a per-channel,
-subsurface-wrapped replacement for the scalar `NdotL` the specular half still uses —
-one of the places the offline file has forked from `pt_raygen.rgen`.
-
-{{cite shaders/rt/pt_raygen_offline.rgen "// Forked from pt_raygen.rgen (the default shader set's raygen); it differs in the"}}
-
-If a light sphere pokes through a wall, the wall texels inside it draw samples at
-$d \to 0$ and the contribution diverges. The offline profile has no clamp to catch
-it: `kOfflineRTSettings` leaves `enableFireflyClamp` false, so the push-constant
-flag is never set and the luminance-clamp branch guarding every one of those
-shading lines is compiled in but never entered.
+If a light sphere pokes through a wall, the wall texels inside it get no light
+sample, and the camera sees the light's emitter mesh, a bright sphere of radiance
+$L_e$, cut by the wall. The offline profile has no clamp either way:
+`kOfflineRTSettings` leaves `enableFireflyClamp` false, so the push-constant flag is
+never set and the luminance clamp at the end of the path is never entered.
 
 {{cite ohao/render/rt/rt_settings.hpp ".enableFireflyClamp = false,"}}
 
 :::key
-The light radii are geometry, not aesthetics. With the clamp off on the offline
-profile, the only defence against an unbounded NEE sample is keeping every light
-sphere strictly inside the surfaces it can illuminate — and *which* surfaces those
-are is per-caller: `model_viewer` and the scene file `ohao_game` loads build a floor,
-a ceiling and the back and side walls, and neither builds the z = +S wall that
-`FrontFill`'s comment measures against. Moving a light "a bit closer to the ceiling" is a rendering
-bug, not a lighting tweak.
+The light radii are geometry, not aesthetics. The only way to keep every light
+sphere's light on the surfaces around it, and its emitter mesh out of them, is to
+keep every sphere strictly inside the room — and *which* surfaces bound the room is
+per-caller: `model_viewer` and the scene file `ohao_game` loads build a floor, a
+ceiling and the back and side walls, and neither builds the z = +S wall that
+`FrontFill`'s comment measures against. Moving a light "a bit closer to the ceiling"
+is a rendering bug, not a lighting tweak.
 :::
 
 ## Contracts

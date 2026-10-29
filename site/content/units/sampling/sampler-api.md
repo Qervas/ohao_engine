@@ -8,27 +8,29 @@ figures: [sampling-sampler-api-dim-ledger]
 
 ## One name, two different contracts
 
-`pt_raygen_realtime.rgen` asks for randomness at forty distinct call sites and
-`pt_raygen_offline.rgen` at twenty-nine — pixel jitter, light index, area-light
-point, environment direction, BSDF lobe choice, Russian roulette — and every one
-of them goes through `getSample1D(dim)` or `getSample2D(dim)`.
+`pt_raygen_realtime.rgen` asks for randomness at forty distinct call sites — pixel
+jitter, light index, area-light point, environment direction, BSDF lobe choice,
+Russian roulette — and every one of them goes through `getSample1D(dim)` or
+`getSample2D(dim)`. It is the only shader that does.
 
-Those two are the shaders that run. `PathTracerShaderSet` still *defaults* to a
-third, `rt_pt_raygen.rgen.spv`,
+The other profile's tracer does not use this API. `PathTracerShaderSet` defaults to
+the reference path tracer, `rt/path_tracer.slang`,
 
 {{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"}}
 
-but the engine's only `PathTracer` is a member of `RTProfileRendererBase`, whose
-`init()` overwrites the whole shader set before the pipeline is built,
+and the offline profile takes that default, while the realtime profile names its
+GLSL shaders:
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
-
-and the only two subclasses of that base name the realtime and offline variants.
-`rt_pt_raygen.rgen.spv` is compiled and never loaded. Everything below traces
-`pt_raygen_offline.rgen` unless it says otherwise.
-
+{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
 {{cite ohao/render/rt/rt_profile_renderer.hpp "rt_pt_raygen_realtime.rgen.spv"}}
-{{cite ohao/render/rt/rt_profile_renderer.hpp "rt_pt_raygen_offline.rgen.spv"}}
+
+The reference carries its own generator, one PCG stream a pixel and sample
+(*PCG realtime* describes it), and consumes it in call order with no dimension
+index at all:
+
+{{cite shaders/rt/path_tracer.slang "struct Rng"}}
+
+Everything below is the realtime tracer's.
 
 What sits behind that one function name are two implementations whose contracts
 are not the same, and an integrator written to a discipline that only one of
@@ -48,7 +50,7 @@ dimension).
 
 {{cite shaders/includes/rt/sampler_sobol.glsl "_sobol_index = sampleIdx;"}}
 
-That is why each raygen threads a `dimIdx` counter by hand, bumping it by
+That is why the raygen threads a `dimIdx` counter by hand, bumping it by
 exactly the number of scalars consumed at every site. Under PCG the bookkeeping
 is decoration — drop a `dimIdx += 2u` and the image is bit-identical. Under
 Sobol the same omission makes two unrelated decisions read one coordinate, and
@@ -79,13 +81,13 @@ The API-visible consequence is that `getSample2D(d)` is not a 2D primitive: it i
 stratification it looks like it is asking for. This is not hypothetical. The
 camera jitter takes dims 0–1,
 
-{{cite shaders/rt/pt_raygen_offline.rgen "vec2 jitter = getSample2D(dimIdx) - 0.5;"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec2 jitter = getSample2D(dimIdx) - 0.5;"}}
 
 the bounce-0 next-event-estimation block spends dim 2 on the light index, and
 the light-position sample inside it therefore begins at dim 3 — split across
 pads 0 and 1.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "// ==== Analytic direct NEE at bounce 0 ===="}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "// ==== Analytic direct NEE at bounce 0 ===="}}
 
 That is a trace of one path, not a fixed map. The whole NEE block is gated on a
 non-empty light buffer; inside it the sphere, spot and area branches each take
@@ -95,37 +97,39 @@ follows is itself gated on a loaded environment map. So the environment sample
 starts at dim 5, dim 3 or dim 2 depending on the scene and on which light type
 this particular path drew.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "// ==== Analytic direct env-MIS at bounce 0 ===="}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "// ==== Analytic direct env-MIS at bounce 0"}}
 
-{{figure sampling-sampler-api-dim-ledger "Conceptual — one branch of the first-bounce dimension ledger of pt_raygen_offline.rgen, traced by hand from the dimIdx arithmetic for the case where the sampled light is a sphere, spot or area light. A directional light, or an empty light buffer, shifts every later draw. Not a measurement."}}
+{{figure sampling-sampler-api-dim-ledger "Conceptual — one branch of the first-bounce dimension ledger of the realtime raygen (pt_raygen_realtime.rgen, which takes its draws in the same order), traced by hand from the dimIdx arithmetic for the case where the sampled light is a sphere, spot or area light. A directional light, or an empty light buffer, shifts every later draw. Not a measurement."}}
 
 ## The pads move at runtime, not just at edit time
 
 `dimIdx` is a running count, not an allocation, so any branch that consumes a
 different number of dimensions shifts every later draw *of that path* into a
 different pad. The clearest case is the specular direction chosen at the primary
-hit: a surface with `roughness > 0.01` spends two dimensions jittering the
-mirror direction,
+hit: a surface below roughness 0.02 is treated as a mirror and spends nothing, any
+rougher one spends two dimensions on a visible-normal sample,
 
-{{cite shaders/rt/pt_raygen_offline.rgen "if (roughness > 0.01) {"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec2 u = getSample2D(dimIdx); dimIdx += 2u;"}}
 
-and two more if the jittered direction ends up below the horizon.
+and a sample whose reflection falls below the horizon snaps to the mirror direction
+without drawing again.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "if (dot(reflected, N) < 0.0) {"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "// Rare VNDF tail below the horizon — snap to the mirror lobe."}}
 
 Russian roulette then terminates paths at different depths, so how many
 dimensions a path has spent by bounce 3 is a function of its own history.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "float p = max(specThroughput.r, max(specThroughput.g, specThroughput.b));"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "float p = max(specThroughput.r, max(specThroughput.g, specThroughput.b));"}}
 
 What padded Sobol buys is stratification along a pixel's *sample sequence*: for
 a fixed dimension, that pixel's samples 0…N−1 form a low-discrepancy set. That
 only means anything if dimension *d* denotes the same decision on every sample,
 and here it does not — which light, and therefore which light type, is drawn
-from dim 2; the horizon-reject test is decided by the jitter sample itself;
+from dim 2; whether the specular sample spends two dimensions is decided by the
+surface's roughness;
 roulette ends different samples at different depths. Past the first
 data-dependent branch, one sample's dimension *d* is a light point and
-another's a specular jitter, sharing one low-discrepancy sequence. What is
+another's a specular direction, sharing one low-discrepancy sequence. What is
 stable across a pixel's samples is dims 0–2 — camera jitter and the light index
 — which is the short end of the prefix the padded-QMC assumption leans on.
 Nothing after it is protected, and no `dimIdx` discipline in the source can
@@ -175,9 +179,11 @@ and silently select the other backend.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pSpecializationInfo = &samplerSpecInfo;"}}
 
-That is correct today: the only files that `#include` `sampler_api.glsl` are the
-three raygen shaders, and `pt_miss.rmiss`, `pt_closesthit.rchit` and
-`pt_anyhit.rahit` make no sampler calls at all. It is also a trap with no
+That is correct today: the only file that `#include`s `sampler_api.glsl` is the
+realtime raygen, and `pt_miss.rmiss`, `pt_closesthit.rchit` and `pt_anyhit.rahit`
+make no sampler calls at all. The same specialization is handed to the reference's
+Slang raygen, which declares no constant 0; Vulkan ignores a map entry whose ID the
+module does not use. It is also a trap with no
 diagnostic. The stage array is zero-initialised, so the miss and hit stages
 carry a null `pSpecializationInfo`: a sampler call added to the closest-hit
 shader would compile, link and run on the GLSL *default* — Sobol — whatever the
@@ -205,7 +211,9 @@ pipeline — and only then pushes its own settings down.
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setRenderSettings(m_settings);"}}
 
 Every pipeline the `PathTracer` creates is therefore specialized to Sobol,
-including the realtime profile's, whose settings table asks for PCG. (The other
+including the realtime profile's, whose settings table asks for PCG — and the
+only pipeline that reads the constant is that realtime one. The offline profile's
+`SamplerType::Sobol` reaches a Slang raygen that has no `SAMPLER_TYPE`. (The other
 ray-traced passes in the engine — `RTGITechnique`'s and
 `RTShadowTechnique`'s compute pipelines of inline ray queries — attach no
 `VkSpecializationInfo` at all: none of their shaders pulls in `sampler_api.glsl`,
@@ -232,11 +240,11 @@ PCG divides the whole 32-bit word by $2^{32}$ instead.
 Float32 spacing just below $2^{32}$ is 256, so unsigned words within 128 of
 $2^{32}$ round *up* to it and the quotient is exactly 1.0. The two backends
 therefore return samples from different intervals — $[0,1)$ for Sobol, $[0,1]$
-for PCG — through the same function signature. In the raygens this is absorbed
+for PCG — through the same function signature. In the raygen this is absorbed
 rather than prevented: the NEE light index is computed as
 `uint(u * lightCount)` and immediately clamped with
-`min(selectedLightIdx, lightCount - 1u)` at every light-selection site — three
-of them in `pt_raygen_offline.rgen`, four in `pt_raygen_realtime.rgen` — so a
+`min(selectedLightIdx, lightCount - 1u)` at every light-selection site — all four
+of them in `pt_raygen_realtime.rgen` — so a
 returned 1.0 costs a slightly biased light choice rather than a read past the end
 of the light SSBO.
 

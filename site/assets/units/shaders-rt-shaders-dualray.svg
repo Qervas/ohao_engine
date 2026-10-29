@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="Data flow of the dual-ray split in pt_raygen_offline.rgen into the NRD demodulated AOVs and the nrd_compose recomposition">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="Data flow of the dual-ray split in pt_raygen_realtime.rgen into the NRD demodulated AOVs and the nrd_compose recomposition">
   <defs>
     <marker id="rtA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#6e685c"/>
@@ -19,7 +19,7 @@
   </defs>
   <rect x="0" y="0" width="720" height="300" fill="#0f1419"/>
 
-  <text x="16" y="18" class="m">pt_raygen_offline.rgen — one primary hit, two chains</text>
+  <text x="16" y="18" class="m">pt_raygen_realtime.rgen — one primary hit, two chains</text>
 
   <rect class="bx" x="16" y="48" width="126" height="56"/>
   <text x="26" y="70" class="t">Stage A</text>

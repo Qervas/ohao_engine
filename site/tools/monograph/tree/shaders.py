@@ -26,14 +26,14 @@ MODULE = {
             'includes-lighting',
             'Lighting includes',
             'One uncompiled attenuation header; the falloff, IBL and light record that ship.',
-            files=['shaders/includes/lighting/light_attenuation.glsl', 'shaders/core/deferred_lighting.frag', 'shaders/shared/layout.json'],
-            design=['light_attenuation.glsl: no stage includes it; its default falloff has different units from the deferred law.', 'deferred_lighting.frag: windowed inverse square, exactly zero past the range (clustered lighting depends on it), split-sum IBL inline.', 'LightGpu (shared/layout.json): the 64-byte raster light record.'],
+            files=['shaders/includes/lighting/light_attenuation.glsl', 'shaders/includes/lighting/clustered_lights.slang', 'shaders/core/deferred_lighting.slang', 'shaders/shared/layout.json'],
+            design=['light_attenuation.glsl: no stage includes it; its default falloff has different units from the deferred law.', 'clustered_lights.slang: windowed inverse square, exactly zero past the range (clustered lighting depends on it), the light loop (directLight) through OpenPBR\'s base for deferred and the transparent pass; deferred_lighting.slang adds the split-sum IBL.', 'LightGpu (shared/layout.json): the 64-byte raster light record.'],
         ),
         page(
             'includes-shadow',
             'Shadow sampling in lighting',
             'RT visibility channels, the CSM fallback, the cascade depth write.',
-            files=['shaders/core/deferred_lighting.frag', 'shaders/shadow/shadow_csm.vert', 'ohao/render/scene/light_table.cpp'],
+            files=['shaders/core/deferred_lighting.slang', 'shaders/includes/lighting/clustered_lights.slang', 'shaders/shadow/shadow_csm.vert', 'ohao/render/scene/light_table.cpp'],
             design=['RT shadows: eight 8-bit channels (RG32UI, binding 14), params.w names a light\'s; the first eight casters own one, the rest render unshadowed.', 'CSM fallback for directional lights only: cascade by view depth, 3x3 hardware-compare PCF, constant bias.', 'shadow_csm.vert: one vertex stage per cascade, draw record at gl_InstanceIndex.'],
         ),
         page(
@@ -61,9 +61,9 @@ MODULE = {
         page(
             'core-gbuffer-lighting',
             'Core GBuffer & lighting shaders',
-            'gbuffer.vert/frag, deferred_lighting.frag MRT contract.',
-            files=['shaders/core/gbuffer.vert', 'shaders/core/gbuffer.frag', 'shaders/core/deferred_lighting.frag'],
-            design=['GBuffer MRT: albedo, normal, material, velocity (from current/prev clip pos), depth.', 'Bindless texture indices via nonuniformEXT; 0xFFFFFFFF = missing map.', 'deferred_lighting.frag: the froxel\'s light list + IBL + CSM + optional RT shadow/GI textures.'],
+            'gbuffer.vert/frag, deferred_lighting.slang, the eight-target MRT contract.',
+            files=['shaders/core/gbuffer.vert', 'shaders/core/gbuffer.frag', 'shaders/includes/scene/gbuffer_body.glsl', 'shaders/core/deferred_lighting.slang'],
+            design=['GBuffer MRT, eight targets: position, normal, albedo, velocity (from current/prev clip pos), depth, emission, specular (6), OpenPBR (7).', 'Bindless texture indices via nonuniformEXT; 0xFFFFFFFF = missing map.', 'deferred_lighting.slang: OpenPBR\'s base over the froxel\'s light list (directLight) + split-sum IBL + CSM + optional RT shadow/GI textures.'],
         ),
         page(
             'overlay-gizmo',
@@ -74,9 +74,9 @@ MODULE = {
         page(
             'rt-shaders',
             'RT program family',
-            'pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.',
-            files=['shaders/rt/pt_raygen.rgen', 'shaders/rt/pt_raygen_realtime.rgen', 'shaders/rt/pt_raygen_offline.rgen', 'shaders/rt/pt_closesthit.rchit', 'shaders/rt/pt_anyhit.rahit', 'shaders/rt/pt_miss.rmiss', 'shaders/rt/shadow_trace.slang', 'shaders/rt/shadow_filter.slang', 'shaders/rt/gi_trace.slang', 'shaders/rt/gi_denoise.slang', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
-            design=['pt_raygen.rgen = reference brute force; realtime/offline variants add NEE/MIS/AOV packing.', 'Hybrid (Slang compute, inline ray queries): shadow_* visibility; gi_* one-bounce diffuse GI into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
+            'path_tracer.slang, pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.',
+            files=['shaders/rt/path_tracer.slang', 'shaders/rt/pt_raygen_realtime.rgen', 'shaders/rt/pt_closesthit.rchit', 'shaders/rt/pt_anyhit.rahit', 'shaders/rt/pt_miss.rmiss', 'shaders/rt/shadow_trace.slang', 'shaders/rt/shadow_filter.slang', 'shaders/rt/gi_trace.slang', 'shaders/rt/gi_denoise.slang', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
+            design=['path_tracer.slang = the offline reference (Slang, four entry points, OpenPBR base); pt_raygen_realtime.rgen + pt_closesthit/anyhit/miss = the realtime GLSL tracer.', 'Hybrid (Slang compute, inline ray queries): shadow_* visibility; gi_* one-bounce diffuse GI into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
         ),
     ],
 }

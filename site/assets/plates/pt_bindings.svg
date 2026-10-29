@@ -16,7 +16,7 @@
   <rect class="bg" width="1100" height="1480"/>
   <text x="60" y="52" class="h">PLATE · PATH TRACER DESCRIPTORS</text>
   <text x="60" y="88" class="t" style="font-size:28px">Set 0 binding map (as shipped)</text>
-  <text x="60" y="118" class="s">path_tracer_descriptors.cpp · pt_raygen.rgen · CLAUDE.md</text>
+  <text x="60" y="118" class="s">path_tracer_descriptors.cpp · path_tracer.slang · CLAUDE.md</text>
 
   <!-- Column headers -->
   <text x="70" y="165" class="tag">#</text>

@@ -42,14 +42,14 @@ Anything that reports "rendering in mode X" from its own local variable rather t
 
 The facade holds *both* `IRTRenderPipeline` objects and `IRTRendererProfile` objects for each RT mode, which reads like redundancy until you look at their storage class. The pipelines are plain value members with no GPU state — pure constant policy, always answerable — so `getRTPipeline(mode)` can report "this is an RT mode, and here are its default settings" before a single Vulkan object exists. The profiles are `unique_ptr`s, each owning a whole `PathTracer`, and they are the thing that might be null.
 
-The two profiles are not the same tracer with different knobs; they load different raygen SPIR-V. `RTProfileRendererBase::init` installs the profile's shader set before `PathTracer::init` runs, so the shader set the `PathTracerShaderSet` struct declares as its own default is never the one that reaches the pipeline through this facade.
+The two profiles are not the same tracer with different knobs; they load different shaders. `RTProfileRendererBase::init` installs the profile's shader set before `PathTracer::init` runs. `RTOfflineRenderer` takes the struct's default, the Slang reference path tracer (`rt/path_tracer.slang`, four named entry points in one file):
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
-{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"}}
+{{cite ohao/render/rt/path_tracer.hpp "rt_path_tracer.slang.raygen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
 
-Reading `rt_pt_raygen.rgen` and concluding "that is what RTOffline runs" is the mistake this indirection invites; `RTOfflineRenderer` names `rt_pt_raygen_offline.rgen.spv` explicitly.
+`RTRealtimeRenderer` names the GLSL set explicitly, `pt_raygen_realtime.rgen` with the GLSL closest-hit, any-hit and miss, every entry `main`. Reading one profile's shaders and concluding "that is what the other mode runs" is the mistake this indirection invites; the two are different integrators.
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
 ## Why the path tracer is not built during initialize()
 

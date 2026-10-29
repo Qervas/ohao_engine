@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" class="unit-diagram" role="img" aria-label="One branch of the first-bounce dimension ledger of pt_raygen_offline.rgen: dims 0 to 7 grouped into two Owen-scramble pads of four, with the camera jitter taking dims 0 and 1, the light index taking dim 2, and the light-position 2D sample taking dims 3 and 4 across the pad boundary. A directional light spends no dimensions on a position, moving every later draw two slots earlier.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" class="unit-diagram" role="img" aria-label="One branch of the first-bounce dimension ledger of pt_raygen_realtime.rgen: dims 0 to 7 grouped into two Owen-scramble pads of four, with the camera jitter taking dims 0 and 1, the light index taking dim 2, and the light-position 2D sample taking dims 3 and 4 across the pad boundary. A directional light spends no dimensions on a position, moving every later draw two slots earlier.">
   <rect x="0" y="0" width="720" height="280" fill="#0f1419"/>
 
-  <text x="24" y="30" font-family="IBM Plex Mono,monospace" font-size="13" fill="#c4a574">dimIdx &#8594; (pad, local Sobol dimension)   &#8212;   pt_raygen_offline.rgen, bounce 0, sphere/spot/area light</text>
+  <text x="24" y="30" font-family="IBM Plex Mono,monospace" font-size="13" fill="#c4a574">dimIdx &#8594; (pad, local Sobol dimension)   &#8212;   pt_raygen_realtime.rgen, bounce 0, sphere/spot/area light</text>
 
   <!-- pad groups -->
   <rect x="56" y="60" width="284" height="86" rx="6" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>

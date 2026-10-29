@@ -10,7 +10,7 @@ figures: [shaders-rt-includes-hitdist-smc]
 
 Every shader in a ray tracing pipeline must declare the same `rayPayloadEXT`
 struct byte-for-byte, so a field added for one stage is paid for by all of them.
-OHAO's path-traced payload is five `vec3`s plus two floats and a `uint`, and
+The realtime path tracer's payload is five `vec3`s plus two floats and a `uint`, and
 three of those vec3s carry material data: `color` (emissive),
 `hitAlbedo`, and `attenuation`. Only the last is packed, and `pbr_unpack.glsl`
 is the contract for reading it back. The closest-hit shader writes roughness,
@@ -24,62 +24,51 @@ per-pixel. The decode of the other two floats looks like it ought to be two
 clamps. It is not: it also has to accept two obsolete encodings of the same
 float.
 
-## Two legacy encodings, and the C++ that still writes them
+## Two encodings no code produces
 
-Before OHAO carried a continuous metallic, `.x` did double duty. A *negative*
-value meant "metal"; on top of that, ±10 was added as a *shape* flag — sphere
-versus cube, detected on the C++ side from vertex count (`manyVertices`, more than
-100 vertices) — which works because roughness itself never reaches 1, so a
-magnitude of 10 or more can only be the flag:
-
-{{cite ohao/render/scene/model_upload.cpp "if (model.manyVertices) packed += (packed >= 0 ? 10.0f : -10.0f);"}}
-
-`unpackHitPbr` still honours both rules, gating the sign one on `.y` being near
-zero — the signature of a producer that never filled the metallic channel:
+`unpackHitPbr` accepts two encodings of `.x` besides plain roughness. A *negative*
+value means "metal", and ±10 on top is a *shape* flag — which can work only because
+roughness never reaches 1, so a magnitude of 10 or more can only be the flag. The sign
+rule is gated on `.y` being near zero, the signature of a producer that never filled
+the metallic channel:
 
 {{cite shaders/rt/includes/pbr_unpack.glsl "if (att.x < 0.0 && att.y < 1e-4) {"}}
 
-Neither branch can fire on today's payload. `payload.attenuation` is written in
-exactly one place, from the per-material `matColors` buffer at binding 10, and
-roughness is clamped to at least 0.04 before the write, so `.x` is always
-positive and never near 10:
+Nothing in the tree writes either encoding. `payload.attenuation` is written in
+exactly one place, from the per-material table at binding 10, and roughness is
+clamped to at least 0.04 before the write, so `.x` is always positive and never
+near 10:
 
 {{cite shaders/rt/pt_closesthit.rchit "roughness = max(roughness, 0.04);"}}
 
-The *encoding* is not dead, though — only its route into the payload is.
-`giMaterialLegacyPacked` still builds the signed, shifted float, per model —
-`spawn` and the instantiate system store it on the entity as a `GiMaterialLegacy`
-component — and the render extractor copies it into the instance table's
-`giAlbedoPacked.a`:
+The instance table carries no material word either. Its tenth row, `emitterLight`, is
+zero on every instance except a light's emitter mesh, where it holds the mesh's
+radiance (`.rgb`) and the light's index in the RT light list (`.w`):
 
-{{cite ohao/render/scene/model_upload.cpp "float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;"}}
+{{cite shaders/includes/scene/scene_data.glsl "vec4 emitterLight;   // an emitter mesh's radiance (rgb) and light index (w)"}}
 
-Nothing reads it. The only shader in the tree that touches that field is
-`rt/gi_trace.slang`, on the deferred GI technique's own descriptor set, and it loads
-the three floats of `.rgb` by byte offset and stops there. The path
-tracer's raygens and closest-hit do not declare a per-instance material word at all;
-they read materials from the shared table at binding 10. So the format has a live
-producer and no consumer — which is the reason the decoder's shape is worth
-understanding before touching it, not the reachability of its branches.
+The reference path tracer reads `.w` on such an instance to weigh a bounce ray's hit
+against light sampling:
 
-## The refactor that left two decodes behind
+{{cite shaders/rt/path_tracer.slang "payload.light = uint(c.instanceRow9.w + 0.5);"}}
 
-`unpackHitPbr` has eleven call sites. In each of `pt_raygen.rgen`,
-`pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen` it decodes the first hit
-once and a secondary bounce twice — once in the specular walk, once in the
-diffuse walk — and in the two profile raygens it also feeds the roughness AOV.
-Two further decodes open-code the old rules instead.
+So the decoder's two extra branches are dead code that still compiles into every
+realtime raygen; they are worth understanding before touching the helper, not because
+anything can reach them.
 
-The harmless one fills `pt_raygen.rgen`'s roughness AOV and names the historic
-encoding in a comment:
+## The decode that bypasses the helper
 
-{{cite shaders/rt/pt_raygen.rgen "shifted (historic encoding from Feature 1.1 era)."}}
+`unpackHitPbr` has four call sites, all in `pt_raygen_realtime.rgen`: the first hit
+once, the roughness AOV once, and a secondary bounce twice — once in the specular
+walk, once in the diffuse walk. The reference path tracer, `path_tracer.slang`, has
+no packed payload: its closest hit hands the raygen every material input as its own
+field, so it neither includes the helper nor needs it.
 
-It takes `abs()` and undoes the shift, so on a payload the closest-hit produced
-it agrees with `unpackHitPbr` exactly. Duplication, not divergence.
+{{cite shaders/rt/pt_raygen_realtime.rgen "unpackHitPbr(payload.attenuation, _aovRough, _aovMetal);"}}
 
-The consequential one is in the realtime profile's ReSTIR-GI secondary-vertex
-decode, which reimplements the *sign* rule and drops the `.y` guard entirely:
+One further decode open-codes the old rules instead, and it is consequential: the
+realtime profile's ReSTIR-GI secondary-vertex decode reimplements the *sign* rule
+and drops the `.y` guard entirely:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "bool  sIsMetal  = (sPacked < 0.0);"}}
 
@@ -106,7 +95,7 @@ neither break it nor repair it.
 ## Two identical files, one of which never compiles
 
 `shaders/rt/includes/pbr_unpack.glsl` and `shaders/includes/pbr_unpack.glsl` are
-byte-identical, and only the first is ever compiled. The raygens write
+byte-identical, and only the first is ever compiled. The realtime raygen writes
 `#include "includes/pbr_unpack.glsl"`; glslc resolves a quoted include relative
 to the including file before consulting `-I`, so from `shaders/rt/` the sibling
 `includes/` wins. The root copy is reachable only via the `-I <shaders>` search
@@ -114,15 +103,17 @@ path — that is, only if the `rt/` copy were deleted:
 
 {{cite shaders/CMakeLists.txt "COMMAND ${GLSLC} --target-env=vulkan1.3 -I${CMAKE_CURRENT_SOURCE_DIR}"}}
 
-`glslc -M` on `pt_raygen.rgen` confirms which copy wins: the dependency list
-names `shaders/rt/includes/pbr_unpack.glsl`. That same list does reach
-`shaders/includes/` for seven other headers — `rt/mis.glsl`,
-`rt/env_sampling.glsl`, `rt/sampler_api.glsl` and `material/ggx_aniso.glsl`
-directly, plus the three sampler files `sampler_api.glsl` pulls in transitively
-— all resolved through the `-I <shaders>` root, because `shaders/rt/includes/`
-has no `rt/` or `material/` subdirectory to shadow them. `pbr_unpack.glsl` is the one
-name that exists in both places, and the sibling copy takes it every time.
-Editing the root copy changes no binary and warns about nothing.
+{{cite shaders/rt/pt_raygen_realtime.rgen "#include "includes/pbr_unpack.glsl""}}
+
+The same raygen reaches `shaders/includes/` for its other headers —
+`rt/mis.glsl`, `rt/env_sampling.glsl`, `rt/sampler_api.glsl`,
+`rt/nrd_frontend.glsl`, `material/ggx_aniso.glsl` and `rt/pt_lights.glsl` directly,
+plus the two sampler files `sampler_api.glsl` pulls in and the generated
+`shared/layout.glsl` that `pt_lights.glsl` does — all resolved through the
+`-I <shaders>` root, because `shaders/rt/includes/` has no `rt/` or `material/`
+subdirectory to shadow them. `pbr_unpack.glsl` is the one name that exists in both
+places, and the sibling copy takes it every time. Editing the root copy changes no
+binary and warns about nothing.
 
 ## The build does not track either copy
 
@@ -221,30 +212,37 @@ and a luma/chroma pair blended from neighbouring pixels can invert to a negative
 channel. Without the clamp those negatives survive remodulation and land in the
 HDR buffer.
 
-`nrd_frontend.glsl` is included by `nrd_compose.comp` and by the two profile
-raygens, and by nothing else:
+`nrd_frontend.glsl` is included by `nrd_compose.comp` and by the realtime raygen,
+and by nothing else:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "vec4 diffPacked = nrdPackRadianceHitDist(diffDemod,   diffHitDist, firstHitViewZ, firstHitRoughness);"}}
 
-The default offline `PathTracer` raygen, `pt_raygen.rgen`, does not include it.
-NRD packing is a profile feature, not something the flagship offline tracer does.
+The reference path tracer is Slang and cannot include GLSL; it carries its own
+copies of the two packing functions, with the same A, B and C written as literals:
+
+{{cite shaders/rt/path_tracer.slang "float4 nrdPackRadianceHitDist(float3 radiance, float hitDist, float viewZ, float roughness)"}}
 
 ## The ray masks are not a header here
 
 The masks a trace passes are generated constants, one source for C++, GLSL and Slang:
 `shaders/shared/layout.json` names the instance masks and the ray masks, and
-`tools/gen_layout.py` writes them into `shared/layout.glsl`, which the path tracer reaches
-through `includes/rt/pt_lights.glsl`:
+`tools/gen_layout.py` writes them into `shared/layout.glsl` and its Slang twin. The
+realtime raygen reaches the GLSL file through `includes/rt/pt_lights.glsl`; the
+reference imports the Slang module:
 
 {{cite shaders/includes/rt/pt_lights.glsl "shared/layout.glsl"}}
+{{cite shaders/rt/path_tracer.slang "import shared.layout;"}}
 
-Every trace in the three raygens passes `kRayMaskScene` except the camera ray, which
-passes `kRayMaskCamera` and is the only ray that sees a light's emitter mesh
-(hybrid/visibility has the scheme).
+In the realtime raygen every trace passes `kRayMaskScene` except the camera ray and a
+near-mirror first hit's specular ray, which pass `kRayMaskCamera` and are the only
+rays that see a light's emitter mesh. In the reference the camera ray passes
+`kRayMaskCamera`, shadow rays `kRayMaskScene`, and bounce rays `kRayMaskScene` plus
+the emitter mask, so a bounce that meets a light's mesh is weighed against light
+sampling (hybrid/visibility has the scheme).
 
 ## Contracts
 
 - `pt_closesthit.rchit` must write `attenuation` as (roughness, metallic, curvature) in that order. `pt_miss.rmiss` declares the same payload and writes `hitDist = -1.0`, `color` and `envPdf`, but never `attenuation` — so `unpackHitPbr` is valid only inside the `payload.hitDist >= 0` branch.
 - Edit `shaders/rt/includes/pbr_unpack.glsl`; the `shaders/includes/` copy is shadowed by include-resolution order and never compiled. Neither file is in the CMake `DEPENDS` list, so force a shader rebuild after touching it.
-- `NRD_HIT_DIST_PARAMS` in GLSL and `nrd::ReblurSettings::hitDistanceParameters` in C++ must hold the same A, B, C. Only A is exposed through `NrdReblurProfile`; B and C must therefore stay at NRD's defaults of 0.1 and 20.
-- The legacy branches in `unpackHitPbr` are unreachable on the shipping payload, and removing them changes nothing at any of its eleven call sites. What must not be skipped is the reverse: the ReSTIR-GI block in `pt_raygen_realtime.rgen` open-codes the sign rule and does *not* call `unpackHitPbr`, so deleting the branches will not repair it. Route that block through the function first.
+- `NRD_HIT_DIST_PARAMS` in GLSL, the literals in `path_tracer.slang`'s `nrdPackRadianceHitDist` and `nrd::ReblurSettings::hitDistanceParameters` in C++ must hold the same A, B, C. Only A is exposed through `NrdReblurProfile`; B and C must therefore stay at NRD's defaults of 0.1 and 20.
+- The legacy branches in `unpackHitPbr` are unreachable on the shipping payload, and removing them changes nothing at any of its four call sites. What must not be skipped is the reverse: the ReSTIR-GI block in `pt_raygen_realtime.rgen` open-codes the sign rule and does *not* call `unpackHitPbr`, so deleting the branches will not repair it. Route that block through the function first.

@@ -15,73 +15,97 @@ holding closest-hit plus — nominally — any-hit.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "groups[2].anyHitShader = hasAnyHit ? 3 : VK_SHADER_UNUSED_KHR;"}}
 
-Every `traceRayEXT` in the family passes SBT offset 0, stride 0, miss index 0, so
-there is no per-material hit record and the table is three handles wide. Bouncing
-is a `for` loop in the raygen; closest-hit and miss never trace.
+Every trace in the family passes SBT offset 0, stride 0, miss index 0, so there is
+no per-material hit record and the table is three handles wide. Bouncing is a loop
+in the raygen; closest-hit and miss never trace.
 
-Only the raygen varies between profiles, and the one the header names by default
-is neither of them. `PathTracerShaderSet`'s in-class default is `pt_raygen.rgen`, but
-`RTProfileRendererBase::init` overwrites the whole set before `PathTracer::init`
-runs, and the two `IRTRendererProfile` implementations — the only two, since the
-base is abstract and the renderer owns exactly those two — name
-`pt_raygen_realtime.rgen` and `pt_raygen_offline.rgen`.
+The two profiles are two program families. `PathTracerShaderSet` names four SPIR-V
+files and their entry points; its default is the reference path tracer, one Slang
+file, `rt/path_tracer.slang`, whose four entry points compile to four `.spv` files:
+
+{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};"}}
+{{cite ohao/render/rt/path_tracer.hpp "const char* closestHitEntry{"closestHit"};"}}
+
+The offline profile takes that default. The realtime profile names the GLSL family
+— `pt_raygen_realtime.rgen`, `pt_miss.rmiss`, `pt_closesthit.rchit`,
+`pt_anyhit.rahit`, each entered at `main`. `RTProfileRendererBase::init` hands the
+set to the tracer before `PathTracer::init` runs, and the pipeline takes each
+stage's entry name from it:
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
+{{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pName = m_shaderSet.raygenEntry;"}}
 
-`pt_raygen.rgen` still compiles and ships a `.spv`, but no runtime path binds it —
-it is the ancestor the two profiles were forked from, not a fallback. Everything
-below describes the raygens that run.
+Both families bind to the same descriptor set layout. The reference reads two
+things the GLSL family does not: the bindless textures from the raygen (binding 12,
+for the environment it samples itself) and OpenPBR's energy tables at binding 38.
+
+{{cite shaders/rt/path_tracer.slang "[[vk::binding(38, 0)]] StructuredBuffer<float> openpbrTables;"}}
 
 ## The payload is the calling convention
 
-One raygen drives everything, so the single `rayPayloadEXT RayPayload` is the only
-channel between programs — reused for material fetch, emissive transport,
-environment radiance and shadow visibility.
+A raygen drives everything, so the single payload is the only channel between
+programs. The two families use it differently.
 
-Visibility is the interesting one. The path-trace pipeline has no shadow payload
-and no shadow miss shader. The raygen stores a positive sentinel in
-`payload.hitDist`, traces with terminate-on-first-hit plus skip-closest-hit, then
-asks whether the miss shader ran — it alone can write a negative distance.
+The GLSL family's `RayPayload` is reused for material fetch, emissive transport,
+environment radiance and shadow visibility. Visibility has no shadow payload and no
+shadow miss shader: the raygen stores a positive sentinel in `payload.hitDist`,
+traces with terminate-on-first-hit plus skip-closest-hit, then asks whether the
+miss shader ran — it alone can write a negative distance.
 
 {{cite shaders/rt/pt_miss.rmiss "payload.hitDist = -1.0;  // signal miss"}}
 
-The same invocation fills `payload.color` with environment radiance, so env-MIS
-gets occlusion and incident radiance from one ray instead of two. The cost is
-global mutable state: anything still needed after a shadow trace must be latched
-into a local first, or the failure is a quiet darkening, not a crash.
+The same invocation fills `payload.color` with environment radiance, so the
+realtime raygen's env-MIS gets occlusion and incident radiance from one ray instead
+of two. The cost is global mutable state: anything still needed after a shadow
+trace must be latched into a local first, or the failure is a quiet darkening, not
+a crash.
 
 :::why
-With no environment map bound the miss shader returns black, not a cheap constant
-sky ambient. The shader names the rejected alternative: in a closed room, GI rays
-leaking through wall seams pick that fake sky up and carry spurious light and
-grain back inside.
+With no environment map bound the GLSL miss shader returns black, not a cheap
+constant sky ambient. The shader names the rejected alternative: in a closed room,
+GI rays leaking through wall seams pick that fake sky up and carry spurious light
+and grain back inside.
 :::
 
 {{cite shaders/rt/pt_miss.rmiss "payload.color = vec3(0.0);"}}
 
+The reference's `PathPayload` carries a hit's place, its geometric and shading
+normals and its resolved OpenPBR inputs, or a light's index, or nothing. Its miss
+shader only clears the hit flag; the raygen looks the environment up itself.
+Visibility uses the same convention as the GLSL family — a flag set before the
+trace that only the miss shader clears:
+
+{{cite shaders/rt/path_tracer.slang "p.flags = kHit;   // the closest hit is skipped: only the miss shader clears it"}}
+{{cite shaders/rt/path_tracer.slang "payload.flags = 0u;"}}
+
 ## An any-hit shader that runs only when a material asks
 
-`pt_anyhit.rahit` is an alpha test — read the material's alpha row, interpolate the UV,
-multiply the diffuse texture's alpha in, and drop the intersection below the cutoff
-(alpha-tested materials) or by a stochastic test against the alpha (blended ones).
+Each family's any-hit is an alpha test — read the material's alpha row,
+interpolate the UV, multiply the base colour texture's alpha in, and drop the
+intersection below the cutoff (alpha-tested materials) or by a stochastic test
+against the alpha (blended ones).
 
 {{cite shaders/rt/pt_anyhit.rahit "if (alpha < alphaRow.y) ignoreIntersectionEXT;"}}
+{{cite shaders/rt/path_tracer.slang "if (alpha < row3.y) IgnoreHit();"}}
 
 Most scenes never run it. Both BLAS builders in `rt_acceleration_structure.cpp` stamp
-`VK_GEOMETRY_OPAQUE_BIT_KHR` on the geometry, and the raygens trace through a macro that
-adds `gl_RayFlagsOpaqueEXT` to every ray, which suppresses any-hit, unless the scene's
-light header says an instance has an alpha material:
+`VK_GEOMETRY_OPAQUE_BIT_KHR` on the geometry, and the raygens trace with
+the opaque ray flag, which suppresses any-hit, unless the scene's light header says
+an instance has an alpha material. The GLSL raygen does it through a macro, the
+Slang one through a function:
 
-{{cite shaders/rt/pt_raygen.rgen "#define OHAO_RAY_OPAQUE (lightBuf.alphaRays == 1u ? gl_RayFlagsNoneEXT : gl_RayFlagsOpaqueEXT)"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "#define OHAO_RAY_OPAQUE (lightBuf.alphaRays == 1u ? gl_RayFlagsNoneEXT : gl_RayFlagsOpaqueEXT)"}}
+{{cite shaders/rt/path_tracer.slang "uint traceFlags() { return alphaRays() ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE; }"}}
 
-Every `traceRayEXT` site in both profile raygens — nine offline, fourteen realtime —
-goes through it. `RenderScene` sets the TLAS instance of an alpha-tested or blended
-material to `VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR`, which overrides the BLAS bit
-for that instance only, and an instance whose materials are all blended gets its own mask
-that camera rays alone see. A scene with no alpha material traces exactly as before alpha
-modes existed. The hybrid shadow trace has no hit shaders at all: it is a compute pass of
-inline ray queries that ends on the first hit, and for a non-opaque candidate it asks
-`rt/alpha_test.slang` whether the triangle counts before committing it.
+Every trace site goes through them — fourteen in the realtime raygen, two in the
+reference (`trace` and `visible`). `RenderScene` sets the TLAS instance of an
+alpha-tested or blended material to `VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR`,
+which overrides the BLAS bit for that instance only, and an instance whose materials
+are all blended gets its own mask that camera rays alone see. A scene with no alpha
+material traces exactly as before alpha modes existed. The hybrid shadow trace has no
+hit shaders at all: it is a compute pass of inline ray queries that ends on the first
+hit, and for a non-opaque candidate it asks `rt/alpha_test.slang` whether the triangle
+counts before committing it.
 
 {{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
 
@@ -92,17 +116,19 @@ Its visibility is the query's committed status — lit when nothing was committe
 :::key
 Occlusion is signalled by the *absence* of a hit — the path tracer's miss shader
 running, the shadow query committing nothing — not by any hit shader. An alpha cutout
-works by making a hit disappear (`ignoreIntersectionEXT`, or a candidate the query never
+works by making a hit disappear (`IgnoreHit`, or a candidate the query never
 commits), which is why it needs the ray to be non-opaque in the first place.
 :::
 
-## What the closest hit decodes, and the 24-bit fuse
+## What the closest hits decode, and the 24-bit fuse
 
-`pt_closesthit.rchit` resolves a triangle through the instance table. The TLAS instance's
-custom index is the `RenderScene` slot, and the shader uses it to fetch the instance, its
-mesh, and the mesh-local indices into the shared vertex and index arenas:
+Both closest hits resolve a triangle through the instance table. The TLAS
+instance's custom index is the `RenderScene` slot, and the shaders use it to fetch
+the instance, its mesh, and the mesh-local indices into the shared vertex and index
+arenas:
 
 {{cite shaders/rt/pt_closesthit.rchit "InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];"}}
+{{cite shaders/rt/path_tracer.slang "asuint(instances[slot * stride + 8u])"}}
 
 The host stages that field when it builds each TLAS instance:
 
@@ -110,34 +136,40 @@ The host stages that field when it builds each TLAS instance:
 
 The field is 24 bits wide in `VkAccelerationStructureInstanceKHR`, so the scheme wraps
 past 16,777,216 instance slots — masked rather than checked, and the symptom would be a
-hit reading another instance's mesh and material. The fuse is now on instances, not
-triangles, which moves it far out of reach of any scene the engine builds today.
+hit reading another instance's mesh and material. The fuse is on instances, not
+triangles, which keeps it far out of reach of any scene the engine builds today.
 
-The RT vertex streams carry no tangent, so normal mapping builds a Frisvad basis
-from the shading normal alone.
+The reference's closest hit hands the raygen every OpenPBR input already resolved:
+base colour times its texture, roughness and metalness times the packed map,
+specular weight and colour times theirs, emission colour times luminance times the
+emissive texture. A normal map is read in the vertex tangents' frame, as the
+G-buffer reads it:
+
+{{cite shaders/rt/path_tracer.slang "// A normal map in the vertex tangents' frame, as the G-buffer reads it."}}
+
+A hit on a light's emitter mesh returns no material: it flags the payload and
+carries the light's index, which the host stored in the instance's tenth row:
+
+{{cite shaders/rt/path_tracer.slang "payload.light = uint(c.instanceRow9.w + 0.5);"}}
+
+The GLSL closest hit is older. Its normal mapping builds a Frisvad basis from the
+shading normal alone, ignoring the vertex tangents:
 
 {{cite shaders/rt/pt_closesthit.rchit "float a = 1.0 / (1.0 + worldNormal.z);"}}
 
-That frame is unrelated to the UV parameterisation, so directional detail
-authored against the UV layout — brushed metal, mortar bevels, stitching — is
-rotated by an arbitrary amount about the normal. Bump-like isotropic detail
-survives.
+That frame is unrelated to the UV parameterisation, so on the realtime profile
+directional detail authored against the UV layout — brushed metal, mortar bevels,
+stitching — is rotated by an arbitrary amount about the normal. Bump-like isotropic
+detail survives.
 
-The payload's third slot is not what its name suggests: `attenuation.z` carries a
+Its payload's third slot is not what its name suggests: `attenuation.z` carries a
 curvature proxy, the summed pairwise divergence of the triangle's three vertex
-normals.
+normals, meant for a subsurface term.
 
 {{cite shaders/rt/pt_closesthit.rchit "payload.attenuation = vec3(roughness, clamp(metallic, 0.0, 1.0), curv);"}}
 
-Exactly one shader reads it, and it is the offline one. `pt_raygen_offline.rgen`
-uses curvature to widen its subsurface Gaussian where geometry is thin — lips,
-ears, fingertips — while flat regions keep the tight profile.
-
-{{cite shaders/rt/pt_raygen_offline.rgen "float curvature = clamp(payload.attenuation.z, 0.0, 1.0);"}}
-{{cite shaders/rt/pt_raygen_offline.rgen "float curvScale = mix(1.0, 0.3, curvature);"}}
-
-`pt_raygen_realtime.rgen` has no subsurface term at all, so on the realtime
-profile the closest-hit computes and ships a value nobody consumes.
+No raygen reads it: the realtime raygen has no subsurface term, so the closest hit
+computes and ships a value nobody consumes.
 
 The `.x` / `.y` half goes through `unpackHitPbr` — the RT-local one of two
 byte-identical copies in the tree, which is what the quoted include resolves to.
@@ -152,80 +184,79 @@ reservoir vertex, dormant branch included, instead of calling the helper:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "if (sRough >= 10.0) sRough -= 10.0;"}}
 
-## One buffer, four declarations
+## One buffer, three declarations
 
-Binding 11 is declared four times across `shaders/rt/`, with two different shapes.
-All three raygens see a light count followed by the `GPULight` array; the miss
-shader sees a four-word header whose second and third words are the environment
-map's bindless index and intensity.
+Binding 11 is declared three times across `shaders/rt/`, in three shapes. The
+realtime raygen sees a four-word header (light count, environment map index,
+intensity, the alpha-rays flag) followed by the `GPULight` array; the GLSL miss
+shader sees the same header with its last word as padding and no array:
 
 {{cite shaders/rt/pt_miss.rmiss "uint envMapTexIdx;    // bindless index of HDR env map (0xFFFFFFFF = none)"}}
 
-std430 puts the vec4-based array at offset 16 regardless, so those three spare
-header words are free real estate — and a hand-maintained union across four
-shader declarations and the C++ file that fills them, with nothing enforcing
-agreement.
+The reference reads it as rows of four floats — row 0 the header, five rows a light
+after it — and decodes each light by hand:
+
+{{cite shaders/rt/path_tracer.slang "[[vk::binding(11, 0)]] StructuredBuffer<float4> lightData;    // header, then 5 rows a light"}}
+
+std430 puts the vec4-based array at offset 16 regardless, so the three spare header
+words are a hand-maintained union across three shader declarations and the C++ file
+that fills them, with nothing enforcing agreement.
 
 {{cite ohao/render/scene/light_table.hpp "static constexpr VkDeviceSize kHeaderBytes = 16;"}}
 
-## Splitting one path in two so a denoiser can see it
+## Two ways to split a path for a denoiser
 
-From the primary hit `pt_raygen_offline.rgen` does not stochastically choose a
-lobe. It fires two independent chains — a roughness-jittered mirror direction and
-a cosine hemisphere sample — attributing everything each collects to `specContrib`
-or `diffContrib`.
-
-{{cite shaders/rt/pt_raygen_offline.rgen "vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;"}}
-
-The diffuse chain's bounce-0 throughput is exact: for a Lambertian lobe under
-cosine sampling, f·cosθ/pdf collapses to `albedo`. The specular chain's is not —
-it is a constant, which the line's own comment calls simplified:
-
-{{cite shaders/rt/pt_raygen_offline.rgen "specThroughput = mix(vec3(1.0), albedo, metallic);"}}
-
-The comment above it argues a deterministic pair needs no selection correction.
-True of the *selection*; it does not restore the lobe weight, so a dielectric
-launches a unit-weight specular chain and an albedo-weight diffuse chain from the
-same hit. From bounce 2 on both chains sample one lobe and divide by its
-probability — the approximation is bounce-0 only.
-
-`pt_raygen_realtime.rgen` replaced exactly this half. Its bounce-0 specular
-direction is a GGX VNDF sample, whose estimator weight is the Fresnel term times
-the height-correlated Smith ratio — the real f·cosθ/pdf, not a constant:
+From the primary hit `pt_raygen_realtime.rgen` does not stochastically choose a
+lobe. It fires two independent chains — a GGX VNDF specular sample and a cosine
+hemisphere diffuse sample — attributing everything each collects to `specContrib`
+or `diffContrib`. The specular chain's bounce-0 weight is the VNDF estimator, the
+Fresnel term times the height-correlated Smith ratio:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);"}}
 
-The offline file's two loops read as copies but are not. A specular bounce inside
-the specular chain scales throughput by `mix(1, albedo, metallic)`; the same event
-inside the diffuse chain scales by `albedo * (1 - metallic)` — zero for a pure
-metal, which kills that chain outright.
+The diffuse chain's bounce-0 throughput is exact: for a Lambertian lobe under
+cosine sampling, f·cosθ/pdf collapses to `albedo`. Neither restores the lobe
+weight of the other, so a dielectric launches both chains from the same hit, each
+at its own lobe's weight. Past bounce 0 the two loops read as copies but are not. A
+specular bounce inside the specular chain scales throughput by
+`mix(1, albedo, metallic)`; the same event inside the diffuse chain scales by
+`albedo * (1 - metallic)` — zero for a pure metal, which kills that chain outright.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);"}}
-{{cite shaders/rt/pt_raygen_offline.rgen "diffThroughput *= bAlbedo * (1.0 - bMetallic);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "diffThroughput *= bAlbedo * (1.0 - bMetallic);"}}
 
-Hit distances follow REBLUR's conventions, not aesthetics: the specular one
-accumulates along the chain until a diffuse bounce breaks it, the diffuse one
-latches the first secondary hit only.
+Hit distances follow REBLUR's conventions: the specular one accumulates along the
+chain until a diffuse bounce breaks it, the diffuse one latches the first secondary
+hit only.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "if (payload.hitDist >= 0.0 && specChainActive) {"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "if (payload.hitDist >= 0.0 && specChainActive) {"}}
 
-{{figure shaders-rt-shaders-dualray "Conceptual data flow of the dual-ray split and the NRD round trip, drawn from the shader source — not a captured render and not a timing measurement. The dashed path is the remodulation performed by nrd_compose.comp."}}
+The reference traces one path a sample. The OpenPBR base samples the next
+direction and reports the lobe it drew from; the first bounce's lobe decides which
+channel everything after it is attributed to:
+
+{{cite shaders/rt/path_tracer.slang "const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);"}}
+{{cite shaders/rt/path_tracer.slang "if (depth == 0u) firstLobe = s.lobe;"}}
+
+{{figure shaders-rt-shaders-dualray "Conceptual data flow of the realtime raygen's dual-ray split and the NRD round trip, drawn from the shader source — not a captured render and not a timing measurement. The dashed path is the remodulation performed by nrd_compose.comp."}}
 
 ## The packing that keeps a sign bit alive
 
-Binding 26 is `R10G10B10A2_UNORM`, NRD's `IN_NORMAL_ROUGHNESS` layout, and the
-profile raygens port NRD's encoder verbatim: rotated octahedral normal in x and y,
+Binding 26 is `R10G10B10A2_UNORM`, NRD's `IN_NORMAL_ROUGHNESS` layout, and both
+raygens port NRD's encoder verbatim: rotated octahedral normal in x and y,
 roughness in z, and the normal's z-sign smuggled into the *sign of the roughness*.
 Zero roughness has no sign, so the encoder floors it at 1.5/512 ≈ 0.0029 first:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "roughness = max(roughness, 1.5 / 512.0);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "roughness = max(roughness, 1.5 / 512.0);"}}
 
-In this engine that floor can never bind. Closest-hit already clamps roughness to
-0.04 before writing the payload and `unpackHitPbr` clamps again at 0.01, so what
-reaches the encoder is more than ten times the floor. The line is inherited and
-correct, but not load-bearing: nothing here can reach it.
+In this engine that floor can never bind. The GLSL closest hit clamps roughness to
+0.04 before writing the payload and `unpackHitPbr` clamps again at 0.01; the
+reference clamps its first hit's roughness at 0.01 before packing. What reaches the
+encoder is more than three times the floor: the line is correct, but not
+load-bearing.
 
 {{cite shaders/rt/pt_closesthit.rchit "roughness = max(roughness, 0.04);"}}
+{{cite shaders/rt/path_tracer.slang "firstRough = clamp(hit.specularRoughness, 0.01, 1.0);"}}
 
 The remaining two bits carry NRD's material ID, left at slot 0.
 
@@ -237,23 +268,26 @@ unpacking REBLUR's YCoCg output back to linear:
 {{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad * specColor;"}}
 
 That multiply is the second half of a round trip whose first half — dividing
-radiance by the albedo AOV before packing — lives in the profile raygens:
+radiance by the diffuse albedo AOV before packing — lives in the raygens:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "vec3 diffDemod = diffContrib / max(firstHitDiffAlbedo, vec3(0.03));"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 diffDemod = diffOut / max(firstHitDiffAlbedo, vec3(0.03));"}}
+{{cite shaders/rt/path_tracer.slang "const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));"}}
 
-Only the diffuse channel is divided. Specular is packed raw, and that asymmetry is
-deliberate: the specular chain's bounce-0 throughput already folded a metal's
-albedo in, so the factor compose reads is `mix(F0, 1, metallic)` — unity for a
-metal, making the remodulate a no-op there, and F0 for a dielectric, whose chain
-started at unit weight. Each surface class gets exactly one application.
+Only the diffuse channel is divided. Specular is packed raw. The realtime raygen's
+specular factor is `mix(F0, 1, metallic)` — unity for a metal, F0 for a
+dielectric — matched to a chain whose throughput carries a metal's albedo:
 
-{{cite shaders/rt/pt_raygen_offline.rgen "firstHitSpecColor  = mix(F0, vec3(1.0), metallic);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "firstHitSpecColor  = mix(F0, vec3(1.0), metallic);"}}
 
-Both radiance AOVs are written through `AOV_ACCUMULATE_WRITE`, which under the
-accumulate-AOVs flag folds each sample into a `1/(n+1)` running mean, so an N-spp
-render hands the denoiser its average rather than its last sample:
+The reference's is the base's specular albedo toward the viewer, while its specular
+radiance already carries the BSDF's Fresnel; its NRD composite applies the specular
+albedo twice (see the NRD unit).
 
-{{cite shaders/rt/pt_raygen_offline.rgen "_ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);"}}
+The radiance AOVs are folded under the accumulate-AOVs flag into a `1/(n+1)`
+running mean, so an N-spp render hands the denoiser its average rather than its
+last sample — a macro in GLSL, a `lerp` in the reference:
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "_ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);"}}
 
 ## The hybrid pair, and what it is not
 
@@ -282,7 +316,13 @@ shadow ray from the secondary hit. It takes the hit surface's
 normal as the negated ray direction: a one-bounce estimate, not a path tracer (see the
 hybrid GI technique).
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, key, s) * T;"}}
+{{cite shaders/rt/gi_trace.slang "return (albedo * (1.0 / kPi) * directAt(at, -dir, key, s) + hm.emission) * T;"}}
+
+The albedo is the hit material's OpenPBR directional albedo toward the ray, the material
+resolved at the hit's uv by `hitMaterial` (`rt/alpha_test.slang`) and its energy tables at
+binding 11; the hit's own emission is added unlit.
+
+{{cite shaders/rt/gi_trace.slang "const float3 albedo = OpenPBRBase(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);"}}
 
 There is no miss shader in either. The query's committed status is the whole answer:
 a shadow ray that commits nothing is lit, and a GI ray that commits nothing samples
@@ -298,20 +338,20 @@ so their noise changes every frame and repeats exactly for the same seed and fra
 
 Both trace with ray mask `kRayMaskScene`: every visible scene instance, never a
 light's emitter mesh or a first-person gun (camera and mirror rays only, `kRayMaskCamera`)
-nor a hidden instance (mask 0). Whatever triangle the GI trace's opaque query commits, it
-reads that instance's bounce albedo unconditionally; the mask is why that word never has
-to mean anything for an emitter.
+nor a hidden instance (mask 0). Whatever triangle the GI trace's query commits, it
+resolves that instance's material unconditionally; the mask is why an emitter's instance,
+which carries no surface material (its `emitterLight` holds its radiance and light index), is never read as a surface.
 
 {{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0   ? gpu::shared::kTlasMaskEmitter"}}
 {{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceViewModel) != 0 ? gpu::shared::kTlasMaskViewModel"}}
-{{cite shaders/rt/gi_trace.slang "const uint slot = q.CommittedInstanceID();"}}
+{{cite shaders/rt/gi_trace.slang "const HitMaterial hm = hitMaterial(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),"}}
 
 ## The rest of shaders/rt, and which of it runs
 
-Eighteen files sit in `shaders/rt/`. Past the path tracer and the hybrid passes above, four
+Nineteen files sit in `shaders/rt/`. Past the two path tracer families and the hybrid passes above, four
 `cinematic_*.comp` passes run after NRD compose — bright-pass extract, a 13-tap
 downsampling blur that builds the bloom mip chain, a gather-based DoF, and the
-composite that applies AgX and writes binding 30 — each built and dispatched
+composite that applies Khronos PBR Neutral and writes binding 32 — each built and dispatched
 through `nrd_cinematic.cpp`.
 
 Two à-trous kernels remain, and the plain one is the one that never runs.
@@ -333,8 +373,9 @@ translation unit, `ohao/render/rt/denoiser.hpp`, since deleted.
 
 ## Contracts
 
-- Latch any payload field you still need before tracing a shadow ray: the miss shader overwrites `color`, `hitDist` and `envPdf` on every ray, visibility rays included.
-- Binding 11's header sits at fixed byte offsets 0 / 4 / 8 with `GPULight[]` at 16, declared in four shaders and written in one C++ file. Change it in one place and the miss shader reads a light's position as an env-map index.
-- TLAS instances must be added in the order the global index / UV / material-ID arrays are concatenated: `instanceCustomIndex` *is* the triangle base offset, capped at 2²⁴.
-- Alpha-tested and blended geometry reaches a ray only while the scene has an instance with such a material: the raygens' `OHAO_RAY_OPAQUE` drops `gl_RayFlagsOpaqueEXT` only then, and the TLAS instance carries `FORCE_NO_OPAQUE` over the BLAS's `VK_GEOMETRY_OPAQUE_BIT_KHR`. The hybrid ray queries decide through `rt/alpha_test.slang`.
-- Bindings 24/25 are demodulation factors matched to what the raygen already did — diffuse pre-divided, specular not. Demodulate the specular channel without changing `firstHitSpecColor`, or vice versa, and metals double-darken while dielectrics lose their Fresnel.
+- In the GLSL family, latch any payload field you still need before tracing a shadow ray: the miss shader overwrites `color`, `hitDist` and `envPdf` on every ray, visibility rays included.
+- Binding 11's header sits at fixed byte offsets 0 / 4 / 8 / 12 with `GPULight[]` at 16, declared in three shaders (the reference as raw `float4` rows, five a light) and written in one C++ file. Change it in one place and a shader reads a light's position as an env-map index.
+- `instanceCustomIndex` is the `RenderScene` slot, masked to 24 bits; past 2²⁴ slots a hit reads another instance.
+- Alpha-tested and blended geometry reaches a ray only while the scene has an instance with such a material: `OHAO_RAY_OPAQUE` and `traceFlags()` drop the opaque flag only then, and the TLAS instance carries `FORCE_NO_OPAQUE` over the BLAS's `VK_GEOMETRY_OPAQUE_BIT_KHR`. The hybrid ray queries decide through `rt/alpha_test.slang`.
+- A profile's shader set names files *and* entry points: a GLSL stage is `main`, a Slang stage its function name. A set that names a Slang file with `main` fails pipeline creation.
+- Bindings 24/25 are demodulation factors matched to what the raygen already did — diffuse pre-divided, specular not. In the realtime raygen, demodulate the specular channel without changing `firstHitSpecColor`, or vice versa, and metals double-darken while dielectrics lose their Fresnel.

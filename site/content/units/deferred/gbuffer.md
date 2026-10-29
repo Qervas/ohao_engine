@@ -14,28 +14,26 @@ scaling with geometry × lights. The interesting part is never the bet; it is th
 record — what fits, what was dropped to make it fit, and which downstream pass
 finds out.
 
-OHAO writes six attachments, in two render passes over one framebuffer (below): world position + metallic, an
-encoded normal + roughness + emissive luminance (or subsurface strength), albedo + AO, a two-component
-velocity vector, depth, and the emitted radiance. That is 36 bytes per pixel, roughly 71 MiB resident
-at the 1920×1080 default the pass initialises to.
+OHAO writes eight attachments, in two render passes over one framebuffer (below): world position +
+metallic, an encoded normal + roughness + emissive luminance (or subsurface strength), albedo + AO, a
+two-component velocity vector, depth, the emitted radiance, and two for OpenPBR's inputs the first
+targets have no room for. That is 42 bytes per pixel, roughly 83 MiB resident at the 1920×1080
+default the pass initialises to.
 
-{{figure deferred-gbuffer-channels "Conceptual layout, not a captured render. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer.frag."}}
+{{figure deferred-gbuffer-channels "Conceptual layout, not a captured render, of the first six targets. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer_body.glsl. The OpenPBR targets (6, RGBA8; 7, RG8) are not drawn."}}
 
 Check one thing before trusting anything else written about this buffer: the
 normal target is `R16G16B16A16_SFLOAT`, not a packed 10-bit format.
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "VK_FORMAT_R16G16B16A16_SFLOAT,   // octahedral normal + roughness + emissive / -subsurface"}}
 
-Comments in five files still name a packed 10-bit format for this attachment,
-including the header of the shared octahedral decoder:
+Two comments still name a packed 10-bit format for this attachment: the G-buffer
+shader's own output declaration ("or R10G10B10A2_UNORM") and the header of the shared
+octahedral decoder, which no shader includes any more (deferred lighting decodes the normal
+itself):
 
+{{cite shaders/includes/scene/gbuffer_body.glsl "// GBuffer1: Encoded Normal (rgb) + Roughness (a) - R16G16B16A16_SFLOAT or R10G10B10A2_UNORM"}}
 {{cite shaders/includes/common/encoding.glsl "Octahedron normal encoding/decoding (A2R10G10B10 GBuffer format)"}}
-
-Three of those five, and four of the nine shaders that `#include` that header,
-sit under `shaders/_disabled/` — a directory nothing actually excludes, because
-the shader target globs the tree recursively and compiles it too:
-
-{{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SHADER_SOURCES"}}
 
 The octahedral encoding is a leftover from the 10-bit format. It is not
 vestigial — it is now paying for something else.
@@ -61,55 +59,46 @@ surface takes no subsurface:
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "const float subsurface = emissiveLuminance > 0.0 ? 0.0 : row2.z;"}}
 
-Emission itself has its own attachment, the sixth: the emissive texture's colour times
-the material's emissive strength, exactly what the path tracer's hit emits, which
-lighting adds as is:
+Emission itself has its own attachment, the sixth (`kEmissive`): OpenPBR's
+`emission_color` times `emission_luminance`, times the emissive texture's colour when there
+is one, exactly what the path tracer's hit emits, which lighting adds as is:
 
-{{cite shaders/core/deferred_lighting.frag "const vec3 emissive = emitted.rgb;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec3 emissive = row6.rgb * row2.y;"}}
+{{cite shaders/core/deferred_lighting.slang "o.color = float4(ambient + Lo + emitted.rgb, 1.0);"}}
 
 A light's emitter mesh (the sphere or rectangle the `RenderScene` draws for a point, spot
 or area light) writes its radiance there with alpha 1, from its instance rather than a
 material, black on its back side:
 
-{{cite shaders/includes/scene/gbuffer_body.glsl "const vec3 radiance = gl_FrontFacing ? inst.giAlbedoPacked.rgb : vec3(0.0);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "const vec3 radiance = gl_FrontFacing ? inst.emitterLight.rgb : vec3(0.0);"}}
 
 Lighting then outputs that radiance and nothing else, with no environment specular and a
 zero reflection weight, so SSR leaves the pixel alone; SSR also treats a march that lands
 on such a pixel as a miss, because the light's reflection is already its analytic specular:
 
-{{cite shaders/core/deferred_lighting.frag "if (emitted.a > 0.5) {"}}
+{{cite shaders/core/deferred_lighting.slang "if (emitted.a > 0.5)"}}
 
 The slot used to hold all of emission as a luminance scalar, which lighting re-tinted
 with the albedo. On DamagedHelmet the cyan ring rendered as a dim grey (0.062 in linear
 luminance against the path tracer's 0.367); with the attachment it is cyan, at 0.283.
 
-Roughness is floored before storage:
+Roughness is stored as authored. The only floor is OpenPBR's own, applied where the BSDF
+is built, as the path tracer's is: below `kMinSpecularRoughness` (0.01, $\alpha = 10^{-4}$)
+the GGX lobe is evaluated at it, a mirror to any renderer's resolution without a delta
+lobe's special cases.
 
-{{cite shaders/includes/scene/gbuffer_body.glsl "roughness = max(roughness, 0.04);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "// The roughness as authored: OpenPBR's module holds it at its floor (kMinSpecularRoughness),"}}
+{{cite shaders/material/openpbr.slang "rough = clamp(m.specularRoughness, kMinSpecularRoughness, 1.0);"}}
 
-`initBRDFSurface` applies the same floor again, but only to the copy it owns:
+Deferred lighting keeps the raw local value beside the BSDF and uses it for the two
+image-based terms that are not the BSDF's: the prefiltered environment's level and the
+specular occlusion. Weather runs before either and can lower it — wet horizontal faces
+remap roughness toward `max(roughness * 0.15, 0.02)` — which the BSDF's floor sits below:
 
-{{cite shaders/includes/brdf/brdf_common.glsl "surface.roughness = max(roughness, 0.04);"}}
+{{cite shaders/core/deferred_lighting.slang "roughness = lerp(roughness, max(roughness * 0.15, 0.02), w);"}}
 
-Deferred lighting keeps the raw local value alongside that surface and uses it
-for everything image-based — the prefiltered environment's level, the
-roughness-aware Fresnel term, and the split-sum fit all read the unclamped local, not
-`surface.roughness`:
-
-{{cite shaders/core/deferred_lighting.frag "textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;"}}
-
-For those uses the G-buffer clamp is the only floor there is, so it is not
-redundant. It is also not sufficient, because the weather modifiers run before
-the surface is built and can push the local value back under it — wet
-horizontal faces remap roughness toward `max(roughness * 0.15, 0.02)`, which
-bottoms out at 0.02:
-
-{{cite shaders/core/deferred_lighting.frag "roughness  = mix(roughness, max(roughness * 0.15, 0.02), w);"}}
-
-The other raw reader, screen-space reflections, is insensitive to the floor in
-either direction. It uses the channel exactly twice: a `roughness > 0.7`
-rejection branch, which a 0.04 floor can never flip, and a `1.0 - roughness` hit
-fade, which it can move by at most 4%.
+The other raw reader, screen-space reflections, uses the channel exactly twice: a
+`roughness > 0.7` rejection branch and a `1.0 - roughness` hit fade.
 
 {{cite shaders/postprocess/ssr.slang "if (roughness > 0.7 && metallic < 0.5)"}}
 
@@ -158,11 +147,11 @@ near it — the buffer format, not the tracer, is the cause.
 There is no coverage channel and no stencil. Consumers decide "was anything
 rasterised here" by testing GBuffer0 against its clear value of `(0,0,0,0)`:
 
-{{cite shaders/core/deferred_lighting.frag "if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {"}}
+{{cite shaders/core/deferred_lighting.slang "if (all(g0 == float4(0.0)))"}}
 
 The same exact-equality test is duplicated in `rt/shadow_trace.slang`,
 `rt/gi_trace.slang`, `rt/gi_denoise.slang`'s upsample, `compute/ssao.slang` and
-`postprocess/ssr.slang` (each as `all(position == float4(0.0))`). The seventh reader
+`postprocess/ssr.slang` (each, like lighting, as `all(position == float4(0.0))`). The seventh reader
 opts out: the subsurface blur runs only on pixels whose normal `w` is negative, so
 its centre is never sky, but its taps are not tested. It weights a tap by its
 distance from the camera against the centre's, and a sky tap arrives as the world
@@ -252,10 +241,34 @@ material, rather than reading out of bounds:
 
 {{cite shaders/includes/scene/scene_data.glsl "((slot) < (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)"}}
 
-Three 16-byte rows per material then give base colour and albedo texture, roughness,
-metallic, normal and emissive textures, and the rough/metal texture and emissive
-strength. Texture indices are bindless slots stored as float bits and recovered with
-`floatBitsToUint`. Nothing is resolved by name: the only per-frame descriptor work is
+The material table holds `kMaterialRows` (seven) 16-byte rows per material, and the
+fragment shader reads six of them: base colour and albedo texture; roughness, metallic,
+normal and emissive textures; the rough/metal texture, emission luminance, subsurface
+and occlusion texture; and OpenPBR's rows 4–6 (specular colour and weight; IOR, diffuse
+roughness, base weight and specular texture; emission colour and specular-colour
+texture). Row 3, the alpha mode, is read only by the MASK entry. Texture indices are
+bindless slots stored as float bits and recovered with `floatBitsToUint`.
+
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec4 row5 = matRows[m * kMaterialRows + 5u];   // specular_ior, base_diffuse_roughness, base_weight, specularTex"}}
+
+## The two OpenPBR targets
+
+OpenPBR's base needs four inputs the first targets have no channel for. They go into two
+small UNORM targets, each value encoded so its default lands on an exact code:
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "VK_FORMAT_R8G8B8A8_UNORM,        // OpenPBR's specular: specular_color, specular_weight / 1.5"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "VK_FORMAT_R8G8_UNORM,            // OpenPBR's base: base_diffuse_roughness, (specular_ior - 1) / 2.55"}}
+
+`kSpecular` (6) holds `specular_color` and `specular_weight / 1.5`, KHR_materials_specular's
+textures applied; a weight of 1, the default, is code 170 exactly. `kOpenPBR` (7) holds
+`base_diffuse_roughness` and `(specular_ior - 1) / 2.55`: IOR steps of 0.01, 1.5 at code
+50. The albedo target carries `base_weight` folded in, so lighting needs no channel for it:
+
+{{cite shaders/includes/scene/gbuffer_body.glsl "outSpecular = vec4(clamp(specularColor, 0.0, 1.0), clamp(specularWeight / 1.5, 0.0, 1.0));"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer2 = vec4(albedo * row5.z, ao);"}}
+
+Deferred lighting reads them at bindings 18 and 19 and undoes both encodings (the
+lighting unit). Nothing is resolved by name: the only per-frame descriptor work is
 rewriting the slot's scene set, since the table buffers can be replaced when they
 grow.
 
@@ -278,7 +291,7 @@ single pass over the vertices:
 {{cite ohao/render/scene/mesh_registry.cpp "mn = glm::min(mn, v.position);"}}
 
 The two draws need two render passes over the same targets. The early one clears all
-five and leaves the colours as attachments and the depth in
+eight and leaves the colours as attachments and the depth in
 `DEPTH_STENCIL_READ_ONLY_OPTIMAL`, where the Hi-Z build samples it; the late one loads
 them and leaves them for the readers, the colours shader-readable:
 
@@ -355,8 +368,8 @@ written in `execute` after that slot's fence wait.
 
 ## The descriptor set nobody reads
 
-`createDescriptors()` builds a complete five-binding combined-image-sampler set
-over the G-buffer, with its own nearest-filter sampler, and re-creates it on
+`createDescriptors()` builds a complete `GBUFFER_COUNT`-binding (eight)
+combined-image-sampler set over the G-buffer, with its own nearest-filter sampler, and re-creates it on
 every resize. Its two accessors have zero callers in the tree:
 
 {{cite ohao/render/deferred/gbuffer_pass.hpp "VkDescriptorSet getGBufferDescriptor() const"}}
@@ -377,11 +390,12 @@ and nobody holds a stale one only because nobody holds one at all.
 - GBuffer0's clear value `(0,0,0,0)` *is* the coverage bit, tested by exact float equality in six of its seven readers. Changing the clear colour or the attachment order breaks all four with no diagnostic; changing the position's space leaves the test intact and breaks the two ray-tracing readers instead.
 - `m_prevViewProj` must still hold last frame's value when `setViewProjection` runs, and must not be refreshed until the frame ends. Refresh it first and the previous clip position is built from this frame's *unjittered* `m_proj * m_view` while the current one uses the *jittered* projection, so camera-induced velocity collapses to the sub-pixel jitter delta rather than to zero — TAA keeps reprojecting, onto itself.
 - Velocity encodes camera and object motion (through `prevWorld`) and includes the current frame's TAA jitter.
-- The normal target's `w` is signed: emissive luminance when positive, minus the subsurface strength when negative. Every reader must clamp it to the half it means (`max(w, 0)` in lighting, `max(-w, 0)` in SSS).
+- The normal target's `w` is signed: emissive luminance when positive, minus the subsurface strength when negative. SSS reads `max(-w, 0)`; nothing reads the positive half, which exists so that an emissive surface takes no subsurface.
 - The SSS tile buffer is one buffer shared by every frame in flight, reset by a transfer each frame; the barrier in `resetSSSTiles` orders that reset after the previous frame's SSS reads only because both are recorded on the same queue.
 - The only per-draw state is `firstInstance`, the draw's index in `RenderScene`'s draw table; the draw record gives the instance slot and the material slot, and the instance gives its material list, so the pass is only as correct as the draw table `RenderScene` uploads.
-- Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/includes/scene/gbuffer_body.glsl "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
+- Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal, occlusion, emissive, specular and specular colour test a hard-coded capacity — {{cite shaders/includes/scene/gbuffer_body.glsl "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those slots stop binding above index 4095.
+- The OpenPBR targets' encodings (`/ 1.5`, `(ior - 1) / 2.55`) are one contract with deferred lighting's decode; change one and every dielectric's Fresnel moves.
 - Back faces are culled only for one-sided materials, with counter-clockwise front faces. A one-sided material on a mesh wound the other way renders inside out; materials that never state their sidedness stay double-sided (`VK_CULL_MODE_NONE`).
 - The early and late render passes must stay compatible — the same attachments, formats, sample counts and subpass dependencies — because they share the framebuffer and the pipelines. A dependency added to one must be added to both.
-- `execute()` begins both render passes, and so performs all five clears, every frame — with no scene bound only the culling and the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run both render passes, scene or not: the early one's clears are what every"}}
+- `execute()` begins both render passes, and so performs all eight clears, every frame — with no scene bound only the culling and the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run both render passes, scene or not: the early one's clears are what every"}}
 - The vertex shader declares bone index and weight inputs it never reads; skinning was removed from this pass and the slots remain only to match the shared `Vertex` layout.

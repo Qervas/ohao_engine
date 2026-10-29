@@ -17,6 +17,6 @@
 <polyline points="70,54 200,66 340,104 470,150 600,196 680,224" fill="none" stroke="#c4784a" stroke-width="2"/>
 <text x="360" y="200" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">single-scatter GGX (loses energy)</text>
 <!-- lost-energy shading gap -->
-<text x="120" y="240" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">gap = energy Kulla-Conty/Turquin adds back</text>
-<text x="28" y="314" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual shape from GGX_E() polynomial (Turquin 2019) — brdf_ggx.glsl. Not a captured render.</text>
+<text x="120" y="240" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">gap = energy Kulla-Conty adds back</text>
+<text x="28" y="314" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual shape of GGX's single-scatter energy E1 (openpbr.slang's tables). Not a captured render.</text>
 </svg>

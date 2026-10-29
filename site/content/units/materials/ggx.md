@@ -8,15 +8,21 @@ figures: [materials-ggx-ndf-energy]
 
 ## The α convention every copy shares
 
-The isotropic GGX distribution exists three times in this tree, each behind a
-name: `distributionGGX` in `brdf_ggx.glsl`, which the deferred lighting
-fragment shader reaches through `evaluateBRDF`; and `ggxDisoShaded` and `ggxDiso`
-in `ggx_aniso.glsl`, which the three path-tracer raygens include.
+The isotropic GGX distribution exists three times in the shaders that run, each behind a
+name: `ggxDisoShaded` and `ggxDiso` in `ggx_aniso.glsl`, which only the realtime GLSL
+raygen includes, and `ggxD` in `material/openpbr.slang`, the GGX of OpenPBR's base. That
+last one is the GGX of everything else: the offline reference path tracer
+(`rt/path_tracer.slang`), deferred lighting (`core/deferred_lighting.slang`, through
+`includes/lighting/clustered_lights.slang`), the forward transparent pass and RT GI's hits
+all import `material.openpbr`.
 
-The one thing all three agree on without qualification is the width
-parameter. Every one of them resolves the artist's perceptual roughness to
-α = roughness² — `ggxDiso` at its call site, the rest internally — and then squares
-α again inside the Trowbridge-Reitz denominator:
+{{cite shaders/includes/material/ggx_aniso.glsl "Used by the path-tracer raygen for direct-light NEE, env-MIS, and BSDF"}}
+{{cite shaders/core/deferred_lighting.slang "import material.openpbr;"}}
+
+The one thing every copy agrees on without qualification is the width parameter. Each
+resolves the artist's perceptual roughness to α = roughness² — `ggxDiso` at its call site,
+`OpenPBRBase` in its constructor, `ggxDisoShaded` internally — and then squares α again
+inside the Trowbridge-Reitz denominator:
 
 $$D(\omega_h)=\frac{\alpha^{2}}{\pi\big[(n\cdot\omega_h)^{2}(\alpha^{2}-1)+1\big]^{2}},\qquad \alpha=\text{roughness}^{2}$$
 
@@ -24,21 +30,29 @@ Here $\omega_h$ is the half-vector between view and light, $n$ the shading
 normal, and $\alpha$ the lobe width. $D$ is normalised so that
 $\int D(\omega_h)(n\cdot\omega_h)\,d\omega_h = 1$ over the hemisphere — the
 microfacets' projected areas must add back up to the macrosurface. That property
-is load-bearing, and it is the one this implementation loses. The rasteriser's
-copy:
-
-{{cite shaders/includes/brdf/brdf_ggx.glsl "return a2 / max(denom, EPSILON);"}}
-
-and the copy the raygens call at every bounce:
+is load-bearing, and it is the one the realtime raygen's shaded copy loses:
 
 {{cite shaders/includes/material/ggx_aniso.glsl "return a2 / (3.14159265 * denom * denom + 0.0001);"}}
 
-The double squaring is why a painted roughness of 0.1 is already a near-mirror:
-α = 0.01, α² = 10⁻⁴. Both stacks also floor roughness at 0.04 before shading —
-the path tracer in `pt_closesthit.rchit`, the rasteriser in `initBRDFSurface` —
-so α never falls below 1.6 × 10⁻³.
+OpenPBR's copy has no guard. It writes the denominator in the microfacet normal's
+components, $m_x^2+m_y^2+m_z^2\alpha^2$, which is the same quantity as
+$(n\cdot\omega_h)^2(\alpha^2-1)+1$ for a unit $m$ but never forms $\alpha^2-1$, a value
+that rounds to −1 at small α:
 
-{{cite shaders/includes/brdf/brdf_common.glsl "surface.roughness = max(roughness, 0.04);"}}
+{{cite shaders/material/openpbr.slang "const float d = dot(m.xy, m.xy) + m.z * m.z * a2;"}}
+
+{{cite shaders/material/openpbr.slang "alpha = rough * rough;"}}
+
+The double squaring is why a painted roughness of 0.1 is already a near-mirror:
+α = 0.01, α² = 10⁻⁴. The realtime stack floors roughness at 0.04 in its closest hit, so
+α never falls below 1.6 × 10⁻³ there. OpenPBR's base floors it at 0.01 (α = 10⁻⁴), a
+mirror at any resolution, and needs no delta lobe because its D stays finite there; the
+G-buffer stores roughness as authored and leaves the floor to the module, as the path
+tracer does.
+
+{{cite shaders/rt/pt_closesthit.rchit "roughness = max(roughness, 0.04);"}}
+
+{{cite shaders/material/openpbr.slang "static const float kMinSpecularRoughness = 0.01;"}}
 
 The α agreement is not cosmetic — a sampler whose α drifts from the D it
 importance-samples renders a plausible-looking image with a quietly biased
@@ -69,7 +83,7 @@ and integrates to 1 at *every* roughness — the flat curve in the figure below.
 {{cite shaders/includes/material/ggx_aniso.glsl "return a2 / (3.14159265 * denom * denom);"}}
 
 That widens the gap between the two functions rather than closing it, and the file
-now says so where a reader will hit it. It matters because the realtime raygen
+says so where a reader will hit it. It matters because the realtime raygen
 computes the *same* quantity — the specular BSDF sampler's VNDF pdf — on both
 sides of one MIS partition, and both sides must use the same D or the balance
 heuristic is evaluated with two different densities:
@@ -78,158 +92,137 @@ heuristic is evaluated with two different densities:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "float pdfSpecMIS = smithG1GGX(NdotV, roughness * roughness) * Dpdf"}}
 
-The shaded value `spec` on that same branch still calls `ggxD_anisoOrIso`, because
-that is the D every existing reference render was made with. Only the density
-moved.
+The shaded value `spec` on that same branch still calls `ggxD_anisoOrIso`. Only
+the density moved.
 
-## The visibility term that is not a geometry term
+## Masking-shadowing: correlated where it matters
 
-`geometrySmithCorrelated` is named for a G but returns a V. It is Heitz's
-height-correlated Smith term already divided by the Cook-Torrance denominator:
+OpenPBR's single-scatter lobe is $D\,G_2/4\mu_o$ (times $\cos\omega_i$) with Heitz's
+height-correlated $G_2$, written from the Smith Λ function:
 
-$$V(\omega_o,\omega_i)=\frac{G_2}{4(n\cdot\omega_o)(n\cdot\omega_i)}=\frac{0.5}{(n\cdot\omega_i)\sqrt{\alpha^{2}+(1-\alpha^{2})(n\cdot\omega_o)^{2}}+(n\cdot\omega_o)\sqrt{\alpha^{2}+(1-\alpha^{2})(n\cdot\omega_i)^{2}}}$$
+$$G_2(\omega_o,\omega_i)=\frac{1}{1+\Lambda(\omega_o)+\Lambda(\omega_i)},\qquad \Lambda(\theta)=\tfrac{1}{2}\!\left(-1+\sqrt{1+\alpha^{2}\tan^{2}\theta}\right)$$
 
-with $\omega_o$ the view direction, $\omega_i$ the light direction, and $G_2$ the
-joint masking-shadowing fraction. The two square roots are the code's `lambdaV`
-and `lambdaL`, and the leading 0.5 is where the factor of 4 went:
+with $\omega_o$ the view direction, $\omega_i$ the light direction and $\mu_o$ the cosine
+of the view to the normal. The denominator is explicit, so there is no folded-in
+visibility term to divide twice.
 
-{{cite shaders/includes/brdf/brdf_ggx.glsl "return 0.5 / max(lambdaV + lambdaL, EPSILON);"}}
+{{cite shaders/material/openpbr.slang "const float G2 = 1.0 / (1.0 + ggxLambda(wo.z, a2) + ggxLambda(wi.z, a2));"}}
 
-Consequently the deferred specular is assembled as a bare triple product with no
-denominator at all:
+Because deferred lighting evaluates the same `ggxSingle` through `OpenPBRBase.evalLobes`,
+the rasteriser and the reference agree on masking-shadowing exactly, sphere and
+rectangle lights included (their lobes are only widened, through `withRoughness`).
 
-{{cite shaders/includes/brdf/brdf_ggx.glsl "return D * V_term * F;"}}
+The realtime raygen does two other things. Its NEE branches build an *uncorrelated*
+Schlick-k `G` and divide by `4 * NdotV * NdotL + 0.001` explicitly, a second additive
+epsilon inside the same expression (four copies of that line; the light NEE copy is the
+one directly above the near-mirror rule):
 
-This is the sharpest edit trap in the file. Anyone who notices the "missing"
-Cook-Torrance denominator and restores $1/4(n\cdot\omega_o)(n\cdot\omega_i)$
-divides twice: highlights come out four times too dim head-on and wrongly lifted
-at grazing angles — a change that reads as a plausible material tweak rather than
-a bug. The raygens keep the two apart, building an *uncorrelated* Schlick-k `G`
-and dividing by `4 * NdotV * NdotL + 0.001` explicitly in each NEE branch — a
-second additive epsilon inside the same expression.
+{{cite shaders/rt/pt_raygen_realtime.rgen "if (firstHitMirror) spec = vec3(0.0);   // its specular ray reflects the light's mesh"}}
 
-A third arrangement lives in `ggx_aniso.glsl`. `smithG2overG1GGX` is written from
-the Smith Λ function rather than the square root above, and substituting
-$\Lambda=\tfrac{1}{2}\!\left(-1+\sqrt{1+\alpha^{2}\tan^{2}\theta}\right)$ into
-$1/(1+\Lambda_o+\Lambda_i)$ reproduces $2c_oc_i/(c_iS_o+c_oS_i)$ exactly — the same
-$G_2$ `geometrySmithCorrelated` computes. That is where the resemblance stops. It
-has exactly one call site in the tree, in the realtime raygen, as the VNDF
-estimator weight $f\cos/\text{pdf}=F\,G_2/G_1$ with the Fresnel factored out —
-not as a shading G.
+and its first glossy bounce weighs a VNDF sample by $F\,G_2/G_1$ through
+`smithG2overG1GGX`, which substituting Λ into $1/(1+\Lambda_o+\Lambda_i)$ makes the same
+correlated $G_2$ — used as the estimator weight with the Fresnel factored out, not as a
+shading G:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);"}}
 
-`pt_raygen.rgen` and `pt_raygen_offline.rgen` never mention it. The two pipelines
-therefore do not share a masking-shadowing model: the rasteriser shades with
-height-correlated Smith, every raygen NEE branch shades with the uncorrelated
-Karis product.
+So the realtime raygen's NEE branches are the one place that shades with the
+uncorrelated Karis product.
 
-## Fresnel: an IBL approximation wired into direct lighting
+## Fresnel: exact in two renderers, Schlick in the third
 
-`brdf_common.glsl` ships two Schlick Fresnels. The textbook one, with F90 fixed
-at 1, has no callers anywhere under `shaders/`. The one the deferred BRDF actually
-calls replaces F90 with `max(1 - roughness, F0)`:
+OpenPBR's base gives a dielectric the exact unpolarised Fresnel of its IOR (after
+`specular_weight` has scaled its F0) and a metal the F82-tint form: Schlick minus a
+$\mu(1-\mu)^6$ term fitted so the reflectance at $\mu = 1/7$ is `specular_color` times
+Schlick's:
 
-$$F(\omega_o\cdot\omega_h)=F_0+\big(\max(1-\text{roughness},\,F_0)-F_0\big)\,(1-\omega_o\cdot\omega_h)^{5}$$
+{{cite shaders/material/openpbr.slang "const float spec = fresnelDielectric(c, eta) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms;"}}
 
-{{cite shaders/includes/brdf/brdf_common.glsl "return F0 + (max(vec3(1.0 - roughness), F0) - F0)"}}
+{{cite shaders/material/openpbr.slang "return saturate(F0 + (1.0 - F0) * m5 - b * (c * m5 * m));"}}
 
-At roughness 0.95 a dielectric's F90 collapses from 1.0 to 0.05, i.e. essentially
-to $F_0$: no grazing boost at all. This variant is normally an image-based-lighting
-device evaluated at $n\cdot\omega_o$, standing in for a pre-integrated
-reflectance; OHAO evaluates it per punctual light at $\omega_o\cdot\omega_h$.
+Both the path tracer and deferred lighting call it, for every light and, through
+`specularAlbedo`, for the environment's split sum. The realtime raygen keeps textbook
+Schlick with F90 = 1 at a fixed dielectric F0 of 0.04:
 
-{{cite shaders/includes/brdf/brdf_ggx.glsl "F = fresnelSchlickRoughness(HdotV, F0, roughness);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 F0 = mix(vec3(0.04), albedo, metallic);"}}
 
 :::why
-The rejected alternative is textbook Schlick with F90 = 1 — exactly what all three
-raygens use inline. Under a rasteriser that Fresnel gives a rough dielectric a
-bright white rim at grazing angles with nothing to cancel it: the inter-reflection
-that would swallow it is microfacet-scale transport the deferred pass never traces.
-Clamping F90 to 1 − roughness buys EEVEE-like edge behaviour at the price of a
-Fresnel that no longer matches the offline render, so a rough dielectric silhouette
-is dimmer in the deferred preview than in the path-traced frame.
+A rough dielectric under single-scatter GGX with full Schlick gets a bright rim at
+grazing angles that nothing cancels. The deferred frame once hid it by clamping F90 to
+`1 − roughness`, a Fresnel that matched no path-traced frame. OpenPBR removes the cause
+instead: Kulla-Conty's multiple-scattering lobe returns the energy single-scatter GGX
+loses, and the diffuse beneath is scaled by what the specular lets through, so the white
+furnace holds with the exact Fresnel and the deferred silhouette matches the reference's.
 :::
 
 ## The epsilon that eats the highlight
 
-Those three D expressions guard against a vanishing denominator in three
-different ways, and only two of them are floors. `distributionGGX` floors the
-finished denominator, `max(π·denom², EPSILON)`, with EPSILON defined as 10⁻⁶.
-
-{{cite shaders/includes/common/constants.glsl "#define EPSILON       1e-6"}}
-
-`ggxDisoShaded` — which is both `ggxD_anisoOrIso`'s isotropic branch and every D
-the raygens shade with — *adds* 10⁻⁴ instead. `ggxDiso` adds nothing: it floors
-α² upstream, which is the one arrangement that costs no mass.
+The two GLSL D expressions that run guard against a vanishing denominator in two
+different ways, and only one of them is a floor. `ggxDisoShaded` — which is both
+`ggxD_anisoOrIso`'s isotropic branch and every D the realtime raygen shades with —
+*adds* 10⁻⁴. `ggxDiso` adds nothing: it floors α² upstream, which is the one arrangement
+that costs no mass. OpenPBR's `ggxD` is the same in kind: the 0.01 roughness floor is
+its only guard.
 
 An additive term is not a floor — it never leaves the expression. At the lobe
-peak the true denominator is $\pi\,\text{roughness}^{8}$, which at the 0.04
-roughness floor is about 2 × 10⁻¹¹: roughly five orders of magnitude under
-`distributionGGX`'s floor and seven under the added 10⁻⁴. For both guards that
-add, the guard rather than the GGX algebra sets the height of the highlight. A
+peak the true denominator is $\pi\,\text{roughness}^{8}$, which at the realtime stack's
+0.04 roughness floor is about 2 × 10⁻¹¹: seven orders of magnitude under the added
+10⁻⁴, so the guard rather than the GGX algebra sets the height of the highlight. A
 floor on α is a different kind of object: it substitutes a slightly wider — but
 still correctly normalised — lobe, so it moves *where* the energy sits without
 removing any.
 
-Numerical quadrature of the shipped guards shows how far each truncation reaches.
-`ggxDiso` integrates to 1.000 at every roughness in the table — it truncates
-nothing. `distributionGGX` recovers full normalisation by roughness ≈ 0.16, with
-0.9% of the mass surviving at the 0.04 floor. The +10⁻⁴ expression — the one on
-every NEE branch of every raygen — does not recover until roughness ≈ 0.4, and at
-roughness 0.2 it retains only 37% of the distribution's mass (2.7% at roughness
-0.1, 0.07% at the 0.04 floor). For scale, `ggxDiso` in its pre-`9e2d0b4` +10⁻⁸
-form sat between the two: 91% at roughness 0.1, within 1% of full by 0.14, and 7%
-at the 0.04 floor.
+Numerical quadrature of the guards shows how far each truncation reaches. `ggxDiso`
+integrates to 1.000 at every roughness in the table — it truncates nothing. The +10⁻⁴
+expression — the one on every NEE branch of the realtime raygen — does not recover until
+roughness ≈ 0.4, and at roughness 0.2 it retains only 37% of the distribution's mass
+(2.7% at roughness 0.1, 0.07% at the 0.04 floor). For scale, a 10⁻⁶ denominator floor
+recovers by roughness ≈ 0.16 with 0.9% surviving at 0.04, and `ggxDiso` in its
+pre-`9e2d0b4` +10⁻⁸ form sat between: 91% at roughness 0.1, within 1% of full by 0.14,
+and 7% at the 0.04 floor.
 
-{{figure materials-ggx-ndf-energy "Hemispherical integral of the shipped isotropic D guards versus perceptual roughness — measured by numerical quadrature of the GLSL, not a captured render. Two of the three come from ggx_aniso.glsl, which now pairs a 10⁻⁴ additive guard with an α floor that loses nothing; the dashed curve is the 10⁻⁸ additive guard ggxDiso carried until 9e2d0b4. A correct NDF integrates to 1 everywhere; the missing mass is the peak of the specular lobe."}}
+{{figure materials-ggx-ndf-energy "Hemispherical integral of isotropic D guards versus perceptual roughness — measured by numerical quadrature of the GLSL, not a captured render. Two of the curves come from ggx_aniso.glsl, which pairs a 10⁻⁴ additive guard with an α floor that loses nothing; the 10⁻⁶ denominator floor is a comparison curve that no shader in the tree uses; the dashed curve is the 10⁻⁸ additive guard ggxDiso carried until 9e2d0b4. A correct NDF integrates to 1 everywhere; the missing mass is the peak of the specular lobe."}}
 
-Where it bites matters as much as how much. Take the raygen `PathTracer` binds by
-default:
+Where it bites matters as much as how much. The realtime profile binds the GLSL
+raygen:
 
-{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_pt_raygen.rgen.spv"};"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
-D enters that file at nine sites: six BRDF evaluations — light NEE and env-MIS, at
-bounce 0 and again on both the specular and the diffuse chain — and three MIS
-pdfs. The truncation therefore dims specular NEE at every bounce along both chains.
-What it never touches is indirect specular throughput, which is a bare metal tint:
+There D enters every light NEE and environment-MIS branch, at bounce 0 and on
+both the specular and the diffuse chain, so the truncation dims specular NEE at
+every bounce. What it does not touch is indirect specular throughput. The first
+glossy bounce draws from the VNDF and weighs by $F\,G_2/G_1$; past it, the chain
+reflects a mirror direction jittered by a roughness-scaled cosine lobe and tints
+by the metal colour:
 
-{{cite shaders/rt/pt_raygen.rgen "specThroughput = mix(vec3(1.0), albedo, metallic);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);"}}
 
-The ray it weights is not a mirror ray, though. The comment calling the dual-ray
-design deterministic is about lobe *selection* — bounce 0 traces a specular and a
-diffuse child instead of choosing one — not direction. Above roughness 0.01 the
-reflection is perturbed by a roughness-scaled cosine-hemisphere jitter, with a
-stochastic fallback below the horizon:
+Its MIS pdf is where D re-enters that chain:
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;"}}
-
-{{cite shaders/rt/pt_raygen.rgen "reflected = cosineHemisphere(N, fallbackU);"}}
-
-Its MIS pdf is where D re-enters the chain:
-
-{{cite shaders/rt/pt_raygen.rgen "specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "specLastBsdfPdf = specProb * pdf_spec;"}}
 
 So a chrome sphere still reflects the environment at full strength. What shrinks
 is the direct-light highlight on smooth surfaces, and the MIS weight deciding how
-much environment radiance the specular ray is allowed to keep.
+much environment radiance the specular ray is allowed to keep. The offline
+reference has none of this: its D is exact, its samples come from bounded VNDF
+sampling (Eto and Tokuyoshi 2023) with the matching density, and its estimator
+weight is the BSDF over that density.
+
+{{cite shaders/material/openpbr.slang "s.pdf = ps * ggxPdfBounded(wo, s.wi, alpha) + (1.0 - ps) * eonPdf(wo, s.wi, diffRough);"}}
+
+{{cite shaders/material/openpbr.slang "if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;"}}
 
 :::key
-The `+ 0.0001` in the raygens' D is not a division guard; it is an undeclared
-highlight clamp on smooth materials. `kOfflineRTSettings` turns firefly clamping
-off outright, yet a roughness-0.2 surface loses roughly two thirds of its NEE
-specular before any clamp logic runs.
+The `+ 0.0001` in the realtime raygen's D is not a division guard; it is an
+undeclared highlight clamp on smooth materials. A roughness-0.2 surface loses
+roughly two thirds of its NEE specular before any firefly clamp runs.
 
-{{cite ohao/render/rt/rt_settings.hpp ".enableFireflyClamp = false,"}}
+{{cite ohao/render/rt/rt_settings.hpp ".enableFireflyClamp = true,"}}
 
-There is a free repair, and `ggxDiso` has taken it: floor **α** instead of
-guarding the denominator, and the expression stays exactly normalised at every
-roughness. What is not free is applying it here. Flooring the *denominator* — what
-`distributionGGX` does — still loses 99.1% of the mass at the 0.04 roughness
-floor, and the 10⁻⁸ `ggxDiso` used to add left 93% missing there. Any of these
-changes every existing smooth-material reference render, which is why
-`ggxD_anisoOrIso` keeps its 10⁻⁴: it is the D the offline raygen — and therefore
-the golden-image corpus — was baselined against.
+There is a free repair, and `ggxDiso` and OpenPBR's `ggxD` have both taken it:
+floor **α** instead of guarding the denominator, and the expression stays exactly
+normalised at every roughness. The realtime raygen's shaded D keeps its 10⁻⁴; the
+reference the golden corpus renders with, and the deferred frame, are not built on it.
 :::
 
 ## The anisotropic branch and the normalisation it drops
@@ -260,8 +253,8 @@ anisotropy over-brightens the highlight *and* de-normalises the pdf in the same
 direction.
 
 This never fires in a default render. The global override defaults to zero and
-only `env_demo`'s `--aniso=` flag raises it, so every shipped reference image is
-on the isotropic branch.
+only `env_demo`'s `--aniso=` flag raises it, and OpenPBR's base, which the
+reference and the deferred frame use, has no anisotropy at all.
 
 {{cite ohao/render/rt/rt_settings.hpp "float anisotropyStrength{0.0f};"}}
 
@@ -271,43 +264,23 @@ calls — was written specifically to reject Frisvad. Trust the function.
 
 ## What is actually reachable
 
-`brdf_common.glsl` and `brdf_ggx.glsl` define twenty functions between them; the
-deferred lighting fragment shader reaches ten, `envBRDFApprox` among them (the split
-sum's environment BRDF, which also weights the screen-space reflections). Four of the
-ten unreachable ones still have their math shipping under no name at all.
-`geometrySchlickGGX` and `geometrySmith`, its sole caller, are the `(roughness+1)²/8`
-remap inlined in every NEE branch of all three raygens. `fresnelSchlick` — textbook
-Schlick with F90 = 1 — is written out by hand in those same branches.
-`lambertianDiffuse` is the `albedo/π` sitting a few lines under each of those
-Fresnels.
+Outside `ggx_aniso.glsl` and `openpbr.slang` there is no named GGX function in the tree.
+The realtime raygen still open-codes a textbook model under no name at all: the
+`(roughness+1)²/8` Schlick-k G in every NEE branch, textbook Schlick in those same
+branches, and the `albedo/π` Lambert sitting a few lines under each Fresnel.
 
-{{cite shaders/rt/pt_raygen.rgen "vec3 diff = kD * albedo / 3.14159;"}}
-
-Four of the remaining six are dead in both senses: `f0FromIOR` and the uncorrelated
-Smith trio, whose
-$(2\,n\cdot\omega)/(n\cdot\omega+\sqrt{\cdot})$ arrangement appears nowhere else
-under `shaders/`.
-
-{{cite shaders/includes/brdf/brdf_common.glsl "float smithG(float NdotV, float NdotL, float roughness) {"}}
-
-The last two are one-line compositions the fragment shaders open-code rather than
-call: `getRoughnessMipLevel` as `roughness * float(kEnvPrefilterLevels - 1u)`, the
-prefiltered environment's level, `evaluateBRDFWithShadow` as a multiply by
-`1 - shadow`.
-
-{{cite shaders/core/deferred_lighting.frag "textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 diff = kD * albedo / 3.14159;"}}
 
 Prune by grepping the formula, not only the name: a copy written with different
 temporaries is invisible to a search for the usual identifiers.
 
 ## Contracts
 
-- `geometrySmithCorrelated` returns a visibility term with $1/4(n\cdot\omega_o)(n\cdot\omega_i)$ folded in, so `evaluateSpecularBRDF` must return `D * V * F` with no denominator. Adding one divides twice.
-- Both stacks floor roughness at 0.04 before shading. Lowering that floor does not sharpen the highlight — it drives D further into its epsilon guard.
+- OpenPBR's `ggxD`, `ggxSingle` and Fresnels are the one BSDF of the path tracer, deferred lighting, the transparent pass and RT GI's hits. A change to `material/openpbr.slang` moves all four, and the energy tables (`tools/material/openpbr_tables`) must be regenerated from the module.
+- The realtime tracer floors roughness at 0.04 before shading; OpenPBR's base floors it at 0.01 and the G-buffer stores roughness as authored. Lowering the GLSL floor does not sharpen the realtime highlight — it drives D further into its epsilon guard.
 - `ggxDisoShaded`, `ggxDiso` and `smithG1GGX` must all keep α = roughness². Changing one without the others biases the MIS estimator silently.
-- `ggxDisoShaded` is the *shaded* D and `ggxDiso` the *density*. Six raygen call sites feed `ggxDisoShaded` into `pdf_spec = D·n·ω_h / 4(ω_o·ω_h)` and on into `specLastBsdfPdf`, which **looks** like the density/shaded confusion this page warns about and is not. `specLastBsdfPdf` is never a divisor — its only use is as an argument to the balance heuristic — and the env-IS side of that same partition computes the identical expression from the identical function. Balance weights sum to one whenever both sides agree, so the combination is unbiased; the wrong density costs variance only. Substituting `ggxDiso` at those six sites *alone* would make them disagree with `pdfSpecMIS` and would create the bias rather than remove it.
-- In the base and offline raygens the specular sampler is not GGX at all: it is a mirror direction jittered by a cosine lobe scaled by roughness, so neither D is its true pdf. `pt_raygen_realtime.rgen` is the one that has a real VNDF sampler, behind `OHAO_CRUDE_GLOSSY`, with matched pdfs on both sides. Porting that is the real fix and is not a clamp swap.
+- `ggxDisoShaded` is the *shaded* D and `ggxDiso` the *density*. The realtime raygen's deeper bounces feed `ggxDisoShaded` into `pdf_spec = D·n·ω_h / 4(ω_o·ω_h)` and on into `specLastBsdfPdf`, which **looks** like the density/shaded confusion this page warns about and is not. `specLastBsdfPdf` is never a divisor — its only use is as an argument to the balance heuristic — and the env-IS side of that same partition computes the identical expression from the identical function. Balance weights sum to one whenever both sides agree, so the combination is unbiased; the wrong density costs variance only. Substituting `ggxDiso` at those sites *alone* would make them disagree with `pdfSpecMIS` and would create the bias rather than remove it.
+- Past its first glossy bounce the realtime raygen's specular sampler is not GGX: it is a mirror direction jittered by a cosine lobe scaled by roughness, so neither D is its true pdf. Its first bounce has a real VNDF sampler with matched pdfs on both sides (`OHAO_CRUDE_GLOSSY` restores the jitter there too). The offline reference samples bounded VNDF at every vertex and divides by that density exactly.
 - `ggxD_anisoOrIso` and `ggxDiso` are *not* the same D, and have not been since `9e2d0b4`. Anywhere one quantity is computed on both sides of a MIS weight, the same one must be called on both sides — `pt_raygen_realtime.rgen`'s env-IS `pdfSpecMIS` and its VNDF `specLastBsdfPdf` are exactly that pair, and both call `ggxDiso`.
-- The three *shipped* isotropic D guards — 10⁻⁶ floored on the denominator, 10⁻⁴ added to it, and an α floor that adds nothing — normalise at roughness 0.16, 0.4, and everywhere, respectively. They are not interchangeable, and editing one changes which existing renders it matches.
 - The anisotropic branch is not energy-matched to its own isotropic branch and is off by default. `--aniso=` renders are not radiometrically comparable to isotropic ones.
-- The deferred Fresnel clamps F90 to `1 - roughness`; the raygens do not. Rough dielectric silhouettes will not match between preview and offline render.
+- Deferred lighting and the reference share the exact dielectric Fresnel and F82-tint; the realtime raygen uses textbook Schlick at F0 0.04. Rough dielectric silhouettes match between the deferred frame and the reference, not the realtime tracer.

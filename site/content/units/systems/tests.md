@@ -111,34 +111,37 @@ unnoticed. Five PNGs back ten scenes.
 
 The RT profile that command selects is not obvious. With no mode flag the
 examples default to `RenderMode::RTOffline`, which instantiates
-`RTOfflineRenderer` — and that profile overrides the `PathTracerShaderSet` with
-the *offline reference* raygen, not the `pt_raygen.rgen` named in the shader-set
-member initializer.
+`RTOfflineRenderer`, and that profile takes `PathTracerShaderSet`'s default: the
+reference path tracer, `rt/path_tracer.slang`, whose four entry points are the
+offline profile's raygen, miss, closest hit and any hit.
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
+{{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};"}}
 
-That covers more than one file. `RTRealtimeRenderer` names the same miss,
-closest-hit and any-hit SPIR-V modules as the offline profile and differs only in
-the raygen entry, so three of the realtime profile's four stages are under the
-offline goldens before `cornell_box_rt_realtime` adds the fourth.
+The realtime profile shares none of those stages. `RTRealtimeRenderer` names the
+GLSL family — its own raygen and the GLSL miss, closest-hit and any-hit modules —
+so the offline goldens say nothing about any of its four stages, and
+`cornell_box_rt_realtime` is their only gate.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
-So is the include graph the offline raygen compiles in: `pbr_unpack.glsl`,
-`mis.glsl`, `env_sampling.glsl`, `sampler_api.glsl`, `nrd_frontend.glsl` and
-`ggx_aniso.glsl`, plus what those pull in turn. Those six are the same six the
-realtime raygen includes.
+The same split holds for includes. The reference imports two Slang modules, the
+generated `shared/layout` and the OpenPBR base, `material/openpbr`; the realtime
+raygen includes the GLSL headers `pbr_unpack.glsl`, `mis.glsl`,
+`env_sampling.glsl`, `sampler_api.glsl`, `nrd_frontend.glsl`, `ggx_aniso.glsl` and
+`pt_lights.glsl`, plus what those pull in turn — all of which only the realtime
+golden reaches.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "includes/rt/nrd_frontend.glsl"}}
+{{cite shaders/rt/path_tracer.slang "import material.openpbr;"}}
 
 The realtime scene was added after `rt_realtime` lost the device and wrote an
-all-black frame — bindings 29–35 were never written into the descriptor set — and
-it is looser than the offline pair (`max_abs_diff` 10, `max_diff_frac` 0.05),
-because `pt_raygen_realtime.rgen` reads neighbour pixels of images the same
-dispatch writes and is not bit-exact run to run. It also puts the PCG branch of
-`sampler_api.glsl` under the gate: the sampler is a specialization constant baked at
-pipeline creation, the offline profile bakes Sobol, and the realtime profile PCG.
-What has no golden is every denoised path.
+all-black frame — bindings 29–35 were never written into the descriptor set. It
+holds to the same 1-LSB floor as the offline scenes since its temporal history
+became the previous frame's image and its spatial denoise a pass after the trace.
+It also puts the PCG branch of `sampler_api.glsl` under the gate: the sampler is a
+specialization constant baked at pipeline creation and the realtime profile bakes
+PCG. The offline settings still name Sobol, but the reference raygen declares no
+such constant and draws from its own PCG stream, so the Sobol branch reaches no
+golden. What has no golden is every denoised path.
 
 {{cite tests/golden/manifest.json "bindings 29-35 (reservoirs, spec hit-distance) were never written into the descriptor set"}}
 
@@ -482,7 +485,7 @@ checked in.
 
 ## Contracts
 
-- Re-enabling temporal reprojection in `pt_raygen_offline.rgen` does not merely change the goldens, it makes them unreproducible: the race has no defined ordering, so `--selftest` starts failing against itself.
+- Reading neighbour pixels of an image the same dispatch writes, in either raygen, does not merely change the goldens, it makes them unreproducible: the race has no defined ordering, so `--selftest` starts failing against itself.
 - The harness must run from the repository root — manifest commands and golden paths are repo-relative. The executable is resolved through the per-configuration subdirectories and the `.exe` suffix, so `./build/cornell_box` finds `build/Release/cornell_box.exe`; one that is genuinely absent is reported as a scene FAIL (`could not launch …`), not a traceback. The pre-push hook sidesteps the working-directory requirement by `cd`-ing to the toplevel first.
 - Goldens must come from `--update`, which stores the downscaled image. One regenerated at full resolution is a shape mismatch, reported cleanly as `size mismatch vs golden` in check mode. `--selftest` never opens the golden at all — it renders twice and diffs actual against actual — but it dereferences its stats dict unguarded, so if the two renders of one command ever disagree in shape it raises instead of reporting.
 - Adding a manifest scene is the only way a fixed bug becomes non-regressible; nothing else in the tree pins an image against a committed reference — the `*_gpu_test`s only compare fresh renders with each other.

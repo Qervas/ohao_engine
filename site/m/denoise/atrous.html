@@ -99,11 +99,11 @@ $$</div>
 </div>
 <div class="section-rule"><h2 id="the-motion-vectors-svgf-actually-receives">The motion vectors SVGF actually receives</h2></div>
 <div class="prose reveal">
-<p>Atrous mode forces `historyFrameCount = 0` in the raygen push constants every frame, so the engine&#x27;s cross-frame accumulation is bypassed and the denoiser owns temporal integration. (How many paths it carries is a separate control, `samplesPerFrame`, averaged in-raygen.) Two of the three raygen variants gate motion-vector output on that same zeroed counter:</p>
-<div class="citation-chip"><code class="citation-code">if (firstHitDist &gt; 0.0 &amp;&amp; historyFrameCount &gt; 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L213" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:213</a></div>
-<p>With the offline profile bound it is false on every Atrous frame, so the motion-vector AOV is identically zero and reprojection degenerates to `prevPixel == pixel` — the smaller problem there. That profile also resets accumulation on view change, which raises `pc.reset` and makes Pass 1 discard *all* history unconditionally — not per-pixel, not by geometry test — for every frame the camera moves. The realtime raygen was fixed by gating on the frame index, which advances in all modes:</p>
+<p>Atrous mode forces `historyFrameCount = 0` in the raygen push constants every frame, so the engine&#x27;s cross-frame accumulation is bypassed and the denoiser owns temporal integration. (How many paths it carries is a separate control, `samplesPerFrame`, averaged in-raygen.) The reference path tracer, the offline profile&#x27;s raygen, gates motion-vector output on that same zeroed counter: the vector starts at zero and is computed only while history frames are counted.</p>
+<div class="citation-chip"><code class="citation-code">float2 motion = float2(0.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L530" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:530</a></div>
+<p>With the offline profile bound the counter is 0 on every Atrous frame, so the motion-vector AOV is identically zero and reprojection degenerates to `prevPixel == pixel` — the smaller problem there. That profile also resets accumulation on view change, which raises `pc.reset` and makes Pass 1 discard *all* history unconditionally — not per-pixel, not by geometry test — for every frame the camera moves. The realtime raygen gates on the frame index instead, which advances in all modes:</p>
 <div class="citation-chip"><code class="citation-code">if (firstHitDist &gt; 0.0 &amp;&amp; frameIdx &gt; 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L430" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:430</a></div>
-<p>So an `rt_realtime --denoise=atrous` run gets correct vectors; the other two raygens do not.</p>
+<p>So an `rt_realtime --denoise=atrous` run gets correct vectors; an offline one does not.</p>
 </div>
 <div class="section-rule"><h2 id="two-compiled-shaders-that-nothing-runs">Two compiled shaders that nothing runs</h2></div>
 <div class="prose reveal">
@@ -127,7 +127,7 @@ $$</div>
         <div class="row"><code>shaders/rt/rt_svgf_temporal.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/rt_svgf_atrous.comp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/denoise/atrous_denoise.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/rt/rt_atrous.comp</code><span class="desc">path note</span></div>
       </div>

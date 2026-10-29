@@ -48,7 +48,7 @@ Beside each pack the table keeps one host-only byte, the material's sidedness, w
 
 ## Instance table: slots, free list, material references
 
-An instance is one 160-byte `InstanceGpu` — `world`, `prevWorld`, mesh index, material-reference offset and count, a visibility flag, and the legacy RT GI albedo word — plus a fixed block of 64 material indices at `slot * 64` in a second buffer. Submesh $k$ of instance $s$ shades with
+An instance is one 160-byte `InstanceGpu` — `world`, `prevWorld`, mesh index, material-reference offset and count, a visibility flag, and `emitterLight` (a light's emitter mesh's radiance and light index, zero on every other instance) — plus a fixed block of 64 material indices at `slot * 64` in a second buffer. Submesh $k$ of instance $s$ shades with
 
 $$m(s,k) = \begin{cases} \text{refs}[\,64s + k\,] & k < \text{count}_s \\ 0 & \text{otherwise} \end{cases}$$
 
@@ -90,7 +90,7 @@ It is what GPU culling reads, and what the G-buffer and CSM vertex shaders index
 
 `setLights` also gives every point, spot and area light a body: an *emitter instance*, a
 unit sphere scaled to the light's radius or a unit quad mapped onto its rectangle, with the
-light's radiance in the instance's `giAlbedoPacked.rgb` and the `kInstanceEmitter` flag. A
+light's radiance in the instance's `emitterLight.rgb`, its index in the RT light list in `emitterLight.w`, and the `kInstanceEmitter` flag. A
 point or spot light's sphere shines with `I / (pi r^2)`, so from afar it is the source of
 intensity `I` that lights the scene; an area light's rectangle with the path tracer's own
 radiance for it:

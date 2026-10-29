@@ -11,7 +11,7 @@ A scene file cannot hold a `MeshHandle`. A handle is an index into one `RenderSc
 
 {{cite ohao/ecs/components.hpp "std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim, ConePrim, QuadPrim, BoxPrim> source;"}}
 
-`Material` (OpenPBR's base: base colour, metalness, specular roughness, IOR, emission, ...) sits beside it. The `instantiate` system turns the pair into the runtime components the render extract reads: `MeshRenderer`, `GiMaterialLegacy` and, when the model's first emissive-textured material is bright enough to make an auto-light, `EmissiveProxyLight`. None of these is saved. An entity whose `MeshRenderer` was built in code from an in-memory model has nothing a file can describe, and `saveScene` reports it as `W_UNSAVEABLE_MESH` instead of dropping the mesh silently.
+`Material` (OpenPBR's base: base colour, metalness, specular roughness, IOR, emission, ...) sits beside it. The `instantiate` system turns the pair into the runtime components the render extract reads: `MeshRenderer` and, when the model's first emissive-textured material is bright enough to make an auto-light, `EmissiveProxyLight`. None of these is saved. An entity whose `MeshRenderer` was built in code from an in-memory model has nothing a file can describe, and `saveScene` reports it as `W_UNSAVEABLE_MESH` instead of dropping the mesh silently.
 
 ## The backend seam
 
@@ -54,7 +54,7 @@ Each cache entry counts its users. An entity switched to a source that already h
 
 {{cite ohao/ecs/instantiate.cpp "for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);"}}
 
-A model that has its own materials always uses them. For such a model the override only feeds the legacy GI word, which is what `spawnModel` does too (t11 checks both). Model materials are cached in the mesh entry, not in that map. If a model's last user goes and the model is instantiated again later, its materials are registered a second time and take more table slots.
+A model that has its own materials always uses them; a `Material` beside it is ignored (t11 checks it). Model materials are cached in the mesh entry, not in that map. If a model's last user goes and the model is instantiated again later, its materials are registered a second time and take more table slots.
 
 ## Model files through the resolver
 

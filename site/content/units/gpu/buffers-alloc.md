@@ -151,7 +151,7 @@ come from a projection that clips at 100.
 {{cite ohao/render/deferred/csm_pass.cpp "float d = m_splitLambda * log + (1.0f - m_splitLambda) * linear;"}}
 
 With the shipped `m_splitLambda` of 0.95 and four cascades the splits land near 13.5,
-34.5, 132.5 and 1000. `selectCascade` in `deferred_lighting.frag` compares view depth
+34.5, 132.5 and 1000. `selectCascade` in `deferred_lighting.slang` compares view depth
 against those, so a fragment 30 units out picks cascade 1 — whose matrix, rescaled over
 the 100-unit frustum, actually covers depth 1.4 to 3.5. The three near cascades are
 compressed into the first ~13 world units of a 100-unit view, and most of what is

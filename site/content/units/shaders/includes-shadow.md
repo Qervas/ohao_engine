@@ -7,35 +7,39 @@ standard: v2
 
 ## No shadow header, two shadow sources
 
-There is no shadow include directory. Every shadow lookup the raster frame makes is
-written inline in `deferred_lighting.frag`, and it takes one of two forms per frame:
-a ray-traced visibility image, or, where the frame cannot trace, a cascaded shadow map
-for directional lights. The host picks one when the lighting pass records: the RT bit
-and the CSM bit are the two arms of one if/else on whether an RT visibility view is
-bound.
+There is no shadow include directory. The raster frame's shadow lookups are written in
+`deferred_lighting.slang`, and they take one of two forms per frame: a ray-traced
+visibility image, or, where the frame cannot trace, a cascaded shadow map for
+directional lights. The host picks one when the lighting pass records: the RT bit and
+the CSM bit are the two arms of one if/else on whether an RT visibility view is bound.
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 4;   // CSM fallback (bit 2)"}}
 
 The only shadow stage file left is the cascade depth write, `shadow/shadow_csm.vert`
-(below). Both consumers live in the lighting loop, after the light's attenuation and
-before its BRDF, and both produce *visibility*: 1 lit, 0 occluded, multiplied straight
-into that light's contribution.
+(below). The lighting pass gathers what it has into one `LightVisibility` (the RT words,
+or the directional light's CSM term) and hands it to `directLight` in the shared light
+loop, `includes/lighting/clustered_lights.slang`, which applies it per light after the
+attenuation and before the BSDF. Either way it is *visibility*: 1 lit, 0 occluded,
+multiplied straight into that light's contribution.
 
-{{cite shaders/core/deferred_lighting.frag "Lo += evaluateBRDF(surface, L, radiance) * shadow;"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "Lo += evaluateLight(s, L, radiance, t) * shadow;"}}
+
+The forward transparent pass uses the same loop with a single directional visibility from
+its own sun ray (`directionalVisibility`), so it never reads the RT image.
 
 ## Eight channels, one byte each
 
-The RT image is `R32G32_UINT` at the lighting pass's size, bound at binding 14 as a
-`usampler2D`: eight 8-bit channels, x holding lights 0 to 3 and y lights 4 to 7, lowest
+The RT image is `R32G32_UINT` at the lighting pass's size, bound at binding 14 as an
+integer sampler: eight 8-bit channels, x holding lights 0 to 3 and y lights 4 to 7, lowest
 byte first. It is fetched once per pixel before the loop, by integer coordinate:
 
-{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 14) uniform usampler2D rtShadowVisibility;"}}
+{{cite shaders/core/deferred_lighting.slang "[[vk::binding(14, 0)]] Sampler2D<uint2> rtShadowVisibility;   // RG32UI: 8 bits a shadow channel"}}
 
 A light finds its channel in `params.w`. The light table hands channels out in light
 order to the first eight lights that cast shadows, and writes -1 into every other
 light, which is then never occluded:
 
-{{cite shaders/core/deferred_lighting.frag "const uint word = slot < 4 ? rtShadow.x : rtShadow.y;"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "const uint word = slot < 4 ? vis.rtWords.x : vis.rtWords.y;"}}
 
 Eight is the image's width in bytes, not the light table's size: the raster table holds
 up to 65,536 lights, so a scene with a ninth caster renders it unshadowed. The light
@@ -46,30 +50,33 @@ unshadowed lights.
 {{cite ohao/render/scene/light_table.cpp "if (m_shadowLights.size() < kMaxShadowLights) {"}}
 
 A channel that reads 0 makes the light's term exactly zero, and the loop skips it
-before the BRDF. That skip matters to clustered lighting, which is exact only if every
+before the BSDF. That skip matters to clustered lighting, which is exact only if every
 term it leaves out or skips would have added $+0$:
 
-{{cite shaders/core/deferred_lighting.frag "if (shadow == 0.0) continue;   // fully occluded: adds exactly zero"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "if (shadow == 0.0) continue;   // fully occluded: adds exactly zero"}}
 
 ## The cascade fallback
 
 Without RT shadows, a light with a channel is shadowed by the cascades if it is
-directional, and only then: the CSM branch tests `lightType == 0`, so point and spot
-lights cast no shadow in a frame that cannot trace.
+directional, and only then: the lighting pass computes one CSM term when the CSM bit is
+set, and the loop applies it only to `type == 0`, so point and spot lights cast no
+shadow in a frame that cannot trace.
 
-{{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
+{{cite shaders/core/deferred_lighting.slang "vis.directional = !vis.rt && (pc.flags & 4u) != 0u ? shadowCSM(P, viewDepth) : 1.0;"}}
+
+{{cite shaders/includes/lighting/clustered_lights.slang "shadow = vis.directional;"}}
 
 The cascade is chosen by positive view-space depth against the cascade UBO's split
 distances:
 
-{{cite shaders/core/deferred_lighting.frag "if (viewDepth < cascades.splitDepths[i]) return i;"}}
+{{cite shaders/core/deferred_lighting.slang "if (viewDepth < cascades.splitDepths[i]) return i;"}}
 
 and the lookup is a 3×3 PCF whose nine taps are hardware depth comparisons: the map is
-bound as a `sampler2DArrayShadow` through the pass's `LESS_OR_EQUAL` comparison sampler,
-the fourth coordinate the biased reference depth:
+bound as a `Sampler2DArrayShadow` through the pass's `LESS_OR_EQUAL` comparison sampler,
+each tap a `SampleCmpLevelZero` against the biased reference depth:
 
-{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;"}}
-{{cite shaders/core/deferred_lighting.frag "float(cascadeIdx), reference));"}}
+{{cite shaders/core/deferred_lighting.slang "[[vk::binding(6, 0)]] Sampler2DArrayShadow shadowMap;   // CSM, comparison LESS_OR_EQUAL"}}
+{{cite shaders/core/deferred_lighting.slang "shadow += shadowMap.SampleCmpLevelZero(float3(proj.xy + float2(x, y) * texel, float(c)), reference);"}}
 
 The bias is the cascade UBO's `shadowBias`, a constant 0.012 subtracted at every
 incidence angle. A depth map's error grows with the tangent of the angle between the
@@ -79,13 +86,12 @@ struct, the usual remedy, is never read by the shader.
 
 {{cite ohao/render/deferred/render_pass_base.hpp "float shadowBias{0.012f};"}}
 
-`calculateShadowCSM` takes the fragment position and view depth and nothing about the
-light, so a second directional light recomputes the same nine taps and gets the same
-value. The cascades are rendered from a single direction, the deferred renderer's own
-sun direction (the sky's, or `setDirectionalLight`'s), whichever directional light the
-loop is shading:
+`shadowCSM` takes the fragment position and view depth and nothing about the light, and
+runs once per pixel: every shadow-casting directional light gets the same value. The
+cascades are rendered from a single direction, the deferred renderer's own sun direction
+(the sky's, or `setDirectionalLight`'s), whichever directional light the loop is shading:
 
-{{cite shaders/core/deferred_lighting.frag "shadow = calculateShadowCSM(fragPos, viewDepth);"}}
+{{cite shaders/core/deferred_lighting.slang "float shadowCSM(float3 p, float viewDepth)"}}
 {{cite ohao/render/deferred/csm_pass.cpp "glm::mat4 lightView = glm::lookAt(center - m_lightDirection * radius, center, up);"}}
 
 ## Four cascades, one vertex stage

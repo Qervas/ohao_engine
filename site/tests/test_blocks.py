@@ -38,11 +38,11 @@ class RenderBodyTest(unittest.TestCase):
     def test_cite_block_renders_chip_and_collects_path(self):
         html, headings, cited = blocks.render_body(
             '---\nid: x\n---\n\n## S\n\nlead prose\n'
-            '{{cite shaders/includes/brdf/brdf_ggx.glsl "float Ems = (1.0 - E_o) * (1.0 - E_i);"}}\n'
+            '{{cite shaders/material/openpbr.slang "float ggxD(float3 m, float a2)"}}\n'
         )
         self.assertIn("citation-chip", html)
-        self.assertIn("brdf_ggx.glsl:159", html)
-        self.assertIn("shaders/includes/brdf/brdf_ggx.glsl", cited)
+        self.assertIn("openpbr.slang:116", html)
+        self.assertIn("shaders/material/openpbr.slang", cited)
 
     def test_math_block_renders_katex_delimiters(self):
         html, _, _ = blocks.render_body(
