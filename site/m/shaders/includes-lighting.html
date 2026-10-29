@@ -73,7 +73,7 @@ $$</div>
 <div class="section-rule"><h2 id="the-ibl-the-deferred-pass-evaluates-instead">The IBL the deferred pass evaluates instead</h2></div>
 <div class="prose reveal">
 <p>The header directory has no image-based lighting of its own beyond one function the deferred pass now calls: `envBRDFApprox`, Karis&#x27;s analytic fit to the split sum&#x27;s environment-BRDF scale and bias, used in place of a lookup table. The rest is inline in `deferred_lighting.frag`, fed by `EnvPrefilter`&#x27;s two equirectangular images (the environment GGX-prefiltered into one mip per roughness step, and its irradiance; the deferred lighting unit, &quot;Image-based lighting&quot;):</p>
-<div class="citation-chip"><code class="citation-code">const vec2 ab = envBRDFApprox(NdotV, roughness);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L359" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:359</a></div>
+<div class="citation-chip"><code class="citation-code">const vec2 ab = envBRDFApprox(NdotV, roughness);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L367" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:367</a></div>
 <div class="citation-chip"><code class="citation-code">vec2 envBRDFApprox(float NdotV, float roughness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L271" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:271</a></div>
 </div>
 <div class="section-rule"><h2 id="where-the-light-record-lives">Where the light record lives</h2></div>

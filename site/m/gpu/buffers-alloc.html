@@ -33,7 +33,7 @@
         <p>VMA-style allocation, staging, UBOs, GPU allocator helpers.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-allocator-that-serves-one-subsystem">The allocator that serves one subsystem</a></li><li><a href="#the-leak-counter-both-sides-must-agree-on">The leak counter both sides must agree on</a></li><li><a href="#device-local-for-the-scene-host-visible-for-the-leftovers">Device-local for the scene, host-visible for the leftovers</a></li><li><a href="#the-far-plane-the-cascades-are-told">The far plane the cascades are told</a></li><li><a href="#a-table-of-any-size-two-type-encodings">A table of any size, two type encodings</a></li><li><a href="#the-default-light-and-its-pi">The default light and its $\pi$</a></li><li><a href="#emissive-meshes-flattened-into-point-lights">Emissive meshes flattened into point lights</a></li><li><a href="#vk-utils-a-formula-that-got-inlined-instead">vk_utils: a formula that got inlined instead</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-allocator-that-serves-one-subsystem">The allocator that serves one subsystem</a></li><li><a href="#the-leak-counter-both-sides-must-agree-on">The leak counter both sides must agree on</a></li><li><a href="#device-local-for-the-scene-host-visible-for-the-leftovers">Device-local for the scene, host-visible for the leftovers</a></li><li><a href="#the-far-plane-the-cascades-are-told">The far plane the cascades are told</a></li><li><a href="#a-table-of-any-size-two-type-encodings">A table of any size, two type encodings</a></li><li><a href="#a-scene-without-lights">A scene without lights</a></li><li><a href="#emissive-meshes-flattened-into-point-lights">Emissive meshes flattened into point lights</a></li><li><a href="#vk-utils-a-formula-that-got-inlined-instead">vk_utils: a formula that got inlined instead</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="the-allocator-that-serves-one-subsystem">The allocator that serves one subsystem</h2></div>
@@ -77,7 +77,7 @@
 <p>`renderDeferred` hands `DeferredRenderer` the camera&#x27;s own view and projection, which it uses for the GBuffer, the lighting pass and SSR. The camera is default-constructed and nothing in the tree calls `setPerspectiveProjection`, so its clip planes stay at the constructor&#x27;s 0.1 and 100.</p>
 <div class="citation-chip"><code class="citation-code">float farPlane{100.0f};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.hpp#L81" target="_blank" rel="noopener">ohao/render/camera/camera.hpp:81</a></div>
 <p>The `0.1f, 1000.0f` passed alongside the matrix are not clip planes and never reach a projection. They land in `m_nearPlane`/`m_farPlane`, whose only consumer is the cascaded shadow map:</p>
-<div class="citation-chip"><code class="citation-code">m_deferredRenderer-&gt;setCameraData(view, proj, camPos, 0.1f, 1000.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L137" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:137</a></div>
+<div class="citation-chip"><code class="citation-code">m_deferredRenderer-&gt;setCameraData(view, proj, camPos, 0.1f, 1000.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L134" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:134</a></div>
 <div class="citation-chip"><code class="citation-code">m_csmPass-&gt;setCameraData(m_view, m_proj, m_nearPlane, m_farPlane);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L280" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:280</a></div>
 <p>The real defect is there. `calculateCascadeSplits` blends a logarithmic and a linear split across $[n, f]$, and `calculateLightViewProj` then walks the camera&#x27;s own frustum corners by the fraction $(d - n)/(f - n)$. Both halves must use the same $f$ or they describe different volumes — and they do not: the splits run out to 1000, the corners come from a projection that clips at 100.</p>
 <div class="citation-chip"><code class="citation-code">float d = m_splitLambda * log + (1.0f - m_splitLambda) * linear;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L534" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:534</a></div>
@@ -99,19 +99,10 @@
 <div class="citation-chip"><code class="citation-code">area.type = ecs::LightType::AreaRect;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L195" target="_blank" rel="noopener">examples/turntable.cpp:195</a></div>
 <div class="citation-chip"><code class="citation-code">light.position = glm::vec4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 3.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/light_table.cpp#L119" target="_blank" rel="noopener">ohao/render/scene/light_table.cpp:119</a></div>
 </div>
-<div class="section-rule"><h2 id="the-default-light-and-its-pi">The default light and its $\pi$</h2></div>
+<div class="section-rule"><h2 id="a-scene-without-lights">A scene without lights</h2></div>
 <div class="prose reveal">
-<p>If the scene contributed no lights, `setFrameLights` lights it with a fallback sun, a directional light of intensity $\pi$ and a warm tint (blended toward a dimmer, bluer moon at night):</p>
-<div class="citation-chip"><code class="citation-code">sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi&lt;float&gt;());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L26" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:26</a></div>
-<p>The $\pi$ is not decoration; it calibrates against the $1/\pi$ in an energy-conserving diffuse lobe. Take the Lambertian idealisation first: a BRDF of $\rho/\pi$ gives, for a light of intensity $I$,</p>
-<div class="math-block">$$
-L_o = I \cdot \frac{\rho}{\pi} \cos\theta
-$$</div>
-<p>with $\rho$ the base colour and $\theta$ the angle between surface normal and light direction. Setting $I = \pi$ makes a white albedo return $L_o = 1$ head-on — a clean reference white — instead of $1/\pi \approx 0.318$, which is $\log_2 \pi \approx 1.65$ stops underexposed.</p>
-<p>The shipping lobe is not Lambert. The deferred lighting pass, the one consumer of this buffer, calls `evaluateBRDF`, whose diffuse term is Burley/Disney scaled by $k_D = (1 - F)(1 - m)$ for Fresnel $F$ and metalness $m$:</p>
-<div class="citation-chip"><code class="citation-code">return diffuseColor * INV_PI * lightScatter * viewScatter;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L92" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:92</a></div>
-<div class="citation-chip"><code class="citation-code">vec3 kD = (vec3(1.0) - F) * (1.0 - surface.metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L143" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:143</a></div>
-<p>Burley&#x27;s two scatter factors both go to 1 at normal incidence, so it does collapse to $\rho/\pi$ exactly where the calibration is aimed — but $k_D$ trims 4% off a dielectric at $F_0 = 0.04$, and the Kulla-Conty multi-scatter term adds a little back. $I = \pi$ lands near reference white, not on it.</p>
+<p>`setFrameLights` hands the deferred renderer the scene&#x27;s raster lights and nothing else. A scene that contributed none is lit by its environment, or the constant ambient without one, as the path tracer lights it; no light is made up for it:</p>
+<div class="citation-chip"><code class="citation-code">m_deferredRenderer-&gt;setLights(lights, version, m_ambientOverride.value_or(0.35f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L20" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:20</a></div>
 </div>
 <div class="section-rule"><h2 id="emissive-meshes-flattened-into-point-lights">Emissive meshes flattened into point lights</h2></div>
 <div class="prose reveal">
@@ -162,8 +153,6 @@ $$</div>
         <div class="row"><code>ohao/ecs/components.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/turntable.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/buffer_setup.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/brdf/brdf_common.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/brdf/brdf_ggx.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/model_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/bindless_texture_manager.cpp</code><span class="desc"></span></div>
         <div class="row"><code>tests/engine/engine_tests.cpp</code><span class="desc"></span></div>

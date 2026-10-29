@@ -118,7 +118,7 @@
 <p>Adding a storage-image or storage-buffer binding without bumping that count makes `vkAllocateDescriptorSets` return `VK_ERROR_OUT_OF_POOL_MEMORY` and `createDescriptorResources` return false. That failure is named, not silent — `init()` logs it as an error on the `render` channel and aborts:</p>
 <div class="citation-chip"><code class="citation-code">OHAO_LOG(Error, render, &quot;PathTracer: failed to create descriptor resources&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L104" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:104</a></div>
 <p>It is total, though. `ensureRTRenderer` drops the half-built profile when `init` fails, and the RT dispatch then returns immediately because `getRTRenderer` hands back null, so no trace is ever recorded:</p>
-<div class="citation-chip"><code class="citation-code">if (!rtRenderer || !isRTSupported()) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L312" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:312</a></div>
+<div class="citation-chip"><code class="citation-code">if (!rtRenderer || !isRTSupported()) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L297" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:297</a></div>
 </div>
 <div class="section-rule"><h2 id="two-profiles-one-layout">Two profiles, one layout</h2></div>
 <div class="prose reveal">
