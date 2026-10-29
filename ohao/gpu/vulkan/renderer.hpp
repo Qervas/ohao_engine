@@ -282,9 +282,9 @@ public:
     };
     void setRenderSettings(const RenderSettings& s);
     [[nodiscard]] RenderSettings renderSettings() const;
-    // The deferred frame's constant ambient light, in place of the default (0.35 with scene
-    // lights, the sky's day/night value with the fallback sun); nullopt: the default. A fallback
-    // only: lighting applies it to a frame with neither RT GI nor an environment.
+    // The deferred frame's constant ambient light, in place of the default (0.35); nullopt: the
+    // default. A fallback only: lighting applies it to a frame with neither RT GI nor an
+    // environment.
     void setAmbientIntensity(std::optional<float> ambient) noexcept { m_ambientOverride = ambient; }
     // RT shadows: pixels of the newest finished frame (its renderer frame number) that had
     // more lights worth tracing than the 4 they may trace. Collects finished frames first.
@@ -411,8 +411,8 @@ private:
     // Phase 1: Rendering pipeline setup
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
-    // This frame's raster lights for the deferred renderer: the scene's light table, or with
-    // none the fallback sun (m_fallbackSun, aligned with the sky); sets the ambient intensity.
+    // This frame's raster lights for the deferred renderer: the scene's light table (none
+    // without lights, as in the path tracer); sets the ambient intensity.
     void setFrameLights();
 
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline);
@@ -447,9 +447,6 @@ private:
     uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts
     uint64_t m_framesSubmitted{0};
     std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_slotSubmitted{};   // the submitted frame each slot holds
-
-    // The fallback sun a scene without lights is lit by (setFrameLights)
-    LightData m_fallbackSun{};
 
     // Path tracer profiles (the acceleration structures belong to m_renderScene)
     RTRealtimePipeline m_rtRealtimePipeline;

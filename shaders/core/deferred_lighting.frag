@@ -184,9 +184,17 @@ void main() {
     vec4 gBuffer1Sample = texture(gBuffer1, inTexCoord);
     vec4 gBuffer2Sample = texture(gBuffer2, inTexCoord);
 
-    // Early discard for sky/background — position (0,0,0) means no geometry was written
+    // Sky/background — position (0,0,0) means no geometry was written. With an environment
+    // (IBL, flag bit 0) it is the environment along the view ray, as the path tracer's camera ray
+    // misses see it (prefiltered level 0 is the source image); without one the sky pass fills it.
     if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {
-        outColor = vec4(0.0);
+        if ((pc.flags & 1u) != 0u) {
+            const vec4 farPoint = pc.invViewProj * vec4(inTexCoord * 2.0 - 1.0, 1.0, 1.0);
+            const vec3 viewDir = normalize(farPoint.xyz / farPoint.w - pc.cameraPos);
+            outColor = vec4(pc.envIntensity * textureLod(envPrefiltered, equirectUV(viewDir), 0.0).rgb, 1.0);
+        } else {
+            outColor = vec4(0.0);
+        }
         outEnvSpecular = vec4(0.0);
         outSpecularWeight = vec4(0.0);
         return;

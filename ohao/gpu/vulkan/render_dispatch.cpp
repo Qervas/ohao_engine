@@ -14,9 +14,6 @@ namespace ohao {
 
 namespace {
 
-// The fallback sun's angular radius for its RT shadow penumbra: the real sun's, 0.267 deg.
-constexpr float kSunAngularRadius = 0.00465f;
-
 // The copy into a staging buffer, visible to the host once the frame's fence signals.
 void stagingToHost(VkCommandBuffer cmd, VkBuffer staging) {
     VkBufferMemoryBarrier b{};
@@ -152,24 +149,12 @@ void VulkanRenderer::renderDeferred() {
                                       ibl ? m_envPrefilter->sampler() : VK_NULL_HANDLE, m_envIntensityScale);
     }
 
-    // This frame's raster lights: the scene's light table, or the fallback sun (aligned with
-    // the sky) when the scene has none. The deferred renderer writes them into this slot's
-    // light buffer (its fence was waited on above), only when they changed.
+    // This frame's raster lights: the scene's light table. The deferred renderer writes them
+    // into this slot's light buffer (its fence was waited on above), only when they changed.
     setFrameLights();
 
-    // The lights RT shadows trace: the scene's shadow casters, or the fallback sun (its
-    // params.w names channel 0) when the scene has no lights.
-    if (!m_renderScene->rasterLights().empty()) {
-        m_deferredRenderer->setShadowLights(m_renderScene->shadowLights());
-    } else if (m_fallbackSun.params.w == 0.0f) {
-        render::LightDesc sun{};
-        sun.kind = render::LightKind::Directional;
-        sun.direction = glm::vec3(m_fallbackSun.direction);
-        sun.radius = kSunAngularRadius;
-        m_deferredRenderer->setShadowLights(std::span<const render::LightDesc>(&sun, 1));
-    } else {
-        m_deferredRenderer->setShadowLights({});
-    }
+    // The lights RT shadows trace: the scene's shadow casters (none without lights).
+    m_deferredRenderer->setShadowLights(m_renderScene->shadowLights());
 
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);

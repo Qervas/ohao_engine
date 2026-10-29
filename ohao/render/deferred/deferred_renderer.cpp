@@ -553,8 +553,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Sky draws into the lighting output before SSS blurs it in place and SSR
     // and post read it.
 
-    // 4.5. Sky pass — fills sky pixels with Preetham sky
-    if (m_skyPass && m_skyEnabled) {
+    // 4.5. Sky pass — fills sky pixels with Preetham sky, in a scene without an environment: with
+    //      one, lighting already wrote the environment there (as the path tracer shows it).
+    const bool environmentBackground = m_envPrefiltered != VK_NULL_HANDLE && m_envIrradiance != VK_NULL_HANDLE;
+    if (m_skyPass && m_skyEnabled && !environmentBackground) {
         timerBegin("sky");
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_skyPass->setCameraData(invViewProj, m_cameraPos);

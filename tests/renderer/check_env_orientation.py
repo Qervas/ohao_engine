@@ -5,13 +5,12 @@ v = 0 and -Y to v = 1. This writes a 64x32 HDRI whose upper half (the sky) is bl
 half (the ground) is orange, and a white floor under it, and captures it through `ohao serve` three
 ways: deferred with RT GI (gi_trace's escaped rays), deferred with RT GI off (the prefiltered
 environment and its irradiance), and the path tracer (pt_miss, the CDF's importance sampling). The
-floor, lit by the upper hemisphere, must come out blue in all three, and the path tracer's sky above
-the horizon too: mean blue over mean red at least 1.5. Upside down they come out orange.
+floor, lit by the upper hemisphere, and the sky above the horizon behind it must come out blue in all
+three: mean blue over mean red at least 1.5. Upside down they come out orange.
 
-The scene has one light that gives nothing (a point light 100 m below the floor with a 1 m range):
-a scene without lights is lit in deferred by the fallback sun, which would drown the environment.
-Deferred draws its procedural sky behind the scene, not the HDRI, so only the path tracer's sky is
-checked.
+The scene has no light, so this also holds the renderers to the same scene: deferred lights a scene
+without lights by its environment alone (no fallback sun) and draws the environment behind it (not its
+procedural sky), as the path tracer does.
 
   python tests/renderer/check_env_orientation.py   # exit 0 pass, 1 fail; last line the JSON summary
 """
@@ -64,8 +63,8 @@ def write_scene(path, hdr):
     half = math.radians(-20.0) / 2.0
     scene = {
         "format": "ohao.scene", "version": 1,
-        "components": {"Camera": 1, "Environment": 1, "Light": 1, "MaterialOverride": 1, "MeshSource": 1,
-                       "Name": 1, "Transform": 1},
+        "components": {"Camera": 1, "Environment": 1, "MaterialOverride": 1, "MeshSource": 1, "Name": 1,
+                       "Transform": 1},
         "entities": [
             {"id": "e0e0000000000001", "Name": {"value": "Camera"},
              "Transform": {"position": [0, 2, 4], "rotation": [math.sin(half), 0, 0, math.cos(half)]},
@@ -75,8 +74,6 @@ def write_scene(path, hdr):
             {"id": "e0e0000000000003", "Name": {"value": "Floor"},
              "MeshSource": {"source": {"BoxPrim": {"lo": [-6, -0.1, -8], "hi": [6, 0, 6], "color": [0.8, 0.8, 0.8]}}},
              "MaterialOverride": {"baseColor": [0.8, 0.8, 0.8], "roughness": 0.9}},
-            {"id": "e0e0000000000004", "Name": {"value": "NullLight"}, "Transform": {"position": [0, -100, 0]},
-             "Light": {"type": "Point", "color": [1, 1, 1], "intensity": 1, "range": 1}},
         ],
     }
     with open(path, "w", newline="\n") as f:
@@ -149,9 +146,7 @@ def main():
             s.tool("render_capture", dict(capture, path=png))
             img = np.asarray(Image.open(os.path.join(ROOT, png)).convert("RGB"), dtype=np.float64)
             h, w = img.shape[:2]
-            regions = {"floor": img[h * 3 // 4:, w // 3: w * 2 // 3]}
-            if capture["mode"] != "deferred":
-                regions["sky"] = img[: h // 12, :]
+            regions = {"floor": img[h * 3 // 4:, w // 3: w * 2 // 3], "sky": img[: h // 12, :]}
             results[name] = {}
             for region, pixels in regions.items():
                 ratio, mean = blue_over_red(pixels)
