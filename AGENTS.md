@@ -537,7 +537,17 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   PNG: the two tonemap differently (deferred at the capture's exposure, the path tracer at 0.5).
   The path tracer is ground truth only where `check_analytic` holds it: until 2026-10-29 it lit a
   sun 7.8x too bright (its intensity divided by an emitter area a directional light has not) and
-  every point or spot light under 5.6 cm too dark (the area floored at 0.01 m²).
+  every point or spot light under 5.6 cm too dark (the area floored at 0.01 m²). It is not yet
+  ground truth for indirect light: its specular bounce is a heuristic (a jittered mirror
+  direction, throughput 1), and its BRDF is not deferred's
+  (`docs/changes/2026-10-29-gi-every-light.md`, known gaps).
+- **RT GI's bounce sees every light** (`gi_trace.slang` `directAt`): up to `kGIWeighedLights`
+  (16) each is weighed in one pass, past that `kGILightCandidates` (8) are drawn from an alias
+  table in `GILight.cone.zw` and resampled; one shadow ray either way. `check_analytic.py` holds
+  it at reference quality: spots aimed at a wall must bounce, together, what one spot of their sum
+  does and what each does alone. A one-pass reservoir must always take the first light that gives
+  any: a GPU's `w / w` can round below 1 (it left pixels with no light chosen, NaN, which
+  reference quality's running mean keeps and TAA and bloom spread).
 - Point and spot lights mean the same in both renderers (Frank's ruling, 2026-10-26): a
   light of intensity `I` lights a surface `d` away with `I/d²`, windowed to exactly 0 at
   its `range` (default 10 m) by `(1-(d/range)⁴)²`; a directional light of intensity `I` gives a

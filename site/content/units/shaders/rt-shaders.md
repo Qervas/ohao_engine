@@ -275,13 +275,14 @@ shadow-casting lights (up to eight) per pixel by importance and traces one ray t
 each of the four most important; the filter then turns those bits into one 8-bit
 visibility channel a light (see the hybrid shadow technique). The GI trace shoots
 cosine-weighted rays one bounce deep — two a pixel at half resolution in realtime,
-32 at full resolution in reference — and lights each hit with the four brightest
-lights, attenuated as the lighting pass attenuates them, one of them, chosen in proportion
-to what it gives, behind a shadow ray from the secondary hit. It takes the hit surface's
+32 at full resolution in reference — and lights each hit with every light,
+attenuated as the lighting pass attenuates them, one of them, chosen in proportion
+to what it gives (among eight candidates drawn by power past 16 lights), behind a
+shadow ray from the secondary hit. It takes the hit surface's
 normal as the negated ray direction: a one-bounce estimate, not a path tracer (see the
 hybrid GI technique).
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, xi) * T;"}}
+{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, key, s) * T;"}}
 
 There is no miss shader in either. The query's committed status is the whole answer:
 a shadow ray that commits nothing is lit, and a GI ray that commits nothing samples

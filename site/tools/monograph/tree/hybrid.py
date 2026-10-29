@@ -20,7 +20,7 @@ MODULE = {
             'RT GI technique',
             'One-bounce diffuse GI: half-res trace, temporal + à-trous + upsample.',
             files=['ohao/render/rt/rt_gi_technique.hpp', 'ohao/render/rt/rt_gi_technique.cpp', 'ohao/render/rt/rt_compute.hpp', 'ohao/render/rt/rt_compute.cpp', 'shaders/rt/gi_trace.slang', 'shaders/rt/gi_denoise.slang'],
-            design=['Compute trace with inline ray queries: half resolution, 2 cosine rays a pixel, hits lit by the 4 brightest lights, misses by the env map (reference: full resolution, 32 rays, running mean).', 'Denoised by a reprojected two-speed temporal accumulation, 2 à-trous iterations and a joint-bilateral upsample; lighting adds it at binding 11.'],
+            design=['Compute trace with inline ray queries: half resolution, 2 cosine rays a pixel, hits lit by every light (one shadowed, chosen by what it gives), misses by the env map (reference: full resolution, 32 rays, running mean).', 'Denoised by a reprojected two-speed temporal accumulation, 2 à-trous iterations and a joint-bilateral upsample; lighting adds it at binding 11.'],
         ),
         page(
             'visibility',

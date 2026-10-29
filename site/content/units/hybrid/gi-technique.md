@@ -90,7 +90,7 @@ sample.
 A ray that hits a surface returns that surface's bounce albedo over $\pi$ times the
 direct light the hit point receives — its own one-bounce $L_i$:
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, xi) * T;"}}
+{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, key, s) * T;"}}
 
 The bounce albedo is not the hit's material. It is the RGB of
 `InstanceGpu::giAlbedoPacked`, loaded from the raw instance table at a byte offset
@@ -104,12 +104,13 @@ build rather than the bounce:
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "static_assert(sizeof(render::InstanceGpu) == shared::kInstanceGpuStride);"}}
 
-The direct light at the hit comes from the frame's brightest lights, at most
-`kGIMaxLights` (four). The CPU picks them every frame from the `RenderScene`'s light
-list — by intensity, ties by order, emissive proxies and dark lights out — and writes
-them into this frame slot's light buffer:
+The direct light at the hit comes from every light of the frame. The CPU writes them every
+frame from the `RenderScene`'s light list — in scene order, emissive proxies and dark lights
+out — into this frame slot's light buffer, which grows to the count, each with its share of
+the lights' power (the luminance of colour times intensity) in its fourth radiance component
+and its slot of Vose's alias table in the spot cone's two spare components:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "if (input.lights[i].kind != render::LightKind::EmissiveProxy && input.lights[i].intensity > 0.0f)"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "lights[i].radiance[3] = static_cast<float>(power[i] / total);"}}
 
 Each is attenuated as the lighting pass attenuates it: inverse square, windowed by
 the light's range, and a spot light's cone. A rectangle light is what it is from afar:
@@ -121,12 +122,25 @@ units and with no range; a directional light is a direction, not a position.
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 2.0f);"}}
 
-The hit is shadowed with one ray. Each of the four lights would give the hit some
-luminance unshadowed; one is chosen with probability proportional to it, a shadow ray
-goes to it, and its light is divided by that probability. The mean is the sum of every
-light's shadowed light, for one ray where four would cost four:
+The hit is shadowed with one ray. Each light would give the hit some luminance unshadowed;
+one is chosen with probability proportional to it, a shadow ray goes to it, and its light
+is divided by that probability. The mean is the sum of every light's shadowed light, for
+one ray where n would cost n. Up to `kGIWeighedLights` (16) lights, each is weighed, in one
+pass: a weighted reservoir, one random number rescaled at every light. Past that, weighing
+all of them at every hit costs too much (the benchmark scenes have 1,000), so
+`kGILightCandidates` (eight) candidates are drawn by power from the alias table, in constant
+time each, and one is chosen among them by what it gives. That is resampled importance sampling: the
+candidate's weight is what it gives over its probability, and the estimate, scaled by the
+weights' mean, is unbiased for any number of lights:
 
-{{cite shaders/rt/gi_trace.slang "return lit[pick] * (total / weight[pick]);"}}
+{{cite shaders/rt/gi_trace.slang "scale = sum / (float(kGILightCandidates) * luminance(lit));"}}
+
+Until 2026-10-29 the bounce saw only the four brightest lights. Cornell has twelve of equal
+intensity, so its walls bounced a third of their light. `check_analytic.py` now holds it:
+a spot aimed at a wall lights the floor only by the bounce, and 6, 12 or 20 spots at one
+place must bounce what one spot of their sum does, and twenty spread spots of twenty
+strengths what the twenty do alone, at reference quality (the realtime denoiser's clamp is
+not linear).
 
 Before it, a bounce point in shadow bounced full light, and every surface facing a
 shadowed floor, an underside or a rim, glowed with light that was not there. One
@@ -358,7 +372,7 @@ from the hit's material or texture, so a textured wall bounces one flat colour.
 :::key
 The Monte-Carlo layer is textbook: cosine-weighted, stratified, unbiased for the
 hemisphere it samples. Every approximation lives in what a ray may know when it
-lands — one albedo per instance, one of the four brightest lights shadowed per hit, a
+lands — one albedo per instance, one light shadowed per hit, a
 normal guessed from the ray — and every frame-to-frame artifact in what the
 denoiser keeps: a history clamped to four frames' range, tested per tap against
 depth and normal.

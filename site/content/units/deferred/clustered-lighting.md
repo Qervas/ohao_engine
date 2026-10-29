@@ -208,9 +208,10 @@ writes after the previous frame's fragment reads in queue order, is enough:
 ## What does not read the lists
 
 The deferred lighting pass is the lists' only reader. RT GI shades its bounce with its own
-selection, the four brightest lights by intensity, and the effects' expand pass lights each particle at its centre from the same lists:
+copy of every light, drawn by power (its hits lie outside the camera's froxels), and the
+effects' expand pass lights each particle at its centre from the same lists:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "// The bounce's lights: the brightest by intensity, ties by order, emissive proxies out."}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "// The bounce's lights: every light that gives any, emissive proxies out (the emissive surface"}}
 
 Shadows are separate as well: only the first eight shadow-casting lights own an RT
 visibility channel (the shadow unit), however many lights the froxels hold.

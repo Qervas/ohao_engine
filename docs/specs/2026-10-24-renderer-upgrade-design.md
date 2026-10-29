@@ -406,7 +406,8 @@ larger counts is later work.
 
 **Lighting.** Deferred lighting reads the lists. (As built, step 13: particles shade with
 no lights, and RT GI keeps its own 4 brightest lights, because its hits lie outside the
-camera's froxels; neither reads the lists.) The light table loses its 8-light cap:
+camera's froxels; neither reads the lists. Since 2026-10-29 RT GI's bounce sees every light,
+`docs/changes/2026-10-29-gi-every-light.md`.) The light table loses its 8-light cap:
 `MAX_LIGHTS` becomes the table's capacity, 65,536, in a storage buffer, one per frame slot,
 rewritten only when the lights change. A cluster that overflows 256 lights keeps the first
 256 and counts the overflow in `render.stats` (`lightsOverflow`), so it is visible, not
