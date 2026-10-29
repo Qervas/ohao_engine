@@ -11,7 +11,7 @@ A scene is a JSON object with four members: `"format": "ohao.scene"`, a document
 
 {{cite assets/scenes/cornell_box.scene.json "1a0edc87612c3fd5"}}
 
-After the id come the entity's saved components in registration order (`Name`, `Transform`, `Parent`, `Light`, `MeshSource`, `MaterialOverride`, `Camera`, `Environment`, `Spin`), then any unknown components the entity kept from a file, sorted by name. The header maps each component name the file uses to the version it was written at, so a newer engine knows what to upgrade. Unlike everything else in the file, the header is in alphabetical order, because the save builds it in a `std::map`:
+After the id come the entity's saved components in registration order (`Name`, `Transform`, `Parent`, `Light`, `MeshSource`, `Material`, `Camera`, `Environment`, `Spin`), then any unknown components the entity kept from a file, sorted by name. The header maps each component name the file uses to the version it was written at, so a newer engine knows what to upgrade. Unlike everything else in the file, the header is in alphabetical order, because the save builds it in a `std::map`:
 
 {{cite ohao/ecs/scene_io.cpp "std::map<std::string, uint32_t> header;   // sorted by name"}}
 

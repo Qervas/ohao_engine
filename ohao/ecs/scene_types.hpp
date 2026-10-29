@@ -99,7 +99,7 @@ template <class T>
 
 // Registers every ECS component, authoring and runtime, in a fixed order (the order of
 // the catalogue and of component blocks in scene files):
-//   authoring (saved):  Name, Transform, Parent, Light, MeshSource, MaterialOverride,
+//   authoring (saved):  Name, Transform, Parent, Light, MeshSource, Material,
 //     Camera, Environment (both singletons), Spin, InputActions (singleton),
 //     FlyController, Level, SpawnPoint, Socket. MeshSource's alternatives ModelAsset and
 //     the *Prim structs, and ActionBinding/AxisBinding, are nested types.

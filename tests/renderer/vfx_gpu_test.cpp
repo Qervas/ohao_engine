@@ -19,6 +19,7 @@
 //                             plane within 1 LSB, RT shadows, RT GI, SSR, SSAO and post off.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
+#include "common/materials.hpp"
 #include "api/session.hpp"
 #include "common/harness.hpp"
 #include "ecs/asset_resolver.hpp"
@@ -138,16 +139,16 @@ entt::entity camera(ecs::World& w, const View& v) {
     return c;
 }
 
-void box(ecs::World& w, const char* name, glm::vec3 lo, glm::vec3 hi, ecs::MaterialOverride m) {
+void box(ecs::World& w, const char* name, glm::vec3 lo, glm::vec3 hi, ecs::Material m) {
     const entt::entity e = w.create(name, ecs::Transform{});
     w.registry().emplace<ecs::MeshSource>(e, ecs::MeshSource{ecs::BoxPrim{lo, hi, m.baseColor}});
-    w.registry().emplace<ecs::MaterialOverride>(e, m);
+    w.registry().emplace<ecs::Material>(e, m);
 }
 
-ecs::MaterialOverride pane(glm::vec3 color, float opacity = 0.5f) {
-    ecs::MaterialOverride m{color, 0.8f, 0.0f, 0.0f};
+ecs::Material pane(glm::vec3 color, float opacity = 0.5f) {
+    ecs::Material m = ohao::test::material(color, 0.8f, 0.0f, 0.0f);
     m.alphaMode = ecs::MaterialAlpha::Blend;
-    m.opacity = opacity;
+    m.geometryOpacity = opacity;
     return m;
 }
 
@@ -169,7 +170,7 @@ void sun(ecs::World& w, float intensity = 2.0f, float yawDeg = 0.0f) {
 void floorPlane(ecs::World& w) {
     const entt::entity f = w.create("Floor", ecs::Transform{});
     w.registry().emplace<ecs::MeshSource>(f, ecs::MeshSource{ecs::PlatformPrim{20.0f, 0.2f, 20.0f}});
-    w.registry().emplace<ecs::MaterialOverride>(f, ecs::MaterialOverride{glm::vec3(0.5f), 0.9f, 0.0f, 0.0f});
+    w.registry().emplace<ecs::Material>(f, ohao::test::material(glm::vec3(0.5f), 0.9f, 0.0f, 0.0f));
 }
 
 std::string save(ecs::World& w, const std::string& tag, const std::string& set = {}) {
@@ -450,9 +451,9 @@ std::string cardScene(ecs::MaterialAlpha mode, float opacity, bool card, bool in
     t.rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));   // -Z to -Y: down
     w.registry().emplace<ecs::Light>(w.create("Sun", t), l);
     if (card) {
-        ecs::MaterialOverride m{{0.8f, 0.8f, 0.8f}, 0.8f, 0.0f, 0.0f};
+        ecs::Material m = ohao::test::material({0.8f, 0.8f, 0.8f}, 0.8f, 0.0f, 0.0f);
         m.alphaMode = mode;
-        m.opacity = opacity;
+        m.geometryOpacity = opacity;
         const float y = inView ? 1.0f : 6.0f;
         box(w, "Card", {-1.0f, y, -1.0f}, {1.0f, y + 0.05f, 1.0f}, m);
     }
@@ -545,16 +546,16 @@ std::string parityScene(bool blend, const std::string& tag) {
     lamp.radius = 0.05f;
     lamp.color = {1.0f, 0.7f, 0.4f};
     w.registry().emplace<ecs::Light>(w.create("Lamp", ecs::Transform{{1.0f, 1.0f, 1.0f}}), lamp);
-    ecs::MaterialOverride m{{0.6f, 0.5f, 0.4f}, 0.4f, 0.0f, 0.0f};
+    ecs::Material m = ohao::test::material({0.6f, 0.5f, 0.4f}, 0.4f, 0.0f, 0.0f);
     if (blend) {
         m.alphaMode = ecs::MaterialAlpha::Blend;
-        m.opacity = 1.0f;
+        m.geometryOpacity = 1.0f;
     }
     const entt::entity plane = w.create("Plane", ecs::Transform{});
     w.registry().emplace<ecs::MeshSource>(
         plane, ecs::MeshSource{ecs::QuadPrim{{-2.0f, 0.0f, 2.0f}, {2.0f, 0.0f, 2.0f}, {2.0f, 0.0f, -2.0f}, {-2.0f, 0.0f, -2.0f},
                                              {0.0f, 1.0f, 0.0f}, m.baseColor}});
-    w.registry().emplace<ecs::MaterialOverride>(plane, m);
+    w.registry().emplace<ecs::Material>(plane, m);
     camera(w, {{0.0f, 2.5f, 3.5f}, 0.0f, -35.0f});
     return save(w, tag);
 }
@@ -632,7 +633,7 @@ void slant(ecs::World& w, const char* name, glm::vec3 centre, float yawDeg) {
     t.rotation = glm::angleAxis(glm::radians(yawDeg), glm::vec3(0.0f, 1.0f, 0.0f));
     const entt::entity e = w.create(name, t);
     w.registry().emplace<ecs::MeshSource>(e, ecs::MeshSource{ecs::BoxPrim{{-1.0f, -1.0f, -0.1f}, {1.0f, 1.0f, 0.1f}, glm::vec3(0.8f)}});
-    w.registry().emplace<ecs::MaterialOverride>(e, ecs::MaterialOverride{glm::vec3(0.8f), 0.9f, 0.0f, 0.0f});
+    w.registry().emplace<ecs::Material>(e, ohao::test::material(glm::vec3(0.8f), 0.9f, 0.0f, 0.0f));
 }
 
 // The centre of a `slant` box's front face.
@@ -645,7 +646,7 @@ std::string decalScene(const std::string& tag) {
     ecs::World w;
     w.seedIds(33);
     sun(w);
-    box(w, "Wall", {-6.0f, 0.0f, -6.2f}, {6.0f, 4.0f, -5.8f}, ecs::MaterialOverride{glm::vec3(0.8f), 0.9f, 0.0f, 0.0f});
+    box(w, "Wall", {-6.0f, 0.0f, -6.2f}, {6.0f, 4.0f, -5.8f}, ohao::test::material(glm::vec3(0.8f), 0.9f, 0.0f, 0.0f));
     slant(w, "SlantA", {-1.0f, 1.5f, -3.6f}, 45.0f);
     slant(w, "SlantB", {1.0f, 1.5f, -3.6f}, 61.0f);
     camera(w, View{{0.0f, 1.5f, 0.0f}, 0.0f, 0.0f});

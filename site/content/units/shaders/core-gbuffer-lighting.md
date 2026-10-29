@@ -123,12 +123,12 @@ Lighting adds it unlit, in its own colour. It used to arrive as one luminance sc
 the normal target's alpha, re-tinted with the albedo, so an emitter glowed in its base
 colour: DamagedHelmet's cyan ring rendered dim grey. The alpha still carries that
 luminance, only to keep an emissive surface out of the SSS blur. Emission cannot glow
-*hard* yet: the strength lane, `row2.y`, is set to exactly `1.0f` for any material that
-has an emissive texture and left at 0 otherwise — model upload has no other path that
-raises it — and the bindless textures it multiplies are 8-bit, so the radiance is
-bounded by 1.0.
+*hard* unless the file says so: the strength lane, `row2.y`, is the material's
+`KHR_materials_emissive_strength` (1 without it) for any material that has an emissive
+texture and 0 otherwise, and the bindless textures it multiplies are 8-bit, so the
+radiance is bounded by that strength.
 
-{{cite ohao/render/scene/model_upload.cpp "if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;"}}
+{{cite ohao/render/scene/model_upload.cpp "mats[i].emissiveStrength = i < model.materialEmissionStrength.size() ? model.materialEmissionStrength[i] : 1.0f;"}}
 
 The sharper limitation is upstream of the shader: a material has no emissive colour
 factor at all, only a texture index and that strength. The shader gates on the

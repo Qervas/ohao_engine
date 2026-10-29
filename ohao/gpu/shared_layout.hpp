@@ -53,8 +53,8 @@ inline constexpr uint32_t kAlphaOpaque = 0u;
 inline constexpr uint32_t kAlphaMask = 1u;
 // a material's alpha mode: blended by base colour alpha times the albedo texture's alpha times row 3, z (opacity)
 inline constexpr uint32_t kAlphaBlend = 2u;
-// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (roughness, metallic, normalTex, emissiveTex), 2 (roughMetalTex, emissiveStrength, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha)
-inline constexpr uint32_t kMaterialRows = 4u;
+// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex)
+inline constexpr uint32_t kMaterialRows = 7u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
 inline constexpr uint32_t kVfxGroupSize = 64u;
 // vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order

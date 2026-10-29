@@ -63,7 +63,7 @@ def write_scene(path, hdr):
     half = math.radians(-20.0) / 2.0
     scene = {
         "format": "ohao.scene", "version": 1,
-        "components": {"Camera": 1, "Environment": 1, "MaterialOverride": 1, "MeshSource": 1, "Name": 1,
+        "components": {"Camera": 1, "Environment": 1, "Material": 1, "MeshSource": 1, "Name": 1,
                        "Transform": 1},
         "entities": [
             {"id": "e0e0000000000001", "Name": {"value": "Camera"},
@@ -73,7 +73,7 @@ def write_scene(path, hdr):
              "Environment": {"hdri": {"path": hdr}}},
             {"id": "e0e0000000000003", "Name": {"value": "Floor"},
              "MeshSource": {"source": {"BoxPrim": {"lo": [-6, -0.1, -8], "hi": [6, 0, 6], "color": [0.8, 0.8, 0.8]}}},
-             "MaterialOverride": {"baseColor": [0.8, 0.8, 0.8], "roughness": 0.9}},
+             "Material": {"base_color": [0.8, 0.8, 0.8], "specular_roughness": 0.9}},
         ],
     }
     with open(path, "w", newline="\n") as f:

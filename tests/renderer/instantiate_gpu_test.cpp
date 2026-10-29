@@ -3,7 +3,7 @@
 // Renders the Cornell box twice in deferred mode, each with a fresh renderer:
 //   A. built the way the examples build it today: spawnModel with generateQuad walls and
 //      generator spheres;
-//   B. built from data: MeshSource {QuadPrim | SpherePrim} + MaterialOverride entities,
+//   B. built from data: MeshSource {QuadPrim | SpherePrim} + Material entities,
 //      turned into meshes by the instantiate system on a real RenderScene.
 // The two images must be bit-identical (B shares one sphere mesh and deduplicates the
 // wall materials; neither may change a pixel). Then B's spheres are destroyed: their
@@ -11,6 +11,7 @@
 // cleanly. Validation layers are on for the whole run and must report nothing.
 //
 // Exit code 0 = pass. The last line is a JSON summary.
+#include "common/materials.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/instantiate.hpp"
@@ -54,12 +55,12 @@ struct Ball {
     const char* name;
     glm::vec3 position;
     float scale;
-    ecs::MaterialOverride material;
+    ecs::Material material;
 };
 
 std::vector<Ball> balls() {
-    return {{"MetalSphere", {-2.0f, -S + 2.0f, 0.0f}, 2.0f, {{0.95f, 0.93f, 0.88f}, 0.05f, 1.0f, 0.0f}},
-            {"GlassSphere", {2.5f, -S + 1.8f, 1.5f}, 1.8f, {{0.9f, 0.95f, 1.0f}, 0.02f, 0.0f, 0.0f}}};
+    return {{"MetalSphere", {-2.0f, -S + 2.0f, 0.0f}, 2.0f, ohao::test::material({0.95f, 0.93f, 0.88f}, 0.05f, 1.0f)},
+            {"GlassSphere", {2.5f, -S + 1.8f, 1.5f}, 1.8f, ohao::test::material({0.9f, 0.95f, 1.0f}, 0.02f)}};
 }
 
 void addLights(ecs::World& world) {
@@ -76,12 +77,12 @@ void addLights(ecs::World& world) {
     }
 }
 
-render::MaterialDesc toDesc(const ecs::MaterialOverride& o) {
+render::MaterialDesc toDesc(const ecs::Material& o) {
     render::MaterialDesc d;
     d.baseColor = o.baseColor;
-    d.roughness = o.roughness;
-    d.metallic = o.metallic;
-    d.emissiveStrength = o.emissiveStrength;
+    d.roughness = o.specularRoughness;
+    d.metallic = o.baseMetalness;
+    d.emissiveStrength = o.emissionLuminance;
     return d;
 }
 
@@ -148,7 +149,7 @@ RunResult renderSpawned() {
     return r;
 }
 
-// B: data (MeshSource + MaterialOverride) through instantiate.
+// B: data (MeshSource + Material) through instantiate.
 RunResult renderInstantiated(bool& releasedOk) {
     RunResult r;
     VulkanRenderer renderer(W, H);
@@ -162,7 +163,7 @@ RunResult renderInstantiated(bool& releasedOk) {
         for (const Wall& w : walls()) {
             const auto e = world.create(w.name);
             reg.emplace<ecs::MeshSource>(e, ecs::MeshSource{ecs::QuadPrim{w.a, w.b, w.c, w.d, w.normal, w.color}});
-            reg.emplace<ecs::MaterialOverride>(e, ecs::MaterialOverride{w.color, 0.95f, 0.0f, 0.0f});
+            reg.emplace<ecs::Material>(e, ohao::test::material(w.color, 0.95f, 0.0f, 0.0f));
         }
         std::vector<entt::entity> spheres;
         for (const Ball& b : balls()) {
@@ -171,7 +172,7 @@ RunResult renderInstantiated(bool& releasedOk) {
             t.scale = glm::vec3(b.scale);
             const auto e = world.create(b.name, t);
             reg.emplace<ecs::MeshSource>(e, ecs::MeshSource{ecs::SpherePrim{}});
-            reg.emplace<ecs::MaterialOverride>(e, b.material);
+            reg.emplace<ecs::Material>(e, b.material);
             spheres.push_back(e);
         }
         addLights(world);

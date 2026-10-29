@@ -135,20 +135,35 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("Where the entity's mesh comes from: a model asset or a primitive. Instantiate builds the GPU mesh; "
              "entities with equal sources share one mesh.")
         .field("source", &MeshSource::source).doc("Exactly one of the alternatives, as {\"Name\": {...}}");
-    r.type<MaterialOverride>("MaterialOverride").component().host(makeComponentOps<MaterialOverride>())
-        .doc("The material of a mesh without its own materials (primitives). For a model with materials it only "
-             "sets the legacy RT GI albedo.")
-        .field("baseColor", &MaterialOverride::baseColor).doc("Albedo").unit("linear-rgb").color().min(0.0).max(1.0)
-        .field("roughness", &MaterialOverride::roughness).doc("GGX roughness").unitless().min(0.0).max(1.0)
-        .field("metallic", &MaterialOverride::metallic).doc("0 = dielectric, 1 = metal").unitless().min(0.0).max(1.0)
-        .field("emissiveStrength", &MaterialOverride::emissiveStrength).doc("Emission multiplier").unitless().min(0.0)
-        .field("subsurface", &MaterialOverride::subsurface)
+    r.type<Material>("Material").component().host(makeComponentOps<Material>())
+        .doc("The material of a mesh without its own materials (primitives): OpenPBR Surface 1.1.1's base, under its "
+             "names and defaults. For a model with materials it only sets the legacy RT GI albedo.")
+        .field("base_color", &Material::baseColor).doc("The diffuse albedo, and a metal's F0").unit("linear-rgb").color()
+            .min(0.0).max(1.0)
+        .field("base_weight", &Material::baseWeight).doc("Scales base_color").unitless().min(0.0).max(1.0)
+        .field("base_metalness", &Material::baseMetalness).doc("0 = dielectric, 1 = metal").unitless().min(0.0).max(1.0)
+        .field("base_diffuse_roughness", &Material::baseDiffuseRoughness)
+            .doc("The diffuse's roughness (EON): 0 = Lambert, 1 = the flattest, dustiest").unitless().min(0.0).max(1.0)
+        .field("specular_weight", &Material::specularWeight)
+            .doc("Scales the dielectric's reflectance at normal incidence (and a metal's whole specular)").unitless()
+            .min(0.0)
+        .field("specular_color", &Material::specularColor)
+            .doc("Tints the dielectric's reflection from above, and a metal's edge (F82)").unit("linear-rgb").color()
+            .min(0.0).max(1.0)
+        .field("specular_roughness", &Material::specularRoughness).doc("GGX roughness (alpha = its square)").unitless()
+            .min(0.0).max(1.0)
+        .field("specular_ior", &Material::specularIor).doc("The dielectric's index of refraction").unitless().min(1.0)
+            .max(3.0)
+        .field("emission_luminance", &Material::emissionLuminance)
+            .doc("Emitted radiance, in the engine's units until the camera step (ruling O4)").unitless().min(0.0)
+        .field("emission_color", &Material::emissionColor).doc("The emission's colour").unit("linear-rgb").color().min(0.0)
+        .field("subsurface_weight", &Material::subsurfaceWeight)
             .doc("Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under "
-                 "the surface; 0 = none. Ignored where emissiveStrength > 0.")
+                 "the surface; 0 = none. Ignored where emission_luminance > 0.")
             .unitless().min(0.0).max(1.0)
-        .field("alphaMode", &MaterialOverride::alphaMode).doc("Opaque, alpha-tested (Mask) or blended (Blend)")
-        .field("opacity", &MaterialOverride::opacity).doc("Coverage: Blend's blend factor, Mask's test (cut below 0.5)")
-            .unitless().min(0.0).max(1.0);
+        .field("alpha_mode", &Material::alphaMode).doc("Opaque, alpha-tested (Mask) or blended (Blend)")
+        .field("geometry_opacity", &Material::geometryOpacity)
+            .doc("Coverage: Blend's blend factor, Mask's test (cut below 0.5)").unitless().min(0.0).max(1.0);
 
     r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())
         .doc("The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y "
@@ -527,7 +542,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<MovedLastFrame>("MovedLastFrame").component().runtime()
         .doc("Tag: moved last frame; uploaded once more so prevWorld catches up.");
     r.type<InstantiateDirty>("InstantiateDirty").component().runtime()
-        .doc("Tag: MeshSource or MaterialOverride changed; instantiate rebuilds the mesh renderer this frame.");
+        .doc("Tag: MeshSource or Material changed; instantiate rebuilds the mesh renderer this frame.");
     r.type<InstantiateError>("InstantiateError").component().runtime().host(makeComponentOps<InstantiateError>())
         .doc("Why instantiate could not build the entity's mesh. The entity then has no MeshRenderer.")
         .field("code", &InstantiateError::code).doc("E_ASSET_NOT_FOUND, E_ASSET_INVALID or E_MESH_INVALID")

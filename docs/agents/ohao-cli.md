@@ -62,7 +62,7 @@ the bounds of entity origins and a capped outline.
 
 ```console
 $ build/Release/ohao summary assets/scenes/cornell_box.scene.json --depth 1 --max-nodes 6
-{"result":{"entities":21,"roots":21,"components":{"Name":21,"Transform":21,"Light":12,"MeshSource":7,"MaterialOverride":7,"Camera":1,"Environment":1,"Children":21,"WorldTransform":21,"CreationOrder":21},"bounds":{"min":[-4,-3.2,-4],"max":[4,4,13]},"outline":[{"id":"77c2d2f9c6f089b6","name":"MainCamera"},{"id":"1a0edc87612c3fd5","name":"Environment"},{"id":"2dbe393e136129ec","name":"Back"},{"id":"dd80bf9bc5d8c7eb","name":"Left"},{"id":"bef33aced9e453c8","name":"Right"},{"id":"616133e14807f333","name":"Floor"}],"moreRoots":15}}
+{"result":{"entities":21,"roots":21,"components":{"Name":21,"Transform":21,"Light":12,"MeshSource":7,"Material":7,"Camera":1,"Environment":1,"Children":21,"WorldTransform":21,"CreationOrder":21},"bounds":{"min":[-4,-3.2,-4],"max":[4,4,13]},"outline":[{"id":"77c2d2f9c6f089b6","name":"MainCamera"},{"id":"1a0edc87612c3fd5","name":"Environment"},{"id":"2dbe393e136129ec","name":"Back"},{"id":"dd80bf9bc5d8c7eb","name":"Left"},{"id":"bef33aced9e453c8","name":"Right"},{"id":"616133e14807f333","name":"Floor"}],"moreRoots":15}}
 ```
 
 Then ask for exactly what you need. Filters combine (all must match); `--fields`
@@ -70,8 +70,8 @@ projects `Type` or `Type/field`. Without `--fields` each entity comes back in it
 form, defaults omitted (`--defaults` writes them).
 
 ```console
-$ build/Release/ohao query assets/scenes/cornell_box.scene.json --name-contains Sphere --fields Transform/position,MaterialOverride/roughness
-{"result":{"entities":[{"id":"499421b6ef3e75a9","Transform":{"position":[-2,-3,0]},"MaterialOverride":{"roughness":0.05}},{"id":"b1ab29372b0e7edc","Transform":{"position":[2.5,-3.2,1.5]},"MaterialOverride":{"roughness":0.02}}],"count":2}}
+$ build/Release/ohao query assets/scenes/cornell_box.scene.json --name-contains Sphere --fields Transform/position,Material/specular_roughness
+{"result":{"entities":[{"id":"499421b6ef3e75a9","Transform":{"position":[-2,-3,0]},"Material":{"specular_roughness":0.05}},{"id":"b1ab29372b0e7edc","Transform":{"position":[2.5,-3.2,1.5]},"Material":{"specular_roughness":0.02}}],"count":2}}
 ```
 
 ### Validate before you load anything you wrote
@@ -116,9 +116,9 @@ command (`/commands/N/...`).
 ```console
 $ printf '[{"op":"entity.duplicate","id":"499421b6ef3e75a9","name":"MetalSphere 2"},{"op":"field.set","id":"$0","path":"/Transform/position/2","value":2},{"op":"component.set","id":"$0","type":"Spin","value":{"degreesPerSecond":30}}]' > build/doc_tmp/edit.json
 $ build/Release/ohao apply assets/scenes/cornell_box.scene.json build/doc_tmp/edit.json -o build/doc_tmp/edited.scene.json --seed 0000000000000001
-{"result":{"apply":{"applied":3,"results":["910a2dec89025cc1",null,null],"inverse":[{"op":"component.remove","id":"910a2dec89025cc1","type":"Spin"},{"op":"field.set","id":"910a2dec89025cc1","path":"/Transform/position/2","value":0},{"op":"entity.destroy","id":"910a2dec89025cc1"}]},"save":{"path":"build/doc_tmp/edited.scene.json","bytes":6228}}}
+{"result":{"apply":{"applied":3,"results":["910a2dec89025cc1",null,null],"inverse":[{"op":"component.remove","id":"910a2dec89025cc1","type":"Spin"},{"op":"field.set","id":"910a2dec89025cc1","path":"/Transform/position/2","value":0},{"op":"entity.destroy","id":"910a2dec89025cc1"}]},"save":{"path":"build/doc_tmp/edited.scene.json","bytes":6308}}}
 $ build/Release/ohao query build/doc_tmp/edited.scene.json --name "MetalSphere 2"
-{"result":{"entities":[{"id":"910a2dec89025cc1","Name":{"value":"MetalSphere 2"},"Transform":{"position":[-2,-3,2],"scale":[2,2,2]},"MeshSource":{"source":{"SpherePrim":{"radius":0.5,"sectors":32,"stacks":16}}},"MaterialOverride":{"baseColor":[0.95,0.93,0.88],"roughness":0.05,"metallic":1},"Spin":{"degreesPerSecond":30}}],"count":1}}
+{"result":{"entities":[{"id":"910a2dec89025cc1","Name":{"value":"MetalSphere 2"},"Transform":{"position":[-2,-3,2],"scale":[2,2,2]},"MeshSource":{"source":{"SpherePrim":{"radius":0.5,"sectors":32,"stacks":16}}},"Material":{"base_color":[0.95,0.93,0.88],"base_metalness":1,"specular_roughness":0.05},"Spin":{"degreesPerSecond":30}}],"count":1}}
 ```
 
 `results[0]` is the copy's id; `inverse` is a batch that undoes this one exactly, last
@@ -134,7 +134,7 @@ one output line; every line runs, and the exit code is the worst one seen.
 $ printf '%s\n' '{"method":"world.snapshot","params":{"name":"base"}}' '{"method":"world.step","params":{"frames":30,"dt":0.0333333}}' '{"method":"world.query","params":{"names":["MetalSphere 2"],"fields":["/Transform/rotation"]}}' '{"method":"world.restore","params":{"name":"base"}}' > build/doc_tmp/spin.jsonl
 $ build/Release/ohao run build/doc_tmp/edited.scene.json --script build/doc_tmp/spin.jsonl
 {"method":"scene.load","result":{"entities":22}}
-{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4416}}
+{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4736}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"world.query","result":{"entities":[{"id":"910a2dec89025cc1","Transform":{"rotation":[0,0.25881878,0,0.96592593]}}],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":1,"frame":0}}
@@ -155,7 +155,7 @@ reports.
 $ build/Release/ohao fmt assets/scenes/cornell_box.scene.json --check
 {"result":{"path":"assets/scenes/cornell_box.scene.json","canonical":true}}
 $ build/Release/ohao fmt build/doc_tmp/edited.scene.json --compact -o build/doc_tmp/edited.compact.json
-{"result":{"path":"build/doc_tmp/edited.compact.json","changed":true,"bytes":4138}}
+{"result":{"path":"build/doc_tmp/edited.compact.json","changed":true,"bytes":4158}}
 ```
 
 ### Render
@@ -404,7 +404,7 @@ that id.
 | `Parent` | The parent entity's id. |
 | `Light` | Point, Directional, Spot or AreaRect light; direction is the entity's −Z. |
 | `MeshSource` | Where the mesh comes from: `ModelAsset` (a glb/gltf/fbx/obj path) or a primitive (`SpherePrim`, `CubePrim`, `PlatformPrim`, `CylinderPrim`, `ConePrim`, `QuadPrim`, `BoxPrim`). |
-| `MaterialOverride` | The material of a primitive: baseColor, roughness, metallic, emissiveStrength. |
+| `Material` | The material of a primitive, OpenPBR Surface's base under its names and defaults: `base_color`, `base_weight`, `base_metalness`, `base_diffuse_roughness`, `specular_weight`, `specular_color`, `specular_roughness`, `specular_ior`, `emission_luminance`, `emission_color`, `subsurface_weight`, `alpha_mode`, `geometry_opacity`. |
 | `Camera` | The scene camera (one per world); looks along −Z of its entity. With several (a level's own camera, a player's head), the view is the first active one in creation order. |
 | `Environment` | The HDRI that lights the scene (one per world). |
 | `Spin` | Turns the entity about a local axis at `degreesPerSecond` (the spin system, every step). |

@@ -26,9 +26,10 @@ knows what any lane holds:
 derived from the slot count — `kMaterialBytes = kMaterialVec4s * sizeof(glm::vec4)`
 — and the derived value is then pinned against a literal:
 
-{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 64"}}
+{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 112"}}
 
-The producer is tied to it: `MaterialTable::Pack` is a `std::array<float, 16>`, and a
+The producer is tied to it: `MaterialTable::Pack` is a `std::array<float, 28>` (seven rows since OpenPBR's
+specular, IOR, diffuse roughness, base weight and emission colour joined), and a
 `static_assert` equates its size with `MaterialGpuPack::kBytes`.
 
 ## Integers that have to travel as floats
@@ -77,7 +78,7 @@ material — writes the returned index into the material's field, and only then
 registers the material. A row is never written with sentinels and patched later, and
 no lane has two writers:
 
-{{cite ohao/render/scene/model_upload.cpp "if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;"}}
+{{cite ohao/render/scene/model_upload.cpp "mats[i].emissiveStrength = i < model.materialEmissionStrength.size() ? model.materialEmissionStrength[i] : 1.0f;"}}
 
 The host array is the only CPU copy, and device memory is written only by copies the
 frame records. `recordUploads` walks the dirty set, coalesces contiguous indices into

@@ -17,7 +17,7 @@ and materials with the renderer's `RenderScene` and creates an entity carrying a
 GPU-free builders in `examples/example_scenes.hpp` — `buildCornellBox` and
 `buildModelViewerScene` — that create only authoring components: a `Camera`, an
 `Environment`, `Light`s, and `MeshSource` entities naming a primitive (`QuadPrim`,
-`BoxPrim`, `SpherePrim`) or a model asset, each with a `MaterialOverride`:
+`BoxPrim`, `SpherePrim`) or a model asset, each with a `Material`:
 
 {{cite examples/example_scenes.hpp "addMesh(world, name, ecs::MeshSource{ecs::QuadPrim{a, b, c, d, normal, color}}, surface(color, 0.95f));"}}
 

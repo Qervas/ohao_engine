@@ -92,6 +92,15 @@ public:
     std::vector<uint8_t> materialAlphaMode;
     std::vector<float> materialAlphaCutoff;
     std::vector<float> materialBaseAlpha;
+    // Per-material OpenPBR inputs from glTF's KHR_materials_* (through Assimp; OpenPBR's defaults
+    // where absent): specular_ior (KHR_materials_ior), specular_weight and specular_color
+    // (KHR_materials_specular's factors), emission_color (emissiveFactor) and its luminance
+    // (KHR_materials_emissive_strength, 1 without it).
+    std::vector<float> materialIor;
+    std::vector<float> materialSpecularWeight;
+    std::vector<glm::vec3> materialSpecularColor;
+    std::vector<glm::vec3> materialEmissionColor;
+    std::vector<float> materialEmissionStrength;
 
     // Per-material texture data (RGBA pixels, decoded from GLTF images)
     struct TextureData {

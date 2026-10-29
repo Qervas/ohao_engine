@@ -40,6 +40,9 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
         d.roughness, d.metallic, bits(d.normalTex), bits(d.emissiveTex),
         bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),
         static_cast<float>(static_cast<uint32_t>(d.alphaMode)), d.alphaCutoff, d.opacity, d.baseAlpha,
+        d.specularColor.r, d.specularColor.g, d.specularColor.b, d.specularWeight,
+        d.specularIor, d.diffuseRoughness, d.baseWeight, bits(d.specularTex),
+        d.emissionColor.r, d.emissionColor.g, d.emissionColor.b, bits(d.specularColorTex),
     };
 }
 

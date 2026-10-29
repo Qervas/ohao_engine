@@ -5,7 +5,7 @@
     "Camera": 1,
     "Environment": 1,
     "Light": 1,
-    "MaterialOverride": 1,
+    "Material": 1,
     "MeshSource": 1,
     "Name": 1,
     "Transform": 1,
@@ -29,43 +29,43 @@
       "id": "51a7c0de00000010",
       "Name": { "value": "Back" },
       "MeshSource": { "source": { "QuadPrim": { "a": [-5, -5, -5], "b": [5, -5, -5], "c": [5, 5, -5], "d": [-5, 5, -5], "normal": [0, 0, 1], "color": [0.73, 0.73, 0.73] } } },
-      "MaterialOverride": { "baseColor": [0.73, 0.73, 0.73], "roughness": 0.95 }
+      "Material": { "base_color": [0.73, 0.73, 0.73], "specular_roughness": 0.95 }
     },
     {
       "id": "51a7c0de00000011",
       "Name": { "value": "Left" },
       "MeshSource": { "source": { "QuadPrim": { "a": [-5, -5, -5], "b": [-5, 5, -5], "c": [-5, 5, 5], "d": [-5, -5, 5], "normal": [1, 0, 0], "color": [0.65, 0.05, 0.05] } } },
-      "MaterialOverride": { "baseColor": [0.65, 0.05, 0.05], "roughness": 0.95 }
+      "Material": { "base_color": [0.65, 0.05, 0.05], "specular_roughness": 0.95 }
     },
     {
       "id": "51a7c0de00000012",
       "Name": { "value": "Right" },
       "MeshSource": { "source": { "QuadPrim": { "a": [5, -5, -5], "b": [5, -5, 5], "c": [5, 5, 5], "d": [5, 5, -5], "normal": [-1, 0, 0], "color": [0.12, 0.45, 0.15] } } },
-      "MaterialOverride": { "baseColor": [0.12, 0.45, 0.15], "roughness": 0.95 }
+      "Material": { "base_color": [0.12, 0.45, 0.15], "specular_roughness": 0.95 }
     },
     {
       "id": "51a7c0de00000013",
       "Name": { "value": "Floor" },
       "MeshSource": { "source": { "QuadPrim": { "a": [-5, -5, -5], "b": [-5, -5, 5], "c": [5, -5, 5], "d": [5, -5, -5], "normal": [0, 1, 0], "color": [0.73, 0.73, 0.73] } } },
-      "MaterialOverride": { "baseColor": [0.73, 0.73, 0.73], "roughness": 0.95 }
+      "Material": { "base_color": [0.73, 0.73, 0.73], "specular_roughness": 0.95 }
     },
     {
       "id": "51a7c0de00000014",
       "Name": { "value": "Ceiling" },
       "MeshSource": { "source": { "QuadPrim": { "a": [-5, 5, -5], "b": [5, 5, -5], "c": [5, 5, 5], "d": [-5, 5, 5], "normal": [0, -1, 0], "color": [0.73, 0.73, 0.73] } } },
-      "MaterialOverride": { "baseColor": [0.73, 0.73, 0.73], "roughness": 0.95 }
+      "Material": { "base_color": [0.73, 0.73, 0.73], "specular_roughness": 0.95 }
     },
     {
       "id": "51a7c0de00000020",
       "Name": { "value": "PaneBlue" },
       "MeshSource": { "source": { "QuadPrim": { "a": [-3, -5, 1.5], "b": [0.5, -5, 1.5], "c": [0.5, 0, 1.5], "d": [-3, 0, 1.5], "normal": [0, 0, 1], "color": [0.35, 0.55, 0.9] } } },
-      "MaterialOverride": { "baseColor": [0.35, 0.55, 0.9], "roughness": 0.15, "alphaMode": "Blend", "opacity": 0.4 }
+      "Material": { "base_color": [0.35, 0.55, 0.9], "specular_roughness": 0.15, "alpha_mode": "Blend", "geometry_opacity": 0.4 }
     },
     {
       "id": "51a7c0de00000021",
       "Name": { "value": "PaneAmber" },
       "MeshSource": { "source": { "QuadPrim": { "a": [-0.5, -3.5, 0.2], "b": [3, -3.5, 0.2], "c": [3, 1, 0.2], "d": [-0.5, 1, 0.2], "normal": [0, 0, 1], "color": [0.95, 0.6, 0.2] } } },
-      "MaterialOverride": { "baseColor": [0.95, 0.6, 0.2], "roughness": 0.3, "alphaMode": "Blend", "opacity": 0.5 }
+      "Material": { "base_color": [0.95, 0.6, 0.2], "specular_roughness": 0.3, "alpha_mode": "Blend", "geometry_opacity": 0.5 }
     },
     {
       "id": "51a7c0de00000030",

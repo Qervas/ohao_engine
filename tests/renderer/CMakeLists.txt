@@ -15,13 +15,13 @@ target_link_libraries(renderer_test PRIVATE ohao_test_harness)
 if(MSVC)
     target_link_libraries(renderer_test PRIVATE
         ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
-        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 else()
     target_link_libraries(renderer_test PRIVATE
         -Wl,--start-group
         ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
         -Wl,--end-group
-        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 endif()
 
 if(TARGET Jolt)
@@ -54,7 +54,7 @@ target_include_directories(instantiate_gpu_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao
 target_compile_definitions(instantiate_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(instantiate_gpu_test PRIVATE
     ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 if(TARGET Jolt)
     target_link_libraries(instantiate_gpu_test PRIVATE Jolt)
 endif()
@@ -72,7 +72,7 @@ target_include_directories(scene_view_gpu_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao 
 target_compile_definitions(scene_view_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(scene_view_gpu_test PRIVATE
     ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 if(TARGET Jolt)
     target_link_libraries(scene_view_gpu_test PRIVATE Jolt)
 endif()

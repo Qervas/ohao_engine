@@ -5,6 +5,7 @@
 //
 // Step 2: t05 entity ids, t01 completeness of the real component registrations, the
 // engine catalogue golden, and an informational write benchmark on real components.
+#include "common/materials.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/instantiate.hpp"
@@ -289,7 +290,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<QuadPrim>(r, checked);
     ok &= complete<BoxPrim>(r, checked);
     ok &= complete<MeshSource>(r, checked);
-    ok &= complete<MaterialOverride>(r, checked);
+    ok &= complete<Material>(r, checked);
     ok &= complete<InstantiateDirty>(r, checked);
     ok &= complete<InstantiateError>(r, checked);
     ok &= complete<ecs::Camera>(r, checked);
@@ -346,7 +347,7 @@ static void t01_registrations_lint_clean() {
 static void t01_authoring_and_runtime_split() {
     reflect::TypeRegistry r;
     registerSceneTypes(r);
-    for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
+    for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "Material", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
                               "WeaponTrigger", "Muzzle", "ViewModel", "MoveIntent", "Enemy", "EnemyState", "Round",
@@ -483,8 +484,12 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
         }
         if (rng() % 4 == 0) {
             const auto unit = [&] { return std::min(1.0f, pickFloat(rng, true)); };
-            w.registry().emplace<MaterialOverride>(e, MaterialOverride{{unit(), unit(), unit()}, unit(), unit(),
-                                                                       pickFloat(rng, true)});
+            // In this order: the draws seed the rest of the world.
+            const glm::vec3 color{unit(), unit(), unit()};
+            const float roughness = unit();
+            const float metalness = unit();
+            const float emission = pickFloat(rng, true);
+            w.registry().emplace<Material>(e, ohao::test::material(color, roughness, metalness, emission));
         }
         if (rng() % 6 == 0)
             w.registry().emplace<Spin>(e, Spin{{pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false)},
@@ -1405,21 +1410,21 @@ static std::shared_ptr<Model> twoMaterialModel() {
 static void t11_primitive_becomes_a_mesh_renderer() {
     InstantiateFixture f;
     const auto e = f.add("ball", MeshSource{SpherePrim{}});
-    const MaterialOverride mo{{0.9f, 0.1f, 0.1f}, 0.3f, 1.0f, 0.0f};
-    f.world.registry().emplace<MaterialOverride>(e, mo);
+    const Material mo = ohao::test::material({0.9f, 0.1f, 0.1f}, 0.3f, 1.0f, 0.0f);
+    f.world.registry().emplace<Material>(e, mo);
     f.step();
     const auto& reg = f.world.registry();
     const auto* mr = reg.try_get<MeshRenderer>(e);
     CHECK(mr && mr->mesh.valid() && mr->materials.size() == 1 && mr->visible, "instantiate emplaces a MeshRenderer");
     CHECK(f.backend->uploads == 1 && f.files.loads == 0 && f.backend->names[0] == "SpherePrim",
           "one mesh generated, no file touched");
-    CHECK(f.backend->lastMaterial.baseColor == mo.baseColor && f.backend->lastMaterial.roughness == mo.roughness &&
-              f.backend->lastMaterial.metallic == mo.metallic,
-          "the material is the override");
+    CHECK(f.backend->lastMaterial.baseColor == mo.baseColor && f.backend->lastMaterial.roughness == mo.specularRoughness &&
+              f.backend->lastMaterial.metallic == mo.baseMetalness,
+          "the material is the entity's");
     render::MaterialDesc desc;
     desc.baseColor = mo.baseColor;
-    desc.roughness = mo.roughness;
-    desc.metallic = mo.metallic;
+    desc.roughness = mo.specularRoughness;
+    desc.metallic = mo.baseMetalness;
     CHECK(reg.get<GiMaterialLegacy>(e).packed ==
               render::giMaterialLegacyPacked(*PrimitiveMeshGenerator::makeSphere(), &desc),
           "and the legacy GI word is spawnModel's");
@@ -1455,7 +1460,7 @@ static void t11_model_asset_uses_its_own_materials() {
     f.files.files["props/vase.glb"] = twoMaterialModel();
     const auto a = f.add("a", MeshSource{ModelAsset{AssetRef{"props/vase.glb", {}}}});
     const auto b = f.add("b", MeshSource{ModelAsset{AssetRef{"props/vase.glb", {}}}});
-    f.world.registry().emplace<MaterialOverride>(b, MaterialOverride{{0.5f, 0.6f, 0.7f}, 0.9f, 0.0f, 0.0f});
+    f.world.registry().emplace<Material>(b, ohao::test::material({0.5f, 0.6f, 0.7f}, 0.9f, 0.0f, 0.0f));
     f.step();
     const auto& reg = f.world.registry();
     CHECK(f.files.loads == 1 && f.backend->uploads == 1 && f.backend->modelMaterialCalls == 1,
@@ -1504,18 +1509,18 @@ static void t11_meshes_are_shared_and_released_with_their_last_user() {
 static void t11_materials_are_registered_once_per_value() {
     InstantiateFixture f;
     auto& reg = f.world.registry();
-    const MaterialOverride red{{0.8f, 0.1f, 0.1f}, 0.5f, 0.0f, 0.0f};
+    const Material red = ohao::test::material({0.8f, 0.1f, 0.1f}, 0.5f, 0.0f, 0.0f);
     std::vector<entt::entity> es;
     for (int i = 0; i < 5; ++i) {
         es.push_back(f.add("r", MeshSource{CubePrim{}}));
-        reg.emplace<MaterialOverride>(es.back(), red);
+        reg.emplace<Material>(es.back(), red);
     }
     const auto blue = f.add("b", MeshSource{CubePrim{}});
-    reg.emplace<MaterialOverride>(blue, MaterialOverride{{0.1f, 0.1f, 0.8f}, 0.5f, 0.0f, 0.0f});
+    reg.emplace<Material>(blue, ohao::test::material({0.1f, 0.1f, 0.8f}, 0.5f, 0.0f, 0.0f));
     const auto plain = f.add("p", MeshSource{CubePrim{}});
     f.step();
     CHECK(f.backend->materials == 3, "three distinct materials (red, blue, default) for seven entities");
-    reg.remove<MaterialOverride>(es[0]);
+    reg.remove<Material>(es[0]);
     f.step();
     CHECK(reg.get<MeshRenderer>(es[0]).materials == reg.get<MeshRenderer>(plain).materials && f.backend->materials == 3 &&
               f.backend->uploads == 1,
@@ -1609,16 +1614,16 @@ static void t11_scene_text_round_trips_mesh_sources() {
     // An agent's minimal file: defaults fill in the primitive.
     World w;
     CHECK(load(w, R"({"format":"ohao.scene","version":1,"entities":[)"
-                  R"({"id":"00000000000000b1","MeshSource":{"source":{"SpherePrim":{}}},"MaterialOverride":{"metallic":1}},)"
+                  R"({"id":"00000000000000b1","MeshSource":{"source":{"SpherePrim":{}}},"Material":{"base_metalness":1}},)"
                   R"({"id":"00000000000000b2","MeshSource":{"source":{"QuadPrim":{"color":[0.73,0.73,0.73]}}}}]})"),
           "loads");
     const auto& reg = w.registry();
     const auto& sphere = std::get<SpherePrim>(reg.get<MeshSource>(w.findById(0xb1)).source);
     CHECK(sphere.radius == 0.5f && sphere.sectors == 32 && sphere.stacks == 16 &&
-              reg.get<MaterialOverride>(w.findById(0xb1)).metallic == 1.0f,
+              reg.get<Material>(w.findById(0xb1)).baseMetalness == 1.0f,
           "missing fields take their defaults");
     const std::string saved = save(w, reflect::JsonLayout::Compact);
-    CHECK(saved.find(R"("MeshSource":{"source":{"SpherePrim":{"radius":0.5,"sectors":32,"stacks":16}}},"MaterialOverride":{"metallic":1})") !=
+    CHECK(saved.find(R"("MeshSource":{"source":{"SpherePrim":{"radius":0.5,"sectors":32,"stacks":16}}},"Material":{"base_metalness":1})") !=
               std::string::npos,
           "the variant's value is written in full; the override omits its defaults");
     World again;
@@ -1849,7 +1854,7 @@ static void t21_per_type_writers_match_the_generic_writer() {
         default: ms.source = BoxPrim{}; break;
         }
         reg.emplace<MeshSource>(e, ms);
-        reg.emplace<MaterialOverride>(e, MaterialOverride{{-0.0f, 0.0f, 1.0f}, 0.0f, -0.0f, 0.0f});
+        reg.emplace<Material>(e, ohao::test::material({-0.0f, 0.0f, 1.0f}, 0.0f, -0.0f, 0.0f));
     }
     reg.emplace<Environment>(odd.create("env"), Environment{});
     reg.emplace<ecs::Camera>(odd.create("cam"), ecs::Camera{});
@@ -1936,7 +1941,7 @@ static void t21_numbers_are_judged_identically() {
         const std::string unlimited = R"({"format":"ohao.scene","version":1,"entities":[{"id":"0000000000000001",)"
                                       R"("Transform":{"position":[)" + t + R"(,0,0]}}]})";
         const std::string limited = R"({"format":"ohao.scene","version":1,"entities":[{"id":"0000000000000001",)"
-                                    R"("MaterialOverride":{"roughness":)" + t + "}}]}";
+                                    R"("Material":{"specular_roughness":)" + t + "}}]}";
         for (const std::string& text : {unlimited, limited}) {
             const std::string why = readersDisagree(text);
             if (!why.empty()) std::printf("\n      token %s: %s", t.c_str(), why.c_str());

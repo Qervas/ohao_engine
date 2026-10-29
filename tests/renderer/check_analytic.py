@@ -57,14 +57,14 @@ def quat_x(deg):
 def scene(light):
     return {
         "format": "ohao.scene", "version": 1,
-        "components": {"Camera": 1, "Light": 1, "MaterialOverride": 1, "MeshSource": 1, "Name": 1, "Transform": 1},
+        "components": {"Camera": 1, "Light": 1, "Material": 1, "MeshSource": 1, "Name": 1, "Transform": 1},
         "entities": [
             {"id": "a0a0000000000001", "Name": {"value": "Camera"},
              "Transform": {"position": [0, CAMERA_H, 0], "rotation": quat_x(-90)}, "Camera": {"fovDeg": FOV}},
             {"id": "a0a0000000000002", "Name": {"value": "Floor"},
              "MeshSource": {"source": {"BoxPrim": {"lo": [-50, -0.1, -50], "hi": [50, 0, 50],
                                                     "color": [ALBEDO, ALBEDO, ALBEDO]}}},
-             "MaterialOverride": {"baseColor": [ALBEDO, ALBEDO, ALBEDO], "roughness": 1.0, "metallic": 0.0}},
+             "Material": {"base_color": [ALBEDO, ALBEDO, ALBEDO], "specular_roughness": 1.0}},
             dict(light, id="a0a0000000000003"),
         ],
     }
@@ -114,7 +114,7 @@ def bounce_floor(name, spots, failures):
                          {"id": "a0a0000000000004", "Name": {"value": "Wall"},
                           "MeshSource": {"source": {"BoxPrim": {"lo": [-50, 0, -2.1], "hi": [50, 10, -2],
                                                                  "color": [0.8, 0.8, 0.8]}}},
-                          "MaterialOverride": {"baseColor": [0.8, 0.8, 0.8], "roughness": 1.0, "metallic": 0.0}}] + spots
+                          "Material": {"base_color": [0.8, 0.8, 0.8], "specular_roughness": 1.0}}] + spots
     rel = "%s/%s" % (OUT, name)
     with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
         json.dump(s, f, indent=1)

@@ -6,7 +6,7 @@
     "Environment": 1,
     "Level": 1,
     "Light": 1,
-    "MaterialOverride": 1,
+    "Material": 1,
     "MeshSource": 1,
     "Name": 1,
     "Transform": 1,
@@ -51,7 +51,7 @@
       "id": "5c0b10c000000008",
       "Name": { "value": "Roof" },
       "MeshSource": { "source": { "BoxPrim": { "lo": [-4.2, 3.0, -3.2], "hi": [4.2, 3.2, 3.2], "color": [0.7, 0.66, 0.58] } } },
-      "MaterialOverride": { "baseColor": [0.7, 0.66, 0.58], "roughness": 0.85 }
+      "Material": { "base_color": [0.7, 0.66, 0.58], "specular_roughness": 0.85 }
     },
     {
       "id": "5c0b10c000000007",

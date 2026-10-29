@@ -134,18 +134,26 @@ struct MeshSource {
 enum class MaterialAlpha : uint8_t { Opaque, Mask, Blend };
 
 // The material of a mesh without its own materials (primitives); for a model with
-// materials it only feeds the legacy RT GI word. Same rules as uploadModel's override.
-struct MaterialOverride {
-    glm::vec3 baseColor{0.8f};
-    float roughness{0.5f};
-    float metallic{0.0f};
-    float emissiveStrength{0.0f};
-    float subsurface{0.0f};   // 0: none; > 0 the screen-space subsurface blur's strength (skin, wax)
-    MaterialAlpha alphaMode{MaterialAlpha::Opaque};
-    float opacity{1.0f};      // coverage (Blend: how much of what is behind it is covered; Mask: cut below 0.5)
+// materials it only feeds the legacy RT GI word. OpenPBR Surface 1.1.1's base
+// (docs/specs/2026-10-29-openpbr-materials-design.md): the fields are saved under OpenPBR's
+// names (base_color, specular_roughness, ...) with its defaults.
+struct Material {
+    glm::vec3 baseColor{0.8f};          // base_color
+    float baseWeight{1.0f};             // base_weight
+    float baseMetalness{0.0f};          // base_metalness
+    float baseDiffuseRoughness{0.0f};   // base_diffuse_roughness
+    float specularWeight{1.0f};         // specular_weight
+    glm::vec3 specularColor{1.0f};      // specular_color
+    float specularRoughness{0.3f};      // specular_roughness
+    float specularIor{1.5f};            // specular_ior
+    float emissionLuminance{0.0f};      // emission_luminance (the engine's radiance units, ruling O4)
+    glm::vec3 emissionColor{1.0f};      // emission_color
+    float subsurfaceWeight{0.0f};       // subsurface_weight: 0 none; > 0 the screen-space blur's strength (skin, wax)
+    MaterialAlpha alphaMode{MaterialAlpha::Opaque};   // alpha_mode
+    float geometryOpacity{1.0f};        // geometry_opacity: coverage (Blend's factor; Mask cuts below 0.5)
 };
 
-// Instantiate's bookkeeping: tagged when MeshSource/MaterialOverride change; the error
+// Instantiate's bookkeeping: tagged when MeshSource/Material change; the error
 // when a mesh could not be built (no MeshRenderer then).
 struct InstantiateDirty {};
 struct InstantiateError {

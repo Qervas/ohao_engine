@@ -1,6 +1,6 @@
 add_executable(scene_tests scene_tests.cpp)
 target_compile_features(scene_tests PRIVATE cxx_std_20)
-target_link_libraries(scene_tests PRIVATE ohao_ecs ohao_level_world pfr_test_only)
+target_link_libraries(scene_tests PRIVATE ohao_ecs ohao_level_world pfr_test_only ohao_test_harness)
 target_include_directories(scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/examples)   # example_scenes.hpp (t20)
 target_compile_definitions(scene_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(MSVC)

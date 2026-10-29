@@ -10,7 +10,7 @@
 {"jsonrpc":"2.0","id":10,"error":{"code":-32602,"message":"max is outside (0, 100000]","data":[{"code":"E_PARAMS","path":"/max","message":"max is outside (0, 100000]","expected":"a distance in (0, 100000] m"}]}}
 {"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"max is outside (0, 100000]","data":[{"code":"E_PARAMS","path":"/max","message":"max is outside (0, 100000]","expected":"a distance in (0, 100000] m"}]}}
 {"jsonrpc":"2.0","id":12,"result":{"bodies":{"static":12,"dynamic":2},"shapes":{"box":13,"mesh":1},"steps":0,"awake":2,"contacts":0,"buildMs":0}}
-{"jsonrpc":"2.0","id":13,"result":{"hash":"82a2e6de4aa0f664","frame":0}}
+{"jsonrpc":"2.0","id":13,"result":{"hash":"a8de9c299b905b0e","frame":0}}
 {"jsonrpc":"2.0","id":14,"result":{"entity":"5c0b10c000000005","path":"assets/levels/blockout_room.glb","nodes":18,"meshes":14,"uniqueMeshes":14,"triangles":164,"colliders":{"box":13,"mesh":1},"bodies":{"static":12,"dynamic":2},"spawns":[{"tag":"enemy","entity":"4ab39b557083d07b","pos":[-2.5,0.3,-2],"yawDeg":180},{"tag":"enemy","entity":"2e31f6fd3f3f41d8","pos":[3,0.5,-2],"yawDeg":180},{"tag":"player","entity":"e001e120491d4633","pos":[1.5,0,2.2],"yawDeg":0}],"lights":0,"cameras":1,"warnings":[],"loadMs":0}}
-{"jsonrpc":"2.0","id":15,"result":{"hash":"82a2e6de4aa0f664","frame":0}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":23,"frame":0,"schemaHash":"0379a711fb1e849e","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":15,"result":{"hash":"a8de9c299b905b0e","frame":0}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":23,"frame":0,"schemaHash":"de1dbddc275d489f","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}

@@ -25,7 +25,7 @@ void writeFields(const Transform& v, const Transform* omit, FieldSink& out);
 void writeFields(const Parent& v, const Parent* omit, FieldSink& out);
 void writeFields(const Light& v, const Light* omit, FieldSink& out);
 void writeFields(const MeshSource& v, const MeshSource* omit, FieldSink& out);
-void writeFields(const MaterialOverride& v, const MaterialOverride* omit, FieldSink& out);
+void writeFields(const Material& v, const Material* omit, FieldSink& out);
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out);
 void writeFields(const Environment& v, const Environment* omit, FieldSink& out);
 void writeFields(const Spin& v, const Spin* omit, FieldSink& out);

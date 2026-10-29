@@ -56,10 +56,19 @@ struct MeshData {
 // forward pass (transparent), never in the G-buffer, Hi-Z or CSM, seen by camera rays only.
 enum class AlphaMode : uint8_t { Opaque = 0, Mask = 1, Blend = 2 };
 
+// A material: OpenPBR Surface 1.1.1's base (shaders/material/openpbr.slang), its defaults.
+// roughness is specular_roughness, metallic base_metalness, emissiveStrength
+// emission_luminance.
 struct MaterialDesc {
     glm::vec3 baseColor{0.8f};
-    float roughness{0.5f};
+    float roughness{0.3f};
     float metallic{0.0f};
+    float baseWeight{1.0f};
+    float diffuseRoughness{0.0f};
+    float specularWeight{1.0f};
+    glm::vec3 specularColor{1.0f};
+    float specularIor{1.5f};
+    glm::vec3 emissionColor{1.0f};
     uint32_t albedoTex{kNoTexture};
     uint32_t normalTex{kNoTexture};
     uint32_t roughMetalTex{kNoTexture};
@@ -68,12 +77,15 @@ struct MaterialDesc {
     // same image as roughMetalTex (packed ORM), never implied by it: a metallicRoughness map's
     // R channel is unused by glTF.
     uint32_t occlusionTex{kNoTexture};
+    // KHR_materials_specular's textures: the weight in A, the colour in RGB (sRGB).
+    uint32_t specularTex{kNoTexture};
+    uint32_t specularColorTex{kNoTexture};
     float emissiveStrength{0.0f};
     float subsurface{0.0f};   // > 0: the SSS blur's strength on this material's pixels (table row 2, z)
     // False: one-sided, its back faces culled in raster (glTF's doubleSided: false). Materials
     // that never say (scene-file materials, OBJ, FBX) stay double-sided.
     bool doubleSided{true};
-    // Alpha (table row 3): the mode, the mask's cutoff, an opacity factor (MaterialOverride) and
+    // Alpha (table row 3): the mode, the mask's cutoff, an opacity factor (Material's geometry_opacity) and
     // the base colour's alpha (glTF baseColorFactor.a). Coverage = baseAlpha x the albedo
     // texture's alpha x opacity.
     AlphaMode alphaMode{AlphaMode::Opaque};

@@ -31,7 +31,7 @@ Authoring components:
 
 - `Name`, `Transform` (local position, unit quaternion, per-axis scale), `Parent`.
 - `Light` — type, color, intensity, range, radius, cone angles, area-rect edges. No position or direction field: both come from `WorldTransform`.
-- `MeshSource` and `MaterialOverride` — where the mesh comes from (a model asset or a primitive) and the material of a primitive; the instantiate system turns them into a `MeshRenderer`.
+- `MeshSource` and `Material` — where the mesh comes from (a model asset or a primitive) and the material of a primitive; the instantiate system turns them into a `MeshRenderer`.
 - `Camera` and `Environment` — the view and the image-based lighting, one of each per world.
 - `Spin` — a constant turn about a local axis, applied by the spin system.
 - `InputActions` — the world's controls (action and axis bindings by key name), one per world; the World rebuilds its `InputMap` from it when it changes.

@@ -24,6 +24,7 @@
 //                   the world at its drawn pose does shadow the room.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
+#include "common/materials.hpp"
 #include "api/session.hpp"
 #include "common/harness.hpp"
 #include "ecs/animation.hpp"
@@ -107,16 +108,16 @@ std::string roomScene(const View& view, const std::string& tag, bool spotAtCamer
     using namespace ecs;
     World w;
     w.seedIds(11);
-    const MaterialOverride rough{{0.6f, 0.6f, 0.6f}, 0.9f, 0.0f, 0.0f};
+    const Material rough = ohao::test::material({0.6f, 0.6f, 0.6f}, 0.9f, 0.0f, 0.0f);
     const auto floor = w.create("Floor", Transform{});
     w.registry().emplace<MeshSource>(floor, MeshSource{PlatformPrim{20.0f, 0.2f, 20.0f}});
-    w.registry().emplace<MaterialOverride>(floor, rough);
+    w.registry().emplace<Material>(floor, rough);
     const auto wall = w.create("Wall", Transform{});
     w.registry().emplace<MeshSource>(wall, MeshSource{BoxPrim{{-10.0f, 0.0f, -6.0f}, {10.0f, 8.0f, -5.8f}, glm::vec3(0.6f)}});
-    w.registry().emplace<MaterialOverride>(wall, rough);
+    w.registry().emplace<Material>(wall, rough);
     const auto box = w.create("Box", Transform{});
     w.registry().emplace<MeshSource>(box, MeshSource{BoxPrim{{-0.8f, 0.1f, -1.5f}, {0.8f, 1.7f, 0.1f}, glm::vec3(0.6f)}});
-    w.registry().emplace<MaterialOverride>(box, rough);
+    w.registry().emplace<Material>(box, rough);
 
     const auto light = [&](const char* name, const Transform& t, const Light& l) {
         w.registry().emplace<Light>(w.create(name, t), l);
@@ -572,13 +573,13 @@ std::string gunScene(const View& view, const std::string& tag, Gun gun) {
         lamp.radius = 0.02f;
         w.registry().emplace<Light>(w.create("Lamp behind", Transform{view.position + glm::vec3(0.25f, 0.35f, 0.5f)}), lamp);
         if (gun == Gun::None) return;
-        const MaterialOverride metal{{0.09f, 0.09f, 0.1f}, 0.45f, 0.6f, 0.0f};
+        const Material metal = ohao::test::material({0.09f, 0.09f, 0.1f}, 0.45f, 0.6f, 0.0f);
         const MeshSource box{BoxPrim{kGunLo, kGunHi, glm::vec3(0.09f)}};
         if (gun == Gun::ViewModel) {
             const auto e = w.create("Gun", Transform{kGunAt});
             w.setParent(e, camera);
             w.registry().emplace<MeshSource>(e, box);
-            w.registry().emplace<MaterialOverride>(e, metal);
+            w.registry().emplace<Material>(e, metal);
             ViewModel vm;
             vm.fovDeg = kFov;
             vm.depthScale = kGunDepth;
@@ -591,7 +592,7 @@ std::string gunScene(const View& view, const std::string& tag, Gun gun) {
             t.scale = glm::vec3(kGunDepth);
             const auto e = w.create("Box at the gun", t);
             w.registry().emplace<MeshSource>(e, box);
-            w.registry().emplace<MaterialOverride>(e, metal);
+            w.registry().emplace<Material>(e, metal);
         }
     });
 }

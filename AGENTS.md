@@ -407,7 +407,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   configuration; never change one without the other. A new target that crashes right
   after "resizing to WxH" has picked a mismatched VMA.
 - **Alpha modes** (`render::AlphaMode { Opaque, Mask, Blend }`, glTF's `alphaMode`; primitives'
-  `MaterialOverride.alphaMode`/`opacity`): coverage is base colour alpha x the albedo texture's x
+  `Material`'s `alpha_mode`/`geometry_opacity`): coverage is base colour alpha x the albedo texture's x
   `opacity`, in material row 3 (`mode, cutoff, opacity, base alpha`). A `Mask` draw (`kDrawMask`) is in
   no G-buffer cull list: the G-buffer draws it after the late lists with `core/gbuffer_mask.frag` (a
   discard, so no forced early depth test). A `Blend` draw (`kDrawTransparent`) is in no list at all,

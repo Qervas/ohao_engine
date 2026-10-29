@@ -478,13 +478,13 @@ std::string skinnedOffscreenScene(bool bind) {
     const std::string rig = R"({
   "format": "ohao.scene",
   "version": 1,
-  "components": { "Animator": 1, "Camera": 1, "Light": 1, "MaterialOverride": 1, "MeshSource": 1, "Name": 1, "SkinnedMesh": 1, "Transform": 1 },
+  "components": { "Animator": 1, "Camera": 1, "Light": 1, "Material": 1, "MeshSource": 1, "Name": 1, "SkinnedMesh": 1, "Transform": 1 },
   "entities": [
     { "id": "a17b000000000001", "Name": { "value": "MainCamera" },
       "Transform": { "position": [-2.2, 0.62, 1.8] }, "Camera": { "fovDeg": 30 } },
     { "id": "a17b000000000002", "Name": { "value": "Floor" },
       "MeshSource": { "source": { "BoxPrim": { "lo": [-6, -0.1, -6], "hi": [6, 0, 4], "color": [0.6, 0.6, 0.6] } } },
-      "MaterialOverride": { "baseColor": [0.6, 0.6, 0.6], "roughness": 0.9 } },
+      "Material": { "base_color": [0.6, 0.6, 0.6], "specular_roughness": 0.9 } },
     { "id": "a17b000000000003", "Name": { "value": "Sun" },
       "Transform": { "rotation": [-0.40822, 0.23457, 0.10938, 0.87543] },
       "Light": { "type": "Directional", "color": [1, 0.95, 0.85], "intensity": 3 } },

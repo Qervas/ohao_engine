@@ -78,15 +78,21 @@ std::shared_ptr<const Model> generate(const MeshSource& ms) {
     return m;
 }
 
-render::MaterialDesc describe(const MaterialOverride& o) {
+render::MaterialDesc describe(const Material& o) {
     render::MaterialDesc d;
     d.baseColor = o.baseColor;
-    d.roughness = o.roughness;
-    d.metallic = o.metallic;
-    d.emissiveStrength = o.emissiveStrength;
-    d.subsurface = o.subsurface;
+    d.baseWeight = o.baseWeight;
+    d.metallic = o.baseMetalness;
+    d.diffuseRoughness = o.baseDiffuseRoughness;
+    d.specularWeight = o.specularWeight;
+    d.specularColor = o.specularColor;
+    d.roughness = o.specularRoughness;
+    d.specularIor = o.specularIor;
+    d.emissiveStrength = o.emissionLuminance;
+    d.emissionColor = o.emissionColor;
+    d.subsurface = o.subsurfaceWeight;
     d.alphaMode = static_cast<render::AlphaMode>(o.alphaMode);
-    d.opacity = o.opacity;
+    d.opacity = o.geometryOpacity;
     return d;
 }
 
@@ -122,9 +128,9 @@ public:
         m_reg.on_construct<MeshSource>().connect<&InstantiateState::markDirty>(this);
         m_reg.on_update<MeshSource>().connect<&InstantiateState::markDirty>(this);
         m_reg.on_destroy<MeshSource>().connect<&InstantiateState::onSourceDestroy>(this);
-        m_reg.on_construct<MaterialOverride>().connect<&InstantiateState::markDirty>(this);
-        m_reg.on_update<MaterialOverride>().connect<&InstantiateState::markDirty>(this);
-        m_reg.on_destroy<MaterialOverride>().connect<&InstantiateState::onOverrideDestroy>(this);
+        m_reg.on_construct<Material>().connect<&InstantiateState::markDirty>(this);
+        m_reg.on_update<Material>().connect<&InstantiateState::markDirty>(this);
+        m_reg.on_destroy<Material>().connect<&InstantiateState::onOverrideDestroy>(this);
         // Installed into a world that already has sources (a host that starts its renderer
         // after loading, like `ohao run`): they are instantiated on the first run.
         for (const entt::entity e : m_reg.view<MeshSource>()) m_reg.emplace_or_replace<InstantiateDirty>(e);
@@ -134,9 +140,9 @@ public:
         m_reg.on_construct<MeshSource>().disconnect(this);
         m_reg.on_update<MeshSource>().disconnect(this);
         m_reg.on_destroy<MeshSource>().disconnect(this);
-        m_reg.on_construct<MaterialOverride>().disconnect(this);
-        m_reg.on_update<MaterialOverride>().disconnect(this);
-        m_reg.on_destroy<MaterialOverride>().disconnect(this);
+        m_reg.on_construct<Material>().disconnect(this);
+        m_reg.on_update<Material>().disconnect(this);
+        m_reg.on_destroy<Material>().disconnect(this);
         // The World is going away: release every mesh it still holds.
         for (auto& [key, entry] : m_meshes) m_backend->releaseMesh(entry.mesh);
     }
@@ -149,7 +155,7 @@ public:
             if (m_reg.valid(e) && !m_reg.all_of<MeshSource>(e)) clearDerived(e);
         }
         m_sourceGone.clear();
-        // 2. MaterialOverride removed from an entity that keeps its mesh: back to default.
+        // 2. Material removed from an entity that keeps its mesh: back to default.
         for (const entt::entity e : m_overrideGone)
             if (m_reg.valid(e) && m_reg.all_of<MeshSource>(e)) m_reg.emplace_or_replace<InstantiateDirty>(e);
         m_overrideGone.clear();
@@ -208,7 +214,7 @@ private:
             m_userOf[e] = it->first;
         }
 
-        const auto* overrideMat = m_reg.try_get<MaterialOverride>(e);
+        const auto* overrideMat = m_reg.try_get<Material>(e);
         const render::MaterialDesc desc = overrideMat ? describe(*overrideMat) : render::MaterialDesc{};
         std::vector<render::MaterialHandle> materials =
             entry.modelMaterials.empty() ? std::vector<render::MaterialHandle>{material(desc)} : entry.modelMaterials;
@@ -223,10 +229,15 @@ private:
     }
 
     render::MaterialHandle material(const render::MaterialDesc& d) {
-        const std::array<uint32_t, 7> key{std::bit_cast<uint32_t>(d.baseColor.r), std::bit_cast<uint32_t>(d.baseColor.g),
-                                          std::bit_cast<uint32_t>(d.baseColor.b), std::bit_cast<uint32_t>(d.roughness),
-                                          std::bit_cast<uint32_t>(d.metallic), std::bit_cast<uint32_t>(d.emissiveStrength),
-                                          std::bit_cast<uint32_t>(d.subsurface)};
+        // Every value a scene material sets, bit for bit: two materials differing in any of them
+        // are two table entries.
+        const float values[] = {d.baseColor.r, d.baseColor.g, d.baseColor.b, d.roughness, d.metallic,
+                                d.baseWeight, d.diffuseRoughness, d.specularWeight, d.specularColor.r,
+                                d.specularColor.g, d.specularColor.b, d.specularIor, d.emissiveStrength,
+                                d.emissionColor.r, d.emissionColor.g, d.emissionColor.b, d.subsurface,
+                                static_cast<float>(d.alphaMode), d.opacity};
+        MaterialKey key{};
+        for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);
         if (const auto it = m_materials.find(key); it != m_materials.end()) return it->second;
         const render::MaterialHandle h = m_backend->material(d);
         m_materials.emplace(key, h);
@@ -271,7 +282,8 @@ private:
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
-    std::map<std::array<uint32_t, 7>, render::MaterialHandle> m_materials;
+    using MaterialKey = std::array<uint32_t, 19>;
+    std::map<MaterialKey, render::MaterialHandle> m_materials;
     std::vector<entt::entity> m_sourceGone, m_overrideGone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;
     std::unordered_set<std::string> m_logged;

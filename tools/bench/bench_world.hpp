@@ -18,9 +18,18 @@ namespace ohao::bench {
 
 // n entities with Name and Transform (random position, rotation and scale) and a hierarchy
 // up to 8 deep (about 60% of the entities have a parent among the 64 created just before
-// them). 99% are renderables (a MeshSource primitive and a MaterialOverride, from
+// them). 99% are renderables (a MeshSource primitive and a Material, from
 // palettes), 1% lights of every type. Then a camera and an environment entity (n + 2 in
 // all).
+// A primitive's material: colour, roughness and metalness, the rest OpenPBR's defaults.
+inline ecs::Material surface(const glm::vec3& color, float roughness, float metalness = 0.0f) {
+    ecs::Material m;
+    m.baseColor = color;
+    m.specularRoughness = roughness;
+    m.baseMetalness = metalness;
+    return m;
+}
+
 inline void buildBenchWorld(ecs::World& w, int n, uint64_t seed) {
     using namespace ohao::ecs;
     w.seedIds(seed);
@@ -68,9 +77,9 @@ inline void buildBenchWorld(ecs::World& w, int n, uint64_t seed) {
             static constexpr float kChannel[] = {0.05f, 0.12f, 0.25f, 0.45f, 0.65f, 0.73f, 0.85f, 0.95f};
             const auto c = [&] { return kChannel[rng() % std::size(kChannel)]; };
             static constexpr float kRoughness[] = {0.05f, 0.2f, 0.35f, 0.5f, 0.75f, 0.95f};
-            w.registry().emplace<MaterialOverride>(
-                e, MaterialOverride{{c(), c(), c()}, kRoughness[rng() % std::size(kRoughness)],
-                                    rng() % 5 == 0 ? 1.0f : 0.0f, 0.0f});
+            const glm::vec3 color{c(), c(), c()};
+            const float roughness = kRoughness[rng() % std::size(kRoughness)];
+            w.registry().emplace<Material>(e, surface(color, roughness, rng() % 5 == 0 ? 1.0f : 0.0f));
         }
         es.push_back(e);
         depth.push_back(d);
@@ -117,13 +126,14 @@ inline void buildRenderBenchWorld(ecs::World& w, int n, uint64_t seed) {
         }
         w.registry().emplace<MeshSource>(e, ms);
         const auto c = [&] { return kChannel[rng() % std::size(kChannel)]; };
-        w.registry().emplace<MaterialOverride>(e, MaterialOverride{{c(), c(), c()}, 0.6f, 0.0f, 0.0f});
+        const glm::vec3 color{c(), c(), c()};
+        w.registry().emplace<Material>(e, surface(color, 0.6f));
     }
     // The ground under the grid.
     Transform ground;
     const auto g = w.create("Ground", ground);
     w.registry().emplace<MeshSource>(g, MeshSource{PlatformPrim{420.0f, 0.2f, 420.0f}});
-    w.registry().emplace<MaterialOverride>(g, MaterialOverride{{0.5f, 0.5f, 0.5f}, 0.9f, 0.0f, 0.0f});
+    w.registry().emplace<Material>(g, surface({0.5f, 0.5f, 0.5f}, 0.9f));
     static constexpr glm::vec3 kLightColors[] = {{1.0f, 0.9f, 0.8f}, {0.8f, 0.9f, 1.0f}, {1.0f, 0.7f, 0.5f}, {0.7f, 1.0f, 0.8f}};
     for (int i = 0; i < 1000; ++i) {
         Transform lt;

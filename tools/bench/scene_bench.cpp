@@ -25,7 +25,7 @@
 // code fails. Results go to build/scene_bench.json; with --check the exit code is 1 when a
 // median is over its budget or a bench100k median is more than maxRatio times bench10k's.
 //
-// The scene is the spec's: Name, Transform, Parent, Light, MeshSource, MaterialOverride,
+// The scene is the spec's: Name, Transform, Parent, Light, MeshSource, Material,
 // and (since step 8) one Camera and one Environment.
 #include "api/session.hpp"
 #include "bench_env.hpp"

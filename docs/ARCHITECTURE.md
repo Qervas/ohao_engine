@@ -131,7 +131,7 @@ after the frame's steps (LiveHost):
                       never the world, the schedule or a snapshot)
 once per batch of steps and before each render:
 World::sync()
-  instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
+  instantiate     MeshSource/Material -> MeshRenderer,        installed by a host with
                   meshes and materials registered in the RenderScene   a renderer (addSyncBefore)
   player_spawn    new or changed PlayerControllers -> characters, at  installed by installPhysics
                   the player spawn (so a play scene's first frame is

@@ -7,7 +7,7 @@
     "FlyController": 1,
     "InputActions": 1,
     "Light": 1,
-    "MaterialOverride": 1,
+    "Material": 1,
     "MeshSource": 1,
     "Name": 1,
     "Spin": 1,
@@ -41,7 +41,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.55, 0.5, 0.45], "roughness": 0.9 }
+      "Material": { "base_color": [0.55, 0.5, 0.45], "specular_roughness": 0.9 }
     },
     {
       "id": "f0ae69eea8e8638e",
@@ -58,7 +58,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.55, 0.5, 0.45], "roughness": 0.9 }
+      "Material": { "base_color": [0.55, 0.5, 0.45], "specular_roughness": 0.9 }
     },
     {
       "id": "08c703cc34a67d68",
@@ -75,7 +75,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.55, 0.5, 0.45], "roughness": 0.9 }
+      "Material": { "base_color": [0.55, 0.5, 0.45], "specular_roughness": 0.9 }
     },
     {
       "id": "982734a2804ba579",
@@ -92,7 +92,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.18, 0.1, 0.05], "roughness": 0.95 }
+      "Material": { "base_color": [0.18, 0.1, 0.05], "specular_roughness": 0.95 }
     },
     {
       "id": "39b81fba68c68b65",
@@ -109,7 +109,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.6, 0.58, 0.55], "roughness": 0.9 }
+      "Material": { "base_color": [0.6, 0.58, 0.55], "specular_roughness": 0.9 }
     },
     {
       "id": "4801d422f27ae706",
@@ -119,7 +119,7 @@
           "BoxPrim": { "lo": [-12, -15, -15], "hi": [12, -13.5, -6], "color": [0.2, 0.12, 0.06] }
         }
       },
-      "MaterialOverride": { "baseColor": [0.2, 0.12, 0.06] }
+      "Material": { "base_color": [0.2, 0.12, 0.06], "specular_roughness": 0.5 }
     },
     {
       "id": "93f726ea735b3ff8",
@@ -133,7 +133,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.85, 0.82, 0.78], "roughness": 0.95 }
+      "Material": { "base_color": [0.85, 0.82, 0.78], "specular_roughness": 0.95 }
     },
     {
       "id": "7cdffa0e3946e538",
@@ -147,7 +147,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.2, 0.12, 0.06], "roughness": 0.4 }
+      "Material": { "base_color": [0.2, 0.12, 0.06], "specular_roughness": 0.4 }
     },
     {
       "id": "3bb633ac12689154",
@@ -161,7 +161,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.92, 0.9, 0.88], "roughness": 0.95 }
+      "Material": { "base_color": [0.92, 0.9, 0.88], "specular_roughness": 0.95 }
     },
     {
       "id": "f1354ff9d6e64876",
@@ -175,7 +175,7 @@
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.22, 0.14, 0.07], "roughness": 0.45 }
+      "Material": { "base_color": [0.22, 0.14, 0.07], "specular_roughness": 0.45 }
     },
     {
       "id": "caac71fc3f738361",
@@ -187,7 +187,7 @@
       "MeshSource": {
         "source": { "ModelAsset": { "asset": { "path": "assets/test_models/DamagedHelmet.glb" } } }
       },
-      "MaterialOverride": { "baseColor": [0.8, 0.7, 0.6] }
+      "Material": { "base_color": [0.8, 0.7, 0.6], "specular_roughness": 0.5 }
     },
     {
       "id": "ddc07949626d95c8",
@@ -222,7 +222,7 @@
           "BoxPrim": { "lo": [-1.5, -1.5, -1.5], "hi": [1.5, 1.5, 1.5], "color": [0.7, 0.12, 0.08] }
         }
       },
-      "MaterialOverride": { "baseColor": [0.7, 0.12, 0.08], "roughness": 0.35 },
+      "Material": { "base_color": [0.7, 0.12, 0.08], "specular_roughness": 0.35 },
       "Spin": { "axis": [0.3, 1, 0.2], "degreesPerSecond": 68.75 }
     },
     {

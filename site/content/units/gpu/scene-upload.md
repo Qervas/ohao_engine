@@ -121,10 +121,10 @@ array is shorter:
 {{cite ohao/render/scene/model_upload.cpp "mats[i].metallic = i < model.materialMetallic.size() ? model.materialMetallic[i] : 0.0f;"}}
 
 A model with no `materialColors` gets a single material: the caller's override, or the
-default. A material that loaded an emissive map is marked emissive with a flat
-strength; the strength does not scale with the map.
+default. A material that loaded an emissive map emits at `KHR_materials_emissive_strength`
+(1 without it); the strength does not scale with the map.
 
-{{cite ohao/render/scene/model_upload.cpp "if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;"}}
+{{cite ohao/render/scene/model_upload.cpp "mats[i].emissiveStrength = i < model.materialEmissionStrength.size() ? model.materialEmissionStrength[i] : 1.0f;"}}
 
 Submeshes are the contiguous runs of equal `materialPerTriangle` entries, capped at the
 triangle count; triangles past the end of that list use material 0. Each run becomes

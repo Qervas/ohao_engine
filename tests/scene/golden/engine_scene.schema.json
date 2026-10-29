@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 667173fa20c11cce. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 7b6d190cd6efb22f. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -35,7 +35,7 @@
         "Parent": { "$ref": "#/$defs/Parent" },
         "Light": { "$ref": "#/$defs/Light" },
         "MeshSource": { "$ref": "#/$defs/MeshSource" },
-        "MaterialOverride": { "$ref": "#/$defs/MaterialOverride" },
+        "Material": { "$ref": "#/$defs/Material" },
         "Camera": { "$ref": "#/$defs/Camera" },
         "Environment": { "$ref": "#/$defs/Environment" },
         "Spin": { "$ref": "#/$defs/Spin" },
@@ -561,12 +561,12 @@
       },
       "additionalProperties": false
     },
-    "MaterialOverride": {
-      "description": "The material of a mesh without its own materials (primitives). For a model with materials it only sets the legacy RT GI albedo.",
+    "Material": {
+      "description": "The material of a mesh without its own materials (primitives): OpenPBR Surface 1.1.1's base, under its names and defaults. For a model with materials it only sets the legacy RT GI albedo.",
       "type": "object",
       "properties": {
-        "baseColor": {
-          "description": "Albedo",
+        "base_color": {
+          "description": "The diffuse albedo, and a metal's F0",
           "default": [0.8, 0.8, 0.8],
           "allOf": [
             {
@@ -577,32 +577,76 @@
             }
           ]
         },
-        "roughness": {
-          "description": "GGX roughness",
-          "default": 0.5,
+        "base_weight": {
+          "description": "Scales base_color",
+          "default": 1,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         },
-        "metallic": {
+        "base_metalness": {
           "description": "0 = dielectric, 1 = metal",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         },
-        "emissiveStrength": {
-          "description": "Emission multiplier",
-          "default": 0,
-          "allOf": [{ "type": "number", "minimum": 0 }]
-        },
-        "subsurface": {
-          "description": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emissiveStrength > 0.",
+        "base_diffuse_roughness": {
+          "description": "The diffuse's roughness (EON): 0 = Lambert, 1 = the flattest, dustiest",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         },
-        "alphaMode": {
+        "specular_weight": {
+          "description": "Scales the dielectric's reflectance at normal incidence (and a metal's whole specular)",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "specular_color": {
+          "description": "Tints the dielectric's reflection from above, and a metal's edge (F82)",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "specular_roughness": {
+          "description": "GGX roughness (alpha = its square)",
+          "default": 0.3,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "specular_ior": {
+          "description": "The dielectric's index of refraction",
+          "default": 1.5,
+          "allOf": [{ "type": "number", "minimum": 1, "maximum": 3 }]
+        },
+        "emission_luminance": {
+          "description": "Emitted radiance, in the engine's units until the camera step (ruling O4)",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "emission_color": {
+          "description": "The emission's colour",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "subsurface_weight": {
+          "description": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emission_luminance > 0.",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "alpha_mode": {
           "description": "Opaque, alpha-tested (Mask) or blended (Blend)",
           "default": "Opaque",
           "allOf": [{ "$ref": "#/$defs/MaterialAlpha" }]
         },
-        "opacity": {
+        "geometry_opacity": {
           "description": "Coverage: Blend's blend factor, Mask's test (cut below 0.5)",
           "default": 1,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]

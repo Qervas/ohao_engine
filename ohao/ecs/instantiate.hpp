@@ -1,10 +1,10 @@
 #pragma once
 // Instantiate: builds each entity's MeshRenderer (plus the derived GiMaterialLegacy and
-// EmissiveProxyLight) from its MeshSource and MaterialOverride, so scene files and
+// EmissiveProxyLight) from its MeshSource and Material, so scene files and
 // commands describe meshes as data. The same data path as spawnModel.
 //
-//   - Trigger: constructing or replacing MeshSource or MaterialOverride tags the entity
-//     InstantiateDirty; removing MaterialOverride re-instantiates with the default
+//   - Trigger: constructing or replacing MeshSource or Material tags the entity
+//     InstantiateDirty; removing Material re-instantiates with the default
 //     material; removing MeshSource (or destroying the entity) removes what instantiate
 //     made and releases the mesh.
 //   - Meshes are cached per distinct MeshSource value with a user count, and released

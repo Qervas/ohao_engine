@@ -105,7 +105,7 @@ Restore has no renderer hook, and it needs none. A replaced `Transform` fires `o
 
 {{cite ohao/ecs/world.cpp "m_registry.on_update<Transform>().connect<&World::onTransformChanged>(this);"}}
 
-The transform system recomputes the world matrix and tags `RenderDirty`, and the render extract updates that one instance in the `RenderScene`. `Light` writes mark the light list dirty, and `MeshSource` and `MaterialOverride` writes mark the entity for instantiate. Because an unchanged restore fires nothing, nothing is dirtied, and the frame after it uploads no instance bytes.
+The transform system recomputes the world matrix and tags `RenderDirty`, and the render extract updates that one instance in the `RenderScene`. `Light` writes mark the light list dirty, and `MeshSource` and `Material` writes mark the entity for instantiate. Because an unchanged restore fires nothing, nothing is dirtied, and the frame after it uploads no instance bytes.
 
 `restore_render_gpu_test` checks this on the checked-in Cornell scene through the CLI's own `Session` and `RenderHost`, deferred at 960x540 with validation on. It moves the metal sphere, renders, then restores. The restore's frame must upload exactly the instance bytes the move's frame uploaded, which is one instance back rather than the whole table:
 

@@ -33,7 +33,7 @@ itself:
 
 Scene construction takes one of two forms. `cornell_box` and `model_viewer` build
 the entities a scene file holds — a `MeshSource` naming a primitive or a model path,
-a `MaterialOverride`, lights, a `Camera` and an `Environment` — and install
+a `Material`, lights, a `Camera` and an `Environment` — and install
 instantiate, which builds each GPU mesh on the first update; `ohao_game` and
 `ohao run` load those entities from a scene file instead:
 

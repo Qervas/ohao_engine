@@ -18,6 +18,7 @@
 //                  is kShadowNever, counted by the RenderScene.
 //
 // Exit code 0 = pass; the last line is a JSON summary.
+#include "common/materials.hpp"
 #include "api/session.hpp"
 #include "bench/bench_world.hpp"
 #include "common/harness.hpp"
@@ -119,7 +120,7 @@ std::string packedLightsScene() {
         w.seedIds(8);
         const auto floor = w.create("Floor", Transform{});
         w.registry().emplace<MeshSource>(floor, MeshSource{PlatformPrim{40.0f, 0.2f, 40.0f}});
-        w.registry().emplace<MaterialOverride>(floor, MaterialOverride{{0.6f, 0.6f, 0.6f}, 0.7f, 0.0f, 0.0f});
+        w.registry().emplace<Material>(floor, ohao::test::material({0.6f, 0.6f, 0.6f}, 0.7f, 0.0f, 0.0f));
         for (int i = 0; i < 1000; ++i) {
             Transform t;
             t.position = {-1.35f + 0.3f * static_cast<float>(i % 10), 0.5f + 0.3f * static_cast<float>(i / 10 % 10),
@@ -155,7 +156,7 @@ std::string farWallScene() {
         const auto wall = w.create("Wall", wallT);
         w.registry().emplace<MeshSource>(
             wall, MeshSource{BoxPrim{glm::vec3(-400.0f, -400.0f, -1.0f), glm::vec3(400.0f, 400.0f, 1.0f), glm::vec3(0.7f)}});
-        w.registry().emplace<MaterialOverride>(wall, MaterialOverride{{0.7f, 0.7f, 0.7f}, 0.8f, 0.0f, 0.0f});
+        w.registry().emplace<Material>(wall, ohao::test::material({0.7f, 0.7f, 0.7f}, 0.8f, 0.0f, 0.0f));
         Transform lt;
         lt.position = {0.0f, 0.0f, -1480.0f};
         const auto l = w.create("Light", lt);

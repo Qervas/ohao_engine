@@ -11,7 +11,7 @@ A scene file cannot hold a `MeshHandle`. A handle is an index into one `RenderSc
 
 {{cite ohao/ecs/components.hpp "std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim, ConePrim, QuadPrim, BoxPrim> source;"}}
 
-`MaterialOverride` (base color, roughness, metallic, emissive strength) sits beside it. The `instantiate` system turns the pair into the runtime components the render extract reads: `MeshRenderer`, `GiMaterialLegacy` and, when the model's first emissive-textured material is bright enough to make an auto-light, `EmissiveProxyLight`. None of these is saved. An entity whose `MeshRenderer` was built in code from an in-memory model has nothing a file can describe, and `saveScene` reports it as `W_UNSAVEABLE_MESH` instead of dropping the mesh silently.
+`Material` (OpenPBR's base: base colour, metalness, specular roughness, IOR, emission, ...) sits beside it. The `instantiate` system turns the pair into the runtime components the render extract reads: `MeshRenderer`, `GiMaterialLegacy` and, when the model's first emissive-textured material is bright enough to make an auto-light, `EmissiveProxyLight`. None of these is saved. An entity whose `MeshRenderer` was built in code from an in-memory model has nothing a file can describe, and `saveScene` reports it as `W_UNSAVEABLE_MESH` instead of dropping the mesh silently.
 
 ## The backend seam
 
@@ -21,15 +21,15 @@ Instantiate does not include the renderer's upload code directly. It talks to a 
 
 `uploadMesh` and `releaseMesh` handle geometry. `modelMaterials` registers a model's own materials with their textures. `material` registers one descriptor. The production `RenderSceneBackend` forwards these to `render::uploadModelMesh`, `RenderScene::releaseMesh` and `registerMaterial`, the same path `spawnModel` uses. `material` registers the descriptor as given, adding no texture to it.
 
-The seam is what makes the logic testable without a GPU. In `scene_tests`, a `FakeBackend` hands out sequential handles and counts every upload, release and registration, and the t11 tests assert those counts directly. The GPU half is `instantiate_gpu_test`. It renders the Cornell box twice with fresh renderers, once built through `spawnModel` and once from `MeshSource`/`MaterialOverride` entities through instantiate on a real `RenderScene`. The two images must be bit-identical, and with validation layers on there must be no messages. Then it destroys the spheres and checks that their shared mesh is released.
+The seam is what makes the logic testable without a GPU. In `scene_tests`, a `FakeBackend` hands out sequential handles and counts every upload, release and registration, and the t11 tests assert those counts directly. The GPU half is `instantiate_gpu_test`. It renders the Cornell box twice with fresh renderers, once built through `spawnModel` and once from `MeshSource`/`Material` entities through instantiate on a real `RenderScene`. The two images must be bit-identical, and with validation layers on there must be no messages. Then it destroys the spheres and checks that their shared mesh is released.
 
 ## Triggers and one run
 
-Constructing or updating `MeshSource` or `MaterialOverride` tags the entity `InstantiateDirty`. Destroy signals only queue the entity, because it may be halfway through being destroyed:
+Constructing or updating `MeshSource` or `Material` tags the entity `InstantiateDirty`. Destroy signals only queue the entity, because it may be halfway through being destroyed:
 
 {{cite ohao/ecs/instantiate.cpp "void onSourceDestroy(entt::registry&, entt::entity e) { m_sourceGone.push_back(e); }"}}
 
-Each `run()` does three things in order. First, every entity whose `MeshSource` went away gives up its use of the mesh; if the entity still lives, what instantiate made is removed from it. Second, an entity that lost only its `MaterialOverride` is re-dirtied, so it falls back to the default material. Third, the dirty entities are sorted by `CreationOrder` and instantiated, and the tag is cleared from every entity. The sort makes mesh registration order, and so mesh indices, independent of EnTT pool order. The write rule is the same as for the render extract: a change through `get<>()` fires no signal and is never seen; use `patch` or `replace`.
+Each `run()` does three things in order. First, every entity whose `MeshSource` went away gives up its use of the mesh; if the entity still lives, what instantiate made is removed from it. Second, an entity that lost only its `Material` is re-dirtied, so it falls back to the default material. Third, the dirty entities are sorted by `CreationOrder` and instantiated, and the tag is cleared from every entity. The sort makes mesh registration order, and so mesh indices, independent of EnTT pool order. The write rule is the same as for the render extract: a change through `get<>()` fires no signal and is never seen; use `patch` or `replace`.
 
 ## One mesh per distinct value
 
@@ -50,9 +50,9 @@ Each cache entry counts its users. An entity switched to a source that already h
 
 ## Materials by value, for a reason
 
-`MaterialTable` has a fixed capacity of 4096 entries and no way to free one. When it is full it logs once and returns the default material. Registering a material per entity would fill it in a 10k-entity scene, and every edit would use up another slot. So override materials are deduplicated on the bit patterns of their seven floats (base colour, roughness, metallic, emissive strength and subsurface strength), in a map that lives as long as the system:
+`MaterialTable` has a fixed capacity of 4096 entries and no way to free one. When it is full it logs once and returns the default material. Registering a material per entity would fill it in a 10k-entity scene, and every edit would use up another slot. So scene materials are deduplicated on the bit patterns of every value they set (OpenPBR's base, emission, subsurface, alpha mode and opacity: 19 words; until 2026-10-29 seven, so two materials differing only in alpha shared an entry), in a map that lives as long as the system:
 
-{{cite ohao/ecs/instantiate.cpp "const std::array<uint32_t, 7> key{std::bit_cast<uint32_t>(d.baseColor.r)"}}
+{{cite ohao/ecs/instantiate.cpp "for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);"}}
 
 A model that has its own materials always uses them. For such a model the override only feeds the legacy GI word, which is what `spawnModel` does too (t11 checks both). Model materials are cached in the mesh entry, not in that map. If a model's last user goes and the model is instantiated again later, its materials are registered a second time and take more table slots.
 
@@ -103,6 +103,6 @@ An HDRI path the resolver rejects becomes a warning, not an error. Removing the 
 ## Contracts
 
 - The `RenderScene`, the texture manager and the resolver must outlive the `World`. The system's destructor releases meshes through the backend.
-- `MeshSource` and `MaterialOverride` changes reach instantiate only through `patch`, `replace`, `emplace` or `remove`.
+- `MeshSource` and `Material` changes reach instantiate only through `patch`, `replace`, `emplace` or `remove`.
 - A failed entity stays failed until its `MeshSource` is touched again.
 - A rolled `Camera` entity renders unrolled.

@@ -382,10 +382,10 @@ def main():
     check(not err and summary.get("entities") == loaded.get("entities") and summary.get("outline"),
           "world_summary: the outline of the loaded scene")
 
-    found, _, err = c.tool("world_query", {"names": ["SpinningCube"], "fields": ["/MaterialOverride/baseColor"]})
+    found, _, err = c.tool("world_query", {"names": ["SpinningCube"], "fields": ["/Material/base_color"]})
     cube = (found or {}).get("entities", [{}])[0].get("id")
     edited, _, err = c.tool("world_apply", {"commands": [
-        {"op": "field.set", "id": cube, "path": "/MaterialOverride/baseColor", "value": [0.1, 0.65, 0.2]}]})
+        {"op": "field.set", "id": cube, "path": "/Material/base_color", "value": [0.1, 0.65, 0.2]}]})
     check(cube is not None and not err and edited.get("applied") == 1 and edited.get("inverse"),
           "world_apply: the cube turns green, with its inverse")
 

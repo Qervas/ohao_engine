@@ -12,7 +12,7 @@
     "JointAttach": 1,
     "Level": 1,
     "Light": 1,
-    "MaterialOverride": 1,
+    "Material": 1,
     "MeshSource": 1,
     "Muzzle": 1,
     "Name": 1,

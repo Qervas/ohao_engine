@@ -1,6 +1,6 @@
 #pragma once
 // The worlds cornell_box and model_viewer render, built as authoring data only (Camera,
-// Environment, MeshSource, MaterialOverride, Light): no GPU, so --save-scene can write
+// Environment, MeshSource, Material, Light): no GPU, so --save-scene can write
 // them without a renderer, and tests can build them. Instantiate turns the meshes into
 // MeshRenderers; runtime/scene_view_apply.hpp applies the camera and environment.
 //
@@ -46,16 +46,20 @@ inline entt::entity addEnvironment(ecs::World& world, std::optional<ecs::AssetRe
 }
 
 inline entt::entity addMesh(ecs::World& world, std::string_view name, ecs::MeshSource source,
-                            const ecs::MaterialOverride& material, const ecs::Transform& t = {}) {
+                            const ecs::Material& material, const ecs::Transform& t = {}) {
     const entt::entity e = world.create(name, t);
     auto& reg = world.registry();
     reg.emplace<ecs::MeshSource>(e, std::move(source));
-    reg.emplace<ecs::MaterialOverride>(e, material);
+    reg.emplace<ecs::Material>(e, material);
     return e;
 }
 
-inline ecs::MaterialOverride surface(const glm::vec3& color, float roughness, float metallic = 0.0f) {
-    return ecs::MaterialOverride{color, roughness, metallic, 0.0f};
+inline ecs::Material surface(const glm::vec3& color, float roughness, float metallic = 0.0f) {
+    ecs::Material m;
+    m.baseColor = color;
+    m.specularRoughness = roughness;
+    m.baseMetalness = metallic;
+    return m;
 }
 
 // The classic Cornell box: five walls, a metal and a glass sphere, twelve point lights.
@@ -114,7 +118,7 @@ inline void buildCornellBox(ecs::World& world) {
 // this only feeds the legacy RT GI word (and is the material of a model without any).
 // A single-material model keeps the old viewer's 0.8/0.7/0.6; a multi-material one uses
 // its own material 0.
-inline ecs::MaterialOverride viewerModelMaterial(const Model& model) {
+inline ecs::Material viewerModelMaterial(const Model& model) {
     const bool multiple = !model.materialPerTriangle.empty() &&
         *std::max_element(model.materialPerTriangle.begin(), model.materialPerTriangle.end()) > 0;
     if (multiple && !model.materialColors.empty())
@@ -184,7 +188,7 @@ inline ViewerScene buildModelViewerScene(ecs::World& world, const Model& model, 
     out.model = world.create("Model", out.modelTransform);
     if (modelAsset)
         world.registry().emplace<ecs::MeshSource>(out.model, ecs::MeshSource{ecs::ModelAsset{std::move(*modelAsset)}});
-    world.registry().emplace<ecs::MaterialOverride>(out.model, viewerModelMaterial(model));
+    world.registry().emplace<ecs::Material>(out.model, viewerModelMaterial(model));
 
     ecs::spawnFramedLights(world, frame);
     return out;

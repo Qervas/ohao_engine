@@ -165,7 +165,7 @@ min-depth pyramid of the final depth, after the late pass), not a shader problem
 
 `SSSPass` used to guess. It ran a full-screen blur keyed on an albedo-chromaticity test
 for skin, which took Cornell's red wall for skin and blurred it every frame. The guess
-is gone. A material opts in through a `subsurface` strength on `MaterialOverride`, the
+is gone. A material opts in through a `subsurface_weight` on `Material`, the
 scene-file component, and on `render::MaterialDesc`, packed into row 2, z of the
 material table:
 
@@ -176,7 +176,7 @@ fourth channel (the positive half is emissive luminance; an emissive surface tak
 subsurface), and every visible fragment of such a material flags its 16×16 tile in a
 classification buffer the G-buffer pass owns — the G-buffer unit describes the
 flagging. The materials a glTF model brings never set the field, so only primitives
-whose `MaterialOverride` sets it reach the blur.
+whose `Material` sets it reach the blur.
 
 ## Two indirect dispatches over the flagged tiles
 

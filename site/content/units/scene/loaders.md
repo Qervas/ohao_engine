@@ -123,7 +123,7 @@ Per-texel roughness only appears if a `{material}_gloss_*` image is sitting besi
 {{cite ohao/ecs/instantiate.cpp "[&](const CubePrim& p) { PrimitiveMeshGenerator::generateCube(*m, p.size); },"}}
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float height, int segments) {"}}
 
-What the generator fills is geometry only: none of the per-material arrays below. That is not a gap the caller has to close by hand — `render::uploadModel` treats a `Model` without `materialColors` as one submesh with one material, the caller's override material or the table's default — but it means a primitive's color always comes from the entity's `MaterialOverride` (or the spawn call), never from the generator.
+What the generator fills is geometry only: none of the per-material arrays below. That is not a gap the caller has to close by hand — `render::uploadModel` treats a `Model` without `materialColors` as one submesh with one material, the caller's override material or the table's default — but it means a primitive's color always comes from the entity's `Material` (or the spawn call), never from the generator.
 
 {{cite ohao/render/scene/model_upload.cpp "mats.push_back(overrideMaterial ? *overrideMaterial : MaterialDesc{});"}}
 

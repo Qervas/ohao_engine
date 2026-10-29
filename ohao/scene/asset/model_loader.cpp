@@ -389,6 +389,11 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     model->materialAlphaMode.resize(numMats, 0u);
     model->materialAlphaCutoff.resize(numMats, 0.5f);
     model->materialBaseAlpha.resize(numMats, 1.0f);
+    model->materialIor.resize(numMats, 1.5f);
+    model->materialSpecularWeight.resize(numMats, 1.0f);
+    model->materialSpecularColor.resize(numMats, glm::vec3(1.0f));
+    model->materialEmissionColor.resize(numMats, glm::vec3(1.0f));
+    model->materialEmissionStrength.resize(numMats, 1.0f);
     model->materialTextureIndex.resize(numMats, -1);
     model->materialNormalTexIndex.resize(numMats, -1);
     model->materialRoughMetalTexIndex.resize(numMats, -1);
@@ -432,6 +437,19 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
         if (mat->Get(AI_MATKEY_BASE_COLOR, base) == aiReturn_SUCCESS) model->materialBaseAlpha[m] = base.a;
         else if (float opacity = 1.0f; mat->Get(AI_MATKEY_OPACITY, opacity) == aiReturn_SUCCESS)
             model->materialBaseAlpha[m] = opacity;
+
+        // KHR_materials_ior, _specular (its factors; Assimp sets them only when the extension is
+        // there) and _emissive_strength, and emissiveFactor.
+        if (float ior = 1.5f; mat->Get(AI_MATKEY_REFRACTI, ior) == aiReturn_SUCCESS) model->materialIor[m] = ior;
+        if (float weight = 1.0f; mat->Get(AI_MATKEY_SPECULAR_FACTOR, weight) == aiReturn_SUCCESS) {
+            model->materialSpecularWeight[m] = weight;
+            if (aiColor3D c(1.0f, 1.0f, 1.0f); mat->Get(AI_MATKEY_COLOR_SPECULAR, c) == aiReturn_SUCCESS)
+                model->materialSpecularColor[m] = glm::vec3(c.r, c.g, c.b);
+        }
+        if (aiColor3D e(1.0f, 1.0f, 1.0f); mat->Get(AI_MATKEY_COLOR_EMISSIVE, e) == aiReturn_SUCCESS)
+            model->materialEmissionColor[m] = glm::vec3(e.r, e.g, e.b);
+        if (float strength = 1.0f; mat->Get(AI_MATKEY_EMISSIVE_INTENSITY, strength) == aiReturn_SUCCESS)
+            model->materialEmissionStrength[m] = strength;
 
         // Textures
         model->materialTextureIndex[m] = loadAssimpTexture(scene, mat,

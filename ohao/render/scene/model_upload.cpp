@@ -215,10 +215,16 @@ std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const
             if (i < model.materialAlphaMode.size()) mats[i].alphaMode = static_cast<AlphaMode>(model.materialAlphaMode[i]);
             if (i < model.materialAlphaCutoff.size()) mats[i].alphaCutoff = model.materialAlphaCutoff[i];
             if (i < model.materialBaseAlpha.size()) mats[i].baseAlpha = model.materialBaseAlpha[i];
+            if (i < model.materialIor.size()) mats[i].specularIor = model.materialIor[i];
+            if (i < model.materialSpecularWeight.size()) mats[i].specularWeight = model.materialSpecularWeight[i];
+            if (i < model.materialSpecularColor.size()) mats[i].specularColor = model.materialSpecularColor[i];
+            if (i < model.materialEmissionColor.size()) mats[i].emissionColor = model.materialEmissionColor[i];
         }
         uploadTextures(textures, model, mats);
-        for (auto& m : mats)
-            if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;
+        // An emissive texture emits at KHR_materials_emissive_strength (1 without it).
+        for (std::size_t i = 0; i < mats.size(); ++i)
+            if (mats[i].emissiveTex != kNoTexture)
+                mats[i].emissiveStrength = i < model.materialEmissionStrength.size() ? model.materialEmissionStrength[i] : 1.0f;
     } else {
         mats.push_back(overrideMaterial ? *overrideMaterial : MaterialDesc{});
     }

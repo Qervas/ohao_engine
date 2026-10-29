@@ -348,7 +348,7 @@ restate plain `static_assert`s in `layout_meta.hpp`. The remaining two go throug
 `EXPECT`, so a `MaterialGpuPack::vec4Count` or `GpuPod<GPULight>` regression is a
 failing *run*, not a failing build.
 
-{{cite tests/engine/engine_tests.cpp "EXPECT(layout::MaterialGpuPack::vec4Count(2) == 8"}}
+{{cite tests/engine/engine_tests.cpp "EXPECT(layout::MaterialGpuPack::vec4Count(2) == 14"}}
 
 Three more binaries build by default and never touch an image: `physics_backend_tests`
 (59 cases over Jolt body lifecycle, CCD, the 16-layer collision system, queries,

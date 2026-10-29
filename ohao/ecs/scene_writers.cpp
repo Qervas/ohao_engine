@@ -157,24 +157,31 @@ void writeFields(const MeshSource& v, const MeshSource* omit, FieldSink& out) {
     t.endObject();
 }
 
-void writeFields(const MaterialOverride& v, const MaterialOverride* omit, FieldSink& out) {
+void writeFields(const Material& v, const Material* omit, FieldSink& out) {
     LayoutTree& t = out.tree;
-    if (!omit || !same(v.baseColor, omit->baseColor)) vec3(t, "\"baseColor\"", v.baseColor);
-    if (!omit || !same(v.roughness, omit->roughness)) t.f32("\"roughness\"", v.roughness);
-    if (!omit || !same(v.metallic, omit->metallic)) t.f32("\"metallic\"", v.metallic);
-    if (!omit || !same(v.emissiveStrength, omit->emissiveStrength)) t.f32("\"emissiveStrength\"", v.emissiveStrength);
-    if (!omit || !same(v.subsurface, omit->subsurface)) t.f32("\"subsurface\"", v.subsurface);
+    if (!omit || !same(v.baseColor, omit->baseColor)) vec3(t, "\"base_color\"", v.baseColor);
+    if (!omit || !same(v.baseWeight, omit->baseWeight)) t.f32("\"base_weight\"", v.baseWeight);
+    if (!omit || !same(v.baseMetalness, omit->baseMetalness)) t.f32("\"base_metalness\"", v.baseMetalness);
+    if (!omit || !same(v.baseDiffuseRoughness, omit->baseDiffuseRoughness))
+        t.f32("\"base_diffuse_roughness\"", v.baseDiffuseRoughness);
+    if (!omit || !same(v.specularWeight, omit->specularWeight)) t.f32("\"specular_weight\"", v.specularWeight);
+    if (!omit || !same(v.specularColor, omit->specularColor)) vec3(t, "\"specular_color\"", v.specularColor);
+    if (!omit || !same(v.specularRoughness, omit->specularRoughness)) t.f32("\"specular_roughness\"", v.specularRoughness);
+    if (!omit || !same(v.specularIor, omit->specularIor)) t.f32("\"specular_ior\"", v.specularIor);
+    if (!omit || !same(v.emissionLuminance, omit->emissionLuminance)) t.f32("\"emission_luminance\"", v.emissionLuminance);
+    if (!omit || !same(v.emissionColor, omit->emissionColor)) vec3(t, "\"emission_color\"", v.emissionColor);
+    if (!omit || !same(v.subsurfaceWeight, omit->subsurfaceWeight)) t.f32("\"subsurface_weight\"", v.subsurfaceWeight);
     if (!omit || v.alphaMode != omit->alphaMode) {
         static constexpr std::string_view kModes[] = {"\"Opaque\"", "\"Mask\"", "\"Blend\""};
         const auto raw = static_cast<uint8_t>(v.alphaMode);
         if (raw < std::size(kModes)) {
-            t.token("\"alphaMode\"", kModes[raw]);
+            t.token("\"alpha_mode\"", kModes[raw]);
         } else {
             t.fail("value " + std::to_string(static_cast<int64_t>(raw)) + " is not registered in enum MaterialAlpha");
-            t.null("\"alphaMode\"");
+            t.null("\"alpha_mode\"");
         }
     }
-    if (!omit || !same(v.opacity, omit->opacity)) t.f32("\"opacity\"", v.opacity);
+    if (!omit || !same(v.geometryOpacity, omit->geometryOpacity)) t.f32("\"geometry_opacity\"", v.geometryOpacity);
 }
 
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out) {

@@ -137,11 +137,11 @@ int main(int rawArgc, char* rawArgv[]) {
     ecs::installInstantiate(world, renderer.renderScene(), renderer.getTextureManager(), assets);
     const examples::ViewerScene scene = examples::buildModelViewerScene(world, *model, frame, asset, cli.flipY);
     if (!asset) {
-        const ecs::MaterialOverride o = examples::viewerModelMaterial(*model);
+        const ecs::Material o = examples::viewerModelMaterial(*model);
         render::MaterialDesc mat;
         mat.baseColor = o.baseColor;
-        mat.roughness = o.roughness;
-        mat.metallic = o.metallic;
+        mat.roughness = o.specularRoughness;
+        mat.metallic = o.baseMetalness;
         ecs::attachModel(world, scene.model, renderer.renderScene(), renderer.getTextureManager(), *model, "Model", &mat);
     }
     std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << frame.modelScale << std::endl;
