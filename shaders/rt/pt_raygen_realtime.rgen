@@ -553,7 +553,7 @@ void main() {
             float outerAngle = light.extra.w;
             float r = max(lightRadius, 0.01);
             float area = ptEmitterArea(lightType, r);
-            vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+            vec3 Le = lightColor * lightIntensity / area;
             Le *= ptRangeWindow(lightType, distance(hitPos, lightCenter), light.extra2.x);
             vec3 L;
             float shadowDist;
@@ -892,7 +892,7 @@ void main() {
                 float outerAngle = light.extra.w;
                 float r = max(lightRadius, 0.01);
                 float area = ptEmitterArea(lightType, r);
-                vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                vec3 Le = lightColor * lightIntensity / area;
                 Le *= ptRangeWindow(lightType, distance(bHitPos, lightCenter), light.extra2.x);
                 vec3 L;
                 float shadowDist;
@@ -1173,7 +1173,7 @@ void main() {
                 float outerAngle = light.extra.w;
                 float r = max(lightRadius, 0.01);
                 float area = ptEmitterArea(lightType, r);
-                vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                vec3 Le = lightColor * lightIntensity / area;
                 Le *= ptRangeWindow(lightType, distance(bHitPos, lightCenter), light.extra2.x);
                 vec3 L;
                 float shadowDist;
@@ -1433,7 +1433,7 @@ void main() {
                 float outerAngle = light.extra.w;
                 float r = max(lightRadius, 0.01);
                 float area = ptEmitterArea(lightType, r);
-                vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                vec3 Le = lightColor * lightIntensity / area;
                 Le *= ptRangeWindow(lightType, distance(xs, lightCenter), light.extra2.x);
                 vec3 L; float shadowDist; float weight;
 

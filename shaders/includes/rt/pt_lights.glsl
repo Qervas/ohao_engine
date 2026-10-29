@@ -31,8 +31,13 @@ float ptLightRadius(float type, float dirParam, vec4 extra2) {
 // light of intensity I has Le = I / (pi r^2); sampled uniformly over the whole sphere
 // (weight cos * 4 pi r^2 / d^2) or by solid angle, that delivers I / d^2. A spot's
 // estimator weights 4 pi r^2 / d^2 with no emitter cosine, so its Le = I / (4 pi r^2) is
-// already I / d^2; an area light keeps its own convention.
+// already I / d^2; an area light keeps its own convention. A directional light has no
+// emitter: its intensity is the irradiance it gives a surface facing it, as in the deferred
+// frame (weight 1), so its "area" is 1. The radius is clamped to 0.01 before this, so the area
+// is never zero; it is not floored further (a floor of 0.01 m^2 dimmed every light under
+// 5.6 cm, to 3% of its light at r = 0.01, against the emitter mesh's own I / (pi r^2)).
 float ptEmitterArea(float type, float r) {
+    if (type > 0.5 && type < 1.5) return 1.0;
     return (type < 0.5 ? 1.0 : 4.0) * 3.14159 * r * r;
 }
 

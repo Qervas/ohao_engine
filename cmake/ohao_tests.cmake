@@ -115,6 +115,9 @@ function(ohao_register_harness_tests)
     # The environment map the right way up in deferred (RT GI and IBL) and the path tracer: a sky
     # blue above, orange below, lights a floor blue (ROADMAP row 16's upside-down HDRI).
     ohao_add_python_test(check_env_orientation LABEL gpu GPU SCRIPT tests/renderer/check_env_orientation.py)
+    # Both renderers against closed-form radiance (a floor under one sun, point or spot light): the
+    # anchor the referee stands on.
+    ohao_add_python_test(check_analytic LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_analytic.py)
     if(TARGET ohao_game)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
             COMMAND ohao_game --frames 600 --resize-at 200)
@@ -125,6 +128,8 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(e2e_mcp LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/e2e_mcp.py)
 
     # Long gates
+    # The referee: deferred against the path tracer in linear radiance, scene by scene (a report).
+    ohao_add_python_test(check_parity LABEL slow GPU TIMEOUT 1800 SCRIPT tests/renderer/check_parity.py)
     # Diff images for failing scenes and the per-scene JSON go to build/golden_diff/.
     ohao_add_python_test(render_golden LABEL golden GPU TIMEOUT 1800
         SCRIPT tests/golden/render_golden.py ARGS tests/golden/manifest.json --json build/golden_diff/golden.json)
