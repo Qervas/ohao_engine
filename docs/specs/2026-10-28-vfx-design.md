@@ -939,10 +939,11 @@ particle system is deleted. What differs from the design above, and why:
 - **The doorway room has a roof.** The spec's text is "the room lit only by bounce". The blockout is open to
   the sky, so the floor patch was lit mostly from above and the cloud moved it 0.1%. `smoke_doorway.scene.json`
   adds a roof slab as its own entity (the blockout and its goldens do not move).
-- **The doorway bar is not met.** `t34_doorway_dims_gi` fails (the spec's 20% is the bar, not lowered). Unfilled, the
-  cloud dims 12.1% at 1 s (the curve is in the step 4 change record: 0% at 1 step, 12.5% peak at 20–30 steps). Ruling
-  28 filled the aperture in the harness; the floor is then 122% brighter with smoke in GI, not darker, because ruling
-  18's flat in-scatter lights the cloud (**OPEN ruling 29**). With in-scatter 0 the fill dims the floor (see 29).
+- **The doorway bar is met (ruling 29).** The spec's 20% is the bar, not lowered. Unfilled, the cloud dims 12.1% at
+  1 s (the curve is in the step 4 change record: 0% at 1 step, 12.5% peak at 20–30 steps). Ruling 28 filled the
+  aperture in the harness; with ruling 18's flat in-scatter the floor was 122% brighter, so **parent ruling 29
+  dropped the in-scatter** (`gi_trace` adds nothing; the cloud only attenuates). The filled doorway now dims the floor
+  34.6% (6.95 against 10.64 cloudless), and the cleared floor is back at 0.00% off.
 - **`tools/list` cap is 28 KB** (OPEN ruling 20's alternative): 25,037 bytes for 39 tools. `rpc_tests`,
   `check_serve` and `serve_budgets` use it.
 - **`vfx.info` gate is 2 KB, not 1 KB**: measured 805 bytes at `max` 16 in the play scene mid-fight;
@@ -955,10 +956,14 @@ particle system is deleted. What differs from the design above, and why:
   registry). `vfx.info` after the boom holds an effect, a light and a decal (`e2e_mcp`'s grenade leg).
 - **Level hint** `vfx` makes a `VfxEmitter` (`extras_schema.json`; `check_level_assets` `t35_vfx_hint_schema`).
 - **Validation**: `check_validation` runs the doorway's smoke through raster and both RT modes, 17 of 17 clean.
-- **Not built, open for Task 4's close:** `t34_proxy_cost` (the spec's ≤ +0.06 ms for 32 spheres) and the
-  `render_bench` smoke row with `smokeInGi` off; the 64-decal, doorway-boom and enemy-fire moment of
-  `play_vfx_1080p` (so `decals` stays pending at 0.05 ms); the `play_vfx_1080p` total and frame rows; the boom's
-  look shots inside and outside the room; the monograph's `vfx` units.
+- **The proxy cost is a bench row, not a GPU test.** `render_bench`'s `passesDelta` measure gates `play_vfx_1080p`
+  less `play_vfx_nosmoke_gi_1080p` (`smokeInGi` off) on `rt.shadows` + `rt.gi` at 0.06 ms: 0.013 ms in one run,
+  0.026 ms in the gate's run (the machine busy). `t34_proxy_cost` as a GPU test with its own 32-sphere case is
+  not built; the moment has its real sphere count, which was not read out for this record.
+- **The scripted moment is built:** `play_vfx_1080p` has 62 decals in view, a boom in the room and the player 12 m
+  south of the doorway. Its decals, VFX total and frame rows are gated and pass.
+- **Not built:** the monograph's `vfx` units. The boom look shots are re-taken in `build/sp12/`; copying them to
+  `ohao_refs` was refused by the sandbox.
 - **Hand test V1–V8 is open for Frank.** Nothing here is a hand-test pass.
 
 ## Rulings for Frank
@@ -1109,7 +1114,8 @@ OPEN (judgment calls; recommendations given):
     **Parent ruling 28 (2026-10-29): keep 20%, leave `smoke_cloud` alone, fill the aperture in the test harness only.**
     Done in `vfx_gpu_test.cpp` (four more `smoke_cloud` emitters at the aperture's corners, fixed ids). It does not
     dim: the floor reads 23.62 with the cloud against 10.64 without (122% brighter). See 29.
-29. **The flat in-scatter lights a filled doorway (test 34).** Found applying 28: with the aperture filled, the floor
+29. **The flat in-scatter lights a filled doorway (test 34).** **Parent ruling 29 (2026-10-29): option (a), in-scatter
+    dropped; applied in `shaders/rt/gi_trace.slang` (commit 90f12458). `t34_doorway_dims_gi` passes at 34.6%.** Found applying 28: with the aperture filled, the floor
     is brighter with smoke in GI than without, not darker. The cause is ruling 18's flat in-scatter (0.12 linear, added
     by a GI ray that ends in a cloud, by `1 − T`): where the cloud covers the aperture, that constant exceeds the dim
     outdoor radiance the floor sees through it. Measured on the same fill: 0.12 in-scatter gives 23.62 against 10.64;
