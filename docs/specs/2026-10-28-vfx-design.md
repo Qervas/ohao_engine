@@ -939,11 +939,10 @@ particle system is deleted. What differs from the design above, and why:
 - **The doorway room has a roof.** The spec's text is "the room lit only by bounce". The blockout is open to
   the sky, so the floor patch was lit mostly from above and the cloud moved it 0.1%. `smoke_doorway.scene.json`
   adds a roof slab as its own entity (the blockout and its goldens do not move).
-- **The doorway bar is not met.** `t34_doorway_dims_gi` measures 12.1% dimming at 1 s (the spec's 20% is the
-  bar, not lowered). The curve is in the change record: 0% at 1 step, 12.5% peak at 20–30 steps, 3.4% by 5 s.
-  The cause is the spec's own content: the `smoke_cloud` effect's three spheres (density 0.9) cover part of the
-  1.2 m doorway. **OPEN ruling 28:** make the cloud fill the aperture (more spheres or a larger emitter in the
-  doorway; a change to the effect or to the scene), or re-state the 20% as the peak of the curve. Not decided here.
+- **The doorway bar is not met.** `t34_doorway_dims_gi` fails (the spec's 20% is the bar, not lowered). Unfilled, the
+  cloud dims 12.1% at 1 s (the curve is in the step 4 change record: 0% at 1 step, 12.5% peak at 20–30 steps). Ruling
+  28 filled the aperture in the harness; the floor is then 122% brighter with smoke in GI, not darker, because ruling
+  18's flat in-scatter lights the cloud (**OPEN ruling 29**). With in-scatter 0 the fill dims the floor (see 29).
 - **`tools/list` cap is 28 KB** (OPEN ruling 20's alternative): 25,037 bytes for 39 tools. `rpc_tests`,
   `check_serve` and `serve_budgets` use it.
 - **`vfx.info` gate is 2 KB, not 1 KB**: measured 805 bytes at `max` 16 in the play scene mid-fight;
@@ -1107,3 +1106,16 @@ OPEN (judgment calls; recommendations given):
     shared `smoke_cloud` effect moves every smoke scene); (b) the bar as a peak over the cloud's first second,
     stated as such; (c) the 20% kept and the test left failing until (a). Recommended: (a) in the scene only,
     with `smoke_cloud` untouched; the bar is not lowered either way.
+    **Parent ruling 28 (2026-10-29): keep 20%, leave `smoke_cloud` alone, fill the aperture in the test harness only.**
+    Done in `vfx_gpu_test.cpp` (four more `smoke_cloud` emitters at the aperture's corners, fixed ids). It does not
+    dim: the floor reads 23.62 with the cloud against 10.64 without (122% brighter). See 29.
+29. **The flat in-scatter lights a filled doorway (test 34).** Found applying 28: with the aperture filled, the floor
+    is brighter with smoke in GI than without, not darker. The cause is ruling 18's flat in-scatter (0.12 linear, added
+    by a GI ray that ends in a cloud, by `1 − T`): where the cloud covers the aperture, that constant exceeds the dim
+    outdoor radiance the floor sees through it. Measured on the same fill: 0.12 in-scatter gives 23.62 against 10.64;
+    in-scatter 0 gave 6.24 against 10.64, 41% darker, in one run of an earlier fill whose cloud ids were random (an experiment,
+    reverted; not re-measured with the fixed-id fill, so the 41% is indicative only). **OPEN ruling 29:** (a) drop the
+    in-scatter (the cloud then only attenuates, which is what the spec's own "smoke dims the bounce" sentence says);
+    (b) scale it by the cloud's own lit irradiance (the cloud is not lit yet, so this needs a source); (c) keep 0.12 and
+    state the bar as the attenuation alone. Recommended: (a). Not changed here: 0.12 is ruling 18's value. Test 34 fails
+    until this is ruled.
