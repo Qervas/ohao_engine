@@ -15,8 +15,10 @@
 //
 // A ray that hits a surface brings back that surface's bounce albedo (the instance table's
 // giAlbedoPacked.rgb) over pi, times the direct light the hit receives from the frame's
-// brightest lights (kGIMaxLights), attenuated as the lighting pass attenuates them, with
-// no shadow ray and the hit's normal taken as facing the ray. A ray that leaves the scene
+// brightest lights (kGIMaxLights), attenuated as the lighting pass attenuates them, the hit's
+// normal taken as facing the ray, and shadowed: one light, chosen in proportion to what it
+// would give, gets a shadow ray (directAt). Without it a hit in shadow bounced full light, and
+// every surface facing a shadowed floor (an underside, a rim) glowed. A ray that leaves the scene
 // brings back the environment map in its direction (black without one). Cosine sampling
 // makes the mean of those radiances the diffuse irradiance over pi.
 //
@@ -79,19 +81,51 @@ void basis(float3 n, out float3 t, out float3 b)
     b = cross(n, t);
 }
 
-// The direct light a bounce point at `p` with normal `n` receives (no shadow ray), the
-// lighting pass's attenuation: inverse square windowed by the range, a spot's cone.
-float3 directAt(float3 p, float3 n)
+// Whether `p` sees along the unit direction `L` up to `tMax`: one ray that stops at its first
+// hit, alpha-tested candidates as the main trace tests them (a cut-out lets light through).
+bool visible(float3 p, float3 L, float tMax)
 {
-    float3 sum = float3(0.0);
+    RayDesc ray;
+    ray.Origin = p;
+    ray.Direction = L;
+    ray.TMin = 0.001;
+    ray.TMax = tMax;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+    q.TraceRayInline(scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, kRayMaskScene, ray);
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            alphaHit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    return q.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
+}
+
+// The direct light a bounce point at `p` with normal `n` receives, the lighting pass's
+// attenuation (inverse square windowed by the range, a spot's cone), only where `p` sees the
+// light. One shadow ray: a light is chosen by `xi` with probability proportional to the
+// luminance it would give unshadowed, and its light divided by that probability, so the mean is
+// every light's shadowed sum at the cost of one ray.
+float3 directAt(float3 p, float3 n, float xi)
+{
+    float3 lit[kGIMaxLights];
+    float3 toLight[kGIMaxLights];
+    float reach[kGIMaxLights];
+    float weight[kGIMaxLights];
+    float total = 0.0;
     [unroll]
     for (uint l = 0u; l < kGIMaxLights; ++l)
     {
-        if (l >= pc.seed.w) break;
+        lit[l] = float3(0.0);
+        toLight[l] = float3(0.0, 1.0, 0.0);
+        reach[l] = 0.0;
+        weight[l] = 0.0;
+        if (l >= pc.seed.w) continue;
         const GILight light = lights[l];
         const uint type = uint(light.positionAndType.w + 0.5);
         float3 L;
         float atten = 1.0;
+        float tMax = kRayLength;
         if (type == 0u)
         {
             L = -light.directionAndRange.xyz;
@@ -102,6 +136,7 @@ float3 directAt(float3 p, float3 n)
             const float d2 = max(dot(d, d), 1e-8);
             const float dist = sqrt(d2);
             L = d / dist;
+            tMax = dist;
             const float range = light.directionAndRange.w;
             const float x = range > 0.0 ? dist / range : 0.0;
             const float window = saturate(1.0 - x * x * x * x);
@@ -109,14 +144,33 @@ float3 directAt(float3 p, float3 n)
             if (type == 2u)
                 atten *= saturate((dot(L, -light.directionAndRange.xyz) - light.cone.y) / max(light.cone.x - light.cone.y, 1e-4));
         }
-        sum += light.radiance.xyz * (atten * max(dot(n, L), 0.0));
+        lit[l] = light.radiance.xyz * (atten * max(dot(n, L), 0.0));
+        toLight[l] = L;
+        reach[l] = tMax;
+        weight[l] = dot(lit[l], float3(0.2126, 0.7152, 0.0722));
+        total += weight[l];
     }
-    return sum;
+    if (!(total > 0.0)) return float3(0.0);
+    // The light xi lands in, cumulatively; lights in table order, so the choice is a function of xi.
+    float target = xi * total;
+    uint pick = 0u;
+    [unroll]
+    for (uint l = 0u; l < kGIMaxLights; ++l)
+    {
+        if (weight[l] > 0.0)
+        {
+            pick = l;
+            if (target < weight[l]) break;
+            target -= weight[l];
+        }
+    }
+    if (!visible(p + n * 0.01, toLight[pick], reach[pick])) return float3(0.0);
+    return lit[pick] * (total / weight[pick]);
 }
 
 // The radiance arriving at `origin` from direction `dir`; `escaped` is 1 when the ray left the
 // scene (it then brings back the environment).
-float3 incoming(float3 origin, float3 dir, out float escaped)
+float3 incoming(float3 origin, float3 dir, float xi, out float escaped)
 {
     escaped = 0.0;
     RayDesc ray;
@@ -144,7 +198,7 @@ float3 incoming(float3 origin, float3 dir, out float escaped)
         const uint slot = q.CommittedInstanceID();   // the instance's custom index: its table slot
         const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));
         const float3 at = origin + dir * q.CommittedRayT();
-        return albedo * (1.0 / kPi) * directAt(at, -dir) * T;
+        return albedo * (1.0 / kPi) * directAt(at, -dir, xi) * T;
     }
     escaped = 1.0;
     if (pc.flags.y == 0u) return float3(0.0);
@@ -191,7 +245,7 @@ void trace(uint3 id : SV_DispatchThreadID)
         const float r = sqrt(u);
         const float3 dir = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)));
         float escaped;
-        sum += incoming(origin, dir, escaped);
+        sum += incoming(origin, dir, rand01(key, s, 2u), escaped);
         escapedSum += escaped;
     }
     // The mean incoming radiance, and the environment's visibility: the share of the

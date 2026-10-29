@@ -11,7 +11,7 @@
     {"scene": "cornell_720p", "name": "csm", "passes": ["csm"], "budgetMs": 0.00, "gatedFrom": 7},
     {"scene": "cornell_720p", "name": "rt.shadows", "passes": ["rt.shadows"], "budgetMs": 0.30, "gatedFrom": 7, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.20 -> 0.30; 8 shadowed lights trace 4 rays a pixel"},
     {"scene": "cornell_720p", "name": "rt.shadows.filter", "passes": ["rt.shadows.filter"], "budgetMs": 0.08, "gatedFrom": 7, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.05 -> 0.08; memory-bound over 8 light channels"},
-    {"scene": "cornell_720p", "name": "rt.gi", "passes": ["rt.gi"], "budgetMs": 0.10, "gatedFrom": 8, "moved": "2b step 13 (spec rule, 'Frame cost'): 0.30 -> 0.10 toward lighting; measures 0.065"},
+    {"scene": "cornell_720p", "name": "rt.gi", "passes": ["rt.gi"], "budgetMs": 0.11, "gatedFrom": 8, "moved": "2b step 13 (spec rule, 'Frame cost'): 0.30 -> 0.10 toward lighting; measures 0.065. Frank's ruling 2026-10-29: 0.10 -> 0.11 for the bounce's shadow ray (one sampled light per GI hit), measured 0.101"},
     {"scene": "cornell_720p", "name": "rt.gi.denoise", "passes": ["rt.gi.denoise"], "budgetMs": 0.20, "gatedFrom": 8},
     {"scene": "cornell_720p", "name": "ssao", "passes": ["ssao"], "budgetMs": 0.00, "gatedFrom": 9},
     {"scene": "cornell_720p", "name": "lights.cluster", "passes": ["lights.cluster"], "budgetMs": 0.03, "gatedFrom": 13},
@@ -39,6 +39,6 @@
     {"scene": "anim16_1080p", "name": "rt.blas.refit", "passes": ["rt.blas.refit"], "budgetMs": 0.60, "gatedFrom": 15, "source": "sub-project 10 spec, 'Performance budgets': 16 rigs refit every frame (proposed for Frank, OPEN ruling 16)"},
     {"scene": "play_anim_1080p", "name": "skin", "passes": ["skin", "skin.bounds"], "budgetMs": 0.05, "gatedFrom": 15, "source": "sub-project 10 spec, 'Performance budgets': the play scene's two enemies posed every frame (play_anim_1080p, the play scene stepped before each frame; the spec's play_hud_1080p capture never changes a pose; proposed for Frank, OPEN ruling 16)"},
     {"scene": "play_anim_1080p", "name": "rt.blas.refit", "passes": ["rt.blas.refit"], "budgetMs": 0.10, "gatedFrom": 15, "source": "sub-project 10 spec, 'Performance budgets': the play scene's two enemies refit every frame (proposed for Frank, OPEN ruling 16)"},
-    {"scene": "play_hud_1080p", "name": "frame", "budgetMs": 2.39, "gatedFrom": 15, "source": "sub-project 10 spec, 'Performance budgets': the play scene's frame within 0.20 ms of its pre-SP10 median, 2.190 ms (render_bench of 2026-10-28, the box enemies; that run was noisy) (proposed for Frank, OPEN ruling 16)"}
+    {"scene": "play_hud_1080p", "name": "frame", "budgetMs": 2.45, "gatedFrom": 15, "moved": "Frank's ruling 2026-10-29: 2.39 -> 2.45 for RT GI's bounce shadow ray (rt.gi 0.275 -> 0.385 ms here), measured 2.433", "source": "sub-project 10 spec, 'Performance budgets': the play scene's frame within 0.20 ms of its pre-SP10 median, 2.190 ms (render_bench of 2026-10-28, the box enemies; that run was noisy) (proposed for Frank, OPEN ruling 16)"}
   ]
 }
