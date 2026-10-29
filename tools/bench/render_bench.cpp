@@ -91,6 +91,9 @@ struct SceneSpec {
     // Sub-project 10: the world steps before every frame (one fixed step, then one sync and the
     // frame, as a window runs), so the skinned instances' poses change every frame.
     bool animate{false};
+    // Sub-project 12 step 4: the smoke proxies out of RT shadows and GI (render.settings vfx.smokeInGi off).
+    // The proxies' cost is a scene's rt.shadows + rt.gi against this scene's (the passesDelta budgets).
+    bool smokeGiOff{false};
 };
 
 // anim16_1080p: the blockout room with 16 test rigs (tests/anim/fixtures/rig.glb) on a 4 x 4 grid,
@@ -124,6 +127,9 @@ const std::vector<SceneSpec>& sceneSpecs() {
         // and impacts, stepped before every frame: vfx.expand, vfx.sort and transparent. Last: it
         // installs the combat systems (physics, combat, vfx) on the bench's world.
         {"play_vfx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true},
+        // The same moment with the smoke proxies out of RT shadows and GI (step 4's proxy cost: the budget
+        // is play_vfx_1080p's rt.shadows + rt.gi less this scene's).
+        {"play_vfx_nosmoke_gi_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true, true},
     };
     return s;
 }
@@ -364,7 +370,7 @@ std::optional<Measurement> readMeasurement(const std::string& text, std::string&
 // ---- budgets and the verdict ----------------------------------------------------------------
 
 struct Budget {
-    std::string scene, name, measure, of;   // measure: frame | cpu | cpuRatio | passes
+    std::string scene, name, measure, of;   // measure: frame | cpu | cpuRatio | passes | passesDelta (scene less of)
     std::vector<std::string> passes;
     double limit{0};
     std::string unit{"ms"};
@@ -414,6 +420,19 @@ const SceneResult* findScene(const Measurement& m, const std::string& name) {
     return nullptr;
 }
 
+// The sum of the medians of the scene's passes that b.passes names (sets b.ran when one matches).
+double passSum(const SceneResult& s, Budget& b) {
+    double sum = 0.0;
+    for (const PassResult& p : s.passes)
+        for (const std::string& pattern : b.passes)
+            if (matches(pattern, p.name)) {
+                sum += p.s.median;
+                b.ran = true;
+                break;
+            }
+    return sum;
+}
+
 void measure(const Measurement& m, Budget& b) {
     const SceneResult* s = findScene(m, b.scene);
     if (!s) return;
@@ -427,15 +446,11 @@ void measure(const Measurement& m, Budget& b) {
         const SceneResult* of = findScene(m, b.of);
         if (of && of->cpu.median > 0) b.measured = s->cpu.median / of->cpu.median;
     } else if (b.measure == "passes") {
-        double sum = 0.0;
-        for (const PassResult& p : s->passes)
-            for (const std::string& pattern : b.passes)
-                if (matches(pattern, p.name)) {
-                    sum += p.s.median;
-                    b.ran = true;
-                    break;
-                }
-        b.measured = sum;
+        b.measured = passSum(*s, b);
+    } else if (b.measure == "passesDelta") {
+        // The cost a feature adds: this scene's passes less the reference scene's (`of`), the same passes.
+        const SceneResult* of = findScene(m, b.of);
+        if (of) b.measured = passSum(*s, b) - passSum(*of, b);
     }
 }
 
@@ -761,6 +776,10 @@ struct Gpu {
                 session->call("world.step", "{\"frames\":" + std::to_string(kVfxScriptSteps) + "}");
             if (stepped.rfind("{\"result\"", 0) != 0) return "world.step failed: " + stepped.substr(0, 300);
         }
+        // The smoke proxies' switch, as an agent sets it (default on: every other scene keeps it).
+        const std::string smoke = session->call(
+            "render.settings", std::string(R"({"set":{"vfx":{"smokeInGi":)") + (spec.smokeGiOff ? "false" : "true") + "}}}");
+        if (smoke.rfind("{\"result\"", 0) != 0) return "render.settings failed: " + smoke.substr(0, 300);
         api::RenderRequest r;
         r.mode = "deferred";
         r.frames = spec.animate ? 1 : frames;   // animated: the capture sets the view and the passes up

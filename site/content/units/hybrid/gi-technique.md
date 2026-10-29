@@ -90,7 +90,7 @@ sample.
 A ray that hits a surface returns that surface's bounce albedo over $\pi$ times the
 direct light the hit point receives — its own one-bounce $L_i$:
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir) * T + inscatter;"}}
+{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir) * T;"}}
 
 The bounce albedo is not the hit's material. It is the RGB of
 `InstanceGpu::giAlbedoPacked`, loaded from the raw instance table at a byte offset
@@ -133,7 +133,7 @@ direction, through the same equirect mapping the lighting pass uses, times
 `Environment.intensity` as the path tracer's miss applies it, or brings back black when
 none is bound:
 
-{{cite shaders/rt/gi_trace.slang "return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w * T + inscatter;   // times Environment.intensity"}}
+{{cite shaders/rt/gi_trace.slang "return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w * T;   // times Environment.intensity"}}
 
 The sample is level 0 of the source image, which has a single mip level, so a miss reads
 full-resolution texels and a bright spot in the HDRI is as noisy a target as it is for
