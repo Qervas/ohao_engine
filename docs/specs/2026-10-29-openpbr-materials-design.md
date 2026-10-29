@@ -1,7 +1,8 @@
 # OpenPBR materials: one surface model for every renderer
 
-**Status:** draft for Frank's ruling. **Ruling so far** (Frank, 2026-10-29): the engine takes the frontier option for its
-material model, OpenPBR Surface, and both renderers implement it, so the path tracer can referee the deferred frame.
+**Status:** accepted (Frank, 2026-10-29, "fully accepted": the model, the steps and rulings O1–O5 as proposed). Plan for
+step 1: `docs/plans/2026-10-29-openpbr-step1.md`. The engine takes the frontier option for its material model, OpenPBR
+Surface, and both renderers implement it, so the path tracer can referee the deferred frame.
 
 ## 1. Why
 
@@ -162,7 +163,7 @@ New passes and costs are measured and proposed per step for Frank's ruling, neve
 - `rt.gi` (BSDF albedo at hits);
 - the path tracer's inline capture in `serve_bench` (16 spp in 150 ms, Frank's ruling).
 
-## 10. Open rulings
+## 10. Rulings (accepted as proposed, 2026-10-29)
 
 - **O1:** the component's name and field style: `Material` with OpenPBR's snake_case names (proposed), or camelCase as the
   other components.
