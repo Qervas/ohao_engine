@@ -90,7 +90,7 @@ sample.
 A ray that hits a surface returns that surface's bounce albedo over $\pi$ times the
 direct light the hit point receives — its own one-bounce $L_i$:
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir) * T;"}}
+{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir, xi) * T;"}}
 
 The bounce albedo is not the hit's material. It is the RGB of
 `InstanceGpu::giAlbedoPacked`, loaded from the raw instance table at a byte offset
@@ -121,10 +121,16 @@ units and with no range; a directional light is a direction, not a position.
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 2.0f);"}}
 
-Two shortcuts make that $L_i$ an estimate of an estimate. No shadow ray is traced
-from the hit to the light, so a bounce surface behind a wall still glows: indirect
-light leaks through geometry wherever a lit-looking surface is not in fact lit. And
-the hit has no normal of its own — the trace has only the hit distance and the
+The hit is shadowed with one ray. Each of the four lights would give the hit some
+luminance unshadowed; one is chosen with probability proportional to it, a shadow ray
+goes to it, and its light is divided by that probability. The mean is the sum of every
+light's shadowed light, for one ray where four would cost four:
+
+{{cite shaders/rt/gi_trace.slang "return lit[pick] * (total / weight[pick]);"}}
+
+Before it, a bounce point in shadow bounced full light, and every surface facing a
+shadowed floor, an underside or a rim, glowed with light that was not there. One
+shortcut is left: the hit has no normal of its own — the trace has only the hit distance and the
 instance, not the triangle's shading normal — so it takes the negated ray direction,
 which is exact only for a ray striking the surface head-on.
 
@@ -352,7 +358,7 @@ from the hit's material or texture, so a textured wall bounces one flat colour.
 :::key
 The Monte-Carlo layer is textbook: cosine-weighted, stratified, unbiased for the
 hemisphere it samples. Every approximation lives in what a ray may know when it
-lands — one albedo per instance, the four brightest lights with no shadow ray, a
+lands — one albedo per instance, one of the four brightest lights shadowed per hit, a
 normal guessed from the ray — and every frame-to-frame artifact in what the
 denoiser keeps: a history clamped to four frames' range, tested per tap against
 depth and normal.
