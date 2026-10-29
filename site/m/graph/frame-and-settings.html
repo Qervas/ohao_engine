@@ -62,7 +62,7 @@
 <div class="section-rule"><h2 id="over-the-api">Over the API</h2></div>
 <div class="prose reveal">
 <p>`render.settings {set?}` reads the settings, or merges a partial `set` into them: the reflected params struct is decoded onto the current values, so members left out keep theirs, and the limits are checked before anything is applied (`E_RANGE`, nothing changed). A set counts as a change of the session. The CLI host renders nothing between captures and has no settings (`E_STATE`); a headless `ohao serve` keeps settings set before its first capture and applies them when the renderer starts.</p>
-<div class="citation-chip"><code class="citation-code">{&quot;render.stats&quot;, renderStats},   {&quot;render.settings&quot;, renderSettings}, {&quot;log.read&quot;, logRead},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L952" target="_blank" rel="noopener">ohao/api/session.cpp:952</a></div>
+<div class="citation-chip"><code class="citation-code">{&quot;render.stats&quot;, renderStats},   {&quot;render.settings&quot;, renderSettings}, {&quot;log.read&quot;, logRead},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L963" target="_blank" rel="noopener">ohao/api/session.cpp:963</a></div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">

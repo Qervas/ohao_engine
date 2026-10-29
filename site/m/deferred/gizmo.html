@@ -39,9 +39,9 @@
 <div class="section-rule"><h2 id="a-pass-that-is-fully-wired-and-never-runs">A pass that is fully wired and never runs</h2></div>
 <div class="prose reveal">
 <p>Start with the fact a hostile reader finds in ten seconds of grep, because everything else here depends on it. `GizmoPass` is constructed, its pipeline and render pass are created, its shaders are compiled into the build — and in the current tree nothing ever turns it on. The enable flag defaults false:</p>
-<div class="citation-chip"><code class="citation-code">bool m_gizmoEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L276" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:276</a></div>
+<div class="citation-chip"><code class="citation-code">bool m_gizmoEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L278" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:278</a></div>
 <p>and the only function that can flip it, `DeferredRenderer::setGizmoEnabled`, has no callers anywhere in `ohao/`, `examples/`, or `tests/`.</p>
-<div class="citation-chip"><code class="citation-code">void DeferredRenderer::setGizmoEnabled(bool enabled) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L897" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:897</a></div>
+<div class="citation-chip"><code class="citation-code">void DeferredRenderer::setGizmoEnabled(bool enabled) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L901" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:901</a></div>
 <p>That is what &quot;no editor&quot; looks like from the renderer&#x27;s side: the handle-drawing machinery exists and waits for a selection UI nobody has written. Everything below describes a loaded gun, not a fired one — which is exactly why the three latent defects below have never been caught by running the engine.</p>
 </div>
 <div class="section-rule"><h2 id="compositing-after-the-frame-is-already-finished">Compositing after the frame is already finished</h2></div>
