@@ -502,6 +502,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   turns the sky upside down (it did, everywhere, until 2026-10-29) and the unit tests cannot see
   it. `check_env_orientation.py` can: a sky blue above the horizon and orange below must light a
   floor blue in deferred (RT GI and IBL) and the path tracer.
+- **Deferred and the path tracer light and show the same scene.** A scene without lights has
+  none in either (no fallback sun: `setFrameLights` hands over the scene's raster lights only), and
+  with an environment the deferred frame draws it behind the scene (lighting writes prefiltered
+  level 0, the source, into sky pixels; the procedural sky pass runs only without one), as the
+  path tracer's missing camera rays show it. `check_env_orientation.py` renders a scene with no
+  light and checks the sky band in all three captures.
 - Reflected light is counted once. Lighting writes, beside the lit image, the
   environment/GI specular it added (`envSpecular`, E) and its weight (`specularWeight`,
   W: split sum times specular occlusion, computed for every pixel, environment or not);
@@ -510,8 +516,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   E/W, never be added on top in post.
 - Indirect diffuse light has one source per frame: RT GI's rays, else the environment's
   irradiance, else (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment) the
-  constant ambient (`ambientIntensity`, 0.35 with scene lights; `setAmbientIntensity`
-  overrides it). With RT GI the constant does nothing, so walls are lit by direct light
+  constant ambient (`ambientIntensity`, 0.35; `setAmbientIntensity` overrides it). With RT GI the constant does nothing, so walls are lit by direct light
   and one bounce, darker than the multi-bounce path tracer, and RT GI's denoiser noise
   shows on them. A test that wants ambient light must turn RT GI off. All three are
   diffuse only (`albedo·(1−metallic)`).

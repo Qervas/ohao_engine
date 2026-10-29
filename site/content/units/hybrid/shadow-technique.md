@@ -87,8 +87,8 @@ a directional light gets CSM.
 {{cite shaders/core/deferred_lighting.frag "int slot = int(round(light.params.w));"}}
 
 The lights with a channel, in channel order, are `RenderScene::shadowLights()`,
-which the dispatch hands to the deferred renderer each frame (or, for a scene
-with no lights at all, the fallback sun as channel 0). RT shadows run only when
+which the dispatch hands to the deferred renderer each frame (none for a scene
+with no lights). RT shadows run only when
 that list is non-empty, the device has ray queries and the scene has a TLAS: a
 frame in which no light casts shadows traces nothing.
 

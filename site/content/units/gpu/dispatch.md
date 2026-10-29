@@ -159,34 +159,22 @@ The RT dispatch hands the tracer a command buffer, the frame slot and the camera
 
 The path tracer is therefore lit by exactly the lights the scene holds; there is no number at the call site to edit.
 
-## The fallback sun that follows the sky
+## The lights the deferred renderer sees
 
-`renderDeferred` does something no other body does: it decides, every frame, which lights the deferred renderer sees. `setFrameLights` hands over the render world's raster light table and its version when the table is non-empty:
+`renderDeferred` decides, every frame, which lights the deferred renderer sees: the render world's raster light table with its version, and the scene's shadow-casting lights for RT shadows. Nothing is added to them. A scene without lights hands over none and is lit by its environment, or by the constant ambient without one, as the path tracer lights it:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "if (m_renderScene && !m_renderScene->rasterLights().empty()) {"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "m_deferredRenderer->setLights(lights, version, m_ambientOverride.value_or(0.35f));"}}
 
-and otherwise a fabricated directional light, `m_fallbackSun`, rebuilt each frame and aligned with the sky pass's sun direction. As `nightFactor` rises it blends that direction toward the moon, the colour toward a cool blue and the intensity from $\pi$ down to 8% of it, and the ambient intensity lerps from 0.12 down to 0.04:
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->setShadowLights(m_renderScene->shadowLights());"}}
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "const float blendedIntensity = glm::mix(glm::pi<float>(), glm::pi<float>() * 0.08f, nightFactor);"}}
-
-Either way the lights reach the deferred renderer as a span, a version and the ambient intensity. The fallback travels with version 0, which the light table's upload reads as "always write", so a sun that moves with the time of day reaches every frame slot:
-
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "m_deferredRenderer->setLights(lights, version, ambient);"}}
-
-The test is the render world's own light list, not a count: a scene with exactly one light of its own — the ordinary outdoor case — keeps its authored direction, colour and ambient, because a count of one cannot tell a fabricated light from an authored one.
-
-The same fallback sun is what RT shadows trace when the scene has no lights. After `setFrameLights`, `renderDeferred` hands the deferred renderer the scene's shadow-casting lights; when the scene has no lights at all, and the fallback names visibility channel 0 in its `params.w` (shadows on), it builds a directional `LightDesc` from `m_fallbackSun.direction` with the real sun's angular radius, 0.00465 rad.
-
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "constexpr float kSunAngularRadius = 0.00465f;"}}
-
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->setShadowLights(std::span<const render::LightDesc>(&sun, 1));"}}
+The version is the light table's counter, so an unchanged table uploads nothing.
 
 :::why
 Both bodies pipeline instead of blocking: `render()` never waits for its own submission, only for the frame that last used its slot, three submissions back. Pixels reach the CPU only through a request, and the wait for them is the caller's choice: `readback()` blocks on that one frame's fence. A loop that never reads pays for no copy and no wait. A capture pays exactly one wait, for the frame it keeps, and an inline-only capture of a deferred frame copies a preview of about 1.3 MB instead of a 3.7 MB frame. The ring this replaced copied every headless frame and handed back the one three calls earlier: correct pixels only after the ring had turned over, and a copy paid on every frame nobody read.
 :::
 
 :::key
-Nothing in this file checks that the modes agree with each other. Dispatch is the last point where camera, layout and light state are translated into GPU state, and it translates them differently per mode: two projection paths, owners of the same layout transition on both sides of a module boundary, near/far literals that contradict the matrix they travel with, one mode that steers its fabricated sun from the sky, and one mode that can present while the other cannot. Differences between modes that look like renderer bugs are usually decided here, not in a shader.
+Nothing in this file checks that the modes agree with each other. Dispatch is the last point where camera, layout and light state are translated into GPU state, and it translates them differently per mode: two projection paths, owners of the same layout transition on both sides of a module boundary, near/far literals that contradict the matrix they travel with, and one mode that can present while the other cannot. Differences between modes that look like renderer bugs are usually decided here, not in a shader.
 :::
 
 ## Contracts

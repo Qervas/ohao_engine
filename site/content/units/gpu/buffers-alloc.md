@@ -199,37 +199,13 @@ of an intensity:
 
 {{cite ohao/render/scene/light_table.cpp "light.position = glm::vec4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 3.0f);"}}
 
-## The default light and its $\pi$
+## A scene without lights
 
-If the scene contributed no lights, `setFrameLights` lights it with a fallback sun, a
-directional light of intensity $\pi$ and a warm tint (blended toward a dimmer, bluer
-moon at night):
+`setFrameLights` hands the deferred renderer the scene's raster lights and nothing else. A scene
+that contributed none is lit by its environment, or the constant ambient without one, as the path
+tracer lights it; no light is made up for it:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
-
-The $\pi$ is not decoration; it calibrates against the $1/\pi$ in an
-energy-conserving diffuse lobe. Take the Lambertian idealisation first: a BRDF of
-$\rho/\pi$ gives, for a light of intensity $I$,
-
-$$L_o = I \cdot \frac{\rho}{\pi} \cos\theta$$
-
-with $\rho$ the base colour and $\theta$ the angle between surface normal and light
-direction. Setting $I = \pi$ makes a white albedo return $L_o = 1$ head-on — a clean
-reference white — instead of $1/\pi \approx 0.318$, which is $\log_2 \pi \approx 1.65$
-stops underexposed.
-
-The shipping lobe is not Lambert. The deferred lighting pass, the one consumer of
-this buffer, calls `evaluateBRDF`, whose diffuse term is Burley/Disney scaled by $k_D = (1 - F)(1 - m)$
-for Fresnel $F$ and metalness $m$:
-
-{{cite shaders/includes/brdf/brdf_common.glsl "return diffuseColor * INV_PI * lightScatter * viewScatter;"}}
-
-{{cite shaders/includes/brdf/brdf_ggx.glsl "vec3 kD = (vec3(1.0) - F) * (1.0 - surface.metallic);"}}
-
-Burley's two scatter factors both go to 1 at normal incidence, so it does collapse to
-$\rho/\pi$ exactly where the calibration is aimed — but $k_D$ trims 4% off a dielectric
-at $F_0 = 0.04$, and the Kulla-Conty multi-scatter term adds a little back. $I = \pi$
-lands near reference white, not on it.
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "m_deferredRenderer->setLights(lights, version, m_ambientOverride.value_or(0.35f));"}}
 
 ## Emissive meshes flattened into point lights
 

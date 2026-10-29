@@ -195,8 +195,8 @@ slot holds:
 
 {{cite ohao/render/deferred/light_clusters.cpp "if (version != 0 && s.version == version && s.count == count && s.lights.buffer) return;"}}
 
-The version is the light table's counter, raised whenever the raster lights change; the
-fallback sun passes 0, which always writes. A still scene of a thousand lights therefore
+The version is the light table's counter, raised whenever the raster lights change; a
+frame without a render world passes 0, which always writes. A still scene of a thousand lights therefore
 uploads nothing per frame.
 
 The froxel lists, by contrast, are one buffer shared by every frame slot. Only the GPU

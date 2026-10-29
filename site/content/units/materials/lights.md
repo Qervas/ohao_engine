@@ -56,12 +56,11 @@ no range there is no sphere to cull by.
 
 {{cite shaders/compute/light_cluster.slang "if (l.position.w < 0.5 || l.position.w > 2.5)"}}
 
-The renderer decides what an unlit scene looks like. With no light in the raster list —
-no authored light and no emissive stand-in — `setFrameLights` lights the frame with a warm
-fallback sun whose intensity is $\pi$, cancelling the diffuse BRDF's $1/\pi$ so that a
-white Lambertian surface facing it reflects its colour at unit scale:
+An unlit scene stays unlit. With no light in the raster list — no authored light and no
+emissive stand-in — the deferred frame, like the path tracer, is lit by the environment alone
+(the constant ambient without one); `setFrameLights` makes up no light:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "m_deferredRenderer->setLights(lights, version, m_ambientOverride.value_or(0.35f));"}}
 
 {{figure materials-lights-packing "Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, shaders/shared/layout.json and light_table.cpp; the diagram is conceptual, not a memory dump."}}
 

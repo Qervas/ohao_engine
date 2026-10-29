@@ -14,11 +14,17 @@ Of the GBuffer's four colour clears only two are all-zero — position/metallic 
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[2].color"}}
 
-What makes an uncovered pixel black is one early-out in deferred lighting, gated on the position target alone: zero RGB *and* zero alpha, write black, return. It fires above the lines that unpack albedo, normal and roughness, so the values those targets were cleared to are never read.
+What fills an uncovered pixel is one early-out in deferred lighting, gated on the position target alone: zero RGB *and* zero alpha. It fires above the lines that unpack albedo, normal and roughness, so the values those targets were cleared to are never read. With an environment bound (IBL, flag bit 0) it writes the environment along the view ray, level 0 of the prefiltered image (the source itself), times its intensity: what the path tracer's camera rays see when they miss. Without one it writes black.
 
 {{cite shaders/core/deferred_lighting.frag "if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {"}}
 
-`SkyPass` fills those pixels afterwards, binding the lighting pass's own `R16G16B16A16_SFLOAT` image as a colour attachment with `LOAD_OP_LOAD` so the shaded geometry survives untouched.
+{{cite shaders/core/deferred_lighting.frag "outColor = vec4(pc.envIntensity * textureLod(envPrefiltered, equirectUV(viewDir), 0.0).rgb, 1.0);"}}
+
+The sky pass runs only in a scene without an environment, so the procedural sky never stands in front of an HDRI that lights the scene:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_skyPass && m_skyEnabled && !environmentBackground) {"}}
+
+`SkyPass` fills the black pixels afterwards, binding the lighting pass's own `R16G16B16A16_SFLOAT` image as a colour attachment with `LOAD_OP_LOAD` so the shaded geometry survives untouched.
 
 {{cite ohao/render/deferred/sky_pass.cpp "colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;"}}
 

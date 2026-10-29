@@ -84,6 +84,8 @@ Benches were not run: the change moves no cost (the same lookups, one subtractio
 
 ## 5. Found on the way, not changed
 
+Both fixed the same day: `docs/changes/2026-10-29-deferred-pt-parity.md`.
+
 - **Deferred never shows the HDRI behind the scene.** Its background is the procedural sky pass; the path tracer shows the HDRI.
   A scene lit by an HDRI therefore looks different in the two renderers wherever the sky is in view.
 - **Deferred adds a fallback sun to a scene without lights**; the path tracer does not. A test of the environment alone needs a
