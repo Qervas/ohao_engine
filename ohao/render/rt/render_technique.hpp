@@ -4,13 +4,12 @@
 //
 // Each feature (shadows, GI, reflections, AO) has an interface.
 // Multiple implementations exist per interface:
-//   IShadowTechnique  →  CSMShadows, RTShadows
 //   IGITechnique      →  SSGI, RTGI, PathTracedGI
 //   IReflectionTech   →  SSR, RTReflections
 //   IAOTechnique      →  SSAO, RTAO
 //
 // The renderer holds one active technique per feature.
-// Swap at runtime: renderer.setShadowTechnique(std::make_unique<RTShadows>());
+// Swap at runtime: renderer.setGITechnique(std::make_unique<RTGI>());
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
@@ -26,61 +25,10 @@ class Scene;
 class Camera;
 
 // The hybrid frame's quality (sub-project 2b spec, "Reference quality"). Realtime is the
-// budgeted frame; reference traces every shadowed light with 8 rays a frame and averages
-// the frames since the last temporal reset, the realtime frame's converged answer.
+// budgeted frame; reference resamples and traces without reuse or denoising (RT direct light,
+// RT GI) and averages the frames since the last temporal reset, the realtime frame's converged
+// answer.
 enum class RenderQuality : uint8_t { Realtime, Reference };
-
-// ─── Shadow Technique ────────────────────────────────────────────────
-
-struct ShadowInput {
-    VkImageView positionBuffer;    // world-space position (GBuffer0)
-    VkImageView normalBuffer;      // world-space normal (GBuffer1)
-    VkImageView depthBuffer;       // depth buffer
-    VkImageView velocityBuffer = VK_NULL_HANDLE;   // UV-space motion (GBuffer3): the filter's reprojection
-    uint32_t width;
-    uint32_t height;
-    uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
-    uint64_t frameNumber = 0;      // the renderer's frame number (render.stats' shadowLightsDropped)
-    glm::vec3 cameraPos{0.0f};
-
-    // The scene's shadow-casting lights (RenderScene::shadowLights, or the fallback sun),
-    // <= kShadowMaxLights: light i is visibility channel i (the light UBO's params.w).
-    std::span<const render::LightDesc> lights;
-    // Sample seeding: the render seed and the frame index since the last temporal reset.
-    uint32_t renderSeed = 0;
-    uint32_t frameIndex = 0;
-
-    RenderQuality quality = RenderQuality::Realtime;
-    uint32_t maxLightsPerPixel = 4;   // realtime: the lights a pixel traces at most (0-4)
-
-    // RT-specific: the RenderScene's TLAS (null if rasterization-only)
-    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-    // Set 1 and 2 of the trace (rt/alpha_test.slang): RenderScene's tables (rtc::AlphaTables)
-    // and the bindless textures, for alpha-tested and blended candidates.
-    VkDescriptorSet alphaTables = VK_NULL_HANDLE;
-    VkDescriptorSet textures = VK_NULL_HANDLE;
-};
-
-struct ShadowOutput {
-    // Visibility, one 8-bit channel a shadow light (0 shadowed, 255 lit), in an RG32UI image:
-    // x holds lights 0-3, y lights 4-7, the lowest byte first.
-    VkImageView visibility;
-};
-
-class IShadowTechnique {
-public:
-    virtual ~IShadowTechnique() = default;
-
-    virtual const char* getName() const = 0;
-    virtual bool needsRT() const = 0;
-
-    virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-                      uint32_t width, uint32_t height) = 0;
-    virtual void resize(uint32_t width, uint32_t height) = 0;
-    virtual void render(VkCommandBuffer cmd, const ShadowInput& input) = 0;
-    virtual ShadowOutput getOutput() const = 0;
-    virtual void destroy() = 0;
-};
 
 // ─── Global Illumination Technique ───────────────────────────────────
 
@@ -111,6 +59,9 @@ struct GIInput {
     // SHADER_READ_ONLY_OPTIMAL); null: black.
     VkImageView envMap = VK_NULL_HANDLE;
     float envIntensity = 1.0f;     // Environment.intensity, as the path tracer's miss applies it
+    // RT direct light runs this frame and lights emissive surfaces: a hit's emission is direct light
+    // it already counts, so the bounce does not bring it back.
+    bool emissionIsDirect = false;
 };
 
 struct GIOutput {

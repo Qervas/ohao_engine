@@ -135,13 +135,8 @@ struct LightDesc {
     glm::mat4 lastFrameMotion{1.0f};
 };
 
-// RT shadows know at most this many lights, one visibility channel each (LightData::params.w
-// names a raster light's channel): the first shadow-casting raster lights, in light order
-// (gpu::shared::kShadowMaxLights). A pixel traces at most gpu::shared::kShadowLightsPerPixel of
-// them, the most important; a casting light past them is lit unshadowed.
-inline constexpr uint32_t kMaxShadowLights = 8;
-// LightData::params.w: -1 never shadowed (castShadows false, flashes);
-// 0..kMaxShadowLights-1 its RT visibility channel (CSM shadows a directional one without RT).
+// LightData::params.w: 1 a light that casts shadows, 0 one that does not, kShadowNever a flash (RT
+// direct light lights every light but flashes, shadowed; without it CSM shadows a casting sun).
 inline constexpr float kShadowNever = -1.0f;
 
 // std430, matches shaders/includes/scene/scene_data.glsl

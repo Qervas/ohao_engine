@@ -127,18 +127,6 @@ inline constexpr uint32_t kClusterMaxLights = 256u;
 inline constexpr uint32_t kClusterGroupSize = 64u;
 // clustered lighting: the first slice's near distance in metres (nearer pixels use slice 0)
 inline constexpr float kClusterNear = 0.1f;
-// RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
-inline constexpr uint32_t kShadowMaxLights = 8u;
-// RT shadows, realtime: the lights a pixel traces at most, the most important first
-inline constexpr uint32_t kShadowLightsPerPixel = 4u;
-// RT shadows, reference quality: rays a light a pixel a frame
-inline constexpr uint32_t kShadowReferenceRays = 8u;
-// RT shadows, realtime: the temporal accumulation's longest history (its smallest blend weight is 1/this)
-inline constexpr uint32_t kShadowHistoryFrames = 16u;
-// RT shadows' filter: the pixels a workgroup filters, this many on a side
-inline constexpr uint32_t kShadowFilterTile = 16u;
-// RT shadows' filter: the spatial kernel's radius (5x5)
-inline constexpr uint32_t kShadowFilterRadius = 2u;
 // RT GI: a bounce weighs every light by what it gives when the frame has this many or fewer
 inline constexpr uint32_t kGIWeighedLights = 16u;
 // RT GI: past kGIWeighedLights, the candidates a bounce draws by power (an alias table) and resamples by what they give
@@ -151,6 +139,16 @@ inline constexpr uint32_t kGIReferenceRays = 32u;
 inline constexpr uint32_t kGIHistoryFrames = 32u;
 // RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one
 inline constexpr uint32_t kGIFastHistoryFrames = 4u;
+// ReSTIR DI (rt/restir_di.slang): last frame's reservoir counts at most this many times this frame's candidates
+inline constexpr uint32_t kDIHistoryCap = 20u;
+// ReSTIR DI: the most light samples a pixel draws a frame (render.settings rtDirect.candidates)
+inline constexpr uint32_t kDIMaxCandidates = 32u;
+// ReSTIR DI: the most neighbours a pixel's spatial reuse combines (render.settings rtDirect.spatial)
+inline constexpr uint32_t kDIMaxSpatial = 8u;
+// ReSTIR DI: the spatial reuse's neighbours lie within this many pixels
+inline constexpr uint32_t kDISpatialRadius = 30u;
+// ReSTIR DI's denoiser (rt/di_denoise.slang): the temporal accumulation's longest history (its smallest blend weight is 1/this)
+inline constexpr uint32_t kDIHistoryFrames = 16u;
 // RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side
 inline constexpr uint32_t kGITile = 16u;
 // SSS: the side of a classified tile in pixels (a workgroup of the blur covers one)
@@ -174,32 +172,6 @@ struct alignas(4) CalibratePush {
 };
 static_assert(offsetof(CalibratePush, iterations) == 0);
 static_assert(sizeof(CalibratePush) == 4);
-
-// one shadow-casting light as RT shadows trace it (a storage buffer of kShadowMaxLights)
-struct alignas(16) ShadowLight {
-    alignas(16) std::array<float, 4> positionAndType{};
-    alignas(16) std::array<float, 4> edge1AndRadius{};
-    alignas(16) std::array<float, 4> edge2AndRange{};
-    alignas(16) std::array<float, 4> centreAndIntensity{};
-};
-static_assert(offsetof(ShadowLight, positionAndType) == 0);
-static_assert(offsetof(ShadowLight, edge1AndRadius) == 16);
-static_assert(offsetof(ShadowLight, edge2AndRange) == 32);
-static_assert(offsetof(ShadowLight, centreAndIntensity) == 48);
-static_assert(sizeof(ShadowLight) == 64);
-
-// RT shadows' trace (rt/shadow_trace.slang) push constants
-struct alignas(16) ShadowTracePush {
-    alignas(16) std::array<uint32_t, 4> extent{};
-    alignas(16) std::array<uint32_t, 4> seed{};
-    alignas(16) std::array<float, 4> cameraPos{};
-    alignas(16) std::array<uint32_t, 4> history{};
-};
-static_assert(offsetof(ShadowTracePush, extent) == 0);
-static_assert(offsetof(ShadowTracePush, seed) == 16);
-static_assert(offsetof(ShadowTracePush, cameraPos) == 32);
-static_assert(offsetof(ShadowTracePush, history) == 48);
-static_assert(sizeof(ShadowTracePush) == 64);
 
 // RT shadows' filter (rt/shadow_filter.slang) push constants
 struct alignas(16) ShadowFilterPush {
@@ -294,6 +266,19 @@ static_assert(offsetof(GIDenoisePush, extent) == 0);
 static_assert(offsetof(GIDenoisePush, params) == 16);
 static_assert(offsetof(GIDenoisePush, cameraPos) == 32);
 static_assert(sizeof(GIDenoisePush) == 48);
+
+// ReSTIR DI (rt/restir_di.slang) and its denoiser (rt/di_denoise.slang) push constants
+struct alignas(16) DIPush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<uint32_t, 4> params{};
+    alignas(16) std::array<float, 4> cameraPos{};
+    alignas(16) std::array<float, 4> weather{};
+};
+static_assert(offsetof(DIPush, extent) == 0);
+static_assert(offsetof(DIPush, params) == 16);
+static_assert(offsetof(DIPush, cameraPos) == 32);
+static_assert(offsetof(DIPush, weather) == 48);
+static_assert(sizeof(DIPush) == 64);
 
 // one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
 struct alignas(16) MeshletGpu {

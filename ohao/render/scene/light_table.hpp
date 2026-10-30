@@ -53,12 +53,8 @@ public:
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
     // Changes whenever raster() does (from 1: 0 means "always upload" to LightClusters).
     [[nodiscard]] uint64_t rasterVersion() const noexcept { return m_rasterVersion; }
-    // Shadow-casting raster lights past the kMaxShadowLights channels: lit unshadowed.
-    [[nodiscard]] uint32_t shadowCastersWithoutChannel() const noexcept { return m_shadowCastersWithoutChannel; }
     // The last set() list, sorted by order (host copy).
     [[nodiscard]] std::span<const LightDesc> descs() const noexcept { return m_descs; }
-    // The lights RT shadows trace, <= kMaxShadowLights: element i is shadow-mask channel i.
-    [[nodiscard]] std::span<const LightDesc> shadowLights() const noexcept { return m_shadowLights; }
     [[nodiscard]] uint32_t rtCount() const noexcept { return static_cast<uint32_t>(m_rt.size()); }
     [[nodiscard]] VkBuffer rtBuffer() const noexcept { return m_rtBuffer.buffer; }
 
@@ -71,9 +67,7 @@ private:
     std::vector<LightDesc> m_descs;
     std::vector<LightData> m_raster;
     uint64_t m_rasterVersion{1};
-    uint32_t m_shadowCastersWithoutChannel{0};
     bool m_capLogged{false};
-    std::vector<LightDesc> m_shadowLights;
     std::vector<GPULight> m_rt;
     uint32_t m_envMapTexIdx{kNoTexture};
     float m_envIntensity{1.0f};

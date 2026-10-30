@@ -564,7 +564,7 @@ void t32_forward_parity() {
     Options o;
     o.settings = [](VulkanRenderer& r) {
         VulkanRenderer::RenderSettings s = r.renderSettings();
-        s.rtShadows = false;
+        s.rtDirect = false;
         s.rtGI = false;
         s.ssr = false;
         s.ssao = false;

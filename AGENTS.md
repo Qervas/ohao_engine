@@ -4,8 +4,8 @@ The entry point for any agent (or person) building, testing or changing this rep
 Every command in a `console` block below is run by `python tests/docs/check_docs.py`
 (`--slow` adds builds and long gates); if one stops working, this file is wrong.
 
-OHAO is a C++20 game engine: a Vulkan 1.3 hybrid renderer (deferred raster with RT
-shadows/GI, plus a path tracer), an EnTT world, reflection and canonical scene files, an
+OHAO is a C++20 game engine: a Vulkan 1.3 hybrid renderer (deferred raster with ray-traced
+direct light (ReSTIR DI) and GI, plus a path tracer), an EnTT world, reflection and canonical scene files, an
 API for agents (`ohao/api`), the headless `ohao` CLI and `ohao serve`, the same API as a
 JSON-RPC/MCP server on stdio (`ohao/rpc`). Windows/MSVC is the platform in daily use.
 
@@ -200,7 +200,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   idles nothing and a capture after it is the same from any frame slot; the GPU preview is
   the CPU box filter's bytes and is all a preview request copies), the render settings
   (`sp2b_t14_*`: a fresh renderer starts at the defaults and reads back what was set; the
-  SSR, SSS, SSAO, RT GI and RT shadow switches drop their passes; GI resolution and rays
+  SSR, SSS, SSAO, RT GI and RT direct light switches drop their passes; GI resolution and rays
   reach the trace; CSM cascades and size rebuild the map), the HUD (`sp7_hud_*`: a capture
   with a HUD list differs from one without only inside the listed rectangles, and an empty
   list leaves the frame byte for byte). `ecs_tests`: world, hierarchy, transforms and the render extract
@@ -219,15 +219,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   every light does (PNGs byte for byte: Cornell's 12 lights, the helmet room with post, the
   bench scenes' 1,000 point lights and sun, a wall 1,500 m out under a 3,000 m far plane, an
   orthographic camera); 1,000 lights packed together overflow and `render.stats` reports
-  `lightsOverflow`; twin runs build identical lists; casters past the 8 shadow channels
-  render unshadowed (`--keep` leaves the compared PNGs in `build/`).
+  `lightsOverflow`; twin runs build identical lists (all with RT direct light off: the loop lights
+  every light; `--keep` leaves the compared PNGs in `build/`).
   `light_emitter_gpu_test`: a point, a spot and an area light get one emitter mesh each, a
   sun none; with the lights out of view the image with emitters is the image without them
-  (deferred with RT shadows and GI, deferred with CSM: byte for byte; path traced, whose bounce
+  (deferred with RT direct light and GI, deferred with CSM: byte for byte; path traced, whose bounce
   rays meet emitters and weigh them against light sampling: the same light, the mean within 1%
   overall and 5% per 32x32 block), with them in view each emitter is bright and every other
-  pixel the same (deferred: 1 LSB within 24 px of an emitter, its denoisers' neighbourhoods;
-  path traced: the same light past 24 px); a moved light's emitter carries last
+  pixel's light the same past 24 px (the mean within 1%, per 32x32 block within 5%: RT direct light's
+  reuse and its denoiser read neighbours within 30 px, and an emitter's pixels are not a surface to
+  them; the path tracer's bounce rays meet the mesh); a moved light's emitter carries last
   frame's placement as its prevWorld, and under TAA a moving point light's mesh is as bright
   as the light held still; the first-person gun (`ViewModel`, sub-project 9): a capture with
   the gun against one without it differs only inside the gun's footprint (it shadows and
@@ -243,8 +244,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   four views, two at one distance in id order, the nearest of three overlapping panes winning where
   they overlap; a lit puff by a red lamp redder than the same puff 5 m off (per-particle light read
   back), unlit its own colour; a soft puff crossing the floor stepping no more than 1/8 of its light a
-  pixel (a hard one steps); a cut MASK card letting RT shadows and the path tracer through, a kept one
-  shadowing; a BLEND pane casting no RT shadow or GI; a capture at a step the same after 0, 7 and 200
+  pixel (a hard one steps); a cut MASK card letting RT direct light and the path tracer through, a kept
+  one shadowing; a BLEND pane casting no RT shadow or GI; a capture at a step the same after 0, 7 and 200
   frames; a forward-shaded plane equal to the deferred one within 1 LSB (`--keep` leaves the PNGs in
   `build/`). `cull_parity_gpu_test` test 8: a rig whose bind box is off screen draws its raised arm,
   culling on = off, mesh shaders = fallback = instances. `deferred_determinism_gpu_test` covers the
@@ -642,12 +643,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   heuristic. A triangle whose estimate is 0 is never drawn, and its BSDF hits count in full, so an
   estimate only moves noise, never the mean. Light samples are drawn from the shadow ray's origin:
   drawn from the shading point, a triangle in the surface's own plane was taken as facing it. The
-  deferred frame has no emissive lights of its own: its emissive surfaces light the room through RT
-  GI's bounce (which brings back what a hit emits); there is no proxy light. `check_analytic`'s
-  `emissive_quad` holds both renderers to a rectangle's form factor (deferred at reference quality;
-  realtime GI's denoiser gives x0.85, a gap for F5). Selection by power ignores distance: the
-  helmet's emissive panels draw samples from its point lights (F4's ReSTIR DI chooses by what each
-  light gives the point).
+  table is the `VulkanRenderer`'s, recorded by whichever renderer draws a frame: the deferred
+  frame's RT direct light samples the same triangles (below), and RT GI's bounce then drops what a
+  hit emits (`GIInput::emissionIsDirect`), else it would count twice. There is no proxy light.
+  `check_analytic`'s `emissive_quad` holds both renderers to a rectangle's form factor. The path
+  tracer's selection by power ignores distance: the helmet's emissive panels draw samples from its
+  point lights.
 - **The radiance cache** (frontier F1 T3, `shaders/rt/radiance_cache.slang`, `render/rt/radiance_cache.*`;
   SHaRC's design, our code: RTXGI's licence bars shipping its source in this MIT repo). The realtime
   profile ends a path at a vertex past the first in a world-space hash grid of reflected radiance
@@ -708,7 +709,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   shadow or GI ray hits it (else the light would shadow itself or be counted twice); no CSM cascade draws it
   (`kDrawEmitter`); the
   G-buffer marks it with emissive alpha 1 and metallic −1, so lighting outputs its radiance
-  alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes
+  alone, SSR treats it as a miss and RT direct light and GI skip it as sky. A new trace passes
   `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
   emitter pixel is to it. `setLightEmitters(false)` turns the meshes off (the lights stay).
   A mesh moves with its light and writes motion vectors as any mesh does: the extract passes
@@ -734,12 +735,31 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--frames 30`). Without `VK_KHR_ray_query` there is no RT GI. With it, lighting drops its
   diffuse IBL term and the constant ambient: GI rays that leave the scene bring the
   environment back, occluded.
-- RT shadows are compute with inline ray queries (`VK_KHR_ray_query`; without it the
-  frame keeps CSM, which renders only when RT shadows do not). They keep a history too: the
-  filter averages the frames since the last reset, so frame 1 is the noisiest. The first 8
-  shadow-casting raster lights own a visibility channel each (`params.w`); casters past them
-  render unshadowed (`RenderScene::shadowCastersWithoutChannel()`). A pixel traces only its 4
-  most important; `render.stats`' `shadowLightsDropped` counts the pixels that had more.
+- **RT direct light** (frontier F4, `render/rt/rt_direct_technique.*`, `rt/restir_di.slang`,
+  `rt/di_denoise.slang`): ReSTIR DI (Bitterli et al. 2020) over the path tracer's lights (`rt/lights.slang`,
+  one module both import: every light but flashes, and the emissive triangles), in MegaLights'
+  structure. `di.sample`: `rtDirect.candidates` (4) light points by power (`drawLightPoint`: a point
+  on the light, so a neighbour re-evaluates the same point) kept by RIS against a cheap target
+  (luminance of Le x Lambert under GGX x G from a compact surface: RIS needs the shape, W carries
+  the rest), last frame's reservoir where last frame's surface is the same (M capped at 20x), then
+  one visibility ray. `di.shade`: `rtDirect.spatial` (2) neighbours within 30 px, the final shadow
+  ray, the exact OpenPBR lobes, diffuse and specular each over its directional albedo (lighting
+  multiplies them back). `di.denoise`: a reprojected accumulation (16 frames, a firefly clamp to 2x
+  the 3x3 maximum) and three 3x3 a-trous steps; the specular spreads only as far as the surface is
+  rough. **Z, not 1/M**: a combination counts the M of the inputs whose own surface could have drawn
+  the chosen point, its target above 0 and the point visible from it (a ray a neighbour, Bitterli's
+  Algorithm 6): 1/M darkened penumbrae, more with every frame (0.89 of reference at 16 frames).
+  **Spatial output feeds temporal reuse, so outliers travel**: a boiling filter (RTXDI's) drops a
+  reservoir over 20x its 8x8 tile's mean, and an occluded final point leaves the kept reservoir
+  (weight 0); without them a dim light's point carrying an occluded light's weight streaked a
+  shadow 3x too bright. Lighting leaves every light but flashes out of its loop when RT direct
+  light ran (`LightGpu.params.w`: 1 casts shadows, 0 not, -1 a flash); without ray queries, or
+  `rtDirect.enabled` off, the loop lights everything and CSM shadows a casting sun. **castShadows
+  only matters to that fallback**: RT direct light shadows every light, as the path tracer always
+  has. The sun is a delta, as in the path tracer (its shadows are hard). Reference
+  quality reuses nothing and averages the frames (`check_analytic` holds deferred to the closed
+  forms at realtime and reference). Rays start 5 cm off the surface, as RT GI's do. The frame is
+  the same bits run to run (integer hashes, no atomics, a fixed-order tile sum).
 - Lighting is clustered (`lights.cluster`, `LightClusters`): raster lights are uncapped (up
   to 65,536) in a `LightGpu` storage buffer per frame slot, and each 16x9x24 froxel lists up
   to 256 of them. The lists equal summing every light only because a light's attenuation is
@@ -1157,8 +1177,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     recorded for step 3's decals, OPEN ruling 16).
   - **Smoke in RT** (step 4): a smoke record publishes closed-form proxy spheres (`ohao/vfx/smoke_math.hpp`,
     `caps.proxies` at most, 256 uploaded). They reach the RT traces through set 1 binding 7
-    (`rt/smoke_proxy.slang`; the header's flag is `render.settings vfx.smokeInGi`): `shadow_trace` draws
-    its visibility stochastically with `T`, `gi_trace` multiplies radiance by `T` and adds nothing (OPEN
+    (`rt/smoke_proxy.slang`; the header's flag is `render.settings vfx.smokeInGi`): RT direct light's
+    shading ray draws its visibility stochastically with `T` (its Z rays ignore smoke), `gi_trace` multiplies radiance by `T` and adds nothing (OPEN
     ruling 29: a flat in-scatter lit a filled doorway brighter, not darker). With no spheres `T` is exactly 1,
     so a scene without smoke is bit-identical. A sphere is
     the emitter's pose plus up to 0.6 R of offset: a cloud placed on a wall plane is half outside it.
@@ -1166,7 +1186,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     keys (distance bits, then id); the transparent pass runs after SSR, so SSR never sees a particle.
   - **A GPU test that loads a level must install what the CLI installs** (`level::installLevels`, then
     `installPhysics`, as `tools/ohao/main.cpp` does). Without it the blockout is never expanded, the
-    scene has no instances, `scene.upload` builds no TLAS, and RT shadows and RT GI silently do not run
+    scene has no instances, `scene.upload` builds no TLAS, and RT direct light and RT GI silently do not run
     (the frame is the sky, the passes list has no `rt.gi`). `vfx_gpu_test`'s `capture()` does this.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.

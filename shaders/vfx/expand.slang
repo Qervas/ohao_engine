@@ -105,14 +105,14 @@ uint batchOf(uint i)
 }
 
 // The sun's visibility from `p`: one ray along every directional light that casts shadows
-// would cost a ray each; the first directional light with a shadow channel stands for the sun.
+// would cost a ray each; the first directional light that casts shadows stands for the sun.
 float sunVisibility(float3 p)
 {
     if ((pc.config.w & 8u) == 0u) return 1.0;
     for (uint k = 0u; k < pc.config.z; ++k)
     {
         const LightGpu light = lights[k];
-        if (int(light.position.w) != 0 || int(round(light.params.w)) < 0) continue;
+        if (int(light.position.w) != 0 || int(round(light.params.w)) <= 0) continue;
         RayDesc ray;
         ray.Origin = p;
         ray.TMin = 0.01;

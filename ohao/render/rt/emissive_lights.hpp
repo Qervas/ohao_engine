@@ -1,11 +1,13 @@
 #pragma once
 
-// The path tracer's emissive triangle lights (frontier F3, ruling F-R7): every triangle of the
-// instances with an emissive material (RenderScene::emissiveInstances) is a light, drawn by power.
+// The emissive triangle lights (frontier F3, ruling F-R7): every triangle of the instances with an
+// emissive material (RenderScene::emissiveInstances) is a light, drawn by power. One table, owned by
+// the VulkanRenderer and read by the path tracer and the deferred frame's direct light (F4); the
+// renderer that draws a frame records it.
 // Built on the GPU every frame (RTXDI's light preparation): rt/emissive_collect.slang writes each
 // triangle in world space and its power into level 0 of a power image, rt/emissive_reduce.slang sums
 // the levels above to one texel, and the path tracer draws a light by descending the levels
-// (rt/path_tracer.slang, sampleEmissive). Its bindings:
+// (rt/path_tracer.slang, sampleEmissive). Its bindings (the path tracer's numbers):
 //   42 lights      4 uint4 a light (float bits): (corner 0, material), (corner 1, uv0.x), (corner 2, uv0.y), (uv1, uv2);
 //                  the material an integer (as a float it would be a denormal, flushed to zero on the GPU)
 //   43 power       R32F, a power-of-two square with every level; a light's texel over the top is its probability
@@ -20,7 +22,6 @@
 #include "render/scene/render_scene.hpp"
 
 #include <array>
-#include <span>
 #include <cstdint>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -29,8 +30,11 @@ namespace ohao::render {
 
 class EmissiveLights {
 public:
-    // `textureCapacity`: the bindless table's size (the collect pass reads emissive textures).
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t textureCapacity);
+    // `texturesLayout`: the bindless texture table's set layout (the collect pass's set 1, for the
+    // emissive textures). `rayTracingPipeline`: the device has ray tracing pipelines, whose stage the
+    // barriers then name beside compute's.
+    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkDescriptorSetLayout texturesLayout,
+                    bool rayTracingPipeline);
     void destroy();
 
     // This frame's emissive instances (and the scene's slot count, for `first`). Grows the device
@@ -38,13 +42,16 @@ public:
     void prepare(uint32_t frameSlot, const std::vector<RenderScene::EmissiveInstance>& instances, uint64_t version,
                  uint32_t slotEnd, float analyticPower);
 
+    // prepare() with the scene's own emissive instances, slot count and analytic power.
+    void prepare(uint32_t frameSlot, const RenderScene& scene);
+
     struct SceneBuffers {
         VkBuffer vertices, indices, meshes, triangleSlots, materials, instances, materialRefs;
     };
-    // The collect and reduce passes (nothing without a light); `textures` the bindless table's
-    // entries (the path tracer's binding 12), written into this slot's set.
-    void record(VkCommandBuffer cmd, uint32_t frameSlot, const SceneBuffers& scene,
-                std::span<const VkDescriptorImageInfo> textures);
+    [[nodiscard]] static SceneBuffers buffersOf(const RenderScene& scene);
+    // The collect and reduce passes (nothing without a light); `textures` the bindless table's set.
+    // Their results are visible to compute and (with ray tracing pipelines) ray tracing shaders.
+    void record(VkCommandBuffer cmd, uint32_t frameSlot, const SceneBuffers& scene, VkDescriptorSet textures);
 
     [[nodiscard]] uint32_t count() const noexcept { return m_count; }
     [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lights; }
@@ -58,7 +65,7 @@ private:
     void destroyPower();
 
     VkDevice m_device{VK_NULL_HANDLE};
-    uint32_t m_textureCapacity{0};
+    VkPipelineStageFlags m_readers{VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT};   // the stages that read the results
     VkPhysicalDevice m_physical{VK_NULL_HANDLE};
 
     VkBuffer m_lights{VK_NULL_HANDLE};

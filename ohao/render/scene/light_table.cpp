@@ -73,12 +73,10 @@ void LightTable::set(std::span<const LightDesc> lights) {
     m_descs = sorted;
 
     // ---- Raster: every light, up to the table's capacity (clustered lighting) -----
-    // RT shadow slots: the first kMaxShadowLights raster lights that cast shadows own one
-    // visibility channel each (params.w), in light order; a casting light past them is lit
-    // unshadowed (kShadowNever), and counted in shadowCastersWithoutChannel().
+    // params.w: 1 a light that casts shadows, 0 one that does not, kShadowNever (-1) a flash. RT
+    // direct light lights every light but flashes, shadowed; the loop's fallback shadows only a
+    // casting directional light (CSM).
     std::vector<LightData> raster;
-    m_shadowLights.clear();
-    m_shadowCastersWithoutChannel = 0;
     for (const LightDesc& d : sorted) {
         if (d.kind == LightKind::Flash) continue;
         if (raster.size() >= MAX_LIGHTS) break;
@@ -93,15 +91,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
         light.direction = glm::vec4(d.direction, d.range);
         light.color = glm::vec4(d.color, d.intensity);
 
-        float shadowSlot = kShadowNever;
-        if (d.castShadows) {
-            if (m_shadowLights.size() < kMaxShadowLights) {
-                shadowSlot = static_cast<float>(m_shadowLights.size());
-                m_shadowLights.push_back(d);
-            } else {
-                ++m_shadowCastersWithoutChannel;
-            }
-        }
+        const float shadowSlot = d.castShadows ? 1.0f : 0.0f;
         // z: the sphere's radius for a point or spot light with an emitter mesh (lightEmitter's,
         // so its specular is the reflection of that mesh: evaluateSphere in includes/lighting/clustered_lights.slang); 0 a point.
         const float sphereRadius =

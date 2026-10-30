@@ -269,7 +269,7 @@ static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
 
     changes = s.changeCount();
     CHECK(Reply(s.call("render.settings", R"({"set":{"rtGI":{"rays":33}}})")).code() == "E_RANGE" &&
-              Reply(s.call("render.settings", R"({"set":{"rtShadows":{"maxLights":5}}})")).code() == "E_RANGE" &&
+              Reply(s.call("render.settings", R"({"set":{"rtDirect":{"candidates":33}}})")).code() == "E_RANGE" &&
               Reply(s.call("render.settings", R"({"set":{"csm":{"size":256}}})")).code() == "E_RANGE" &&
               Reply(s.call("render.settings", R"({"set":{"geometry":"triangles"}})")).code() == "E_ENUM" &&
               Reply(s.call("render.settings", R"({"set":{"ssgi":true}})")).code() == "E_UNKNOWN_FIELD" &&

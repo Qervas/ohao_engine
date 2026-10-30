@@ -18,7 +18,7 @@ import shared.layout;
 [[vk::binding(7, 0)]] StructuredBuffer<uint4> ranges;        // [0] (N, S, levels, R); [1] (analytic power); [2 + r] (slot, first light, triangles, 0)
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint4> lights;      // 4 rows a light, as bits: a material index as a float is a denormal, which float paths flush
 [[vk::binding(9, 0)]] [[vk::image_format("r32f")]] RWTexture2D<float> power;   // level 0
-[[vk::binding(10, 0)]] Sampler2D textures[4096];             // the bindless table (partially bound)
+[[vk::binding(0, 1)]] Sampler2D textures[4096];              // set 1: the bindless texture table (BindlessTextureManager)
 
 static const uint kVertexFloats = 25u;
 static const float kPi = 3.14159265358979;

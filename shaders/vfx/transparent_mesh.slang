@@ -60,7 +60,7 @@ float sunVisibility(float3 p, float3 n)
     for (uint k = 0u; k < pc.config.x; ++k)
     {
         const LightGpu light = lights[k];
-        if (int(light.position.w) != 0 || int(round(light.params.w)) < 0) continue;
+        if (int(light.position.w) != 0 || int(round(light.params.w)) <= 0) continue;
         RayDesc ray;
         ray.Origin = p + n * 0.002;
         ray.TMin = 0.001;

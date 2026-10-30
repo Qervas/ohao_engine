@@ -58,6 +58,8 @@ public:
     virtual void setSceneBuffers(const render::RenderScene& scene) = 0;
     // Binding-12 size (the texture table's capacity); before init().
     virtual void setBindlessCapacity(uint32_t capacity) = 0;
+    // See PathTracer::setEmissiveLights; before init().
+    virtual void setEmissiveLights(render::EmissiveLights* lights, VkDescriptorSet textures) = 0;
     virtual void setBindlessTextures(std::span<const VkImageView> views,
                                      std::span<const VkSampler> samplers) = 0;
 
@@ -137,6 +139,9 @@ public:
 
     void setSceneBuffers(const render::RenderScene& scene) override { m_pathTracer.setSceneBuffers(scene); }
     void setBindlessCapacity(uint32_t capacity) override { m_pathTracer.setBindlessCapacity(capacity); }
+    void setEmissiveLights(render::EmissiveLights* lights, VkDescriptorSet textures) override {
+        m_pathTracer.setEmissiveLights(lights, textures);
+    }
     void setBindlessTextures(std::span<const VkImageView> views,
                              std::span<const VkSampler> samplers) override {
         m_pathTracer.setBindlessTextures(views, samplers);

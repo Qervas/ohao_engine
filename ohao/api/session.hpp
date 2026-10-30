@@ -139,9 +139,6 @@ struct RenderStats {
     double gpuMs{0.0};   // first pass begin to last pass end
     double cpuMs{0.0};   // recording and submission on the CPU
     std::vector<std::pair<std::string, double>> passes;   // in frame order
-    // RT shadows: pixels of the newest frame covered that had more lights worth tracing than
-    // they may trace (those shade unshadowed); absent when no covered frame traced shadows.
-    std::optional<uint32_t> shadowLightsDropped;
     // Clustered lighting: lights the newest frame covered left out of full froxels (a froxel
     // keeps its first 256); absent when none was.
     std::optional<uint32_t> lightsOverflow;

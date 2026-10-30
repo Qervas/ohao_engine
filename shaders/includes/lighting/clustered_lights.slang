@@ -195,21 +195,20 @@ void lightAt(LightGpu light, float3 p, out float3 L, out float3 radiance, out in
     radiance = light.color.rgb * light.color.w * attenuation;
 }
 
-// What occludes each light: RT shadows' channels (a shadow-casting light's slot, params.w), or
-// else one visibility for every shadow-casting directional light (the deferred frame's CSM, the
-// forward pass's sun ray); other lights unshadowed.
+// What the loop shadows (a light's params.w: -1 a flash, 0 casts no shadow, 1 casts shadows).
+// `traced`: RT direct light (rt/restir_di.slang) lit this pixel with every light but flashes, so the
+// loop adds only the flashes. Otherwise one visibility for every shadow-casting directional light
+// (the deferred frame's CSM, the forward pass's sun ray); other lights unshadowed.
 struct LightVisibility
 {
-    bool rt;
-    uint2 rtWords;      // 8 bits a channel, channels 0-3 then 4-7
+    bool traced;
     float directional;
 };
 
 LightVisibility directionalVisibility(float v)
 {
     LightVisibility vis;
-    vis.rt = false;
-    vis.rtWords = uint2(0u);
+    vis.traced = false;
     vis.directional = v;
     return vis;
 }
@@ -226,20 +225,9 @@ float3 directLight(Surface s, StructuredBuffer<LightGpu> lights, StructuredBuffe
         int type;
         lightAt(light, s.position, L, radiance, type);
         if (all(radiance == float3(0.0)) && type != 3) continue;   // adds exactly zero: past its range or cone
-        float shadow = 1.0;
-        const int slot = int(round(light.params.w));
-        if (slot >= 0)
-        {
-            if (vis.rt)
-            {
-                const uint word = slot < 4 ? vis.rtWords.x : vis.rtWords.y;
-                shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);
-            }
-            else if (type == 0)
-            {
-                shadow = vis.directional;
-            }
-        }
+        const int casts = int(round(light.params.w));
+        if (vis.traced && casts >= 0) continue;   // RT direct light lit it
+        const float shadow = casts > 0 && type == 0 ? vis.directional : 1.0;
         if (shadow == 0.0) continue;   // fully occluded: adds exactly zero
         if (type == 3)
             Lo += evaluateRect(s, light.position.xyz, light.direction.xyz, light.params.xyz, radiance, t) * shadow;
@@ -272,7 +260,7 @@ float3 particleLight(float3 p, StructuredBuffer<LightGpu> lights, StructuredBuff
             const float d2 = max(dot(d, d), 1e-4);
             radiance *= max(dot(normalize(n), -normalize(d)), 0.0) * length(n) / d2;
         }
-        if (type == 0 && int(round(light.params.w)) >= 0) radiance *= sunVisibility;
+        if (type == 0 && int(round(light.params.w)) > 0) radiance *= sunVisibility;
         sum += radiance;
     }
     return sum * kInvPi;

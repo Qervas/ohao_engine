@@ -324,7 +324,7 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
     const VulkanRenderer::RenderSettings r = renderer.renderSettings();
     api::RenderSettings s;
     s.quality = r.quality == RenderQuality::Reference ? api::Quality::reference : api::Quality::realtime;
-    s.rtShadows = {r.rtShadows, static_cast<int32_t>(r.rtShadowMaxLights)};
+    s.rtDirect = {r.rtDirect, static_cast<int32_t>(r.rtDirectCandidates), static_cast<int32_t>(r.rtDirectSpatial)};
     s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::GIResolution::full : api::GIResolution::half,
               static_cast<int32_t>(r.rtGIRays)};
     s.ssao = r.ssao;
@@ -346,8 +346,9 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
 void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s) {
     VulkanRenderer::RenderSettings r;
     r.quality = s.quality == api::Quality::reference ? RenderQuality::Reference : RenderQuality::Realtime;
-    r.rtShadows = s.rtShadows.enabled;
-    r.rtShadowMaxLights = static_cast<uint32_t>(std::clamp(s.rtShadows.maxLights, 0, 4));
+    r.rtDirect = s.rtDirect.enabled;
+    r.rtDirectCandidates = static_cast<uint32_t>(std::clamp(s.rtDirect.candidates, 1, 32));
+    r.rtDirectSpatial = static_cast<uint32_t>(std::clamp(s.rtDirect.spatial, 0, 8));
     r.rtGI = s.rtGI.enabled;
     r.rtGIFullResolution = s.rtGI.resolution == api::GIResolution::full;
     r.rtGIRays = static_cast<uint32_t>(std::clamp(s.rtGI.rays, 1, 32));
@@ -392,9 +393,6 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
     const std::vector<render::FrameTiming> frames = renderer.frameTimings(static_cast<std::size_t>(std::max(count, 1)));
     std::optional<api::RenderStats> st = summarizeFrames(frames);
     if (st) {
-        const auto dropped = renderer.shadowLightsDropped();
-        if (dropped && dropped->frame >= frames.front().frame && dropped->frame <= frames.back().frame)
-            st->shadowLightsDropped = dropped->pixels;
         const auto overflow = renderer.lightsOverflow();
         if (overflow && overflow->lights > 0 && overflow->frame >= frames.front().frame &&
             overflow->frame <= frames.back().frame)

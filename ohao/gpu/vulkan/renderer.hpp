@@ -255,10 +255,10 @@ public:
     // average a moving camera.
     void setRenderQuality(RenderQuality quality) noexcept { m_renderQuality = quality; }
     [[nodiscard]] RenderQuality renderQuality() const noexcept { return m_renderQuality; }
-    // RT shadows in the deferred frame (when ray tracing is supported); off: CSM shadows
-    // the directional lights.
-    void setRTShadowsEnabled(bool on) noexcept { m_rtShadowsWanted = on; }
-    [[nodiscard]] bool rtShadowsEnabled() const noexcept { return m_rtShadowsWanted; }
+    // RT direct light in the deferred frame (when ray tracing is supported); off: lighting loops
+    // over the lights and CSM shadows the sun.
+    void setRTDirectEnabled(bool on) noexcept { m_rtDirectWanted = on; }
+    [[nodiscard]] bool rtDirectEnabled() const noexcept { return m_rtDirectWanted; }
 
     // Every quality knob in one value (sub-project 2b spec, "The agent-facing surface":
     // render.settings). The defaults are the budgeted configuration. Set it between frames;
@@ -266,8 +266,9 @@ public:
     // renderSettings() reads the knobs back from the passes that hold them.
     struct RenderSettings {
         RenderQuality quality{RenderQuality::Realtime};
-        bool rtShadows{true};
-        uint32_t rtShadowMaxLights{4};   // realtime: the lights a pixel traces (0-4)
+        bool rtDirect{true};
+        uint32_t rtDirectCandidates{4};  // light points a pixel draws a frame (1-32)
+        uint32_t rtDirectSpatial{2};     // realtime: neighbours a pixel's reservoir reuses (0-8)
         bool rtGI{true};
         bool rtGIFullResolution{false};  // realtime: the trace at the frame's size, not half
         uint32_t rtGIRays{2};            // realtime: rays a pixel (1-32)
@@ -276,7 +277,7 @@ public:
         bool sss{true};
         GpuCulling::Geometry geometry{GpuCulling::Geometry::Auto};
         bool occlusionCulling{true};
-        uint32_t csmCascades{4};         // the CSM fallback (without RT shadows): 1-4
+        uint32_t csmCascades{4};         // the CSM fallback (without RT direct light): 1-4
         uint32_t csmSize{2048};          // 512-4096
         float ev100{render::kDefaultEv100};   // the display transform's camera (EV100, ISO 100)
         render::DisplayCurve tonemap{render::DisplayCurve::AgX};
@@ -287,7 +288,7 @@ public:
         bool vfxSoft{true};              // their soft fade against the scene's depth
         bool vfxTracers{true};
         bool vfxDecals{true};
-        bool vfxSmokeInGi{true};         // RT shadows and RT GI attenuate through the smoke proxies
+        bool vfxSmokeInGi{true};         // RT direct light and RT GI attenuate through the smoke proxies
     };
     void setRenderSettings(const RenderSettings& s);
     [[nodiscard]] RenderSettings renderSettings() const;
@@ -295,13 +296,6 @@ public:
     // default. A fallback only: lighting applies it to a frame with neither RT GI nor an
     // environment.
     void setAmbientIntensity(std::optional<float> ambient) noexcept { m_ambientOverride = ambient; }
-    // RT shadows: pixels of the newest finished frame (its renderer frame number) that had
-    // more lights worth tracing than the 4 they may trace. Collects finished frames first.
-    struct ShadowLightsDropped {
-        uint64_t frame{0};
-        uint32_t pixels{0};
-    };
-    [[nodiscard]] std::optional<ShadowLightsDropped> shadowLightsDropped();
     // Clustered lighting: the newest finished frame's froxel overflow (lights left out of
     // froxels past 256, the froxels that left any out, the largest froxel count).
     // Collects finished frames first.
@@ -478,6 +472,8 @@ private:
     [[nodiscard]] std::string environmentKey() const;
     void uploadEnvironmentMap();          // once per path (render()); stamps env index + scale into the RenderScene
     void bindRTTextures(IRTRendererProfile& renderer);
+    // The bindless table as views and samplers (index = bindless index) in m_rtTextureViews/Samplers.
+    void collectRTTextures();
     void destroyEnvSamplingBuffer();
     [[nodiscard]] bool envMapLoaded() const noexcept {
         return m_envMapImageView != VK_NULL_HANDLE && m_envMapTexIdx != 0xFFFFFFFFu;
@@ -509,7 +505,7 @@ private:
     float m_envIntensityScale{1.0f}; // light header offset 8
     uint32_t m_renderSeed{0};        // setRenderSeed; applied to renderers as they are created
     RenderQuality m_renderQuality{RenderQuality::Realtime};
-    bool m_rtShadowsWanted{true};
+    bool m_rtDirectWanted{true};
 
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.
@@ -608,6 +604,9 @@ private:
 
     // Persistent GPU render world; recordUpdates runs at the start of every frame body.
     std::unique_ptr<render::RenderScene> m_renderScene;
+    // The emissive triangle lights (frontier F3): one table for the path tracer and the deferred
+    // frame's direct light, recorded by whichever draws a frame. Null without ray queries.
+    std::unique_ptr<render::EmissiveLights> m_emissiveLights;
 
     // Deferred rendering methods
     [[nodiscard]] bool initializeDeferredRenderer();

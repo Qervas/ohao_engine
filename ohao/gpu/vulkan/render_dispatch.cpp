@@ -137,9 +137,15 @@ void VulkanRenderer::renderDeferred() {
     m_deferredRenderer->setFrameNumber(m_framesStarted);
     m_deferredRenderer->setQuality(m_renderQuality);
 
-    // RT shadows and GI trace the RenderScene's TLAS (DeferredRenderer reads it); without
-    // RT shadows, CSM.
-    m_deferredRenderer->setRTShadowsEnabled(isRTSupported() && m_rtShadowsWanted);
+    // RT direct light and GI trace the RenderScene's TLAS (DeferredRenderer reads it); RT direct
+    // light samples the emissive triangle table and reads their textures. Without it, the
+    // lighting loop and CSM.
+    m_deferredRenderer->setRTDirectEnabled(isRTSupported() && m_rtDirectWanted);
+    m_deferredRenderer->setEmissiveLights(m_emissiveLights.get());
+    if (m_emissiveLights) {
+        collectRTTextures();
+        m_deferredRenderer->setBindlessTextures(m_rtTextureViews, m_rtTextureSamplers);
+    }
 
     // The environment: RT GI's misses read the source image; lighting's IBL its prefiltered
     // levels and irradiance.
@@ -155,9 +161,6 @@ void VulkanRenderer::renderDeferred() {
     // This frame's raster lights: the scene's light table. The deferred renderer writes them
     // into this slot's light buffer (its fence was waited on above), only when they changed.
     setFrameLights();
-
-    // The lights RT shadows trace: the scene's shadow casters (none without lights).
-    m_deferredRenderer->setShadowLights(m_renderScene->shadowLights());
 
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);

@@ -14,8 +14,6 @@
 //                  256, the frame renders, and render.stats reports lightsOverflow (absent for
 //                  the bench scene, where no froxel overflows).
 //   t08 twin runs  two fresh renderers build byte-identical froxel lists (counts and indices).
-//   t08 channels   shadow-casting lights past kMaxShadowLights render unshadowed: their params.w
-//                  is kShadowNever, counted by the RenderScene.
 //
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "common/materials.hpp"
@@ -178,7 +176,6 @@ struct Capture {
     uint32_t lightCount{0};              // the raster light table's
     std::optional<LightClusters::Overflow> overflow;
     std::string stats;                   // render.stats' reply
-    uint32_t castersWithoutChannel{0};
     std::vector<shared::LightGpu> table;  // the raster light table the lighting read
 };
 
@@ -210,6 +207,8 @@ Capture capture(const std::string& scenePath, bool clustered, int frames, bool p
         if (!host.renderer()) return out;
         DeferredRenderer* deferred = host.renderer()->getDeferredRenderer();
         deferred->setClusteredLighting(clustered);
+        // The loop lights every light only without RT direct light (which takes all but flashes).
+        host.renderer()->setRTDirectEnabled(false);
         deferred->lightClusters()->setCapture(true);
         api::RenderRequest r;
         r.mode = "deferred";
@@ -232,7 +231,6 @@ Capture capture(const std::string& scenePath, bool clustered, int frames, bool p
         if (const shared::LightGpu* t = lc->lights(0)) out.table.assign(t, t + out.lightCount);
         out.overflow = host.renderer()->lightsOverflow();
         out.stats = session.call("render.stats", "{}");
-        out.castersWithoutChannel = host.renderer()->renderScene().shadowCastersWithoutChannel();
     }
     return out;
 }
@@ -363,28 +361,6 @@ void t08_twin_runs_build_identical_froxel_lists() {
     check(a.png == b.png, "t08: twin runs: the same image");
 }
 
-void t08_casters_past_the_shadow_channels_render_unshadowed() {
-    std::printf("t08: shadow casters past the %u channels are lit without shadows\n", render::kMaxShadowLights);
-    // Cornell: 12 casting lights; channels for the first 8.
-    const std::string png = std::string(OHAO_SOURCE_DIR) + "/" + scratch("channels") + ".png";
-    const Capture run = capture("assets/scenes/cornell_box.scene.json", true, 1, false, png);
-    std::remove(png.c_str());
-    if (run.table.empty()) {
-        check(false, "t08: channels: the light table was read");
-        return;
-    }
-    uint32_t channelled = 0, never = 0;
-    for (const auto& l : run.table) {
-        if (l.params[3] == static_cast<float>(render::kShadowNever)) ++never;
-        else if (l.params[3] >= 0.0f && l.params[3] < static_cast<float>(render::kMaxShadowLights)) ++channelled;
-    }
-    std::printf("  %zu lights: %u with a shadow channel, %u unshadowed; RenderScene counts %u casters without one\n",
-                run.table.size(), channelled, never, run.castersWithoutChannel);
-    check(run.table.size() == 12, "t08: channels: Cornell's 12 lights all in the table (no 8-light cap)");
-    check(channelled == render::kMaxShadowLights, "t08: channels: the first 8 casters own a channel each");
-    check(never == 4 && run.castersWithoutChannel == 4, "t08: channels: the other 4 are unshadowed, and counted");
-}
-
 // An orthographic camera over a floor lit by 16 small lights, through VulkanRenderer directly
 // (scene cameras are perspective): froxels are slices of a perspective frustum, so lighting
 // sums every light instead, and the image is the full loop's.
@@ -461,7 +437,6 @@ int main(int argc, char** argv) {
     t08_bench_lights_froxels_cull_and_never_overflow();
     t08_thousand_packed_lights_overflow_is_reported();
     t08_twin_runs_build_identical_froxel_lists();
-    t08_casters_past_the_shadow_channels_render_unshadowed();
     t08_orthographic_camera_lights_every_pixel_fully();
     for (const std::string& s : {benchLightsScene(), packedLightsScene(), farWallScene()})
         if (!s.empty()) std::remove((std::string(OHAO_SOURCE_DIR) + "/" + s).c_str());

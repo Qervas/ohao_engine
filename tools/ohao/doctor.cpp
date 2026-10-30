@@ -170,7 +170,7 @@ void vulkanChecks(std::vector<Check>& out) {
                 out.push_back(pass("vulkan.rt", "warn", "ray tracing pipeline and acceleration structures"));
             else
                 out.push_back(fail("vulkan.rt", "warn", "missing " + listCapped(missing) +
-                                                            ": the path tracer and RT shadows/GI are unavailable",
+                                                            ": the path tracer and RT direct light/GI are unavailable",
                                    "a GPU and driver with Vulkan ray tracing"));
         }
         vkDestroyInstance(instance, nullptr);

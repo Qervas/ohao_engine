@@ -24,7 +24,7 @@ public:
     // Configuration
     void setGBufferPass(GBufferPass* gbufferPass);
     // Forget the inputs that other passes own and re-supply every frame (SSAO,
-    // SSGI/RT GI, RT shadow mask). Call it when those passes may have recreated
+    // SSGI/RT GI, RT direct light). Call it when those passes may have recreated
     // their images -- a resize -- BEFORE anything rewrites this pass's
     // descriptors; the bindings fall back to the dummy view until render()
     // hands the new views back. Does not itself touch descriptors.
@@ -32,9 +32,14 @@ public:
     void setShadowMap(VkImageView shadowMap, VkSampler shadowSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
     void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
-    // RT shadow visibility (RG32UI, eight 8-bit channels: render/rt/render_technique.hpp's
-    // ShadowOutput). Null: no RT shadows this frame (CSM, if bound, shadows the directional lights).
-    void setRTShadowMask(VkImageView visibility);
+    // RT direct light's demodulated diffuse and specular (render/rt/rt_direct_technique.hpp):
+    // lighting multiplies them by the albedos and leaves every light but flashes out of its loop.
+    // Null: none this frame (the loop lights everything; CSM, if bound, shadows the sun).
+    void setDirectLight(VkImageView diffuse, VkImageView specular);
+    // The weather the lighting applies (wetness, snow cover, frost cover), for RT direct light's target.
+    [[nodiscard]] glm::vec3 weather() const noexcept {
+        return {m_params.wetness, m_params.snowCover, m_params.frostCover};
+    }
     // Image-based lighting (render/deferred/env_prefilter.hpp): the environment GGX-prefiltered
     // by roughness (binding 15, kEnvPrefilterLevels mips) and its irradiance (binding 7), with
     // their sampler, scaled by `intensity` (Environment.intensity). Null views: no IBL.
@@ -127,16 +132,14 @@ private:
     VkImageView m_ssgiView{VK_NULL_HANDLE};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
-    VkImageView m_rtShadowView{VK_NULL_HANDLE};
+    VkImageView m_directDiffuseView{VK_NULL_HANDLE};
+    VkImageView m_directSpecularView{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};
     VkDeviceMemory m_dummyMemory{VK_NULL_HANDLE};
     VkImageView m_dummyView{VK_NULL_HANDLE};
     // 1x1 RG32UI stand-in for the RT shadow visibility (an integer binding takes an integer view)
-    VkImage m_dummyUintImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_dummyUintMemory{VK_NULL_HANDLE};
-    VkImageView m_dummyUintView{VK_NULL_HANDLE};
     VkBuffer m_dummyBuffer{VK_NULL_HANDLE};
     render::OpenPBRTablesBuffer m_openpbrTables;   // binding 20
     VkDeviceMemory m_dummyBufferMemory{VK_NULL_HANDLE};

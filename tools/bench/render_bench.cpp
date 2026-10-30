@@ -92,7 +92,8 @@ struct SceneSpec {
     // frame, as a window runs), so the skinned instances' poses change every frame.
     bool animate{false};
     // Sub-project 12 step 4: the smoke proxies out of RT shadows and GI (render.settings vfx.smokeInGi off).
-    // The proxies' cost is a scene's rt.shadows + rt.gi against this scene's (the passesDelta budgets).
+    // The proxies' cost is a scene's RT direct light (di.sample, di.shade) + rt.gi against this scene's
+    // (the passesDelta budgets).
     bool smokeGiOff{false};
     // Frontier F1 T6: the realtime path tracer (pt.cache.update, pt.cache.resolve, pt.trace and, under a
     // denoiser, pt.denoise) in place of the deferred frame.
@@ -135,7 +136,7 @@ const std::vector<SceneSpec>& sceneSpecs() {
         // deferred scenes: it installs the combat systems (physics, combat, vfx) on the bench's world.
         {"play_vfx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, false, true, true},
         // The same moment with the smoke proxies out of RT shadows and GI (step 4's proxy cost: the budget
-        // is play_vfx_1080p's rt.shadows + rt.gi less this scene's).
+        // is play_vfx_1080p's di.sample + di.shade + rt.gi less this scene's).
         {"play_vfx_nosmoke_gi_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, false, true, true, true},
         // The realtime path tracer at 1080p (frontier F1 T6): the trace alone (no denoiser) in the helmet
         // room and the play scene, and the play scene's whole realtime frame under DLSS Ray Reconstruction

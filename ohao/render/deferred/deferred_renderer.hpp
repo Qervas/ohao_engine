@@ -13,7 +13,7 @@
 #include "render/vfx/decal_pass.hpp"
 #include "ssr_pass.hpp"
 #include "sss_pass.hpp"
-#include "render/rt/rt_shadow_technique.hpp"
+#include "render/rt/rt_direct_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
 #include "render/rt/rt_alpha_tables.hpp"
 #include "render/graph/render_graph.hpp"
@@ -42,8 +42,8 @@ public:
     ~DeferredRenderer();
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
-    // VK_KHR_ray_query is enabled on the device (before initialize): RT shadows trace with
-    // inline ray queries, and without them the frame keeps CSM.
+    // VK_KHR_ray_query is enabled on the device (before initialize): RT direct light and RT GI
+    // trace with inline ray queries; without them lighting loops over the lights, CSM for the sun.
     void setRayQuerySupported(bool on) noexcept { m_rayQuery = on; }
     // VK_EXT_mesh_shader is enabled (before initialize): the G-buffer's meshlet path runs task
     // and mesh shaders, else its compute + vertex-pulling fallback.
@@ -62,20 +62,32 @@ public:
     // frames that follow render as a fresh renderer's would. The device must be idle.
     void resetTemporalState();
 
-    // RT shadows and RT GI seed every sample from (render seed, frame index since the last
+    // RT direct light and RT GI seed every sample from (render seed, frame index since the last
     // resetTemporalState, pixel, sample): frame k after a reset is the same in every run.
     void setRenderSeed(uint32_t seed) noexcept { m_renderSeed = seed; }
     [[nodiscard]] uint32_t framesSinceReset() const noexcept { return m_framesSinceReset; }
-    // The renderer's number of the frame about to be recorded (RT shadows' dropped-pixel count).
+    // The renderer's number of the frame about to be recorded.
     void setFrameNumber(uint64_t frame) noexcept { m_frameNumber = frame; }
 
-    // Realtime (the budgeted frame) or reference (RT shadows: every light, 8 rays, the plain
-    // mean of the frames since the last reset). Change it only between captures that reset.
+    // Realtime (the budgeted frame) or reference (RT direct light and GI without reuse or
+    // denoising: the plain mean of the frames since the last reset). Change it only between
+    // captures that reset.
     void setQuality(RenderQuality quality) noexcept { m_quality = quality; }
     [[nodiscard]] RenderQuality quality() const noexcept { return m_quality; }
-    // Realtime RT shadows: the lights a pixel traces at most (0-4), the most important first.
-    void setShadowLightsPerPixel(uint32_t n) noexcept { m_shadowLightsPerPixel = std::min(n, 4u); }
-    [[nodiscard]] uint32_t shadowLightsPerPixel() const noexcept { return m_shadowLightsPerPixel; }
+    // RT direct light's light points a pixel draws a frame (1-32) and the neighbours its spatial
+    // reuse combines (0-8).
+    void setDirectSampling(uint32_t candidates, uint32_t spatial) noexcept {
+        m_directCandidates = std::clamp(candidates, 1u, 32u);
+        m_directSpatial = std::min(spatial, 8u);
+    }
+    [[nodiscard]] uint32_t directCandidates() const noexcept { return m_directCandidates; }
+    [[nodiscard]] uint32_t directSpatial() const noexcept { return m_directSpatial; }
+    // The emissive triangle lights (the renderer's table, which this frame records before RT
+    // direct light samples it) and the bindless table RT direct light reads emissive textures from.
+    void setEmissiveLights(render::EmissiveLights* lights) noexcept { m_emissiveLights = lights; }
+    void setBindlessTextures(std::span<const VkImageView> views, std::span<const VkSampler> samplers) {
+        if (m_rtDirect) m_rtDirect->setBindlessTextures(views, samplers);
+    }
 
     // render.settings switches (between frames). RT GI on or off (off: no indirect light), its
     // realtime trace at half or full resolution and its rays a pixel (1-32); SSR and SSS on or
@@ -94,8 +106,8 @@ public:
     [[nodiscard]] uint32_t csmCascades() const noexcept { return m_csmPass ? m_csmPass->cascades() : 4u; }
     [[nodiscard]] uint32_t csmSize() const noexcept { return m_csmPass ? m_csmPass->size() : 2048u; }
 
-    // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT
-    // shadows/GI trace its TLAS, and RT GI takes its bounce light from its lights.
+    // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT direct light and
+    // GI trace its TLAS, RT direct light samples its lights and RT GI's bounce is lit by them.
     void setRenderScene(const render::RenderScene* scene);
 
     // Camera configuration
@@ -114,9 +126,6 @@ public:
     // the last slice's box would miss the lights there).
     void setClusterFarPlane(float farPlane) noexcept { m_clusterFar = farPlane; }
     [[nodiscard]] LightClusters* lightClusters() noexcept { return m_lightClusters.get(); }
-    // The lights RT shadows trace this frame, <= kMaxShadowLights, light i into visibility
-    // channel i (the light UBO's params.w points each raster light at its channel).
-    void setShadowLights(std::span<const render::LightDesc> lights) { m_shadowLights.assign(lights.begin(), lights.end()); }
     [[nodiscard]] glm::vec3 getLightDirection() const { return m_lightDirection; }
 
     // Texture manager (forwarded to GBufferPass)
@@ -129,8 +138,7 @@ public:
     [[nodiscard]] GpuCulling* culling() noexcept { return m_culling.get(); }
     [[nodiscard]] const SSSPass* getSSSPass() const { return m_sssPass.get(); }
     [[nodiscard]] const SSRPass* getSSRPass() const { return m_ssrPass.get(); }
-    [[nodiscard]] const RTShadowTechnique* getRTShadow() const { return m_rtShadow.get(); }
-    [[nodiscard]] RTShadowTechnique* rtShadow() { return m_rtShadow.get(); }
+    [[nodiscard]] const RTDirectTechnique* rtDirect() const { return m_rtDirect.get(); }
 
     // Times every pass render() records, by its render/frame/pass_registry.hpp name (the
     // renderer's per-slot timer; null: untimed).
@@ -150,10 +158,12 @@ public:
     void setGizmoTransform(const glm::mat4& model);
     void setGizmoHighlightedAxis(GizmoAxis axis);
 
-    // RT shadows and GI
+    // RT direct light and GI
     [[nodiscard]] RTGITechnique* getRT_GI() { return m_rtGI.get(); }
-    void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
-    [[nodiscard]] bool getRTShadowsEnabled() const { return m_useRTShadows; }
+    // RT direct light wanted (render.settings rtDirect.enabled): it runs when it is also available.
+    void setRTDirectEnabled(bool enabled) noexcept { m_rtDirectWanted = enabled; }
+    [[nodiscard]] bool rtDirectEnabled() const noexcept { return m_rtDirectWanted; }
+    [[nodiscard]] bool rtDirectAvailable() const noexcept { return m_rtDirect != nullptr; }
     // The environment: `source` (RGBA32F, one level) for RT GI's misses; the prefiltered levels
     // and irradiance (EnvPrefilter) for lighting's IBL, null without them; `intensity`
     // (Environment.intensity) scales both, as the path tracer's miss does.
@@ -170,7 +180,7 @@ public:
     // Whether the decals pass draws (on by default; the GPU tests compare a frame with and without).
     void setDecalsDrawn(bool on) noexcept { m_decalsDrawn = on; }
     [[nodiscard]] bool decalsDrawn() const noexcept { return m_decalsDrawn; }
-    // Whether RT shadows and RT GI attenuate through the smoke proxies (render.settings vfx.smokeInGi;
+    // Whether RT direct light and RT GI attenuate through the smoke proxies (render.settings vfx.smokeInGi;
     // on by default, a presentation switch: the traces read it through the alpha tables).
     void setSmokeInGi(bool on) noexcept { m_smokeInGi = on; }
     [[nodiscard]] bool smokeInGi() const noexcept { return m_smokeInGi; }
@@ -203,9 +213,12 @@ private:
     std::unique_ptr<CSMPass> m_csmPass;
     std::unique_ptr<GpuCulling> m_culling;   // the G-buffer's and CSM's draw lists
 
-    // RT shadow technique (replaces CSM when available)
-    std::unique_ptr<RTShadowTechnique> m_rtShadow;
-    bool m_useRTShadows{false};
+    // RT direct light (replaces the lighting loop's lights and CSM when it runs)
+    std::unique_ptr<RTDirectTechnique> m_rtDirect;
+    bool m_rtDirectWanted{true};
+    uint32_t m_directCandidates{4};
+    uint32_t m_directSpatial{2};
+    render::EmissiveLights* m_emissiveLights{nullptr};
     bool m_rayQuery{false};
     bool m_meshShader{false};
     std::unique_ptr<RTGITechnique> m_rtGI;
@@ -259,7 +272,6 @@ private:
     bool m_clusteredLighting{true};
     float m_clusterFar{1000.0f};
     std::unique_ptr<LightClusters> m_lightClusters;   // the light table and the froxel lists
-    std::vector<render::LightDesc> m_shadowLights;
 
     // Debug modes
     bool m_wireframeEnabled{false};
@@ -279,7 +291,6 @@ private:
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
     uint64_t m_frameNumber{0};
     RenderQuality m_quality{RenderQuality::Realtime};
-    uint32_t m_shadowLightsPerPixel{4};
 
     // Render graph for centralized barrier tracking
     RenderGraph m_renderGraph;

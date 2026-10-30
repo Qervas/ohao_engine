@@ -160,6 +160,12 @@ public:
     // Size of binding 12: the texture table's capacity. Call before init(); init
     // clamps it to the device's update-after-bind sampled-image limits (logged).
     void setBindlessCapacity(uint32_t capacity) noexcept { m_bindlessCapacity = std::max(1u, capacity); }
+    // The emissive triangle lights (the renderer's table, which this tracer records on its frames) and
+    // the bindless texture table's set they read. Without them it traces nothing.
+    void setEmissiveLights(render::EmissiveLights* lights, VkDescriptorSet textures) noexcept {
+        m_emissive = lights;
+        m_textureSet = textures;
+    }
     [[nodiscard]] uint32_t bindlessCapacity() const noexcept { return m_bindlessCapacity; }
     void setRadianceCacheCapacity(uint32_t entries) noexcept { m_radianceCacheCapacity = entries; }
     static constexpr uint32_t kDefaultBindlessCapacity = 4096;
@@ -286,7 +292,8 @@ private:
     // in it, one cell otherwise (the shaders bind it either way). setRadianceCacheCapacity before init.
     render::RadianceCache m_radianceCache;
     // The emissive triangle lights (bindings 42-45), from the scene's emissive instances.
-    render::EmissiveLights m_emissive;
+    render::EmissiveLights* m_emissive = nullptr;   // the renderer's (setEmissiveLights)
+    VkDescriptorSet m_textureSet = VK_NULL_HANDLE;   // the bindless texture table's set (the collect pass's)
     std::vector<render::RenderScene::EmissiveInstance> m_emissiveInstances;
     uint64_t m_emissiveVersion = 0;
     uint32_t m_instanceSlotEnd = 0;

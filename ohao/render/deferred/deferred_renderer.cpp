@@ -2,6 +2,7 @@
 #include "gpu_culling.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
+#include "render/rt/emissive_lights.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "core/log.hpp"
@@ -135,15 +136,12 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     const VkDescriptorSetLayout alphaTables = m_alphaTablesReady ? m_alphaTables.layout() : VK_NULL_HANDLE;
     const VkDescriptorSetLayout textures = m_textureManager ? m_textureManager->getDescriptorSetLayout() : VK_NULL_HANDLE;
 
-    // Initialize RT shadow technique (inline ray queries)
-    m_rtShadow = std::make_unique<RTShadowTechnique>();
-    m_rtShadow->setAlphaLayouts(alphaTables, textures);
-    if (m_rayQuery && m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
-        m_useRTShadows = true;
-        OHAO_LOG(Debug, render, "DeferredRenderer: RTShadow OK");
-    } else {
-        OHAO_LOG(Warn, render, "DeferredRenderer: RTShadow not available (using CSM fallback)");
-        m_rtShadow.reset();
+    // RT direct light (inline ray queries)
+    m_rtDirect = std::make_unique<RTDirectTechnique>();
+    m_rtDirect->setAlphaLayouts(alphaTables, textures);
+    if (!m_rayQuery || !m_alphaTablesReady || !m_rtDirect->init(device, physicalDevice, m_width, m_height)) {
+        OHAO_LOG(Warn, render, "DeferredRenderer: RT direct light not available (lighting loops over the lights, CSM for the sun)");
+        m_rtDirect.reset();
     }
 
     // Initialize RT GI technique (inline ray queries)
@@ -295,12 +293,14 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     const bool alphaSets = m_alphaTablesReady && m_renderScene && m_alphaTables.update(frameIndex, *m_renderScene, m_smokeInGi);
     const VkDescriptorSet alphaTablesSet = alphaSets ? m_alphaTables.set(frameIndex) : VK_NULL_HANDLE;
     const VkDescriptorSet texturesSet = m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
-    // RT shadows replace CSM whenever they trace this frame; CSM is the fallback.
-    const bool rtShadows = m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass &&
-                           !m_shadowLights.empty();
+    // RT direct light replaces the lighting loop's lights and CSM whenever it runs this frame (a
+    // TLAS, and lights or emissive triangles to sample); CSM is the fallback's.
+    const bool rtDirect = m_rtDirectWanted && m_rtDirect && m_emissiveLights && sceneTlas != VK_NULL_HANDLE &&
+                          m_gbufferPass && alphaSets && texturesSet != VK_NULL_HANDLE &&
+                          (m_renderScene->rtLightCount() > 0 || !m_renderScene->emissiveInstances().empty());
 
     // 1. Shadow pass (CSM) — writes shadow map, leaves at DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-    if (m_csmPass && !rtShadows) {
+    if (m_csmPass && !rtDirect) {
         m_renderGraph.addPass("csm",
             [&](PassBuilder& builder) {
                 if (m_graphShadowHandle.isValid())
@@ -396,47 +396,60 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // every RT sample (and RT GI's first frame takes no history).
     const uint32_t rtFrame = m_framesSinceReset++;
 
-    // 3.7. RT Shadows — trace the scene's shadow-casting lights (setShadowLights) through the
-    // TLAS, then (realtime) filter them, one visibility channel a light. Lighting records
-    // after these passes and writes its descriptors then.
-    const auto shadowsToLighting = [&]() {
-        if (!m_lightingPass || !m_rtShadow->rendered()) return;
-        m_lightingPass->setRTShadowMask(m_rtShadow->getOutput().visibility);
+    // 3.7. RT direct light: the emissive triangle table (shared with the path tracer, recorded by
+    // the frame that draws), then ReSTIR DI's passes. Lighting reads their output and leaves the
+    // lights they sample out of its loop.
+    const auto directToLighting = [&]() {
+        if (m_lightingPass && m_rtDirect->rendered())
+            m_lightingPass->setDirectLight(m_rtDirect->diffuse(), m_rtDirect->specular());
     };
-    if (rtShadows) {
-        m_renderGraph.addComputePass("rt.shadows",
+    if (rtDirect) {
+        m_renderGraph.addComputePass("emissive.lights", [&](PassBuilder&) {},
+            [&](VkCommandBuffer c) {
+                m_emissiveLights->prepare(frameIndex, *m_renderScene);
+                m_emissiveLights->record(c, frameIndex, render::EmissiveLights::buffersOf(*m_renderScene), texturesSet);
+            });
+        m_renderGraph.addComputePass("di.sample",
             [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.readComputeTexture(m_graphNormalHandle);
+                if (m_graphNormalHandle.isValid()) builder.readComputeTexture(m_graphNormalHandle);
+                if (m_graphAlbedoHandle.isValid()) builder.readComputeTexture(m_graphAlbedoHandle);
             },
             [&](VkCommandBuffer c) {
-                ShadowInput si{};
-                si.positionBuffer = m_gbufferPass->getPositionView();
-                si.normalBuffer = m_gbufferPass->getNormalView();
-                si.depthBuffer = m_gbufferPass->getDepthView();
-                si.velocityBuffer = m_gbufferPass->getVelocityView();
-                si.width = m_width;
-                si.height = m_height;
-                si.frameSlot = frameIndex;
-                si.frameNumber = m_frameNumber;
-                si.cameraPos = m_cameraPos;
-                si.lights = m_shadowLights;
-                si.renderSeed = m_renderSeed;
-                si.frameIndex = rtFrame;
-                si.quality = m_quality;
-                si.maxLightsPerPixel = m_shadowLightsPerPixel;
-                si.tlas = sceneTlas;
-                si.alphaTables = alphaTablesSet;
-                si.textures = texturesSet;
-                m_rtShadow->render(c, si);
-                if (!m_rtShadow->filters()) shadowsToLighting();   // reference: the trace is the output
+                DirectInput di{};
+                di.positionBuffer = m_gbufferPass->getPositionView();
+                di.normalBuffer = m_gbufferPass->getNormalView();
+                di.albedoBuffer = m_gbufferPass->getAlbedoView();
+                di.specularBuffer = m_gbufferPass->getSpecularView();
+                di.openpbrBuffer = m_gbufferPass->getOpenPBRView();
+                di.velocityBuffer = m_gbufferPass->getVelocityView();
+                di.width = m_width;
+                di.height = m_height;
+                di.frameSlot = frameIndex;
+                di.frameIndex = rtFrame;
+                di.renderSeed = m_renderSeed;
+                di.quality = m_quality;
+                di.candidates = m_directCandidates;
+                di.spatial = m_directSpatial;
+                di.cameraPos = m_cameraPos;
+                di.weather = m_lightingPass ? m_lightingPass->weather() : glm::vec3(0.0f);
+                di.tlas = sceneTlas;
+                di.alphaTables = alphaTablesSet;
+                di.textures = texturesSet;
+                di.lightData = m_renderScene->rtLightBuffer();
+                di.materials = m_renderScene->materialBuffer();
+                di.emissive = m_emissiveLights;
+                m_rtDirect->sample(c, di);
+            });
+        m_renderGraph.addComputePass("di.shade", [&](PassBuilder&) {},
+            [&](VkCommandBuffer c) {
+                m_rtDirect->shade(c);
+                if (!m_rtDirect->denoises()) directToLighting();   // reference: the mean is the output
             });
         if (m_quality == RenderQuality::Realtime) {
-            m_renderGraph.addComputePass("rt.shadows.filter",
-                [&](PassBuilder&) {},
+            m_renderGraph.addComputePass("di.denoise", [&](PassBuilder&) {},
                 [&](VkCommandBuffer c) {
-                    m_rtShadow->filter(c);
-                    shadowsToLighting();
+                    m_rtDirect->denoise(c);
+                    directToLighting();
                 });
         }
     }
@@ -476,6 +489,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.lights = m_renderScene->lights();
                 gi.envMap = m_envView;
                 gi.envIntensity = m_envIntensity;
+                gi.emissionIsDirect = rtDirect;
                 m_rtGI->render(c, gi);
                 if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output
             });
@@ -510,11 +524,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_lightingPass->execute(c, frameIndex); });
     }
 
-    // RT shadow mask and GI reach lighting only from a frame that traced them: the
-    // RTShadow / RTGI passes above hand them over after a successful render(). Until
-    // then lighting falls back to CSM shadows and no indirect light.
+    // RT direct light and GI reach lighting only from a frame that traced them: their passes
+    // above hand them over after a successful run. Until then lighting loops over the lights
+    // (CSM for the sun) and has no indirect light.
     if (m_lightingPass) {
-        m_lightingPass->setRTShadowMask(VK_NULL_HANDLE);
+        m_lightingPass->setDirectLight(VK_NULL_HANDLE, VK_NULL_HANDLE);
         m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
 
@@ -673,7 +687,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     // Every screen-sized target follows the extent. A pass left at its creation size
     // is invisible to validation: the RT shadow raygen stores at gl_LaunchID into the
     // wrong texels (or past the image when the window grows) and lighting samples by UV.
-    if (m_rtShadow) m_rtShadow->resize(width, height);
+    if (m_rtDirect) m_rtDirect->resize(width, height);
     if (m_rtGI) m_rtGI->resize(width, height);
     if (m_sssPass) m_sssPass->onResize(width, height);
     if (m_ssrPass) m_ssrPass->onResize(width, height);
@@ -707,7 +721,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 void DeferredRenderer::resetTemporalState() {
     m_framesSinceReset = 0;
     m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
-    if (m_rtShadow) m_rtShadow->resetHistory();
+    if (m_rtDirect) m_rtDirect->resetHistory();
     if (m_rtGI) m_rtGI->resetHistory();
     if (m_postProcessing) m_postProcessing->resetHistory();
     if (m_culling) m_culling->resetHistory();   // the first frame draws in its late pass

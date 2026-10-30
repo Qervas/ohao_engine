@@ -371,9 +371,9 @@ names of `ohao/render/frame/pass_registry.hpp`. A window host answers for the fr
 presented; a headless host for its captures' frames (`E_STATE` before the first). One
 frame's passes sum to at most its `gpuMs`. To judge a renderer change, compare against the
 baseline `render_bench` records (`build/render_bench.json`, below in AGENTS.md's gates).
-Two fields appear only when something was cut: `shadowLightsDropped` (pixels with more
-lights worth an RT shadow than the 4 they trace) and `lightsOverflow` (lights left out of
-froxels that held more than 256; those pixels miss them). Seeing `lightsOverflow` means the
+One field appears only when something was cut: `lightsOverflow` (lights left out of
+froxels that held more than 256; those pixels miss them, where the lighting loop lights them:
+flashes, or every light without RT direct light). Seeing `lightsOverflow` means the
 scene packs too many lights' ranges into one place: shorten the ranges.
 
 A realtime window (`--realtime`, or `time_set {mode: "realtime"}`) also reports how it
@@ -404,7 +404,7 @@ the device once the host has one (`gpu: {name, driver, rayTracing, meshShaders}`
 in a window, after the first capture headless.
 
 `render_settings` reads the knobs that decide what a frame runs, and `set` changes them:
-`quality`, `rtShadows {enabled, maxLights 0–4}`, `rtGI {enabled, resolution half | full,
+`quality`, `rtDirect {enabled, candidates 1–32, spatial 0–8}`, `rtGI {enabled, resolution half | full,
 rays 1–32}`, `ssao`, `ssr`, `sss`, `geometry` (`auto`, `meshlets`, `instances`),
 `occlusionCulling`, `csm {cascades 1–4, size 512–4096}`, `ev100`, `tonemap`. A `set` merges (what
 it leaves out keeps its value), is checked against the limits before anything applies

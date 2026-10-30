@@ -129,18 +129,6 @@
      "doc": "lights.cluster (compute/light_cluster.slang): threads a froxel's workgroup, lights tested a round"},
     {"name": "kClusterNear", "type": "float", "value": 0.1,
      "doc": "clustered lighting: the first slice's near distance in metres (nearer pixels use slice 0)"},
-    {"name": "kShadowMaxLights", "type": "uint", "value": 8,
-     "doc": "RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each"},
-    {"name": "kShadowLightsPerPixel", "type": "uint", "value": 4,
-     "doc": "RT shadows, realtime: the lights a pixel traces at most, the most important first"},
-    {"name": "kShadowReferenceRays", "type": "uint", "value": 8,
-     "doc": "RT shadows, reference quality: rays a light a pixel a frame"},
-    {"name": "kShadowHistoryFrames", "type": "uint", "value": 16,
-     "doc": "RT shadows, realtime: the temporal accumulation's longest history (its smallest blend weight is 1/this)"},
-    {"name": "kShadowFilterTile", "type": "uint", "value": 16,
-     "doc": "RT shadows' filter: the pixels a workgroup filters, this many on a side"},
-    {"name": "kShadowFilterRadius", "type": "uint", "value": 2,
-     "doc": "RT shadows' filter: the spatial kernel's radius (5x5)"},
     {"name": "kGIWeighedLights", "type": "uint", "value": 16,
      "doc": "RT GI: a bounce weighs every light by what it gives when the frame has this many or fewer"},
     {"name": "kGILightCandidates", "type": "uint", "value": 8,
@@ -153,6 +141,16 @@
      "doc": "RT GI, realtime: the long temporal accumulation's longest history (its smallest blend weight is 1/this)"},
     {"name": "kGIFastHistoryFrames", "type": "uint", "value": 4,
      "doc": "RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one"},
+    {"name": "kDIHistoryCap", "type": "uint", "value": 20,
+     "doc": "ReSTIR DI (rt/restir_di.slang): last frame's reservoir counts at most this many times this frame's candidates"},
+    {"name": "kDIMaxCandidates", "type": "uint", "value": 32,
+     "doc": "ReSTIR DI: the most light samples a pixel draws a frame (render.settings rtDirect.candidates)"},
+    {"name": "kDIMaxSpatial", "type": "uint", "value": 8,
+     "doc": "ReSTIR DI: the most neighbours a pixel's spatial reuse combines (render.settings rtDirect.spatial)"},
+    {"name": "kDISpatialRadius", "type": "uint", "value": 30,
+     "doc": "ReSTIR DI: the spatial reuse's neighbours lie within this many pixels"},
+    {"name": "kDIHistoryFrames", "type": "uint", "value": 16,
+     "doc": "ReSTIR DI's denoiser (rt/di_denoise.slang): the temporal accumulation's longest history (its smallest blend weight is 1/this)"},
     {"name": "kGITile", "type": "uint", "value": 16,
      "doc": "RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side"},
     {"name": "kSSSTile", "type": "uint", "value": 16,
@@ -175,20 +173,6 @@
      "fields": [
        {"name": "iterations", "type": "uint", "doc": "hash rounds per element"}
      ]},
-    {"name": "ShadowLight", "doc": "one shadow-casting light as RT shadows trace it (a storage buffer of kShadowMaxLights)",
-     "fields": [
-       {"name": "positionAndType", "type": "float4", "doc": "xyz position (directional: its travel direction; rect: a corner); w type: 0 directional, 1 sphere, 2 rect"},
-       {"name": "edge1AndRadius", "type": "float4", "doc": "xyz the rect's first edge (a spot: its unit direction); w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)"},
-       {"name": "edge2AndRange", "type": "float4", "doc": "xyz the rect's second edge (a sphere: x the spot's outer-cone cosine, -2 a point light); w the range (0: unlimited)"},
-       {"name": "centreAndIntensity", "type": "float4", "doc": "xyz the light's centre (directional: the unit vector toward it), w its intensity: the per-pixel importance"}
-     ]},
-    {"name": "ShadowTracePush", "doc": "RT shadows' trace (rt/shadow_trace.slang) push constants",
-     "fields": [
-       {"name": "extent", "type": "uint4", "doc": "x width, y height, z lights, w lights a pixel at most (realtime)"},
-       {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z quality (0 realtime, 1 reference), w rays a light"},
-       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the filter's depth guide is the distance from it)"},
-       {"name": "history", "type": "uint4", "doc": "x reference: the frames already in the running means (0: start them again)"}
-     ]},
     {"name": "ShadowFilterPush", "doc": "RT shadows' filter (rt/shadow_filter.slang) push constants",
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x width, y height, z lights, w history frames (0: none)"},
@@ -205,7 +189,7 @@
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x, y the trace's size (realtime: half the frame's, rounded up, or the frame's at full resolution); z, w the frame's"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z rays a pixel, w lights"},
-       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)"},
+       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, 2 when RT direct light lights emissive surfaces (a hit's emission is then not brought back), z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the denoiser's depth guide is the distance from it); w the environment's intensity (Environment.intensity: a miss brings back the environment times it)"}
      ]},
     {"name": "SSAOPush", "doc": "SSAO (compute/ssao.slang) push constants, both entries",
@@ -239,6 +223,13 @@
        {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
        {"name": "params", "type": "uint4", "doc": "x history frames (0: none), y the a-trous step in pixels, z the trace is the frame >> z (1 half resolution, 0 full)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the upsample's depth guide)"}
+     ]},
+    {"name": "DIPush", "doc": "ReSTIR DI (rt/restir_di.slang) and its denoiser (rt/di_denoise.slang) push constants",
+     "fields": [
+       {"name": "extent", "type": "uint4", "doc": "x width, y height, z frame index since the last temporal reset, w render seed"},
+       {"name": "params", "type": "uint4", "doc": "x candidates a pixel, y spatial neighbours, z flags (1 reference, 2 last frame's reservoirs and history valid), w reference: the frames already in the running mean; the denoiser: the a-trous step in pixels"},
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the guides' distance is from it)"},
+       {"name": "weather", "type": "float4", "doc": "x wetness, y snow cover, z frost cover: the lighting pass's, so the target is the material it shades"}
      ]},
     {"name": "MeshletGpu", "doc": "one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh",
      "fields": [
@@ -276,7 +267,7 @@
        {"name": "position", "type": "float4", "doc": "xyz position (world; a rectangle's centre), w type: 0 directional, 1 point, 2 spot, 3 rectangle (area light)"},
        {"name": "direction", "type": "float4", "doc": "xyz direction (a rectangle's first edge), w range: point and spot light contributes nothing past it (a rectangle has none)"},
        {"name": "color", "type": "float4", "doc": "xyz colour, w intensity (a rectangle's radiance, I / (4 pi r^2))"},
-       {"name": "params", "type": "float4", "doc": "x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point); a rectangle's xyz is its second edge; w RT shadow channel (-1 never, 0..kShadowMaxLights-1)"}
+       {"name": "params", "type": "float4", "doc": "x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point); a rectangle's xyz is its second edge; w 1 casts shadows, 0 casts none, -1 a flash (RT direct light lights every light but flashes)"}
      ]},
     {"name": "ClusterPush", "doc": "lights.cluster (compute/light_cluster.slang) push constants",
      "fields": [

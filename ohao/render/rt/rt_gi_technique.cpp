@@ -408,7 +408,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     shared::GITracePush pc{};
     pc.extent = u4(m_traceExtent.width, m_traceExtent.height, m_width, m_height);
     pc.seed = u4(input.renderSeed, input.frameIndex, m_rays, lightCount);
-    pc.flags = u4(reference ? 1u : 0u, input.envMap ? 1u : 0u, reference ? m_refFrames : 0u, m_shift);
+    pc.flags = u4(reference ? 1u : 0u, (input.envMap ? 1u : 0u) | (input.emissionIsDirect ? 2u : 0u),
+                  reference ? m_refFrames : 0u, m_shift);
     pc.cameraPos = f4(input.cameraPos, input.envIntensity);
     vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);

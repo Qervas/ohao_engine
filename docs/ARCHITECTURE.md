@@ -224,7 +224,7 @@ skin                only instances whose palette changed: deform their own mesh 
 skin.bounds         their meshlets' spheres from the deformed vertices
 rt.blas.refit       their BLASes refit to the pose (rebuilt every 120 refits)
 scene.upload        table rows, BLAS builds, TLAS build/refit, the draw table
-csm                 shadow cascades, only when rt.shadows does not run   [csm.cascades, csm.size]
+csm                 shadow cascades, only when RT direct light does not run   [csm.cascades, csm.size]
 cull.instances      early lists: last frame's visible draws in the frustum   [occlusionCulling]
 gbuffer.early       G-buffer cleared, early lists drawn (instances; meshlets [geometry])
 hiz.build           max-depth pyramid of the early depth
@@ -232,11 +232,13 @@ cull.late           every draw vs frustum and pyramid: the newly visible
 gbuffer.late        late lists drawn
 lights.cluster      froxel light lists (16x9x24, up to 256 each)
 ssao                half-res horizon AO, blurred   [ssao, or post "ssao"]
-rt.shadows          a ray to each of a pixel's most important lights   [rtShadows.enabled, .maxLights]
-rt.shadows.filter   5x5 filter + temporal (realtime quality)
+emissive.lights     the emissive triangles as lights, their power's mips (with the path tracer)
+di.sample           ReSTIR DI: candidates by RIS, last frame's reservoir, a visibility ray   [rtDirect.*]
+di.shade            ReSTIR DI: neighbours' reservoirs, the final shadow ray, diffuse + specular
+di.denoise          temporal accumulation, 3 a-trous steps (realtime quality)
 rt.gi               one-bounce GI, half res 2 rays by default   [rtGI.enabled, .resolution, .rays]
 rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
-lighting            froxel list + IBL + shadows + GI into the HDR image (+ env specular, its weight)
+lighting            RT direct light (or the froxel list + CSM) + IBL + GI into the HDR image (+ env specular, its weight)
 vfx.expand          the effect records' particles in closed form, lit at their centres (sub-project 12)
 vfx.sort            each alpha batch's particles back to front (integer keys)
 sss                 subsurface blur on classified tiles   [sss]
@@ -531,7 +533,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-39 passes registered; budget names matching none: []
+40 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 
@@ -653,7 +655,7 @@ kind of record.
    `assets/vfx/README.md`.
 2. **The effect:** an entry in `assets/vfx/slice.vfx.json`'s `effects`: `emitters` (`count`, `life`,
    `speed`, `size`, colour and alpha curves, `blend`, `lit`, `texture`, `frames`), and optionally a
-   `light` (a flash that fades over its `time`) and a `proxy` (smoke spheres for RT shadows and GI).
+   `light` (a flash that fades over its `time`) and a `proxy` (smoke spheres for RT direct light and GI).
    Every error names its JSON pointer; `ohao schema vfx-set` writes the schema.
 3. **The binding:** the set's `events` name it: `shot` (the muzzle), `hit` (per surface, with a
    `fallback`), `explode` (the boom, smoke and scorch). A level node takes an emitter with the `vfx`

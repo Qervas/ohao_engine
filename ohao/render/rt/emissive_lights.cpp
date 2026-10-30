@@ -35,10 +35,13 @@ bool createDeviceBuffer(VkDevice device, VkPhysicalDevice physical, VkDeviceSize
 
 }  // namespace
 
-bool EmissiveLights::initialize(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t textureCapacity) {
+bool EmissiveLights::initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkDescriptorSetLayout texturesLayout,
+                                bool rayTracingPipeline) {
     m_device = device;
     m_physical = physicalDevice;
-    m_textureCapacity = std::max(textureCapacity, 1u);
+    m_readers = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                (rayTracingPipeline ? VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR : VkPipelineStageFlags{0});
+    if (texturesLayout == VK_NULL_HANDLE) return false;
 
     const VkDescriptorSetLayoutBinding collect[] = {
         rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
@@ -46,21 +49,11 @@ bool EmissiveLights::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         rtc::layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
         rtc::layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
         rtc::layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-        VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_textureCapacity,
-                                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
-    // The texture table is partially bound: a frame without textures writes none of it.
-    VkDescriptorBindingFlags collectFlags[11] = {};
-    collectFlags[10] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flagsInfo.bindingCount = 11;
-    flagsInfo.pBindingFlags = collectFlags;
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.pNext = &flagsInfo;
-    li.bindingCount = 11;
+    li.bindingCount = 10;
     li.pBindings = collect;
     if (vkCreateDescriptorSetLayout(device, &li, nullptr, &m_collectSetLayout) != VK_SUCCESS) return false;
-    li.pNext = nullptr;
     const VkDescriptorSetLayoutBinding reduce[] = {rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
                                                    rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
     li.bindingCount = 2;
@@ -70,12 +63,11 @@ bool EmissiveLights::initialize(VkDevice device, VkPhysicalDevice physicalDevice
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_FRAMES_IN_FLIGHT + 2 * kMaxLevels},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_textureCapacity * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pi.maxSets = MAX_FRAMES_IN_FLIGHT + kMaxLevels;
-    pi.poolSizeCount = 3;
+    pi.poolSizeCount = 2;
     pi.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device, &pi, nullptr, &m_pool) != VK_SUCCESS) return false;
     std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
@@ -86,8 +78,9 @@ bool EmissiveLights::initialize(VkDevice device, VkPhysicalDevice physicalDevice
     ai.pSetLayouts = layouts.data();
     if (vkAllocateDescriptorSets(device, &ai, m_collectSets.data()) != VK_SUCCESS) return false;
 
-    if (!rtc::createComputePipeline(device, "rt_emissive_collect.slang.spv", "main", m_collectSetLayout, 0,
-                                    m_collectLayout, m_collect) ||
+    const VkDescriptorSetLayout collectSets[2] = {m_collectSetLayout, texturesLayout};
+    if (!rtc::createComputePipeline(device, "rt_emissive_collect.slang.spv", "main", collectSets, 0, m_collectLayout,
+                                    m_collect) ||
         !rtc::createComputePipeline(device, "rt_emissive_reduce.slang.spv", "main", m_reduceSetLayout, 0, m_reduceLayout,
                                     m_reduce)) {
         OHAO_LOG(Error, render, "emissive lights: the pipelines could not be created");
@@ -287,8 +280,17 @@ void EmissiveLights::prepare(uint32_t frameSlot, const std::vector<RenderScene::
     }
 }
 
-void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const SceneBuffers& scene,
-                            std::span<const VkDescriptorImageInfo> textures) {
+void EmissiveLights::prepare(uint32_t frameSlot, const RenderScene& scene) {
+    prepare(frameSlot, scene.emissiveInstances(), scene.emissiveVersion(), scene.instanceSlotEnd(),
+            scene.analyticLightPower());
+}
+
+EmissiveLights::SceneBuffers EmissiveLights::buffersOf(const RenderScene& scene) {
+    return {scene.vertexArena(),    scene.indexArena(),     scene.meshTable(),         scene.triangleSlotBuffer(),
+            scene.materialBuffer(), scene.instanceBuffer(), scene.materialRefBuffer()};
+}
+
+void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const SceneBuffers& scene, VkDescriptorSet textures) {
     if (!m_device || frameSlot >= MAX_FRAMES_IN_FLIGHT || !m_power) return;
     if (m_powerFresh) {
         // GENERAL for good: the passes write it as storage and the path tracer reads it sampled.
@@ -303,7 +305,7 @@ void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const Scene
                              nullptr, 1, &b);
         m_powerFresh = false;
     }
-    if (m_count == 0) return;   // the header says none: nothing reads the image or the lights
+    if (m_count == 0 || textures == VK_NULL_HANDLE) return;   // the header says none: nothing reads the image or lights
 
     const VkDescriptorSet set = m_collectSets[frameSlot];
     const VkDescriptorBufferInfo infos[9] = {
@@ -313,7 +315,7 @@ void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const Scene
         {scene.materialRefs, 0, VK_WHOLE_SIZE}, {m_ranges[frameSlot].buffer, 0, VK_WHOLE_SIZE},
         {m_lights, 0, VK_WHOLE_SIZE},
     };
-    VkWriteDescriptorSet w[11];
+    VkWriteDescriptorSet w[10];
     for (uint32_t i = 0; i < 9; ++i) {
         w[i] = rtc::descriptorWrite(set, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         w[i].pBufferInfo = &infos[i];
@@ -321,23 +323,16 @@ void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const Scene
     const VkDescriptorImageInfo level0{VK_NULL_HANDLE, m_levelViews[0], VK_IMAGE_LAYOUT_GENERAL};
     w[9] = rtc::descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
     w[9].pImageInfo = &level0;
-    uint32_t writes = 10;
-    if (!textures.empty()) {
-        w[10] = rtc::descriptorWrite(set, 10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-        w[10].descriptorCount = static_cast<uint32_t>(std::min<std::size_t>(textures.size(), m_textureCapacity));
-        w[10].pImageInfo = textures.data();
-        writes = 11;
-    }
-    vkUpdateDescriptorSets(m_device, writes, w, 0, nullptr);
+    vkUpdateDescriptorSets(m_device, 10, w, 0, nullptr);
 
-    // Last frame's trace read the lights and the image (queue order); this frame rewrites them.
+    // Last frame's readers read the lights and the image (queue order); this frame rewrites them.
     const VkMemoryBarrier before = memoryBarrier(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                                                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
+    vkCmdPipelineBarrier(cmd, m_readers, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_collect);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_collectLayout, 0, 1, &set, 0, nullptr);
+    const VkDescriptorSet sets[2] = {set, textures};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_collectLayout, 0, 2, sets, 0, nullptr);
     vkCmdDispatch(cmd, (m_frameSide * m_frameSide + 63) / 64, 1, 1);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_reduce);
@@ -351,8 +346,7 @@ void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const Scene
     }
 
     const VkMemoryBarrier after = memoryBarrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 1,
-                         &after, 0, nullptr, 0, nullptr);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, m_readers, 0, 1, &after, 0, nullptr, 0, nullptr);
 }
 
 }  // namespace ohao::render

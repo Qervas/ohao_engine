@@ -179,9 +179,10 @@ struct RenderCaptureParams {
 enum class GIResolution : uint8_t { half, full };
 enum class GeometryPath : uint8_t { automatic, meshlets, instances };   // "auto", "meshlets", "instances"
 
-struct RtShadowsSettings {
+struct RtDirectSettings {
     bool enabled{true};
-    int32_t maxLights{4};
+    int32_t candidates{4};
+    int32_t spatial{2};
 };
 struct RtGISettings {
     bool enabled{true};
@@ -202,7 +203,7 @@ struct VfxSettings {
 };
 struct RenderSettings {
     Quality quality{Quality::realtime};
-    RtShadowsSettings rtShadows;
+    RtDirectSettings rtDirect;
     RtGISettings rtGI;
     bool ssao{false};
     bool ssr{true};

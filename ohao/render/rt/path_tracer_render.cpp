@@ -42,28 +42,15 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // This frame slot's fence was waited: its set is no longer read by the GPU.
     const VkDescriptorSet set = m_descriptorSets[frameSlot];
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
-        !m_instances || !m_materialRefs || !m_lightBuffer) return;
+        !m_instances || !m_materialRefs || !m_lightBuffer || !m_emissive) return;   // the renderer's tables
     const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
-    // Bindless textures (binding 12 here, the emissive lights' collect pass too). The whole array is
-    // written (entries past the table's views repeat view 0), so no index below the capacity reads an
-    // unwritten descriptor; the shaders treat indices >= the capacity as no texture.
-    std::vector<VkDescriptorImageInfo> texInfos;
-    const uint32_t textureCount = m_bindlessTextureCount > 0 ? m_bindlessCapacity : 0u;
-    texInfos.resize(textureCount);
-    for (uint32_t i = 0; i < textureCount; i++) {
-        const uint32_t src = i < m_bindlessTextureCount ? i : 0u;
-        texInfos[i].imageView = m_bindlessImageViews[src];
-        texInfos[i].sampler = m_bindlessSamplers[src];
-        texInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    }
-
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
-    m_emissive.prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
+    m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
     timePass("emissive.lights");
-    m_emissive.record(cmd, frameSlot,
-                      {m_vertexArena, m_indexArena, m_meshTable, m_triangleSlots, m_materialTable, m_instances,
-                       m_materialRefs},
-                      texInfos);
+    m_emissive->record(cmd, frameSlot,
+                       {m_vertexArena, m_indexArena, m_meshTable, m_triangleSlots, m_materialTable, m_instances,
+                        m_materialRefs},
+                       m_textureSet);
     // The frame's setup is timed with its first trace.
     timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update" : "pt.trace");
 
@@ -185,7 +172,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const VkDescriptorImageInfo emissionInfo{VK_NULL_HANDLE, m_emissionAOVView, VK_IMAGE_LAYOUT_GENERAL};
     addImage(13, &emissionInfo);
     // Binding 43: the emissive lights' power image, every level, sampled (read with Load).
-    const VkDescriptorImageInfo powerInfo{VK_NULL_HANDLE, m_emissive.powerView(), VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo powerInfo{VK_NULL_HANDLE, m_emissive->powerView(), VK_IMAGE_LAYOUT_GENERAL};
     {
         VkWriteDescriptorSet& w = writes[writeCount++];
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -202,8 +189,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         {4, m_vertexArena}, {5, m_indexArena}, {8, m_meshTable}, {9, m_triangleSlots},
         {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
         {38, m_openpbrTables.buffer()}, {39, m_radianceCache.keys()}, {40, m_radianceCache.accum()},
-        {41, m_radianceCache.resolved()}, {42, m_emissive.lightBuffer()}, {44, m_emissive.rangeBuffer(frameSlot)},
-        {45, m_emissive.firstBuffer(frameSlot)},
+        {41, m_radianceCache.resolved()}, {42, m_emissive->lightBuffer()}, {44, m_emissive->rangeBuffer(frameSlot)},
+        {45, m_emissive->firstBuffer(frameSlot)},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -217,7 +204,18 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         w.pBufferInfo = &sceneBufferInfos[b];
     }
 
-    // Binding 12: bindless textures (texInfos, above).
+    // Binding 12: bindless textures. The whole array is written (entries past the table's views
+    // repeat view 0), so no index below the capacity reads an unwritten descriptor; the shaders
+    // treat indices >= the capacity as no texture.
+    std::vector<VkDescriptorImageInfo> texInfos;
+    const uint32_t textureCount = m_bindlessTextureCount > 0 ? m_bindlessCapacity : 0u;
+    texInfos.resize(textureCount);
+    for (uint32_t i = 0; i < textureCount; i++) {
+        const uint32_t src = i < m_bindlessTextureCount ? i : 0u;
+        texInfos[i].imageView = m_bindlessImageViews[src];
+        texInfos[i].sampler = m_bindlessSamplers[src];
+        texInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     if (textureCount > 0) {
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = set;

@@ -60,19 +60,6 @@ namespace ohao {
 // ─── Technique concepts (document virtual surfaces for static helpers) ──────
 
 template<typename T>
-concept ShadowTechniqueLike = requires(T t, VkCommandBuffer cmd, const ShadowInput& in,
-                                        VkDevice dev, VkPhysicalDevice phys,
-                                        uint32_t w, uint32_t h) {
-    { t.getName() } -> std::convertible_to<const char*>;
-    { t.needsRT() } -> std::convertible_to<bool>;
-    { t.init(dev, phys, w, h) } -> std::convertible_to<bool>;
-    { t.resize(w, h) } -> std::same_as<void>;
-    { t.render(cmd, in) } -> std::same_as<void>;
-    { t.getOutput() } -> std::convertible_to<ShadowOutput>;
-    { t.destroy() } -> std::same_as<void>;
-};
-
-template<typename T>
 concept GITechniqueLike = requires(T t, VkCommandBuffer cmd, const GIInput& in,
                                    VkDevice dev, VkPhysicalDevice phys,
                                    uint32_t w, uint32_t h) {
@@ -84,9 +71,6 @@ concept GITechniqueLike = requires(T t, VkCommandBuffer cmd, const GIInput& in,
     { t.getOutput() } -> std::convertible_to<GIOutput>;
     { t.destroy() } -> std::same_as<void>;
 };
-
-template<ShadowTechniqueLike T>
-inline constexpr bool kIsShadowTechnique = true;
 
 template<GITechniqueLike T>
 inline constexpr bool kIsGITechnique = true;

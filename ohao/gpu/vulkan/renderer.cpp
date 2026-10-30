@@ -171,6 +171,17 @@ bool VulkanRenderer::initialize() {
             return false;
         }
 
+        // The emissive triangle lights, once the device's ray tracing is known.
+        if (m_rayQueryEnabled && m_textureManager) {
+            m_emissiveLights = std::make_unique<render::EmissiveLights>();
+            if (!m_emissiveLights->initialize(m_device, m_physicalDevice, m_textureManager->getDescriptorSetLayout(),
+                                              m_renderScene->rtSupported())) {
+                OHAO_LOG(Warn, gpu, "the emissive light table could not be created: emitters light by bounces only");
+                m_emissiveLights->destroy();
+                m_emissiveLights.reset();
+            }
+        }
+
         if (m_presentTarget && !createPresentation()) {
             OHAO_LOG(Error, gpu, "Failed to create swapchain");
             return false;
@@ -216,6 +227,9 @@ void VulkanRenderer::shutdown() {
             m_deferredRenderer.reset();
         }
         m_previewPass.reset();
+
+        // The emissive table (its readers are gone), then the texture table its pipeline names.
+        if (m_emissiveLights) { m_emissiveLights->destroy(); m_emissiveLights.reset(); }
 
         // Cleanup texture manager
         if (m_textureManager) {
@@ -308,6 +322,8 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
         // Binding 12 covers the whole texture table: materials store its slot indices.
         slot->setBindlessCapacity(m_textureManager ? m_textureManager->getMaxTextures()
                                                    : PathTracer::kDefaultBindlessCapacity);
+        slot->setEmissiveLights(m_emissiveLights.get(),
+                                m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE);
         if (!slot->init(m_device, m_physicalDevice, m_width, m_height,
                         m_instance, m_graphicsQueueFamily,
                         m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
@@ -354,10 +370,10 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
 
 void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
     m_renderQuality = s.quality;
-    m_rtShadowsWanted = s.rtShadows;
+    m_rtDirectWanted = s.rtDirect;
     if (!m_deferredRenderer) return;
     DeferredRenderer& d = *m_deferredRenderer;
-    d.setShadowLightsPerPixel(s.rtShadowMaxLights);
+    d.setDirectSampling(s.rtDirectCandidates, s.rtDirectSpatial);
     d.setRTGIEnabled(s.rtGI);
     if (s.rtGIFullResolution != d.rtGIFullResolution() || s.rtGIRays != d.rtGIRays())
         d.setRTGIRealtime(s.rtGIFullResolution, s.rtGIRays);
@@ -389,10 +405,11 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
 VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     RenderSettings s;
     s.quality = m_renderQuality;
-    s.rtShadows = m_rtShadowsWanted;
+    s.rtDirect = m_rtDirectWanted;
     if (!m_deferredRenderer) return s;
     DeferredRenderer& d = *m_deferredRenderer;
-    s.rtShadowMaxLights = d.shadowLightsPerPixel();
+    s.rtDirectCandidates = d.directCandidates();
+    s.rtDirectSpatial = d.directSpatial();
     s.rtGI = d.rtGIEnabled();
     s.rtGIFullResolution = d.rtGIFullResolution();
     s.rtGIRays = d.rtGIRays();
@@ -685,18 +702,6 @@ std::vector<render::FrameTiming> VulkanRenderer::frameTimings(std::size_t n) {
         });
     }
     return m_passTimer.recent(n);
-}
-
-std::optional<VulkanRenderer::ShadowLightsDropped> VulkanRenderer::shadowLightsDropped() {
-    if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
-    RTShadowTechnique* shadows = m_deferredRenderer->rtShadow();
-    if (!shadows) return std::nullopt;
-    shadows->collect([&](uint32_t slot) {
-        return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
-    });
-    const auto d = shadows->latestDropped();
-    if (!d) return std::nullopt;
-    return ShadowLightsDropped{d->frame, d->pixels};
 }
 
 std::optional<float> VulkanRenderer::meteredEv100() {

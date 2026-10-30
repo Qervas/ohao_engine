@@ -123,18 +123,6 @@ const uint kClusterMaxLights = 256u;
 const uint kClusterGroupSize = 64u;
 // clustered lighting: the first slice's near distance in metres (nearer pixels use slice 0)
 const float kClusterNear = 0.1;
-// RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
-const uint kShadowMaxLights = 8u;
-// RT shadows, realtime: the lights a pixel traces at most, the most important first
-const uint kShadowLightsPerPixel = 4u;
-// RT shadows, reference quality: rays a light a pixel a frame
-const uint kShadowReferenceRays = 8u;
-// RT shadows, realtime: the temporal accumulation's longest history (its smallest blend weight is 1/this)
-const uint kShadowHistoryFrames = 16u;
-// RT shadows' filter: the pixels a workgroup filters, this many on a side
-const uint kShadowFilterTile = 16u;
-// RT shadows' filter: the spatial kernel's radius (5x5)
-const uint kShadowFilterRadius = 2u;
 // RT GI: a bounce weighs every light by what it gives when the frame has this many or fewer
 const uint kGIWeighedLights = 16u;
 // RT GI: past kGIWeighedLights, the candidates a bounce draws by power (an alias table) and resamples by what they give
@@ -147,6 +135,16 @@ const uint kGIReferenceRays = 32u;
 const uint kGIHistoryFrames = 32u;
 // RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one
 const uint kGIFastHistoryFrames = 4u;
+// ReSTIR DI (rt/restir_di.slang): last frame's reservoir counts at most this many times this frame's candidates
+const uint kDIHistoryCap = 20u;
+// ReSTIR DI: the most light samples a pixel draws a frame (render.settings rtDirect.candidates)
+const uint kDIMaxCandidates = 32u;
+// ReSTIR DI: the most neighbours a pixel's spatial reuse combines (render.settings rtDirect.spatial)
+const uint kDIMaxSpatial = 8u;
+// ReSTIR DI: the spatial reuse's neighbours lie within this many pixels
+const uint kDISpatialRadius = 30u;
+// ReSTIR DI's denoiser (rt/di_denoise.slang): the temporal accumulation's longest history (its smallest blend weight is 1/this)
+const uint kDIHistoryFrames = 16u;
 // RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side
 const uint kGITile = 16u;
 // SSS: the side of a classified tile in pixels (a workgroup of the blur covers one)
@@ -169,22 +167,6 @@ struct CalibratePush {
     uint iterations;   // hash rounds per element
 };
 
-// one shadow-casting light as RT shadows trace it (a storage buffer of kShadowMaxLights)
-struct ShadowLight {
-    vec4 positionAndType;   // xyz position (directional: its travel direction; rect: a corner); w type: 0 directional, 1 sphere, 2 rect
-    vec4 edge1AndRadius;   // xyz the rect's first edge (a spot: its unit direction); w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)
-    vec4 edge2AndRange;   // xyz the rect's second edge (a sphere: x the spot's outer-cone cosine, -2 a point light); w the range (0: unlimited)
-    vec4 centreAndIntensity;   // xyz the light's centre (directional: the unit vector toward it), w its intensity: the per-pixel importance
-};
-
-// RT shadows' trace (rt/shadow_trace.slang) push constants
-struct ShadowTracePush {
-    uvec4 extent;   // x width, y height, z lights, w lights a pixel at most (realtime)
-    uvec4 seed;   // x render seed, y frame index since the last temporal reset, z quality (0 realtime, 1 reference), w rays a light
-    vec4 cameraPos;   // xyz the camera's position (the filter's depth guide is the distance from it)
-    uvec4 history;   // x reference: the frames already in the running means (0: start them again)
-};
-
 // RT shadows' filter (rt/shadow_filter.slang) push constants
 struct ShadowFilterPush {
     uvec4 extent;   // x width, y height, z lights, w history frames (0: none)
@@ -203,7 +185,7 @@ struct GILight {
 struct GITracePush {
     uvec4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up, or the frame's at full resolution); z, w the frame's
     uvec4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
-    uvec4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)
+    uvec4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, 2 when RT direct light lights emissive surfaces (a hit's emission is then not brought back), z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)
     vec4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it); w the environment's intensity (Environment.intensity: a miss brings back the environment times it)
 };
 
@@ -242,6 +224,14 @@ struct GIDenoisePush {
     uvec4 extent;   // x, y the half-resolution size; z, w the frame's
     uvec4 params;   // x history frames (0: none), y the a-trous step in pixels, z the trace is the frame >> z (1 half resolution, 0 full)
     vec4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
+};
+
+// ReSTIR DI (rt/restir_di.slang) and its denoiser (rt/di_denoise.slang) push constants
+struct DIPush {
+    uvec4 extent;   // x width, y height, z frame index since the last temporal reset, w render seed
+    uvec4 params;   // x candidates a pixel, y spatial neighbours, z flags (1 reference, 2 last frame's reservoirs and history valid), w reference: the frames already in the running mean; the denoiser: the a-trous step in pixels
+    vec4 cameraPos;   // xyz the camera's position (the guides' distance is from it)
+    vec4 weather;   // x wetness, y snow cover, z frost cover: the lighting pass's, so the target is the material it shades
 };
 
 // one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
@@ -285,7 +275,7 @@ struct LightGpu {
     vec4 position;   // xyz position (world; a rectangle's centre), w type: 0 directional, 1 point, 2 spot, 3 rectangle (area light)
     vec4 direction;   // xyz direction (a rectangle's first edge), w range: point and spot light contributes nothing past it (a rectangle has none)
     vec4 color;   // xyz colour, w intensity (a rectangle's radiance, I / (4 pi r^2))
-    vec4 params;   // x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point); a rectangle's xyz is its second edge; w RT shadow channel (-1 never, 0..kShadowMaxLights-1)
+    vec4 params;   // x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point); a rectangle's xyz is its second edge; w 1 casts shadows, 0 casts none, -1 a flash (RT direct light lights every light but flashes)
 };
 
 // lights.cluster (compute/light_cluster.slang) push constants

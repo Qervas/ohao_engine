@@ -320,6 +320,12 @@ void VulkanRenderer::uploadEnvironmentMap() {
 
 void VulkanRenderer::bindRTTextures(IRTRendererProfile& renderer) {
     if (!m_textureManager) return;
+    collectRTTextures();
+    renderer.setBindlessTextures(m_rtTextureViews, m_rtTextureSamplers);
+}
+
+void VulkanRenderer::collectRTTextures() {
+    if (!m_textureManager) return;
     // Every live slot of the one bindless table, index = bindless index. Holes (freed
     // slots) get the default white texture: the path tracer writes the array densely
     // up to its binding capacity (the table's capacity, set in ensureRTRenderer).
@@ -334,7 +340,6 @@ void VulkanRenderer::bindRTTextures(IRTRendererProfile& renderer) {
                                      ? m_envSampler
                                      : m_textureManager->getDefaultSampler();
     }
-    renderer.setBindlessTextures(m_rtTextureViews, m_rtTextureSamplers);
 }
 
 void VulkanRenderer::destroyEnvSamplingBuffer() {

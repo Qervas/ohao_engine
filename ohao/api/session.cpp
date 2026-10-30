@@ -86,7 +86,7 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
          "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
          "saved; captures default to them. E_STATE on a host that renders nothing."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, ev100?, skinning?, vfx?, latency?, pacing?, audio?}",
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, vfx?, latency?, pacing?, audio?}",
          "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
          "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
@@ -844,7 +844,6 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
         }
         out.endArray();
     }
-    if (st->shadowLightsDropped) { out.key("shadowLightsDropped"); out.uint64(*st->shadowLightsDropped); }
     if (st->lightsOverflow) { out.key("lightsOverflow"); out.uint64(*st->lightsOverflow); }
     if (st->ev100) { out.key("ev100"); out.float32(*st->ev100); }
     if (const auto& k = st->skinning) {

@@ -193,15 +193,19 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("auto", GeometryPath::automatic, "Meshlets for draws of 4,096 triangles or more, instances below")
         .value("meshlets", GeometryPath::meshlets, "Every draw with meshlets")
         .value("instances", GeometryPath::instances, "Every draw instanced");
-    r.type<RtShadowsSettings>("RtShadowsSettings").doc("Ray-traced shadows (without them: cascaded shadow maps)")
-        .field("enabled", &RtShadowsSettings::enabled).doc("Trace RT shadows (needs ray tracing)")
-        .field("maxLights", &RtShadowsSettings::maxLights).doc("Realtime: the lights a pixel traces, most important first")
-            .unitless().min(0).max(4);
+    r.type<RtDirectSettings>("RtDirectSettings")
+        .doc("Ray-traced direct light: ReSTIR DI over every light and emissive triangle (without it: a loop over the "
+             "lights, cascaded shadow maps for the sun)")
+        .field("enabled", &RtDirectSettings::enabled).doc("Resample and trace direct light (needs ray tracing)")
+        .field("candidates", &RtDirectSettings::candidates).doc("Light samples a pixel draws a frame")
+            .unitless().min(1).max(32)
+        .field("spatial", &RtDirectSettings::spatial).doc("Realtime: neighbours whose samples a pixel reuses")
+            .unitless().min(0).max(8);
     r.type<RtGISettings>("RtGISettings").doc("Ray-traced one-bounce indirect light")
         .field("enabled", &RtGISettings::enabled).doc("Trace RT GI (needs ray tracing); off: no indirect light")
         .field("resolution", &RtGISettings::resolution).doc("Realtime trace resolution")
         .field("rays", &RtGISettings::rays).doc("Realtime: rays a pixel").unitless().min(1).max(32);
-    r.type<CsmSettings>("CsmSettings").doc("Cascaded shadow maps: the fallback without RT shadows")
+    r.type<CsmSettings>("CsmSettings").doc("Cascaded shadow maps: the fallback without RT direct light")
         .field("cascades", &CsmSettings::cascades).doc("Cascades drawn").unitless().min(1).max(4)
         .field("size", &CsmSettings::size).doc("Each cascade's size").unit("px").min(512).max(4096);
     r.type<VfxSettings>("VfxSettings").doc("Effects' presentation switches (A/B captures)")
@@ -209,10 +213,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("soft", &VfxSettings::soft).doc("Soft particle fade (off: hard)")
         .field("tracers", &VfxSettings::tracers).doc("Tracers")
         .field("decals", &VfxSettings::decals).doc("Decals")
-        .field("smokeInGi", &VfxSettings::smokeInGi).doc("Smoke shades RT shadows and GI");
+        .field("smokeInGi", &VfxSettings::smokeInGi).doc("Smoke shades RT direct light and GI");
     r.type<RenderSettings>("RenderSettings").doc("The host's renderer settings; the defaults are the budgeted frame")
         .field("quality", &RenderSettings::quality).doc("Deferred quality")
-        .field("rtShadows", &RenderSettings::rtShadows).doc("RT shadows")
+        .field("rtDirect", &RenderSettings::rtDirect).doc("RT direct light")
         .field("rtGI", &RenderSettings::rtGI).doc("RT GI")
         .field("ssao", &RenderSettings::ssao).doc("Screen-space ambient occlusion")
         .field("ssr", &RenderSettings::ssr).doc("Screen-space reflections")

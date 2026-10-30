@@ -12,18 +12,19 @@
 //                   light does not: the mean, overall within 1% and per 32x32 block within 5%.
 //   in view         the same room seen with its lights: the point's and the area light's emitters'
 //                   centre pixels are bright, the downward spot's (the camera outside its cone) dark;
-//                   every pixel that changed by more than 1 lies on an emitter's footprint, and
-//                   the 1-LSB changes around it within 24 px: the deferred frame's screen-space
-//                   filters (RT GI's and RT shadows' denoisers) take the mesh's depth among a
-//                   pixel's neighbours (deferred and path traced).
+//                   past an emitter's footprint the same light (the mean overall within 1%, per
+//                   32x32 block within 5%): RT direct light's reuse reads its neighbours' samples
+//                   within 30 px and its denoiser and RT GI's take the mesh's depth among a pixel's
+//                   neighbours, so the samples change there and the light does not (as the path
+//                   tracer's do everywhere).
 //   spot            the spot turned toward the camera: from inside its cone its emitter is bright.
 //   motion          a moved point and area light: their emitters' prevWorld is last frame's
 //                   placement (the motion vector TAA reprojects with); a frame later, the world.
 //   taa             a point light moving ~1.5 px a frame under TAA: its mesh is as bright as the
 //                   same light held still (it was 4.9 darker, its history the background).
-//   gun             a first-person gun (ViewModel, sub-project 9 test 21) changes no pixel past 24 px of
-//                   its footprint: no CSM cascade, shadow or GI ray sees it; the same box placed in
-//                   the world at its drawn pose does shadow the room.
+//   gun             a first-person gun (ViewModel, sub-project 9 test 21) changes no light past 24 px of
+//                   its footprint (the same light, as above): no CSM cascade, shadow or GI ray sees it;
+//                   the same box placed in the world at its drawn pose does shadow the room.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "common/materials.hpp"
@@ -208,7 +209,7 @@ Image capture(const std::string& scenePath, Mode mode, bool emitters, bool viewM
     host.renderer()->renderScene().setLightEmitters(emitters);
     if (mode == Mode::DeferredCsm) {
         VulkanRenderer::RenderSettings s = host.renderer()->renderSettings();
-        s.rtShadows = false;
+        s.rtDirect = false;
         host.renderer()->setRenderSettings(s);
     }
     r.mode = mode == Mode::PathTraced ? "rt_offline" : "deferred";
@@ -381,16 +382,11 @@ void in_view_emitters_change_only_their_pixels() {
         const Diff d = diffOutside(on, off, fs), far = diffOutside(on, off, footprints(kLightsInView, 24.0f));
         std::printf("  %s: outside the footprints max_abs %d on %zu pixels; past 24 px, max_abs %d on %zu\n",
                     modeName(mode), d.maxAbs, d.changed, far.maxAbs, far.changed);
-        if (mode == Mode::PathTraced) {
-            const SameLight l = sameLight(on, off, footprints(kLightsInView, 24.0f));
-            std::printf("  %s: past 24 px, mean %.4f apart, the worst 32x32 block %.4f\n", modeName(mode), l.whole,
-                        l.worstBlock);
-            check(l.whole <= 0.01 && l.worstBlock <= 0.05,
-                  std::string("in view: ") + modeName(mode) + ": past 24 px of an emitter, the same light (mean within 1%, blocks within 5%)");
-        } else {
-            check(d.maxAbs <= 1, std::string("in view: ") + modeName(mode) + ": only the emitters' own pixels changed by more than 1");
-            check(withinBvhFloor(far), std::string("in view: ") + modeName(mode) + ": nothing changed past 24 px of an emitter");
-        }
+        const SameLight l = sameLight(on, off, footprints(kLightsInView, 24.0f));
+        std::printf("  %s: past 24 px, mean %.4f apart, the worst 32x32 block %.4f\n", modeName(mode), l.whole,
+                    l.worstBlock);
+        check(l.whole <= 0.01 && l.worstBlock <= 0.05,
+              std::string("in view: ") + modeName(mode) + ": past 24 px of an emitter, the same light (mean within 1%, blocks within 5%)");
         const auto centre = [&](const Image& im, const glm::vec3& p) {
             const glm::vec3 q = project(kLightsInView, p);
             const std::size_t i = (std::size_t(q.y) * kWidth + std::size_t(q.x)) * 4;
@@ -676,7 +672,11 @@ void view_model_changes_only_its_pixels() {
                 fp.x0, fp.x1, fp.y0, fp.y1, all.changed, outside.changed, outside.maxAbs, plainOutside.changed,
                 plainOutside.maxAbs);
     check(all.changed > 200, "gun: drawn (its pixels changed)");
-    check(withinBvhFloor(outside), "gun: nothing past 24 px of its footprint changed (no shadow, no GI)");
+    const SameLight l = sameLight(on, off, fps), lp = sameLight(inWorld, off, fps);
+    std::printf("  past the footprint: gun mean %.4f apart (worst block %.4f), the plain box %.4f (%.4f)\n", l.whole,
+                l.worstBlock, lp.whole, lp.worstBlock);
+    check(l.whole <= 0.01 && l.worstBlock <= 0.05,
+          "gun: past 24 px of its footprint the same light (mean within 1%, blocks within 5%): no shadow, no GI");
     check(plainOutside.changed > outside.changed + 50 && plainOutside.maxAbs > 2,
           "gun: the same box as a world mesh shadows the room (the comparison sees a shadow)");
 }

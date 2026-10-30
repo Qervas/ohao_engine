@@ -270,10 +270,12 @@ float3 incoming(float3 origin, float3 dir, uint key, uint s, out float escaped)
         tables.data = openpbrTables;
         const float3 albedo = OpenPBRBase(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);
         const float3 at = origin + dir * q.CommittedRayT();
-        return (albedo * (1.0 / kPi) * directAt(at, -dir, key, s) + hm.emission) * T;
+        // What the hit emits is direct light when RT direct light samples emissive triangles (flags.y 2).
+        const float3 emitted = (pc.flags.y & 2u) != 0u ? float3(0.0) : hm.emission;
+        return (albedo * (1.0 / kPi) * directAt(at, -dir, key, s) + emitted) * T;
     }
     escaped = 1.0;
-    if (pc.flags.y == 0u) return float3(0.0);
+    if ((pc.flags.y & 1u) == 0u) return float3(0.0);
     // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
     // full-resolution texels.
     const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith

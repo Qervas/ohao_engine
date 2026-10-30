@@ -2,8 +2,10 @@
 // OpenPBR's base (material/openpbr.slang), the BSDF the reference path tracer samples, by the
 // clustered light loop the forward passes share (includes/lighting/clustered_lights.slang).
 //
-//   direct      each light of the pixel's froxel, shadowed by RT shadows' channels or, without
-//               them, a directional light by the CSM;
+//   direct      RT direct light (rt/restir_di.slang: every light but flashes, resampled and
+//               denoised), its diffuse and specular times their directional albedos, and the
+//               froxel's flashes; without it each light of the pixel's froxel, a directional light
+//               shadowed by the CSM;
 //   indirect    diffuse: RT GI's incoming radiance, else the environment's irradiance, else the
 //               constant ambient, times the diffuse's directional albedo beneath the specular layer
 //               (EON's, scaled by what the specular lets through); specular: the split sum, the
@@ -16,6 +18,7 @@
 import shared.layout;
 import material.openpbr;
 import includes.lighting.clustered_lights;
+import includes.lighting.gbuffer_material;
 
 [[vk::binding(0, 0)]] Sampler2D gBuffer0;           // position, metallic
 [[vk::binding(1, 0)]] Sampler2D gBuffer1;           // octahedral normal, roughness, emissive luminance / -subsurface
@@ -26,7 +29,8 @@ import includes.lighting.clustered_lights;
 [[vk::binding(10, 0)]] Sampler2D ssaoTexture;       // half resolution: (ao, distance from the camera)
 [[vk::binding(11, 0)]] Sampler2D ssgiTexture;       // RT GI: mean incoming radiance, the environment's visibility
 [[vk::binding(12, 0)]] ConstantBuffer<CascadeData> cascades;
-[[vk::binding(14, 0)]] Sampler2D<uint2> rtShadowVisibility;   // RG32UI: 8 bits a shadow channel
+[[vk::binding(14, 0)]] Sampler2D directDiffuse;    // RT direct light's diffuse, over the diffuse albedo
+[[vk::binding(21, 0)]] Sampler2D directSpecular;   // and its specular, over the specular albedo
 [[vk::binding(15, 0)]] Sampler2D envPrefiltered;    // GGX-prefiltered by roughness, kEnvPrefilterLevels levels
 [[vk::binding(16, 0)]] StructuredBuffer<uint> clusters;
 [[vk::binding(17, 0)]] Sampler2D gBufferEmissive;   // emitted radiance; a 1 for a light's emitter mesh
@@ -53,7 +57,7 @@ struct LightingPush
     float ambientIntensity;
     float2 screenSize;
     uint lightCount;   // every light (without clusters)
-    uint flags;        // 1 IBL, 2 SSAO, 4 CSM, 8 RT GI, 32 RT shadows, 64 every light (no froxel lists)
+    uint flags;        // 1 IBL, 2 SSAO, 4 CSM, 8 RT GI, 32 RT direct light, 64 every light (no froxel lists)
     float wetness;
     float sliceScale;
     float snowCover;
@@ -71,16 +75,6 @@ struct LightingOut
 };
 
 float4 mulColumns(float4 c[4], float4 v) { return c[0] * v.x + c[1] * v.y + c[2] * v.z + c[3] * v.w; }
-
-float3 decodeNormalOctahedron(float2 e)
-{
-    const float2 f = e * 2.0 - 1.0;
-    float3 n = float3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    const float t = saturate(-n.z);
-    n.x += n.x >= 0.0 ? -t : t;
-    n.y += n.y >= 0.0 ? -t : t;
-    return normalize(n);
-}
 
 // SSAO at this pixel: the 4 nearest half-resolution samples, weighted bilinearly and by how close
 // their distance from the camera is to this pixel's (within 5%); where none is the same surface,
@@ -169,51 +163,16 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     }
 
     const float3 P = g0.rgb;
-    float metallic = g0.a;
     const float3 N = decodeNormalOctahedron(g1.xy);
-    float roughness = g1.b;
-    float3 albedo = g2.rgb;
     const float ao = g2.a;
     const float4 spec = gBufferSpecular.SampleLevel(uv, 0.0);
     const float2 pbr = gBufferOpenPBR.SampleLevel(uv, 0.0).rg;
-
-    // Weather: wetness darkens and smooths faces looking up, snow and frost coat them, mud tints.
-    if (pc.wetness > 0.001)
-    {
-        const float w = pc.wetness * saturate(N.y * 2.0);
-        albedo *= 1.0 - w * 0.30;
-        roughness = lerp(roughness, max(roughness * 0.15, 0.02), w);
-    }
-    if (pc.snowCover > 0.001)
-    {
-        const float s = pc.snowCover * saturate((N.y - 0.3) * (1.0 / 0.7));
-        albedo = lerp(albedo, float3(0.82, 0.87, 0.92), s);
-        roughness = lerp(roughness, 0.90, s);
-        metallic = lerp(metallic, 0.0, s);
-    }
-    if (pc.wetness > 0.5)
-    {
-        const float w = pc.wetness * saturate(N.y * 2.0);
-        const float mud = saturate((w - 0.5) * 2.0) * (1.0 - metallic);
-        albedo = lerp(albedo, albedo * float3(0.35, 0.27, 0.18), mud * 0.55);
-    }
-    if (pc.frostCover > 0.001)
-    {
-        const float f = pc.frostCover;
-        albedo = lerp(albedo, float3(0.78, 0.88, 0.95), f * 0.50);
-        roughness = lerp(roughness, 0.08, f * 0.70);
-        metallic = lerp(metallic, 0.10, f * 0.40);
-    }
-
-    MaterialInputs mi;
-    mi.baseColor = albedo;   // base_weight is folded in by the G-buffer
-    mi.baseWeight = 1.0;
-    mi.baseMetalness = metallic;
-    mi.baseDiffuseRoughness = pbr.r;
-    mi.specularWeight = spec.a * 1.5;
-    mi.specularColor = spec.rgb;
-    mi.specularRoughness = roughness;
-    mi.specularIor = 1.0 + pbr.g * 2.55;
+    Weather weather;
+    weather.wetness = pc.wetness;
+    weather.snowCover = pc.snowCover;
+    weather.frostCover = pc.frostCover;
+    const MaterialInputs mi = gbufferMaterial(g0, g1, g2, spec, pbr, N, weather);
+    const float roughness = mi.specularRoughness;
     const float3 V = normalize(pc.cameraPos - P);
     const Surface s = makeSurface(P, N, V, mi);
     OpenPBRTables tables;
@@ -225,10 +184,9 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     const uint2 list = lightList(clusters, clustered, pc.lightCount, fragCoord.xy, pc.screenSize, viewDepth,
                                  pc.sliceScale, pc.sliceBias);
     LightVisibility vis;
-    vis.rt = (pc.flags & 32u) != 0u;
-    vis.rtWords = vis.rt ? rtShadowVisibility.Load(int3(int2(fragCoord.xy), 0)).xy : uint2(0u);
-    vis.directional = !vis.rt && (pc.flags & 4u) != 0u ? shadowCSM(P, viewDepth) : 1.0;
-    const float3 Lo = directLight(s, lights, clusters, list, clustered, vis, tables);
+    vis.traced = (pc.flags & 32u) != 0u;
+    vis.directional = !vis.traced && (pc.flags & 4u) != 0u ? shadowCSM(P, viewDepth) : 1.0;
+    float3 Lo = directLight(s, lights, clusters, list, clustered, vis, tables);
 
     // SSAO darkens the ambient and environment terms only (not direct light, which shadows occlude,
     // nor RT GI, whose rays see occluders).
@@ -238,6 +196,8 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     // uniform surround, and what its diffuse beneath them does.
     const float3 diffuseAlbedo = s.bsdf.diffuseAlbedo(s.wo, tables);
     const float3 specularAlbedo = s.bsdf.specularAlbedo(s.wo, tables);
+    if (vis.traced)
+        Lo += directDiffuse.SampleLevel(uv, 0.0).rgb * diffuseAlbedo + directSpecular.SampleLevel(uv, 0.0).rgb * specularAlbedo;
 
     // Indirect diffuse: RT GI's rays (the incoming radiance), else the environment's irradiance
     // (below), else the constant ambient, a fill with no counterpart in the path tracer.
