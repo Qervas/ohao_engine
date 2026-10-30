@@ -770,6 +770,14 @@ bool RenderScene::hasDirectionalLight() const {
                        [](const LightDesc& l) { return l.kind == LightKind::Directional; });
 }
 
+std::optional<RenderScene::Sun> RenderScene::sun() const {
+    if (!m->initialized) return std::nullopt;
+    for (const LightDesc& l : m->lights.descs())
+        if (l.kind == LightKind::Directional && glm::dot(l.direction, l.direction) > 0.0f)
+            return Sun{-glm::normalize(l.direction), l.color * l.intensity};
+    return std::nullopt;
+}
+
 void RenderScene::setLightEmitters(bool enabled) {
     if (!m->initialized || enabled == m->emittersEnabled) return;
     m->emittersEnabled = enabled;

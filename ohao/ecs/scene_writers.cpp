@@ -199,6 +199,7 @@ void writeFields(const Environment& v, const Environment* omit, FieldSink& out) 
         else t.null("\"hdri\"");
     }
     if (!omit || !same(v.intensity, omit->intensity)) t.f32("\"intensity\"", v.intensity);
+    if (!omit || v.sky != omit->sky) t.boolean("\"sky\"", v.sky);
 }
 
 void writeFields(const Spin& v, const Spin* omit, FieldSink& out) {

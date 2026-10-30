@@ -9,7 +9,6 @@
 #include "post_processing_pipeline.hpp"
 #include "gizmo_pass.hpp"
 #include "render/hud/hud_pass.hpp"
-#include "sky_pass.hpp"
 #include "render/vfx/vfx_renderer.hpp"
 #include "render/vfx/decal_pass.hpp"
 #include "ssr_pass.hpp"
@@ -105,8 +104,8 @@ public:
 
     // This frame's raster lights (the light table, in order; the caller keeps them alive until
     // render() returns), their version (unchanged lights are not uploaded again; 0: always) and
-    // the ambient intensity. The first directional light is the sun: the CSM fallback's light and
-    // the procedural sky's sun follow it.
+    // the ambient intensity. The first directional light is the sun: the CSM fallback's light
+    // follows it (the physical sky follows it through the environment, render/sky/atmosphere.hpp).
     void setLights(std::span<const LightData> lights, uint64_t version, float ambient);
     // Clustered lighting on (the default) or every pixel summing every light (tests: the same
     // image when no froxel overflows).
@@ -119,8 +118,6 @@ public:
     // channel i (the light UBO's params.w points each raster light at its channel).
     void setShadowLights(std::span<const render::LightDesc> lights) { m_shadowLights.assign(lights.begin(), lights.end()); }
     [[nodiscard]] glm::vec3 getLightDirection() const { return m_lightDirection; }
-    [[nodiscard]] float getNightFactor() const { return m_nightFactor; }
-    [[nodiscard]] glm::vec3 getMoonDirection() const { return m_moonDirection; }
 
     // Texture manager (forwarded to GBufferPass)
     void setTextureManager(BindlessTextureManager* texManager);
@@ -153,9 +150,6 @@ public:
     void setGizmoTransform(const glm::mat4& model);
     void setGizmoHighlightedAxis(GizmoAxis axis);
 
-    // Sky configuration
-    void setSkyEnabled(bool enabled);
-
     // RT shadows and GI
     [[nodiscard]] RTGITechnique* getRT_GI() { return m_rtGI.get(); }
     void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
@@ -166,11 +160,7 @@ public:
     void setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance, VkSampler iblSampler,
                    float intensity);
 
-    [[nodiscard]] bool getSkyEnabled() const { return m_skyEnabled; }
     void setSunDirection(const glm::vec3& dir);
-    void setSkyTurbidity(float t);
-    void setSkyIntensity(float i);
-    void setSkyGroundColor(const glm::vec3& c);
 
 
     // The effects and blended surfaces (sub-project 12): the RenderScene's VfxFrame and
@@ -192,7 +182,7 @@ public:
     // True when the final image is the post stack's RGBA8 output; false when it is the
     // lighting pass's RGBA16F HDR image (tonemapping off), which a byte copy cannot read back.
     [[nodiscard]] bool finalOutputIsRGBA8() const;
-    // The lighting pass's RGBA16F image: the lit scene (sky, transparents, SSR) before post.
+    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents, SSR) before post.
     [[nodiscard]] VkImage getLitImage() const;
 
     // Get SSAO output for deferred lighting
@@ -236,7 +226,6 @@ private:
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<HudPass> m_hudPass;
-    std::unique_ptr<SkyPass>   m_skyPass;
 
     // Scene the passes draw (owned by VulkanRenderer)
     const render::RenderScene* m_renderScene{nullptr};
@@ -276,16 +265,6 @@ private:
     bool m_wireframeEnabled{false};
     bool m_gizmoEnabled{false};
 
-    // Sky state
-    bool      m_skyEnabled{true};
-    glm::vec3 m_skyGroundColor{0.08f, 0.07f, 0.06f};
-    float     m_skyTurbidity{2.5f};
-    float     m_skyIntensity{1.0f};
-    glm::vec3 m_skySunDirection{0.3f, 0.9f, 0.3f};
-
-    // Night sky state (derived from sun direction each frame)
-    float     m_nightFactor{0.0f};
-    glm::vec3 m_moonDirection{0.0f, 0.5f, 0.3f};
 
 
     // Effects and blended surfaces: vfx.expand, vfx.sort and the transparent pass.
@@ -296,7 +275,6 @@ private:
     VkImageView m_envPrefiltered{VK_NULL_HANDLE};   // setEnvMap: the transparent pass's IBL
     VkImageView m_envIrradiance{VK_NULL_HANDLE};
     float m_deltaTime{0.016f};
-    float m_totalTime{0.0f};   // the sky's star seed
     uint32_t m_renderSeed{0};
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
     uint64_t m_frameNumber{0};

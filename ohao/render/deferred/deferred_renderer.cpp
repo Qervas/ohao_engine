@@ -126,18 +126,6 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
     m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
 
-    // Initialize sky pass (Preetham analytical sky)
-    m_skyPass = std::make_unique<SkyPass>();
-    if (!m_skyPass->initialize(device, physicalDevice)) {
-        OHAO_LOG(Warn, render, "DeferredRenderer: SkyPass failed (non-fatal)");
-        m_skyPass.reset();
-    } else {
-        m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
-                                m_lightingPass->getOutputImage());
-        m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
-        OHAO_LOG(Debug, render, "DeferredRenderer: SkyPass OK");
-    }
-
     // Initialize render graph and import all pass outputs
     importGraphTextures();
 
@@ -214,10 +202,6 @@ void DeferredRenderer::cleanup() {
         m_decals.reset();
     }
 
-    if (m_skyPass) {
-        m_skyPass->cleanup();
-        m_skyPass.reset();
-    }
     if (m_gizmoPass) {
         m_gizmoPass->cleanup();
         m_gizmoPass.reset();
@@ -550,32 +534,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_passTimer) m_passTimer->end(cmd);
     };
 
-    // Sky draws into the lighting output before SSS blurs it in place and SSR
-    // and post read it.
-
-    // 4.5. Sky pass — fills sky pixels with Preetham sky, in a scene without an environment: with
-    //      one, lighting already wrote the environment there (as the path tracer shows it).
-    const bool environmentBackground = m_envPrefiltered != VK_NULL_HANDLE && m_envIrradiance != VK_NULL_HANDLE;
-    if (m_skyPass && m_skyEnabled && !environmentBackground) {
-        timerBegin("sky");
-        glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
-        m_skyPass->setCameraData(invViewProj, m_cameraPos);
-        // Sun direction: opposite of the directional light direction (light points down → sun up)
-        m_skyPass->setSunDirection(-m_lightDirection);
-        m_skyPass->setTurbidity(m_skyTurbidity);
-        m_skyPass->setSunIntensity(m_skyIntensity);
-        m_skyPass->setGroundColor(m_skyGroundColor);
-
-        // Night state already computed eagerly in setSunDirection()
-        m_skyPass->setNightFactor(m_nightFactor);
-        m_skyPass->setMoonDirection(m_moonDirection);
-        m_skyPass->setStarSeed(m_totalTime);
-
-        m_skyPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
-
-    m_totalTime += m_deltaTime;
 
     // 4.6. vfx.expand and vfx.sort (sub-project 12): the effect records' particles in closed
     //      form, lit at their centres by this frame's clusters, sun ray and RT GI, then the
@@ -605,9 +563,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // Sky drew into the lit image as a color attachment; SSS (compute), SSR and post sample
-    // it. Its render pass's dependencies reach no compute read.
-    if (m_lightingPass && m_skyPass && m_skyEnabled) {
+    // Lighting drew the lit image as a color attachment (the environment in sky pixels); SSS
+    // (compute), SSR and post sample it. Its render pass's dependencies reach no compute read.
+    if (m_lightingPass) {
         VkMemoryBarrier toRead{};
         toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -617,8 +575,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                              0, nullptr, 0, nullptr);
     }
 
-    // 4.7. SSS — separable subsurface scattering blur, in place on the lit image (with sky
-    // in it), over the tiles the G-buffer pass flagged for subsurface materials
+    // 4.7. SSS — separable subsurface scattering blur, in place on the lit image, over the tiles the G-buffer pass flagged for subsurface materials
     const VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
     if (m_sssPass && m_sssWanted && litOutput) {
         timerBegin("sss");
@@ -724,17 +681,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
     if (m_hudPass) m_hudPass->onResize(width, height);
-    if (m_skyPass) {
-        m_skyPass->onResize(width, height);
-        // Reconnect to reallocated lighting output image/view
-        if (m_lightingPass) {
-            m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
-                                    m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
-        }
-    }
 
     // The transparent pass draws into the new lit image against the new depth.
     if (m_vfx && m_lightingPass && m_gbufferPass &&
@@ -759,7 +705,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 }
 
 void DeferredRenderer::resetTemporalState() {
-    m_totalTime = 0.0f;
     m_framesSinceReset = 0;
     m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
     if (m_rtShadow) m_rtShadow->resetHistory();
@@ -852,36 +797,8 @@ glm::vec2 DeferredRenderer::getJitterOffset(uint32_t frameIndex) const {
     return glm::vec2(0.0f);
 }
 
-void DeferredRenderer::setSkyEnabled(bool enabled) {
-    m_skyEnabled = enabled;
-    if (m_skyPass) m_skyPass->setEnabled(enabled);
-}
-
 void DeferredRenderer::setSunDirection(const glm::vec3& dir) {
-    m_skySunDirection = glm::normalize(dir);
-    // Also update light direction (sun direction = -light direction for CSM)
-    m_lightDirection = -m_skySunDirection;
-
-    // Eagerly compute night state so it's available to the light buffer
-    // update (which runs BEFORE render()). Avoids one-frame lag between
-    // sky appearance and object lighting.
-    float sunHeight = m_skySunDirection.y;
-    m_nightFactor = 1.0f - glm::smoothstep(-0.3f, 0.1f, sunHeight);
-    glm::vec3 rawMoon = -m_skySunDirection + glm::vec3(0.0f, 0.15f, 0.2f);
-    float len = glm::length(rawMoon);
-    m_moonDirection = (len > 0.001f) ? rawMoon / len : glm::vec3(0.0f, 1.0f, 0.0f);
-}
-
-void DeferredRenderer::setSkyTurbidity(float t) {
-    m_skyTurbidity = t;
-}
-
-void DeferredRenderer::setSkyIntensity(float i) {
-    m_skyIntensity = i;
-}
-
-void DeferredRenderer::setSkyGroundColor(const glm::vec3& c) {
-    m_skyGroundColor = c;
+    m_lightDirection = -glm::normalize(dir);   // where the CSM fallback's sun light travels
 }
 
 void DeferredRenderer::setWireframeEnabled(bool enabled) {
@@ -1009,7 +926,6 @@ bool DeferredRenderer::reloadShaderForPass(std::string_view passName, std::strin
         {"GBuffer",          m_gbufferPass.get()},
         {"CSM",              m_csmPass.get()},
         {"DeferredLighting", m_lightingPass.get()},
-        {"SkyPass",          m_skyPass.get()},
     };
 
     for (const auto& e : entries) {

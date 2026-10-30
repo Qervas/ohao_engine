@@ -25,6 +25,7 @@ struct CameraView {
 struct EnvironmentView {
     std::optional<AssetRef> hdri;
     float intensity{1.0f};
+    bool sky{true};
 };
 
 struct SceneView {

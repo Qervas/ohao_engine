@@ -18,7 +18,6 @@
     {"scene": "cornell_720p", "name": "lighting", "passes": ["lighting"], "budgetMs": 0.32, "gatedFrom": 13, "moved": "2b step 13 (spec rule, 'Frame cost'): 0.12 -> 0.32 from rt.gi; Cornell's 12 lights all render now (the 8-light cap is gone), about 0.022 ms a light over a 0.027 ms base, and the BRDF is held exact by test 8"},
     {"scene": "cornell_720p", "name": "sss", "passes": ["sss"], "budgetMs": 0.02, "gatedFrom": 9},
     {"scene": "cornell_720p", "name": "ssr", "passes": ["ssr"], "budgetMs": 0.04, "gatedFrom": 9, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.10 -> 0.04 toward rt.shadows"},
-    {"scene": "cornell_720p", "name": "sky", "passes": ["sky"], "budgetMs": 0.03, "gatedFrom": 9, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.05 -> 0.03 toward rt.shadows.filter; sub-project 12 step 2 deleted the particles pass it shared (effects are vfx.expand, vfx.sort and transparent, play_vfx_1080p)"},
     {"scene": "cornell_720p", "name": "post", "passes": ["post.*"], "budgetMs": 0.05, "gatedFrom": 9},
     {"scene": "helmet_game_720p", "name": "frame", "budgetMs": 3.0, "gatedFrom": 9},
     {"scene": "helmet_game_1080p", "name": "frame", "budgetMs": 5.0, "gatedFrom": 9},

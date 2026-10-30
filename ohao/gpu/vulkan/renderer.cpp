@@ -267,17 +267,15 @@ void VulkanRenderer::shutdown() {
 void VulkanRenderer::render() {
     if (!m_initialized) return;
 
-    // The environment map (and the dummy CDF buffers without one), once per path, and again
-    // when a directional light comes or goes: while there is one, it stands for the sun and the
-    // map lights without its own. A new HDRI joins the bindless table, so frames in flight must
-    // finish first.
-    const bool sunless = m_renderScene && m_renderScene->hasDirectionalLight();
-    if (!m_envMapChecked || m_envMapPath != m_envMapAttemptedPath || sunless != m_envMapSunless) {
-        if (!m_envMapPath.empty() && (m_envMapPath != m_envMapLoadedPath || sunless != m_envMapLoadedSunless))
-            vkDeviceWaitIdle(m_device);
+    // The environment (and the dummy CDF buffer without one), again whenever what it is changes:
+    // another HDRI, a directional light come or gone (while there is one, it stands for the HDRI's
+    // sun), the sky's sun moved. A new map joins the bindless table and an old one goes, so frames
+    // in flight must finish first.
+    m_envMapSunless = m_renderScene && m_renderScene->hasDirectionalLight();
+    if (const std::string key = environmentKey(); !m_envMapChecked || key != m_envMapAttemptedKey) {
+        if (key != m_envMapLoadedKey) vkDeviceWaitIdle(m_device);
         m_envMapChecked = true;
-        m_envMapAttemptedPath = m_envMapPath;
-        m_envMapSunless = sunless;
+        m_envMapAttemptedKey = key;
         uploadEnvironmentMap();
     }
 

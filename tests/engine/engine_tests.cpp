@@ -1128,9 +1128,8 @@ static void runHeadlessDeferredRenderTests() {
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cmd;
 
-            // No sky: an empty scene is then a cleared frame, the known image the stride
-            // check below needs (with the sky on, every pixel of an empty scene is sky).
-            renderer.setSkyEnabled(false);
+            // An empty scene (no environment) is a cleared frame, the known image the stride
+            // check below needs.
             vkBeginCommandBuffer(cmd, &bi);
             renderer.render(cmd, 0u);
             vkEndCommandBuffer(cmd);
@@ -1727,9 +1726,10 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
     TEST_PASS();
 }
 
-// Sky and particles draw into the lit image before SSS (2b step 4): the sky is in the final
-// image of a frame that runs SSS. It used to be drawn after SSS copied the image for post,
-// so every SSS frame lost it: the open sky came out black.
+// The environment is in the lit image before SSS (2b step 4): the sky is in the final image of
+// a frame that runs SSS. It used to be drawn after SSS copied the image for post, so every SSS
+// frame lost it: the open sky came out black. The sky is the physical one (frontier F2 T3), so the
+// scene has a sun.
 static void sp2b_s4_the_sky_reaches_the_final_image_through_sss() {
     TEST_BEGIN("sp2b step 4: the sky reaches the final image in a frame that runs SSS");
     ohao::VulkanRenderer r(160, 120);
@@ -1744,6 +1744,11 @@ static void sp2b_s4_the_sky_reaches_the_final_image_through_sss() {
         ohao::Model floor;
         ohao::PrimitiveMeshGenerator::generateBox(floor, {-50.0f, -0.1f, -50.0f}, {50.0f, 0.0f, 50.0f}, {1, 1, 1});
         ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {});
+        ohao::ecs::Light sun;
+        sun.type = ohao::ecs::LightType::Directional;
+        sun.intensity = 3.0f;
+        ohao::ecs::spawnLight(world, "sun", sun,
+                              ohao::ecs::Transform{{0.0f, 10.0f, 0.0f}, glm::angleAxis(glm::radians(-60.0f), glm::vec3(1, 0, 0))});
         r.getCamera().setPosition({0.0f, 1.0f, 0.0f});
         r.getCamera().setRotation(10.0f, -90.0f);   // the horizon low, the sky above it
         r.setRenderMode(ohao::RenderMode::Deferred);

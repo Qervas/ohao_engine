@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/display/display.hpp"
+#include "render/sky/atmosphere.hpp"
 
 #include <optional>
 #include <array>
@@ -229,7 +230,10 @@ public:
     [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
     /// HDRI for the path tracer and deferred reflections, loaded at the start of the
     /// next render() when the path changed.
+    // The environment: an HDRI (a path), else the physical sky (render/sky/atmosphere.hpp) lit by
+    // the scene's sun when `sky` is on and there is a directional light, else none (black).
     void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
+    void setEnvironmentSky(bool sky) noexcept { m_envSky = sky; }
     /// Scale HDRI contribution (inverse / relight). Default 1.0. Written into the
     /// RT light header (offset 8) every RT frame — no env re-load.
     void setEnvIntensityScale(float s) noexcept {
@@ -470,6 +474,8 @@ private:
     std::unique_ptr<RTOfflineRenderer> m_rtOfflineRenderer;
     // Environment map (env_upload.cpp): HDR image in the bindless table, its CDF,
     // and the RT bindless view/sampler arrays rebuilt each RT frame.
+    // What the environment is: "file:<path>[|sunless]", "sky:<sun>", or empty for none.
+    [[nodiscard]] std::string environmentKey() const;
     void uploadEnvironmentMap();          // once per path (render()); stamps env index + scale into the RenderScene
     void bindRTTextures(IRTRendererProfile& renderer);
     void destroyEnvSamplingBuffer();
@@ -481,13 +487,14 @@ private:
     VkBuffer m_envCdfBuffer{VK_NULL_HANDLE};   // the path tracer's 2D CDF (render/rt/env_cdf.hpp)
     VkDeviceMemory m_envCdfMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
-    std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
-    std::string m_envMapAttemptedPath;  // path render() last handed to uploadEnvironmentMap
+    std::string m_envMapLoadedKey;      // the environment uploaded (environmentKey()); empty: none
+    std::string m_envMapAttemptedKey;   // the key render() last handed to uploadEnvironmentMap
+    bool m_envSky{true};                // no HDRI: the physical sky
+    std::unique_ptr<render::Atmosphere> m_atmosphere;   // its tables, built once
     bool m_envMapChecked{false};        // render() ran uploadEnvironmentMap at least once
     // The environment lights without its sun while the scene has a directional light, which
     // stands for it (render/rt/env_sun.hpp): what render() asked for, and what is uploaded.
     bool m_envMapSunless{false};
-    bool m_envMapLoadedSunless{false};
     VkImage m_envMapImage{VK_NULL_HANDLE};
     VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered

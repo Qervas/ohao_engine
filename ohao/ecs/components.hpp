@@ -173,6 +173,7 @@ struct Camera {
 struct Environment {
     std::optional<AssetRef> hdri;
     float intensity{1.0f};
+    bool sky{true};   // no hdri: the physical sky, lit by the scene's sun (render/sky/atmosphere.hpp)
 };
 
 // ---- engine-provided behaviour (ecs/spin_system.hpp; run by every World) -------------------

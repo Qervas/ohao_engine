@@ -36,7 +36,6 @@ inline constexpr PassInfo kPasses[] = {
     {"rt.gi", PassKind::RayTracing, "ray-traced one-bounce indirect light: render.settings rtGI, default half resolution, 2 rays a pixel (reference: full, 32)"},
     {"rt.gi.denoise", PassKind::Compute, "RT GI's reprojected temporal accumulation, 2 a-trous iterations and joint-bilateral upsample (realtime)"},
     {"lighting", PassKind::Raster, "deferred lighting into the HDR image"},
-    {"sky", PassKind::Raster, "the procedural sky into the HDR image"},
     {"vfx.expand", PassKind::Compute, "every live effect particle in closed form from its record and age, lit at its centre (vfx/expand.slang)"},
     {"vfx.sort", PassKind::Compute, "the alpha-blended effect batches' particles back to front, by integer keys (vfx/sort.slang)"},
     {"sss", PassKind::Compute, "subsurface scattering blur (over the lit image with the sky)"},

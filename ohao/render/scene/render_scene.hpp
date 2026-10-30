@@ -83,6 +83,13 @@ public:
     // Whether the last setLights had a directional light: it stands for the sun, so the
     // environment lights without its own (render/rt/env_sun.hpp, VulkanRenderer::render).
     [[nodiscard]] bool hasDirectionalLight() const;
+    // The first directional light as the sun: the direction toward it and its illuminance (colour x
+    // intensity); none without a directional light.
+    struct Sun {
+        glm::vec3 toward;
+        glm::vec3 illuminance;
+    };
+    [[nodiscard]] std::optional<Sun> sun() const;
     // Lights without their emitter meshes (true by default): the light still lights.
     void setLightEmitters(bool enabled);
     // Where the camera is this frame: a spot light's mesh shines toward it by its cone

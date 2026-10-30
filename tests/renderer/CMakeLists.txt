@@ -191,9 +191,13 @@ add_executable(denoise_parse_test denoise_parse_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
 )
 target_link_libraries(denoise_parse_test PRIVATE ohao_core)   # parse warnings go to the logger
+add_executable(sky_test sky_test.cpp   # the physical sky (Hillaire 2020) on the CPU
+    ${CMAKE_SOURCE_DIR}/ohao/render/sky/atmosphere.cpp
+)
+target_link_libraries(sky_test PRIVATE glm)
 add_executable(display_test display_test.cpp)   # the display transform: the module against its C++ twin
 target_link_libraries(display_test PRIVATE ohao_display_cpu)
-foreach(t env_cdf_test env_sun_test sobol_test denoise_parse_test display_test)
+foreach(t env_cdf_test env_sun_test sobol_test denoise_parse_test display_test sky_test)
     target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
     target_link_libraries(${t} PRIVATE ohao_gtest_main)
     if(UNIX)

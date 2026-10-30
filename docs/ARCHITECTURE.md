@@ -237,7 +237,6 @@ rt.shadows.filter   5x5 filter + temporal (realtime quality)
 rt.gi               one-bounce GI, half res 2 rays by default   [rtGI.enabled, .resolution, .rays]
 rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
 lighting            froxel list + IBL + shadows + GI into the HDR image (+ env specular, its weight)
-sky                 into the HDR image
 vfx.expand          the effect records' particles in closed form, lit at their centres (sub-project 12)
 vfx.sort            each alpha batch's particles back to front (integer keys)
 sss                 subsurface blur on classified tiles   [sss]
@@ -426,8 +425,8 @@ Followed once in sub-project 4, step 11, with a throwaway compute pass (the mean
 luminance of each 8x8 tile of the lit HDR image): it built, ran validation-clean through
 a resize and teardown, left every golden exact, and was then removed, since nothing read
 its output. Deferred passes live in `ohao/render/deferred/`; `SSRPass` is the compute
-model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), `SkyPass`
-the fullscreen raster one.
+model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), the post
+stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
 
 1. **The shader** under `shaders/<area>/<name>.<stage>` (`.comp`, `.vert`, `.frag`,
    `.rgen`, … — the glob in `shaders/CMakeLists.txt`). The next build picks it up and
@@ -531,7 +530,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-39 passes registered; budget names matching none: []
+38 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 

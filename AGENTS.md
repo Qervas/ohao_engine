@@ -110,6 +110,7 @@ $ build/Release/env_sun_test.exe > /dev/null
 $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
 $ build/Release/display_test.exe > /dev/null
+$ build/Release/sky_test.exe > /dev/null
 $ build/Release/level_physics_tests.exe > /dev/null
 $ build/Release/combat_tests.exe > /dev/null
 $ build/Release/anim_tests.exe > /dev/null
@@ -518,8 +519,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Deferred and the path tracer light and show the same scene.** A scene without lights has
   none in either (no fallback sun: `setFrameLights` hands over the scene's raster lights only), and
   with an environment the deferred frame draws it behind the scene (lighting writes prefiltered
-  level 0, the source, into sky pixels; the procedural sky pass runs only without one), as the
-  path tracer's missing camera rays show it. `check_env_orientation.py` renders a scene with no
+  level 0, the source, into sky pixels; without one they are black), as the path tracer's missing
+  camera rays show it. `check_env_orientation.py` renders a scene with no
   light and checks the sky band in all three captures.
 - Reflected light is counted once. Lighting writes, beside the lit image, the
   environment/GI specular it added (`envSpecular`, E) and its weight (`specularWeight`,
@@ -582,6 +583,20 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   CPU frames use the C++ twin `render/display/display.hpp`, which `display_test` holds to the
   module (its slangc C++ build, `tools/display`) to the 8-bit code. A new path that shows a frame
   imports the module; never write a curve or `pow(1/2.2)` again.
+- **The physical sky** (frontier F2 T3, `render/sky/atmosphere.*`: Hillaire 2020, Earth's
+  atmosphere in RGB, on the CPU) is the environment of a scene without an HDRI: `Environment.sky`
+  (default true; a world without an `Environment` has the default) lit by the scene's first
+  directional light, whose colour x intensity is the sun's illuminance outside the atmosphere.
+  The renderer renders it into a 512x256 equirectangular map (row 0 the zenith) and uploads it
+  exactly as an HDRI (`environmentKey()`: `file:` or `sky:<sun>`), so the CDF, the IBL prefilter,
+  RT GI's and the path tracer's misses read it unchanged, and both renderers show and are lit by
+  the same sky. No sun, or `sky: false`: no environment (black), and an environment that goes
+  away is unloaded. A moved sun re-renders it (about 30 ms with the device idle): a day cycle is
+  not cheap yet. The map has no sun disc (the directional light is the sun). The referee's
+  scenes that need no environment say `"Environment": {"sky": false}` (`check_analytic.py`).
+  `sky_test`: the zenith transmittance of a pure Rayleigh atmosphere against its closed form, a
+  blue noon, a red sunset toward the sun, linearity in the sun, a dark night, the map's
+  orientation.
 - **Auto exposure** (frontier F2 T2, `render/deferred/auto_exposure.*`, `postprocess/exposure.slang`, the
   `exposure` pass before `post.tonemap`): a window's deferred frames are metered
   (`render.settings autoExposure`, on in windows, `LiveConfig::autoExposure`; `exposureCompensation`

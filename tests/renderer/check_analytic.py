@@ -57,7 +57,8 @@ def quat_x(deg):
 def scene(light):
     return {
         "format": "ohao.scene", "version": 1,
-        "components": {"Camera": 1, "Light": 1, "Material": 1, "MeshSource": 1, "Name": 1, "Transform": 1},
+        "components": {"Camera": 1, "Environment": 1, "Light": 1, "Material": 1, "MeshSource": 1, "Name": 1,
+                       "Transform": 1},
         "entities": [
             {"id": "a0a0000000000001", "Name": {"value": "Camera"},
              "Transform": {"position": [0, CAMERA_H, 0], "rotation": quat_x(-90)}, "Camera": {"fovDeg": FOV}},
@@ -66,6 +67,8 @@ def scene(light):
                                                     "color": [ALBEDO, ALBEDO, ALBEDO]}}},
              "Material": {"base_color": [ALBEDO, ALBEDO, ALBEDO], "specular_roughness": 1.0}},
             dict(light, id="a0a0000000000003"),
+            # No environment: the closed form counts the light alone (a sun would otherwise bring the sky).
+            {"id": "a0a0000000000004", "Name": {"value": "Environment"}, "Environment": {"sky": False}},
         ],
     }
 
@@ -110,6 +113,7 @@ def bounce_floor(name, spots, failures):
     # pixels, or None when the capture failed.
     s = scene(spots[0])
     s["entities"][0]["Transform"]["position"] = [0, CAMERA_H, -0.6]
+    s["components"].pop("Environment")   # spots only: no sun, so no sky either way
     s["entities"][1:] = [s["entities"][1],
                          {"id": "a0a0000000000004", "Name": {"value": "Wall"},
                           "MeshSource": {"source": {"BoxPrim": {"lo": [-50, 0, -2.1], "hi": [50, 10, -2],

@@ -41,23 +41,51 @@ VkSampler createEnvSampler(VkDevice device) {
 
 } // namespace
 
+std::string VulkanRenderer::environmentKey() const {
+    if (!m_envMapPath.empty()) return "file:" + m_envMapPath + (m_envMapSunless ? "|sunless" : "");
+    if (!m_envSky || !m_renderScene) return {};
+    const auto sun = m_renderScene->sun();
+    if (!sun) return {};   // a sky without a sun is black: no environment
+    // The sun to 1e-5 in direction and illuminance: a moved or brightened sun re-renders the sky.
+    char key[160];
+    std::snprintf(key, sizeof(key), "sky:%.5f,%.5f,%.5f:%.5g,%.5g,%.5g", sun->toward.x, sun->toward.y, sun->toward.z,
+                  sun->illuminance.x, sun->illuminance.y, sun->illuminance.z);
+    return key;
+}
+
 void VulkanRenderer::uploadEnvironmentMap() {
     if (m_device == VK_NULL_HANDLE) return;
     if (m_envSampler == VK_NULL_HANDLE) m_envSampler = createEnvSampler(m_device);
 
-    // Load once per path (reloading on every scene upload leaked multi-GB HDR images), and again
-    // when the scene gains or loses the directional light that stands for the map's sun.
-    if (!m_envMapPath.empty() && (m_envMapPath != m_envMapLoadedPath || m_envMapSunless != m_envMapLoadedSunless) &&
-        m_textureManager) {
+    // Once per environment (reloading on every scene upload leaked multi-GB HDR images); none
+    // unloads what was there (the queue is idle: render() waited).
+    const std::string key = environmentKey();
+    if (key.empty() && !m_envMapLoadedKey.empty()) destroyEnvMapImage();
+    if (!key.empty() && key != m_envMapLoadedKey && m_textureManager) {
         int ew = 0, eh = 0, ec = 0;
-        float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
+        float* hdrPixels = nullptr;
+        std::vector<float> skyPixels;   // the physical sky's map, when there is no HDRI
+        if (!m_envMapPath.empty()) {
+            hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
+        } else {
+            // 512 x 256: the sky is smooth; its tables are built once.
+            constexpr uint32_t kSkyW = 512, kSkyH = 256;
+            if (!m_atmosphere) m_atmosphere = std::make_unique<render::Atmosphere>();
+            const auto sun = m_renderScene->sun();
+            skyPixels = m_atmosphere->equirect(kSkyW, kSkyH, sun->toward, sun->illuminance);
+            ew = static_cast<int>(kSkyW);
+            eh = static_cast<int>(kSkyH);
+            hdrPixels = skyPixels.data();
+            OHAO_LOG(Info, gpu, "env: the physical sky for the sun toward ({:.3f}, {:.3f}, {:.3f})", sun->toward.x,
+                     sun->toward.y, sun->toward.z);
+        }
         if (!hdrPixels) {
             OHAO_LOG(Error, gpu, "RT: env map: failed to load {}", m_envMapPath);
         } else {
             // A directional light stands for the sun: every consumer below (RT GI's rays, the
             // deferred IBL, the path tracer's misses and its importance sampling) lights with the
             // sky alone, so the sun is counted once and GI's cosine rays never meet it.
-            if (m_envMapSunless) {
+            if (m_envMapSunless && skyPixels.empty()) {   // the sky's map has no sun disc
                 const render::EnvSun sun = render::separateEnvSun(
                     std::span<float>(hdrPixels, static_cast<size_t>(ew) * static_cast<size_t>(eh) * 4u), ew, eh);
                 if (sun.found)
@@ -258,12 +286,11 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 m_envMapTexIdx = h.valid() ? h.index : 0xFFFFFFFFu;
                 m_envMapWidth = static_cast<uint32_t>(ew);
                 m_envMapHeight = static_cast<uint32_t>(eh);
-                m_envMapLoadedPath = m_envMapPath;
-                m_envMapLoadedSunless = m_envMapSunless;
+                m_envMapLoadedKey = key;
                 OHAO_LOG(Info, gpu, "RT: Environment map loaded: {}x{} (bindless idx={})", ew, eh,
                          m_envMapTexIdx);
             }
-            stbi_image_free(hdrPixels);
+            if (skyPixels.empty()) stbi_image_free(hdrPixels);
         }
     }
 
@@ -327,7 +354,7 @@ void VulkanRenderer::destroyEnvMapImage() {
     if (m_envMapMemory) { vkFreeMemory(m_device, m_envMapMemory, nullptr); m_envMapMemory = VK_NULL_HANDLE; }
     m_envMapWidth = 0;
     m_envMapHeight = 0;
-    m_envMapLoadedPath.clear();
+    m_envMapLoadedKey.clear();
 }
 
 } // namespace ohao

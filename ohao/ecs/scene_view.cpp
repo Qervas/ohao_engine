@@ -73,7 +73,7 @@ SceneView resolveSceneView(const World& world) {
     }
     if (const entt::entity e = firstWith<Environment>(reg); e != entt::null) {
         const Environment& env = reg.get<Environment>(e);
-        view.environment = EnvironmentView{env.hdri, env.intensity};
+        view.environment = EnvironmentView{env.hdri, env.intensity, env.sky};
     }
     return view;
 }

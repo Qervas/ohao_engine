@@ -174,10 +174,14 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .unit("m").min(0.001)
         .field("active", &Camera::active).doc("false: the host keeps its own camera");
     r.type<Environment>("Environment").component().singleton().host(makeComponentOps<Environment>())
-        .doc("Image-based lighting (one per world): an equirectangular HDR image lighting and backing the scene.")
-        .field("hdri", &Environment::hdri).doc("Project-relative path of the .hdr image; null for none")
-        .field("intensity", &Environment::intensity).doc("Multiplier on the image's radiance").unitless().min(0.0)
-            .uiRange(0.0, 10.0);
+        .doc("What lights and backs the scene from afar (one per world): an equirectangular HDR image, else the "
+             "physical sky (Hillaire) lit by the scene's first directional light. A world without one has the sky.")
+        .field("hdri", &Environment::hdri).doc("Project-relative path of the .hdr image; null for the sky")
+        .field("intensity", &Environment::intensity).doc("Multiplier on the environment's radiance").unitless().min(0.0)
+            .uiRange(0.0, 10.0)
+        .field("sky", &Environment::sky)
+            .doc("Without an hdri: the physical sky for the scene's sun (none without a directional light); false: "
+                 "no environment (black)");
 
     r.type<Spin>("Spin").component().host(makeComponentOps<Spin>())
         .doc("Turns the entity about an axis of its own frame at a constant rate (the spin system, which runs "
