@@ -1726,6 +1726,73 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
     TEST_PASS();
 }
 
+// Bloom by energy (frontier F2 T4): the display shows (1 - s) frame + s bloom, bloom a normalised
+// convolution of the frame. A frame that is one radiance everywhere (an emissive wall filling the
+// view, nothing else lit) is the same with bloom on and off; a small bright emitter on black glares
+// with bloom on and not with it off.
+static std::vector<uint8_t> emitterFrame(float halfSize, bool bloom) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) return {};
+    std::vector<uint8_t> out;
+    {
+        ohao::ecs::World world;
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model wall;
+        ohao::PrimitiveMeshGenerator::generateBox(wall, {-halfSize, -halfSize, -5.1f}, {halfSize, halfSize, -5.0f}, {0, 0, 0});
+        ohao::render::MaterialDesc glow;
+        glow.baseColor = {0.0f, 0.0f, 0.0f};   // reflects nothing: the frame is its emission alone
+        glow.emissionColor = {1.0f, 0.8f, 0.6f};
+        glow.emissiveStrength = halfSize > 10.0f ? 0.5f : 50.0f;
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), wall, "wall", {}, &glow);
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        auto settings = r.renderSettings();
+        settings.rtGI = false;
+        settings.ssr = false;
+        r.setRenderSettings(settings);
+        auto* pp = r.getDeferredRenderer()->getPostProcessing();
+        pp->setBloomEnabled(bloom);
+        pp->setTAAEnabled(false);
+        r.getCamera().setPosition({0.0f, 0.0f, 0.0f});
+        r.getCamera().setRotation(0.0f, -90.0f);   // toward -Z, at the wall
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        out.assign(px.begin(), px.end());
+    }
+    return out;
+}
+
+static void f2_t4_bloom_moves_energy_and_adds_none() {
+    TEST_BEGIN("frontier F2 T4: bloom moves the frame's energy and adds none");
+    const auto uniformOff = emitterFrame(100.0f, false), uniformOn = emitterFrame(100.0f, true);
+    if (uniformOff.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    EXPECT(uniformOn.size() == uniformOff.size(), "both frames read back");
+    int maxDiff = 0, lit = 0;
+    for (std::size_t i = 0; i < uniformOff.size() && i < uniformOn.size(); ++i) {
+        if (i % 4 == 3) continue;
+        maxDiff = std::max(maxDiff, std::abs(int(uniformOn[i]) - int(uniformOff[i])));
+        lit += uniformOff[i] > 20;
+    }
+    std::cout << "(uniform frame: max difference " << maxDiff << ", lit channels " << lit << ") ";
+    EXPECT(lit > int(160 * 120 * 3 * 9 / 10), "the wall fills the frame");
+    EXPECT(maxDiff <= 1, "a uniform frame is the same with bloom on and off (within 1 LSB)");
+
+    const auto spotOff = emitterFrame(0.3f, false), spotOn = emitterFrame(0.3f, true);
+    // Twenty pixels right of the emitter's edge (it covers about 14 px about the centre), on black.
+    const std::size_t p = (60u * 160u + 80u + 27u) * 4u;
+    const int off = spotOff.size() > p ? spotOff[p] + spotOff[p + 1] + spotOff[p + 2] : -1;
+    const int on = spotOn.size() > p ? spotOn[p] + spotOn[p + 1] + spotOn[p + 2] : -1;
+    std::cout << "(beside the emitter: " << off << " without bloom, " << on << " with) ";
+    EXPECT(off == 0, "without bloom the black beside an emitter stays black");
+    EXPECT(on > 3, "with bloom a bright emitter glares onto the black beside it");
+    TEST_PASS();
+}
+
 // The environment is in the lit image before SSS (2b step 4): the sky is in the final image of
 // a frame that runs SSS. It used to be drawn after SSS copied the image for post, so every SSS
 // frame lost it: the open sky came out black. The sky is the physical one (frontier F2 T3), so the
@@ -2867,6 +2934,7 @@ static void runRTShadowTests() {
     sp2b_t09_a_spot_outside_its_cone_takes_no_slot();
     sp2b_t09_realtime_converges_toward_the_reference();
     sp2b_s4_the_sky_reaches_the_final_image_through_sss();
+    f2_t4_bloom_moves_energy_and_adds_none();
 }
 
 // =============================================================================

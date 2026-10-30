@@ -699,10 +699,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   as a miss, the analytic reflection stands in. A spot's mesh shines toward the camera by
   its cone (`RenderScene::setViewerPosition`, each frame): dark from outside it, in both
   renderers; its reflection uses the same per-frame value in the path tracer.
-  Bloom's input is clamped at luminance 4 before exposure (`BloomPass::kBloomMaxLuminance`,
-  `bloom_threshold.frag`): a mesh at radiance ~19,000 otherwise glared over half the frame
-  (the Karis average renormalises per tap group, so it cannot stop a bright area). Lighting
-  never reads bloom; tone glare there, never the mesh's radiance.
+  Bloom is by energy (frontier F2 T4): no threshold, no clamp. The frame goes into the pyramid
+  as it is (`postprocess/bloom_input.slang`), the chain is normalised by its level weights
+  (`BloomPass::levelWeightSum`) and the display pass shows `(1 - s) frame + s bloom`
+  (`PostProcessingPipeline::kBloomStrength`, 0.04): energy moves, none is added, so a frame of
+  one radiance is the same with bloom on and off (`engine_tests`' F2 T4 case). The first
+  downsample's Karis average keeps a small mesh at radiance ~19,000 from flooding the frame.
+  Lighting never reads bloom; tone glare there, never the mesh's radiance.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

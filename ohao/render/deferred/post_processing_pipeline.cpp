@@ -89,12 +89,12 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     VkImageView currentInput = m_hdrInputView;
 
     // ── 1. Bloom ──────────────────────────────────────────────────────
-    float bloomStrength = 0.0f;
+    float bloomStrength = 0.0f;   // bloom's share of the frame (kBloomStrength when it ran)
     if (m_bloomEnabled && m_bloomPass) {
         if (m_passTimer) m_passTimer->begin(cmd, "post.bloom");
         m_bloomPass->setInputImage(currentInput);
         m_bloomPass->execute(cmd, frameIndex);
-        if (m_bloomPass->didExecute()) bloomStrength = 1.0f;
+        if (m_bloomPass->didExecute()) bloomStrength = kBloomStrength;
         if (m_passTimer) m_passTimer->end(cmd);
     }
 
@@ -160,7 +160,8 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
         TonemapParams params{};
         params.exposure      = render::displayExposure(m_ev100);
-        params.bloomStrength = bloomStrength;
+        params.bloomWeight   = bloomStrength > 0.0f ? bloomStrength / m_bloomPass->levelWeightSum() : 0.0f;
+        params.frameWeight   = 1.0f - bloomStrength;
         params.curve         = static_cast<uint32_t>(m_displayCurve);
         params.autoExposure  = metered ? 1u : 0u;
 
@@ -235,14 +236,6 @@ void PostProcessingPipeline::setSSAOInputs(VkImageView position, VkImageView nor
 
 void PostProcessingPipeline::setVelocityBuffer(VkImageView velocity) {
     if (m_taaPass) m_taaPass->setVelocityBuffer(velocity);
-}
-
-void PostProcessingPipeline::setBloomThreshold(float threshold) {
-    if (m_bloomPass) m_bloomPass->setThreshold(threshold);
-}
-
-void PostProcessingPipeline::setBloomIntensity(float intensity) {
-    if (m_bloomPass) m_bloomPass->setIntensity(intensity);
 }
 
 void PostProcessingPipeline::setTAABlendFactor(float factor) {

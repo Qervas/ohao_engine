@@ -7,8 +7,11 @@
 
 namespace ohao {
 
-// Bloom post-processing pass
-// Multi-stage: Threshold -> Downsample chain -> Upsample chain -> Composite
+// Bloom (frontier F2 T4): the frame's energy convolved by a mip pyramid (Jimenez 2014): the frame
+// into level 0 as it is (postprocess/bloom_input.slang), a 13-tap downsample chain (Karis's average
+// on the first), a tent upsample chain that adds each level to the one above at half weight. The
+// display pass mixes the result, divided by levelWeightSum(), into the frame at a small strength:
+// energy moves, none is added.
 class BloomPass : public RenderPassBase {
 public:
     static constexpr uint32_t MAX_MIP_LEVELS = 8;
@@ -24,12 +27,10 @@ public:
 
     // Configuration
     void setInputImage(VkImageView hdrInput);
-    void setThreshold(float threshold) { m_threshold = threshold; }
-    void setSoftThreshold(float softThreshold) { m_softThreshold = softThreshold; }
-    void setIntensity(float intensity) { m_intensity = intensity; }
     void setFilterRadius(float radius) { m_filterRadius = radius; }
-    void setMaxLuminance(float maxLuminance) { m_maxLuminance = maxLuminance; }
-    static constexpr float kBloomMaxLuminance = 4.0f;
+    // The weights the upsample chain gives the levels sum to this (1 + 1/2 + 1/4 + ...): level 0's
+    // output divided by it is a normalised convolution of the frame.
+    [[nodiscard]] float levelWeightSum() const;
 
     // Get output (for compositing)
     [[nodiscard]] VkImageView getBloomOutput() const { return m_mipViews[0]; }
@@ -43,7 +44,7 @@ private:
     [[nodiscard]] bool createDescriptors();
     void destroyMipChain();
 
-    void executeThreshold(VkCommandBuffer cmd, VkDescriptorSet inputSet);
+    void executeInput(VkCommandBuffer cmd, VkDescriptorSet inputSet);
     [[nodiscard]] bool createFramebuffers();   // one per mip; rebuilt with the mip chain
     void executeDownsample(VkCommandBuffer cmd);
     void executeUpsample(VkCommandBuffer cmd);
@@ -60,15 +61,15 @@ private:
     std::array<glm::uvec2, MAX_MIP_LEVELS> m_mipSizes{};
 
     // Render passes
-    VkRenderPass m_thresholdRenderPass{VK_NULL_HANDLE};
+    VkRenderPass m_inputRenderPass{VK_NULL_HANDLE};
     VkRenderPass m_downsampleRenderPass{VK_NULL_HANDLE};
     VkRenderPass m_upsampleRenderPass{VK_NULL_HANDLE};
 
     // Pipelines
-    VkPipeline m_thresholdPipeline{VK_NULL_HANDLE};
+    VkPipeline m_inputPipeline{VK_NULL_HANDLE};
     VkPipeline m_downsamplePipeline{VK_NULL_HANDLE};
     VkPipeline m_upsamplePipeline{VK_NULL_HANDLE};
-    VkPipelineLayout m_thresholdLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_inputPipelineLayout{VK_NULL_HANDLE};
     VkPipelineLayout m_downsampleLayout{VK_NULL_HANDLE};
     VkPipelineLayout m_upsampleLayout{VK_NULL_HANDLE};
 
@@ -90,23 +91,9 @@ private:
     uint32_t m_height{0};
 
     // Parameters
-    float m_threshold{1.0f};
-    float m_softThreshold{0.5f};
-    float m_intensity{1.0f};
     float m_filterRadius{1.0f};
-    // The bloom input's luminance at most (pre-exposure HDR): a brighter source blooms as if it
-    // were this bright. A light's emitter mesh is as bright as the light (I / (pi r^2), tens of
-    // thousands for a small bulb); unclamped, the mip chain spread that over half the frame.
-    float m_maxLuminance{kBloomMaxLuminance};
 
     // Push constants
-    struct ThresholdParams {
-        float threshold;
-        float softThreshold;
-        float intensity;
-        float maxLuminance;
-    };
-
     struct SampleParams {
         glm::vec2 texelSize;
         float filterRadius;

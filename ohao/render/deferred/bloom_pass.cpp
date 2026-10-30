@@ -30,10 +30,10 @@ void BloomPass::cleanup() {
     vkDeviceWaitIdle(m_device);
 
     // Pipelines
-    if (m_thresholdPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_thresholdPipeline, nullptr);
+    if (m_inputPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_inputPipeline, nullptr);
     if (m_downsamplePipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_downsamplePipeline, nullptr);
     if (m_upsamplePipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_upsamplePipeline, nullptr);
-    if (m_thresholdLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_thresholdLayout, nullptr);
+    if (m_inputPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_inputPipelineLayout, nullptr);
     if (m_downsampleLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_downsampleLayout, nullptr);
     if (m_upsampleLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_upsampleLayout, nullptr);
 
@@ -42,7 +42,7 @@ void BloomPass::cleanup() {
     if (m_inputLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, m_inputLayout, nullptr);
 
     // Render passes
-    if (m_thresholdRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_device, m_thresholdRenderPass, nullptr);
+    if (m_inputRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_device, m_inputRenderPass, nullptr);
     if (m_downsampleRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_device, m_downsampleRenderPass, nullptr);
     if (m_upsampleRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_device, m_upsampleRenderPass, nullptr);
 
@@ -51,15 +51,15 @@ void BloomPass::cleanup() {
 
     destroyMipChain();
 
-    m_thresholdPipeline = VK_NULL_HANDLE;
+    m_inputPipeline = VK_NULL_HANDLE;
     m_downsamplePipeline = VK_NULL_HANDLE;
     m_upsamplePipeline = VK_NULL_HANDLE;
-    m_thresholdLayout = VK_NULL_HANDLE;
+    m_inputPipelineLayout = VK_NULL_HANDLE;
     m_downsampleLayout = VK_NULL_HANDLE;
     m_upsampleLayout = VK_NULL_HANDLE;
     m_descriptorPool = VK_NULL_HANDLE;
     m_inputLayout = VK_NULL_HANDLE;
-    m_thresholdRenderPass = VK_NULL_HANDLE;
+    m_inputRenderPass = VK_NULL_HANDLE;
     m_downsampleRenderPass = VK_NULL_HANDLE;
     m_upsampleRenderPass = VK_NULL_HANDLE;
     m_sampler = VK_NULL_HANDLE;
@@ -70,10 +70,10 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Validate all resources before executing
     if (m_hdrInputView == VK_NULL_HANDLE) return;
     if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_inputSets[frameIndex] == VK_NULL_HANDLE) return;
-    if (m_thresholdRenderPass == VK_NULL_HANDLE ||
+    if (m_inputRenderPass == VK_NULL_HANDLE ||
         m_downsampleRenderPass == VK_NULL_HANDLE ||
         m_upsampleRenderPass == VK_NULL_HANDLE) return;
-    if (m_thresholdPipeline == VK_NULL_HANDLE ||
+    if (m_inputPipeline == VK_NULL_HANDLE ||
         m_downsamplePipeline == VK_NULL_HANDLE ||
         m_upsamplePipeline == VK_NULL_HANDLE) return;
     if (m_mipLevels == 0 || m_framebuffers[0] == VK_NULL_HANDLE) return;
@@ -93,10 +93,17 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     write.pImageInfo = &imageInfo;
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 
-    executeThreshold(cmd, m_inputSets[frameIndex]);
+    executeInput(cmd, m_inputSets[frameIndex]);
     executeDownsample(cmd);
     executeUpsample(cmd);
     m_executed = true;
+}
+
+float BloomPass::levelWeightSum() const {
+    // executeUpsample adds each level to the one above at 0.5.
+    float sum = 0.0f, w = 1.0f;
+    for (uint32_t i = 0; i < m_mipLevels; ++i, w *= 0.5f) sum += w;
+    return sum > 0.0f ? sum : 1.0f;
 }
 
 void BloomPass::onResize(uint32_t width, uint32_t height) {
@@ -257,7 +264,7 @@ bool BloomPass::createRenderPasses() {
     renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
     renderPassInfo.pDependencies = dependencies.data();
 
-    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_thresholdRenderPass) != VK_SUCCESS) {
+    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_inputRenderPass) != VK_SUCCESS) {
         return false;
     }
 
@@ -279,14 +286,14 @@ bool BloomPass::createRenderPasses() {
 
 bool BloomPass::createFramebuffers() {
     // Create framebuffers for each mip level
-    // Note: Framebuffer 0 is used by threshold pass, others by downsample
+    // Note: Framebuffer 0 is used by the input pass, others by downsample
     // All render passes share compatible attachment format, so we can use any
     // However, MoltenVK may require matching render pass, so we use the appropriate one
     for (uint32_t i = 0; i < m_mipLevels; ++i) {
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        // Use threshold pass for mip 0, downsample for others
-        framebufferInfo.renderPass = (i == 0) ? m_thresholdRenderPass : m_downsampleRenderPass;
+        // Use the input pass for mip 0, downsample for others
+        framebufferInfo.renderPass = (i == 0) ? m_inputRenderPass : m_downsampleRenderPass;
         framebufferInfo.attachmentCount = 1;
         framebufferInfo.pAttachments = &m_mipViews[i];
         framebufferInfo.width = m_mipSizes[i].x;
@@ -387,7 +394,7 @@ bool BloomPass::createDescriptors() {
 bool BloomPass::createPipelines() {
     // Load shaders
     VkShaderModule fullscreenVert = loadShaderModule("postprocess_fullscreen.vert.spv");
-    VkShaderModule thresholdFrag = loadShaderModule("postprocess_bloom_threshold.frag.spv");
+    VkShaderModule inputFrag = loadShaderModule("postprocess_bloom_input.slang.spv");
     VkShaderModule downsampleFrag = loadShaderModule("postprocess_bloom_downsample.frag.spv");
     VkShaderModule upsampleFrag = loadShaderModule("postprocess_bloom_upsample.frag.spv");
 
@@ -431,21 +438,14 @@ bool BloomPass::createPipelines() {
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Threshold pipeline
+    // Input pipeline: the frame into level 0
     {
-        VkPushConstantRange pushConstant{};
-        pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        pushConstant.offset = 0;
-        pushConstant.size = sizeof(ThresholdParams);
-
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layoutInfo.setLayoutCount = 1;
         layoutInfo.pSetLayouts = &m_inputLayout;
-        layoutInfo.pushConstantRangeCount = 1;
-        layoutInfo.pPushConstantRanges = &pushConstant;
 
-        vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_thresholdLayout);
+        vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_inputPipelineLayout);
 
         std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
         stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -454,7 +454,7 @@ bool BloomPass::createPipelines() {
         stages[0].pName = "main";
         stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[1].module = thresholdFrag;
+        stages[1].module = inputFrag;
         stages[1].pName = "main";
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -468,10 +468,10 @@ bool BloomPass::createPipelines() {
         pipelineInfo.pMultisampleState = &multisampling;
         pipelineInfo.pColorBlendState = &colorBlending;
         pipelineInfo.pDynamicState = &dynamicState;
-        pipelineInfo.layout = m_thresholdLayout;
-        pipelineInfo.renderPass = m_thresholdRenderPass;
+        pipelineInfo.layout = m_inputPipelineLayout;
+        pipelineInfo.renderPass = m_inputRenderPass;
 
-        vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_thresholdPipeline);
+        vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_inputPipeline);
     }
 
     // Downsample pipeline
@@ -569,21 +569,21 @@ bool BloomPass::createPipelines() {
     }
 
     vkDestroyShaderModule(m_device, fullscreenVert, nullptr);
-    vkDestroyShaderModule(m_device, thresholdFrag, nullptr);
+    vkDestroyShaderModule(m_device, inputFrag, nullptr);
     vkDestroyShaderModule(m_device, downsampleFrag, nullptr);
     vkDestroyShaderModule(m_device, upsampleFrag, nullptr);
 
     return true;
 }
 
-void BloomPass::executeThreshold(VkCommandBuffer cmd, VkDescriptorSet inputSet) {
-    // Threshold pass: HDR input -> mip 0
+void BloomPass::executeInput(VkCommandBuffer cmd, VkDescriptorSet inputSet) {
+    // Input pass: the frame -> level 0
     VkClearValue clearValue{};
     clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = m_thresholdRenderPass;
+    renderPassInfo.renderPass = m_inputRenderPass;
     renderPassInfo.framebuffer = m_framebuffers[0];
     renderPassInfo.renderArea.extent = {m_mipSizes[0].x, m_mipSizes[0].y};
     renderPassInfo.clearValueCount = 1;
@@ -597,12 +597,10 @@ void BloomPass::executeThreshold(VkCommandBuffer cmd, VkDescriptorSet inputSet) 
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_thresholdPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_thresholdLayout,
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_inputPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_inputPipelineLayout,
                             0, 1, &inputSet, 0, nullptr);
 
-    ThresholdParams params{m_threshold, m_softThreshold, m_intensity, m_maxLuminance};
-    vkCmdPushConstants(cmd, m_thresholdLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
 
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);

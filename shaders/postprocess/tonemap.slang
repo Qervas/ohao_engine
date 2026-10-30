@@ -1,4 +1,4 @@
-// The deferred frame's display pass: bloom added to the lit HDR image, then the display transform
+// The deferred frame's display pass: bloom mixed into the lit HDR image, then the display transform
 // (display/display.slang): exposure (fixed, or a window's metered EV100), the curve (AgX or PBR
 // Neutral), sRGB.
 import display.display;
@@ -10,16 +10,17 @@ import display.display;
 struct DisplayParams
 {
     float exposure;        // linear: 1 / (1.2 x 2^EV100)
-    float bloomStrength;   // 0: no bloom
+    float bloomWeight;     // bloom's level 0 x this: the strength over the chain's weight sum; 0: none
     uint curve;            // kDisplayAgX | kDisplayNeutral
     uint autoExposure;     // 1: the metered EV100 in place of `exposure`
+    float frameWeight;     // the frame x this: 1 - the strength (bloom moves energy, adds none)
 };
 [[vk::push_constant]] ConstantBuffer<DisplayParams> params;
 
 [shader("fragment")]
 float4 main(float2 uv : TEXCOORD0) : SV_Target0
 {
-    const float3 hdr = hdrInput.Sample(uv).rgb + bloomInput.Sample(uv).rgb * params.bloomStrength;
+    const float3 hdr = hdrInput.Sample(uv).rgb * params.frameWeight + bloomInput.Sample(uv).rgb * params.bloomWeight;
     const float exposure = params.autoExposure != 0u ? displayExposure(exposureState[0].x) : params.exposure;
     return float4(displayPixel(hdr, exposure, params.curve), 1.0);
 }

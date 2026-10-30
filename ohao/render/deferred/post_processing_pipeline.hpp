@@ -47,6 +47,9 @@ public:
     // Times bloom, TAA and tonemapping as post.bloom, post.taa, post.tonemap (null: untimed).
     void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
 
+    // Bloom's share of the frame's energy (frontier F2 T4): the display shows (1 - s) frame + s bloom.
+    static constexpr float kBloomStrength = 0.04f;
+
     // Feature toggles
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
@@ -80,10 +83,6 @@ public:
         if (!m_autoExposure) return std::nullopt;
         return m_autoExposure->latestEv100(fenceSignalled);
     }
-
-    // Bloom configuration
-    void setBloomThreshold(float threshold);
-    void setBloomIntensity(float intensity);
 
     // TAA configuration
     void setTAABlendFactor(float factor);
@@ -172,9 +171,10 @@ private:
     // Push constants for the display pass (postprocess/tonemap.slang's DisplayParams).
     struct TonemapParams {
         float exposure;        // linear: displayExposure(EV100)
-        float bloomStrength;   // 0.0 = no bloom composite
+        float bloomWeight;     // bloom's level 0 x this (the strength over its weight sum); 0: none
         uint32_t curve;        // render::DisplayCurve
         uint32_t autoExposure; // 1: the metered EV100
+        float frameWeight;     // the frame x this: 1 - the strength (energy moves, none is added)
     };
 
 };

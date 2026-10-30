@@ -243,7 +243,7 @@ sss                 subsurface blur on classified tiles   [sss]
 ssr                 half-res trace; resolve replaces env specular in place   [ssr]
 transparent         blended meshes and effects back to front over the lit image, soft against
                     depth, each with its blend state; coverage into the mask TAA reads
-post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; ev100, tonemap]  (bloom's input clamped at luminance 4)
+post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; ev100, tonemap]  (bloom by energy: 0.04 of the frame)
 gizmo               transform handles
 hud                 the HudList over the final image (only when the list has items:      [capture hud]
                     a window always; a capture with hud: true)
@@ -431,8 +431,8 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
 1. **The shader** under `shaders/<area>/<name>.<stage>` (`.comp`, `.vert`, `.frag`,
    `.rgen`, … — the glob in `shaders/CMakeLists.txt`). The next build picks it up and
    compiles it with `glslc --target-env=vulkan1.3 -I shaders -I shaders/includes`; the
-   SPIR-V is named by flattening the path: `postprocess/bloom_threshold.frag` →
-   `postprocess_bloom_threshold.frag.spv`. Include shared code by its path under `shaders/`
+   SPIR-V is named by flattening the path: `postprocess/bloom_downsample.frag` →
+   `postprocess_bloom_downsample.frag.spv`. Include shared code by its path under `shaders/`
    (`#include "includes/scene/scene_data.glsl"`); every `.spv` is rebuilt when any file under
    `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
    transitively. Fullscreen raster passes reuse `postprocess/fullscreen.vert` (no vertex
