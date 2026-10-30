@@ -20,8 +20,11 @@ The base installs the set on the `PathTracer` before the pipeline is built:
 
 The program is a correct estimator of OpenPBR's base, the reference the deferred frame
 is judged by. The profiles differ only in settings: the realtime one traces two bounces
-a frame for NRD to denoise, the offline one 32 into a running mean (see the profiles
-page).
+a frame, ends its paths in the radiance cache past the first vertex and hands each frame
+to NRD; the offline one traces 32 into a running mean (see the profiles page). The same
+file has a second raygen, `cacheUpdate`, which fills the cache (the radiance cache unit).
+
+{{cite shaders/rt/path_tracer.slang "// The realtime profile ends a path in the radiance cache (rt/radiance_cache.slang, kFlagCache) at"}}
 
 ## One path a sample
 
@@ -92,7 +95,8 @@ Two cases skip the weight. A sun is a delta, found only by light sampling. A lig
 without an emitter mesh (`LightTable::setEmitterLights` did not flag it) is also
 found only by light sampling, so it is taken at full weight:
 
-{{cite shaders/rt/path_tracer.slang "const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;"}}
+{{cite shaders/rt/path_tracer.slang "// A sun is a delta (its radiance already over its choice); a light without an"}}
+{{cite shaders/rt/path_tracer.slang "const float3 c = throughput * f * ls.radiance * w;"}}
 
 A bounce ray that meets an emitter learns which light it is from the emitter
 instance's `emitterLight.w`, which the closest hit returns as `payload.light`;
@@ -131,7 +135,7 @@ the albedo's luminance, samples GGX's bounded visible normals or EON's diffuse l
 and returns $f\cos\theta/p$ with $p$ the mixture density. That weight multiplies the
 throughput, and the density is kept for the next vertex's MIS.
 
-{{cite shaders/rt/path_tracer.slang "const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);"}}
+{{cite shaders/material/openpbr.slang "BsdfSample sample(float3 wo, float3 u, OpenPBRTables t)"}}
 
 A sample below the geometric surface ends the path (the base has no transmission).
 From the third vertex on, Russian roulette continues with probability
@@ -146,6 +150,30 @@ light sample's companion BSDF ray meets, so 0 is direct light, both strategies
 weighted.
 
 {{cite shaders/rt/path_tracer.slang "if (stop || depth > bounces) break;"}}
+
+## Ending in the radiance cache
+
+With `kFlagCache` set (bit 5 of `control.x`, the realtime profile), a path can end
+before its cap. At a vertex past the first, the raygen looks the surface up in the
+radiance cache, if the segment that reached it is at least the cell's voxel long
+(0.05 m × 2^level, the level from the distance to the camera) and the lobe that drew it
+spreads over the voxel: a diffuse lobe, or a specular one with roughness² × length at
+least the voxel. A sharp reflection keeps tracing, so mirrors stay sharp.
+
+{{cite shaders/rt/path_tracer.slang "static const uint kFlagCache = 32u;   // realtime: paths end in the radiance cache"}}
+{{cite shaders/rt/path_tracer.slang "if (hit.t >= voxel && (lastLobe == 1u || lastRough * lastRough * hit.t >= voxel))"}}
+
+The query point is jittered within the voxel's face (Binder 2019) by a hash of the pixel,
+the sample and the depth, so no cell shows as a block. A hit adds the throughput times
+the cell's resolved radiance, to the lobe the first bounce chose, and ends the path; a
+miss (no cell yet) traces on as if the cache were off.
+
+{{cite shaders/rt/path_tracer.slang "if (cacheLookup(cacheKeys, cacheResolved, cacheCell(hit.position + jt * j.x + jb * j.y, hit.geoNormal, camPos),"}}
+
+The cache's three buffers are bindings 39–41 (keys, the frame's sums, resolved
+radiance):
+
+{{cite shaders/rt/path_tracer.slang "[[vk::binding(39, 0)]] RWStructuredBuffer<uint> cacheKeys;"}}
 
 ## Where the random numbers come from
 
@@ -163,9 +191,7 @@ draws in one group: group 0 is the pixel jitter; at vertex $d$, group $1+3d$ the
 choice and its point, $2+3d$ the environment texel and its point, $3+3d$ the BSDF's
 three numbers and the Russian roulette test.
 
-{{cite shaders/rt/path_tracer.slang "rng.group(1u + 3u * depth);"}}
-
-{{cite shaders/rt/path_tracer.slang "rng.group(3u + 3u * depth);"}}
+{{cite shaders/rt/path_tracer.slang "// bounce d's light choice and point in group 1 + 3d, its environment sample in 2 + 3d, its BSDF"}}
 
 A branch that skips a draw cannot shift later decisions onto other dimensions: each
 group starts at its own dimension. The PCG hash is left for the pixel seed and the
@@ -225,16 +251,18 @@ floor: core Vulkan only guarantees 128 bytes.
 Every path-traced pixel comes from `path_tracer.slang`: one path a sample, next-event
 estimation to one light and to the environment, BSDF sampling of OpenPBR's base, every
 strategy weighted by the power heuristic, Russian roulette from the third vertex. The
-realtime profile is the same estimator at two bounces, its frames denoised instead of
-averaged.
+realtime profile is the same estimator at two bounces, ended in the radiance cache past
+the first vertex, its frames denoised instead of averaged.
 :::
 
 ## Contracts
 
-- Both profiles run `PathTracerShaderSet`'s default. A set's entry names must match its SPIR-V (`raygen`, `closestHit`, `anyHit`, `miss`).
+- Both profiles run `PathTracerShaderSet`'s default. A set's entry names must match its SPIR-V (`raygen`, `closestHit`, `anyHit`, `miss`, `cacheUpdate`).
 - A light found by both strategies must be weighted on both sides. A bounce ray meets an emitter only when its mask includes `kTlasMaskEmitter`; a light with no emitter mesh must not be flagged by `LightTable::setEmitterLights`, or its light sampling is halved for a hit that never comes.
 - An emitter instance's `emitterLight.w` is its light's index in the RT light buffer. If the two orders differ, a bounce ray weighs one light's emission against another's density.
 - Emissive surfaces reach the path tracer by BSDF sampling only. Putting proxy lights for them back into the RT buffer counts their light twice.
 - A shadow ray's payload must start with `kHit` set; with the closest hit skipped, nothing else sets it on a hit.
 - The bounce cap lives in `params.w`'s low 16 bits.
+- A path ends in the radiance cache only past its first vertex, only with `kFlagCache` set, and only where the cell's voxel fits the segment and the lobe; the first hit is always shaded, so primary visibility and the denoisers' guides never come from the cache.
+- `cacheUpdate` is a second raygen in the same pipeline and file; a change to the path's sampling or MIS in `raygen` must be made in `cacheUpdate` too, or the cache holds a different estimator's light.
 - `control.y` is the number of frames already in the running mean; the raygen reads the history image only when it is above zero.

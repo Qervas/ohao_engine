@@ -31,6 +31,8 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 // Phase 5: DLSSRR mode — raygen repurposes normalAOV (binding 7) as the packed
 // (worldN, roughness) guide DLSS Ray Reconstruction consumes.
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
+// The realtime profile: paths end in the radiance cache (rt/radiance_cache.slang).
+constexpr uint32_t kPTFlagRadianceCache = 1u << 5;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -158,7 +160,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const struct { uint32_t binding; VkBuffer buffer; } sceneBuffers[] = {
         {4, m_vertexArena}, {5, m_indexArena}, {8, m_meshTable}, {9, m_triangleSlots},
         {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
-        {38, m_openpbrTables.buffer()},
+        {38, m_openpbrTables.buffer()}, {39, m_radianceCache.keys()}, {40, m_radianceCache.accum()},
+        {41, m_radianceCache.resolved()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -505,6 +508,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         pc.control.x |= kPTFlagEnableFireflyClamp;
     if (tracerAccumulatesAOVs(m_renderSettings)) pc.control.x |= kPTFlagAccumulateAOVs;
     if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) pc.control.x |= kPTFlagDLSSRR;
+    const bool cacheOn = m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u;
+    if (cacheOn) pc.control.x |= kPTFlagRadianceCache;
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
     // denoiser takes), and whether last frame's view gives motion vectors.
     pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;
@@ -519,6 +524,19 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
                        0, sizeof(PTPushConstants), &pc);
+
+    // --- The radiance cache: this frame's update (1 pixel in 5x5) and resolve, before the trace
+    //     that ends its paths in it. ---
+    if (cacheOn) {
+        m_radianceCache.recordBeginFrame(cmd);
+        vkCmdTraceRaysKHR(cmd, &m_cacheRgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
+                          (m_width + 4u) / 5u, (m_height + 4u) / 5u, 1);
+        m_radianceCache.recordResolve(cmd);
+        // Push constants are shared by the bind points: the resolve's replaced the trace's.
+        vkCmdPushConstants(cmd, m_pipelineLayout,
+                           VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
+                           0, sizeof(PTPushConstants), &pc);
+    }
 
     // --- Trace rays! ---
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,

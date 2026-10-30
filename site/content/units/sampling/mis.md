@@ -81,7 +81,8 @@ and its sample is taken at full weight; a sphere or rectangle with an emitter me
 weighed against the BSDF's density; a light *without* an emitter mesh is found only
 by light sampling, and takes full weight too:
 
-{{cite shaders/rt/path_tracer.slang "const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;"}}
+{{cite shaders/rt/path_tracer.slang "// A sun is a delta (its radiance already over its choice); a light without an"}}
+{{cite shaders/rt/path_tracer.slang "const float3 c = throughput * f * ls.radiance * w;"}}
 
 Which lights have a mesh is the scene's to say. `LightTable::setEmitterLights`
 receives the RT indices of the lights RenderScene made an emitter instance for, and

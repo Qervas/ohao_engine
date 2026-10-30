@@ -568,7 +568,20 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   draws sit in fixed groups (light, environment, BSDF and roulette), so a branch never shifts the
   next bounce's dimensions. A new draw goes into a group (`Sampler.group`), never after another
   bounce's. `sobol_test` runs the module through slangc's C++ (`tools/sampling`) against the CPU
-  generator, bit for bit, and holds its stratification. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
+  generator, bit for bit, and holds its stratification.
+- **The radiance cache** (frontier F1 T3, `shaders/rt/radiance_cache.slang`, `render/rt/radiance_cache.*`;
+  SHaRC's design, our code: RTXGI's licence bars shipping its source in this MIT repo). The realtime
+  profile ends a path at a vertex past the first in a world-space hash grid of reflected radiance
+  (cells of 0.05 m x 2^level, level = log2 of the distance from the camera, keyed by the side the
+  surface faces) when the segment is a voxel long and the last lobe spreads over the voxel; a
+  sparse update trace (`cacheUpdate`, 1 pixel in 5x5) fills it every frame and a resolve pass blends
+  and evicts. **Integers only**: radiance is summed x1024 by `InterlockedAdd` (no float atomics; the
+  sum is order-free, so two runs give the same bits) and `resetAccumulation` empties it, so a
+  capture repeats in any host. The offline profile never reads it (its slot holds one entry: the
+  shaders bind it either way). The realtime closed box reaches its closed form within 3%
+  (`check_material`); realtime Cornell is within 0.3% of the reference. Push constants are shared by
+  the bind points: anything recorded between pushing the trace's constants and tracing that pushes
+  its own (the resolve) must push the trace's again. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
   weighs it by the light's index in `InstanceGpu.emitterLight.w`; a light without a mesh (a
   point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
   full weight. Emissive proxies are not path tracer lights (the surfaces are). `--bounces N`

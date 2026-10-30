@@ -1,7 +1,7 @@
 ---
 module: path-tracer
 id: bindings
-title: Descriptor map 0–38
+title: Descriptor map 0–41
 standard: v2
 ---
 
@@ -12,18 +12,25 @@ any-hit and miss all execute inside a single `vkCmdTraceRaysKHR` against whateve
 was bound before it. OHAO takes that literally. The RT pipeline layout declares
 one descriptor set and one push-constant range, so every buffer, image and
 acceleration structure any RT stage can reach must occupy a numbered slot in
-set 0. The set's numbers run from 0 to 38 with gaps: the path tracer's own images
+set 0. The set's numbers run from 0 to 41 with gaps: the path tracer's own images
 and buffers at 0–12 and 17–26, the two `RenderScene` tables the hit shaders add
-at 36 and 37, and OpenPBR's energy tables at 38. Bindings 13–16 and 27–35 are not
-in the layout.
+at 36 and 37, OpenPBR's energy tables at 38, and the radiance cache's three buffers
+at 39–41. Bindings 13–16 and 27–35 are not in the layout.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "layoutInfo.setLayoutCount = 1;"}}
 
 `createDescriptorResources` builds the layout once at init, collecting bindings
 and their flags in two parallel vectors, and ends the list with the energy
-tables the path tracer's raygen reads:
+tables and the radiance cache, all read by the raygens only:
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "add(38, BUFFER, RGEN);  // OpenPBR's energy tables (rt/path_tracer.slang)"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(39, BUFFER, RGEN);  // the radiance cache: keys,"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(41, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)"}}
+
+The cache's buffers (its keys, the frame's sums and the resolved radiance) belong to
+`render::RadianceCache`; the radiance cache unit describes them. They are bound in
+every set, in both profiles: the offline profile's cache holds one entry and its
+trace never reads it.
 
 That buffer is a `render::OpenPBRTablesBuffer`, created once at init and written from the
 generated `render::kOpenPBRTables` (the Kulla-Conty and dielectric albedo tables
@@ -98,7 +105,7 @@ The path tracer then clamps that against what the device allows for an
 update-after-bind combined-image-sampler array in one set and one stage, leaving
 room for the set's other resources:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "constexpr uint32_t kOtherResources = 64;   // the set's 25 other bindings, with margin"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "constexpr uint32_t kOtherResources = 64;   // the set's 28 other bindings, with margin"}}
 
 The shader does not learn the clamped size. It declares the array at a fixed 4096
 (Slang decorates an unsized resource array with a stride spirv-val rejects) and
@@ -170,13 +177,13 @@ with no light entities and leans on the HDR environment alone.
 The writes are packed rather than sparse: a running `writeCount` skips the
 optional bindings (12 when the table is empty, 17 and 18 without CDF buffers), so
 the write index and the binding number diverge. The function emits at most
-twenty-six writes — six unconditional ones for bindings 0, 1, 2, 3, 6 and 7, nine
-buffers (4, 5, 8, 9, 10, 11, 36, 37 and the energy tables at 38) in a loop, the
-three optional ones, and eight for 19–26 — into a 41-entry array:
+twenty-nine writes — six unconditional ones for bindings 0, 1, 2, 3, 6 and 7, twelve
+buffers (4, 5, 8, 9, 10, 11, 36, 37, the energy tables at 38 and the cache's 39–41)
+in a loop, the three optional ones, and eight for 19–26 — into a 41-entry array:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[41] = {};"}}
 
-Nothing checks `writeCount` against the array size; the fifteen spare entries are
+Nothing checks `writeCount` against the array size; the twelve spare entries are
 the margin.
 
 ## Format qualifiers are load-bearing
@@ -203,14 +210,16 @@ mode, so the packed normal-roughness AOV can be handed to REBLUR without a repac
 {{cite external/cmake/nrd.cmake "set(NRD_NORMAL_ENCODING"}}
 
 Shader and image agree in both cases, so nothing renders wrong today; what is
-unsafe is adding binding 39 and trusting a qualifier copied from a neighbour.
+unsafe is adding binding 42 and trusting a qualifier copied from a neighbour.
 
 ## The pool has no slack either
 
-The pool reserves, per frame-slot set, 13 storage images and 11 storage buffers,
+The pool reserves, per frame-slot set, 13 storage images and 14 storage buffers,
 which is exactly what the layout consumes: the accumulation pair, the output and
-ten AOV images; and the seven scene tables, the light buffer, the two CDFs and the
-energy tables.
+ten AOV images; and the seven scene tables, the light buffer, the two CDFs, the
+energy tables and the radiance cache's three buffers.
+
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 * kSets},"}}
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 13 * kSets},  // 1-3, 6, 7, 19-26"}}
 
@@ -240,8 +249,9 @@ entry points:
 
 {{cite ohao/render/rt/path_tracer.hpp "rt_path_tracer.slang.raygen.spv"}}
 
-What differs is settings: bounce count, firefly clamp and denoise mode, and with the
-denoise mode whether the trace keeps its own running mean. The descriptor code does
+What differs is settings: bounce count, firefly clamp, denoise mode (and with it
+whether the trace keeps its own running mean) and the radiance cache, whose capacity is
+2^21 entries for the realtime profile and one entry otherwise. The descriptor code does
 not branch on any of them: neither `createDescriptorResources` nor the per-frame
 write function knows which profile it serves, and every binding is written in every
 set whichever denoiser runs.
@@ -257,7 +267,7 @@ any shader reads it lives in `rt/path_tracer.slang`.
 
 - The layout's `UPDATE_AFTER_BIND_POOL` flag and the pool's `UPDATE_AFTER_BIND` flag must be set together, but dropping one is not symmetrical with dropping the other: without the pool flag, `vkAllocateDescriptorSets` is the invalid call; without the layout flag, `vkCreateDescriptorSetLayout` already is, because binding 12 carries `UPDATE_AFTER_BIND_BIT`. Only binding 12 uses the capability.
 - Every `[[vk::binding(N, 0)]]` in `rt/path_tracer.slang` must match the number *and* the descriptor type in `createDescriptorResources`, and for storage images the format attribute must match the view format.
-- Bindings 4, 5, 8, 9, 10, 36 and 37 are hit-stage only (closest-hit and any-hit), and 38 is raygen only. Reading them from the wrong stage is a layout mismatch at pipeline creation, not a compile error in the shader.
+- Bindings 4, 5, 8, 9, 10, 36 and 37 are hit-stage only (closest-hit and any-hit), and 38–41 are raygen only. Reading them from the wrong stage is a layout mismatch at pipeline creation, not a compile error in the shader.
 - The shader declares binding 12 at a fixed 4096 and tests indices against 4096, while the layout's count is the texture table's capacity clamped to the device's limits. A material index the table hands out must stay below both.
 - Binding 11 is always backed: `LightTable` owns the buffer and writes a header with `count = 0` when there are no lights. Bindings 17 and 18 are backed by one-float dummies when there is no environment map.
 - There is one descriptor set per frame in flight (`MAX_FRAMES_IN_FLIGHT = 3`). `render()` writes only the set of the slot it is given, after that slot's fence wait, so the writes never touch a set a pending submission reads. Every binding except 12 must be written in every set.

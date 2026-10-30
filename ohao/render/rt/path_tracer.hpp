@@ -23,6 +23,7 @@
 //   pt.resize(newWidth, newHeight);
 
 #include "render/material/openpbr_tables_buffer.hpp"
+#include "render/rt/radiance_cache.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
 #include "render/rt/rt_meta.hpp"
@@ -67,6 +68,8 @@ struct PathTracerShaderSet {
     const char* missEntry{"miss"};
     const char* closestHitEntry{"closestHit"};
     const char* anyHitEntry{"anyHit"};
+    const char* cacheUpdateSpv{"bin/shaders/rt_path_tracer.slang.cacheUpdate.spv"};   // the radiance cache's update
+    const char* cacheUpdateEntry{"cacheUpdate"};
 };
 
 class PathTracer {
@@ -150,6 +153,7 @@ public:
     // clamps it to the device's update-after-bind sampled-image limits (logged).
     void setBindlessCapacity(uint32_t capacity) noexcept { m_bindlessCapacity = std::max(1u, capacity); }
     [[nodiscard]] uint32_t bindlessCapacity() const noexcept { return m_bindlessCapacity; }
+    void setRadianceCacheCapacity(uint32_t entries) noexcept { m_radianceCacheCapacity = entries; }
     static constexpr uint32_t kDefaultBindlessCapacity = 4096;
 
     // Shader contract: envWidth == 0 means "no env map loaded" — the shader
@@ -279,6 +283,10 @@ private:
     VkBuffer m_envMarginalCDFBuffer   = VK_NULL_HANDLE;
     // OpenPBR's energy tables, binding 38: written once at init.
     render::OpenPBRTablesBuffer m_openpbrTables;
+    // The radiance cache (bindings 39-41): full size for the realtime profile, which ends its paths
+    // in it, one cell otherwise (the shaders bind it either way). setRadianceCacheCapacity before init.
+    render::RadianceCache m_radianceCache;
+    uint32_t m_radianceCacheCapacity = 1;
     VkBuffer m_envConditionalCDFBuffer = VK_NULL_HANDLE;
     uint32_t m_envCDFWidth   = 0;
     uint32_t m_envCDFHeight  = 0;
@@ -442,6 +450,7 @@ private:
     VkStridedDeviceAddressRegionKHR m_missRegion{};
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
     VkStridedDeviceAddressRegionKHR m_callRegion{};  // empty, not used
+    VkStridedDeviceAddressRegionKHR m_cacheRgenRegion{};   // the radiance cache's update raygen
 
     // Push constants — 256 bytes (Vulkan max on most RT GPUs)
     struct PTPushConstants {

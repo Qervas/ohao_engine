@@ -105,6 +105,11 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
+    if (!m_radianceCache.create(m_device, m_physicalDevice, m_radianceCacheCapacity)) {
+        OHAO_LOG(Error, render, "PathTracer: failed to create the radiance cache");
+        return false;
+    }
+
     if (!createDescriptorResources()) {
         OHAO_LOG(Error, render, "PathTracer: failed to create descriptor resources");
         return false;
@@ -206,6 +211,7 @@ void PathTracer::resetAccumulation() {
     m_accumFrames = 0;
     m_viewChangedThisFrame = false;
     m_hasPreviousView = false;
+    m_radianceCache.clear();   // a capture after a reset starts from an empty cache in any host
 
     // Sub-plan 4.E T2: keep NRD's prev matrices in sync with frameIndex=0
     // bootstrap. Leaving them stale across a view change / resize could
@@ -385,6 +391,7 @@ void PathTracer::destroy() {
     m_envCDFIntegral = 0.0f;
 
     m_openpbrTables.destroy();
+    m_radianceCache.destroy();
 
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }

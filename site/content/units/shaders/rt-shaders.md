@@ -148,7 +148,6 @@ reports the lobe it drew from; the first bounce's lobe decides which channel —
 diffuse or specular — everything after the primary hit is attributed to, so the
 beauty stays one estimate and the denoiser still gets two signals:
 
-{{cite shaders/rt/path_tracer.slang "const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);"}}
 {{cite shaders/rt/path_tracer.slang "if (depth == 0u) firstLobe = s.lobe;"}}
 
 Direct light at the primary hit goes to the diffuse channel whatever the surface. Hit

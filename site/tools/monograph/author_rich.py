@@ -486,6 +486,21 @@ KNOWLEDGE: dict[str, dict] = {
             "NRD inputs are YCoCg+hitDist, not linear RGB",
         ],
     },
+    "path-tracer/radiance-cache": {
+        "what": [
+            "A world-space hash grid of reflected radiance (SHaRC's design, OHAO's own Slang): the realtime profile ends paths in it past the first vertex.",
+        ],
+        "how": [
+            "radiance_cache.slang: cells of (level, voxel, facing side), 32-bit keys with 8 linear probes, integer sums (x1024, clamped at 2000).",
+            "cacheUpdate (path_tracer.slang) trains it from 1 pixel per 5x5 tile; radiance_cache_resolve.slang blends, ages and evicts once a frame.",
+            "render::RadianceCache owns the buffers and the resolve; PathTracer records begin, update, resolve, then the frame.",
+        ],
+        "why": "Integer sums make the cache order-independent, so a capture repeats bit for bit; the cache stands for the rest of a path at a fraction of its cost.",
+        "contracts": [
+            "Bindings 39-41: keys, accum, resolved",
+            "resetAccumulation clears the cache",
+        ],
+    },
     "path-tracer/hit-miss": {
         "what": [
             "closesthit: barycentrics → material → PBR payload; anyhit: alpha cutout; miss: environment contribution.",
@@ -497,7 +512,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "path-tracer/bindings": {
         "what": [
-            "Descriptor set 0 map: TLAS, accum, materials, lights, env CDF, AOVs and guides, RenderScene tables 36–37, OpenPBR tables 38; 13–16 and 27–35 unused.",
+            "Descriptor set 0 map: TLAS, accum, materials, lights, env CDF, AOVs and guides, RenderScene tables 36–37, OpenPBR tables 38, radiance cache 39–41; 13–16 and 27–35 unused.",
         ],
         "how": [
             "path_tracer_descriptors.cpp writes all slots; the shaders' binding numbers (Slang [[vk::binding]], GLSL layout) must match exactly.",

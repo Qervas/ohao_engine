@@ -21,11 +21,15 @@
 // radiance I / (4 pi r^2); a directional light irradiance I. The emitter meshes RenderScene makes
 // for them carry their light's index (InstanceGpu.emitterLight.w).
 //
+// The realtime profile ends a path in the radiance cache (rt/radiance_cache.slang, kFlagCache) at
+// its second or later vertex; cacheUpdate fills the cache. The offline profile never reads it.
+//
 // Outputs as before: the running mean (bindings 1 and 3), the tonemapped image (2, ACES at 0.5),
 // OIDN's albedo and normal (6, 7), NRD's and DLSS's guides (19-26).
 import shared.layout;
 import material.openpbr;
 import sampling.sobol;
+import rt.radiance_cache;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> accumBuffer;
@@ -53,6 +57,9 @@ import sampling.sobol;
 [[vk::binding(36, 0)]] StructuredBuffer<float4> instances;    // InstanceGpu, kInstanceGpuStride / 16 rows
 [[vk::binding(37, 0)]] StructuredBuffer<uint> materialRefs;
 [[vk::binding(38, 0)]] StructuredBuffer<float> openpbrTables; // OpenPBRTables (kPbrTableFloats)
+[[vk::binding(39, 0)]] RWStructuredBuffer<uint> cacheKeys;      // the radiance cache (rt/radiance_cache.slang)
+[[vk::binding(40, 0)]] RWStructuredBuffer<uint4> cacheAccum;
+[[vk::binding(41, 0)]] RWStructuredBuffer<uint4> cacheResolved;
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -71,6 +78,7 @@ static const uint kFlagAOVs = 1u;
 static const uint kFlagFireflyClamp = 4u;
 static const uint kFlagAccumulateAOVs = 8u;
 static const uint kFlagDLSSRR = 16u;
+static const uint kFlagCache = 32u;   // realtime: paths end in the radiance cache
 static const float kPi = 3.14159265358979;
 static const float kTwoPi = 6.28318530717959;
 static const uint kVertexFloats = 25u;
@@ -469,6 +477,8 @@ void raygen()
     float firstHitT = -1.0, secondHitT = -1.0;
     float viewZ = 1e30, firstRough = 1.0;
     float3 diffAlbedo = float3(0.0), specColor = float3(0.0);
+    uint lastLobe = 0u;       // the last vertex's sampled lobe and its roughness (the cache's cone rule)
+    float lastRough = 0.0;
 
     for (uint depth = 0u; ; ++depth)
     {
@@ -550,6 +560,32 @@ void raygen()
                 normalRoughnessAOV[pixel] = blendAOVs ? lerp(normalRoughnessAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
             }
         }
+        // The radiance cache (realtime): a surface past the first vertex gives the light it reflects
+        // and the path ends there, if the segment reaching it is at least its voxel long and the
+        // lobe that drew it spreads over the voxel (a diffuse one, or roughness^2 x length >= voxel:
+        // a sharp reflection keeps tracing). The query point is jittered within the voxel's face
+        // (Binder 2019) so no voxel shows as a block.
+        if (!stop && depth > 0u && (flags & kFlagCache) != 0u)
+        {
+            const float voxel = cacheVoxelSizeAt(hit.position, camPos);
+            if (hit.t >= voxel && (lastLobe == 1u || lastRough * lastRough * hit.t >= voxel))
+            {
+                float3 jt, jb;
+                basisOf(hit.geoNormal, jt, jb);
+                const uint h = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ (depth * 0x9E3779B9u))));
+                const float2 j = (float2(float(h & 0xFFFFu), float(h >> 16u)) / 65536.0 - 0.5) * voxel;
+                float3 cached;
+                if (cacheLookup(cacheKeys, cacheResolved, cacheCell(hit.position + jt * j.x + jb * j.y, hit.geoNormal, camPos),
+                                cached))
+                {
+                    const float3 c = throughput * cached;
+                    radiance += c;
+                    if (firstLobe == 1u) diffuseOut += c;
+                    else specularOut += c;
+                    break;
+                }
+            }
+        }
         if (stop || depth > bounces) break;
 
         // The surface.
@@ -621,6 +657,8 @@ void raygen()
         const float3 next = toWorld(s.wi, t, b, n);
         if (dot(next, hit.geoNormal) <= 0.0) break;
         if (depth == 0u) firstLobe = s.lobe;
+        lastLobe = s.lobe;
+        lastRough = hit.specularRoughness;
         throughput *= s.weight;
         lastPdf = s.pdf;
         origin = p;
@@ -656,6 +694,140 @@ void raygen()
     specularRadiance[pixel] = lerp(specularRadiance[pixel], nrdPackRadianceHitDist(specularOut, firstLobe == 0u ? secondHitT : 0.0, viewZ, firstRough), k);
 
     outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);
+}
+
+// ---- the radiance cache's update ------------------------------------------------------------
+//
+// One pixel of every 5x5 tile (a different one each frame and tile) traces a path of up to
+// kCacheUpdateBounces bounces, ending in the cache beyond them, and adds to the cell of every
+// vertex it records (the last kCacheUpdateVertices) the light the rest of the path brings back,
+// divided by the throughput that reached the vertex: the radiance that vertex reflects, without
+// its own emission. One sample a vertex. The cells' light reaches every later path that ends in
+// them, so a frame of short paths carries every bounce.
+
+static const uint kCacheUpdateBounces = 3u;
+static const uint kCacheUpdateVertices = 4u;
+
+struct CacheVertex
+{
+    uint slot;
+    float3 throughput;
+};
+
+void cacheContribute(inout CacheVertex v[kCacheUpdateVertices], uint count, float3 c)
+{
+    if (!any(c > 0.0)) return;
+    for (uint k = 0u; k < count; ++k)
+    {
+        if (v[k].slot == ~0u) continue;
+        const float3 t = v[k].throughput;
+        cacheAdd(cacheAccum, v[k].slot, float3(t.x > 0.0 ? c.x / t.x : 0.0, t.y > 0.0 ? c.y / t.y : 0.0,
+                                                t.z > 0.0 ? c.z / t.z : 0.0));
+    }
+}
+
+[shader("raygeneration")]
+void cacheUpdate()
+{
+    const uint2 tile = DispatchRaysIndex().xy;
+    const uint2 size = pc.params.xy;
+    const uint o = pcg(pc.params.z * 0x9E3779B9u ^ pcg(tile.x ^ pcg(tile.y))) % 25u;
+    const uint2 pixel = tile * 5u + uint2(o % 5u, o / 5u);
+    if (any(pixel >= size)) return;
+    Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0xA511E9B3u)));
+
+    OpenPBRTables tables;
+    tables.data = openpbrTables;
+
+    const float2 uv = (float2(pixel) + float2(rng.next(), rng.next())) / float2(size);
+    const float2 ndc = uv * 2.0 - 1.0;
+    const float3 camPos = pc.invView[3].xyz;
+    const float tanY = abs(pc.invProj[1].y);
+    const float tanX = tanY * float(size.x) / float(size.y);
+    float3 dir = normalize(-pc.invView[2].xyz + pc.invView[0].xyz * (ndc.x * tanX) - pc.invView[1].xyz * (ndc.y * tanY));
+    float3 origin = camPos;
+    float3 throughput = float3(1.0);
+    float lastPdf = 0.0;
+
+    CacheVertex verts[kCacheUpdateVertices];
+    uint count = 0u;
+    for (uint depth = 0u; ; ++depth)
+    {
+        const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskScene : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);
+        if ((hit.flags & kHit) == 0u)
+        {
+            if (depth > 0u)
+                cacheContribute(verts, count, throughput * envRadiance(dir) * powerHeuristic(lastPdf, envPdf(dir)));
+            break;
+        }
+        if ((hit.flags & kHitEmitter) != 0u)
+        {
+            float lightPdf;
+            const float3 le = emitterRadiance(hit.light, origin, hit.position, hit.geoNormal, dir, lightPdf);
+            if (depth > 0u) cacheContribute(verts, count, throughput * le * powerHeuristic(lastPdf, lightPdf));
+            break;
+        }
+        cacheContribute(verts, count, throughput * hit.emission);
+        if (depth >= kCacheUpdateBounces)
+        {
+            // Past the path's bounces: the light this surface reflects, as the cache holds it.
+            float3 cached;
+            if (cacheLookup(cacheKeys, cacheResolved, cacheCell(hit.position, hit.geoNormal, camPos), cached))
+                cacheContribute(verts, count, throughput * cached);
+            break;
+        }
+
+        // This vertex's cell: the light reflected here is what the rest of the path adds.
+        if (count == kCacheUpdateVertices)
+        {
+            for (uint k = 1u; k < kCacheUpdateVertices; ++k) verts[k - 1u] = verts[k];
+            count -= 1u;
+        }
+        verts[count].slot = cacheInsert(cacheKeys, cacheCell(hit.position, hit.geoNormal, camPos));
+        verts[count].throughput = throughput;
+        if (verts[count].slot != ~0u) cacheCount(cacheAccum, verts[count].slot);
+        count += 1u;
+
+        const float3 n = hit.normal;
+        float3 t, b;
+        basisOf(n, t, b);
+        const float3 wo = toLocal(-dir, t, b, n);
+        const OpenPBRBase base = OpenPBRBase(inputsOf(hit));
+        const float3 p = hit.position + hit.geoNormal * 1e-3;
+
+        rng.group(1u + 3u * depth);
+        const LightSample ls = sampleLight(hit.position, rng);
+        if (ls.valid)
+        {
+            const float3 wi = toLocal(ls.L, t, b, n);
+            const float3 f = base.eval(wo, wi, tables);
+            if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist))
+            {
+                const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
+                cacheContribute(verts, count, throughput * f * ls.radiance * w);
+            }
+        }
+        if (envSampled())
+        {
+            rng.group(2u + 3u * depth);
+            const float3 L = sampleEnv(rng);
+            const float pdfL = envPdf(L);
+            const float3 wi = toLocal(L, t, b, n);
+            const float3 f = base.eval(wo, wi, tables);
+            if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))
+                cacheContribute(verts, count, throughput * f * envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
+        }
+
+        rng.group(3u + 3u * depth);
+        const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+        if (!(s.pdf > 0.0)) break;
+        const float3 next = toWorld(s.wi, t, b, n);
+        if (dot(next, hit.geoNormal) <= 0.0) break;
+        throughput *= s.weight;
+        lastPdf = s.pdf;
+        origin = p;
+        dir = next;
+    }
 }
 
 // ---- hit shaders ----------------------------------------------------------------------------

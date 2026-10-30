@@ -105,8 +105,9 @@
 <li><a href="path-tracer/profiles.html">Profiles &amp; meta</a> — RTRenderSettings, Realtime vs Offline traits.</li>
 <li><a href="path-tracer/as.html">Acceleration structures</a> — BLAS/TLAS API, rebuild vs update.</li>
 <li><a href="path-tracer/raygen.html">Raygen integrator</a> — The OpenPBR path tracer: NEE + BSDF sampling under MIS, AOV writes.</li>
+<li><a href="path-tracer/radiance-cache.html">Radiance cache</a> — A world-space hash grid of reflected radiance, filled by a sparse update trace and read by realtime paths past their first vertex: SHaRC&#x27;s design in OHAO&#x27;s Slang.</li>
 <li><a href="path-tracer/hit-miss.html">Hit &amp; miss shaders</a> — closesthit materials, anyhit alpha, miss env.</li>
-<li><a href="path-tracer/bindings.html">Descriptor map 0–38</a> — Set-0 layout: TLAS, images, AOVs and guides, scene tables, OpenPBR tables.</li>
+<li><a href="path-tracer/bindings.html">Descriptor map 0–41</a> — Set-0 layout: TLAS, images, AOVs and guides, scene tables, OpenPBR tables, the radiance cache.</li>
 </ul>
 <h2 class="gloss-group">07 · Sampling</h2><ul class="prose">
 <li><a href="sampling.html"><strong>Hub</strong> — sampling.html</a></li>
@@ -179,7 +180,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">100 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">101 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

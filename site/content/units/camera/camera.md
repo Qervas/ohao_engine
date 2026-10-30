@@ -148,7 +148,7 @@ The push constants carry the matrix as its four columns, so that element is the 
 of the 0-indexed column `[1]`, and that is the one the raygen reads. $P_{11}$, and the aspect baked into it, is never
 touched:
 
-{{cite shaders/rt/path_tracer.slang "const float tanY = abs(pc.invProj[1].y);"}}
+{{cite shaders/rt/path_tracer.slang "float3 dir = normalize(fwd + right * (ndc.x * tanX) - up * (ndc.y * tanY));"}}
 
 ## The near plane is twice what it says
 

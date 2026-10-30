@@ -22,6 +22,8 @@ struct RTRenderSettings {
     bool enableFireflyClamp{false};
     float fireflyClampLuminance{10.0f};
     DenoiseMode denoiseMode{DenoiseMode::None};
+    // Paths end in the radiance cache past their first vertex (render/rt/radiance_cache.hpp).
+    bool radianceCache{false};
 };
 
 inline constexpr RTRenderSettings kRealtimeRTSettings{
@@ -33,6 +35,7 @@ inline constexpr RTRenderSettings kRealtimeRTSettings{
     .enableFireflyClamp = true,
     .fireflyClampLuminance = 10.0f,
     .denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history
+    .radianceCache = true,
 };
 
 inline constexpr RTRenderSettings kOfflineRTSettings{

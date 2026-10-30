@@ -9,7 +9,8 @@ standard: v2
 
 `PathTracer` is the largest single owner of GPU state in the engine: some two dozen
 images, a descriptor set per frame in flight, an RT pipeline, a shader
-binding table, and five optional denoise/post backends held by pointer. `init()` runs five build
+binding table, the radiance cache (`render::RadianceCache`, created right after the
+energy tables), and five optional denoise/post backends held by pointer. `init()` runs five build
 steps whose order is forced by data dependencies, not taste: `createRTPipeline`
 needs the descriptor set layout to build a pipeline layout, and
 `createShaderBindingTable` needs the finished pipeline to query group handles plus
@@ -42,6 +43,32 @@ any-hit or miss entry point of `rt/path_tracer.slang` calls `TraceRay`. Every ra
 launched from the raygen, so the pipeline never recurses past depth one.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "pipelineInfo.maxPipelineRayRecursionDepth = 2;"}}
+
+The pipeline has a fifth stage beside raygen, miss, closest-hit and any-hit: a second
+raygen, the radiance cache's `cacheUpdate`, in its own (fourth) shader group. The SBT
+keeps its record after the hit group and publishes it as a second raygen region,
+`m_cacheRgenRegion`, the same one-record size and stride as the frame's:
+
+{{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[cacheStage].pName = m_shaderSet.cacheUpdateEntry;"}}
+{{cite ohao/render/rt/path_tracer_pipeline.cpp "m_cacheRgenRegion.deviceAddress = sbtAddr + rgenSize + missSize + hitSize;"}}
+
+## A frame with the radiance cache
+
+With `RTRenderSettings::radianceCache` on and a cache larger than one entry (the
+realtime profile), `render()` sets `kFlagCache` in the push constants and records the
+cache's work before the frame's trace: `recordBeginFrame` (orders the previous frame's
+cache work before this frame's, and fills the buffers with zeros if a clear is
+pending), the update trace over one pixel in each 5x5 tile, `recordResolve` (a compute
+dispatch), and then the push constants again, because the resolve's compute pipeline
+replaced them (push constants are shared across bind points):
+
+{{cite ohao/render/rt/path_tracer_render.cpp "const bool cacheOn = m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u;"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "(m_width + 4u) / 5u, (m_height + 4u) / 5u, 1);"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "// Push constants are shared by the bind points: the resolve's replaced the trace's."}}
+
+The offline profile's cache holds one entry, so `cacheOn` is false and none of this is
+recorded; its buffers are still bound, because the layout is shared. What the cache
+stores and how the resolve blends it is the radiance cache unit's subject.
 
 ## Render resolution is not output resolution
 
@@ -105,8 +132,8 @@ backend's real header.
 ## One descriptor set per frame slot, rewritten every frame
 
 There is no descriptor caching: the pool holds one set per frame in flight, and
-`render()` rebuilds up to twenty-six writes from scratch into the set of the frame
-slot it is given before every trace. The array has fifteen entries of slack above
+`render()` rebuilds up to twenty-nine writes from scratch into the set of the frame
+slot it is given before every trace. The array has twelve entries of slack above
 the worst case, and nothing checks `writeCount` against its size.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[41] = {};"}}
@@ -128,7 +155,7 @@ they read their own sets. The write lands on a set whose last user has completed
 
 {{cite ohao/render/frame/frame_resources.hpp "waitForFrame(currentFrame) - blocks until frame N-3 completes"}}
 
-Of the 26 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
+Of the 29 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
 that per-slot ordering. The one place the ordering does not reach is a buffer the
 set *points at*: a handle that `RenderScene` replaces mid-flight stays alive in its
 retire queue for `MAX_FRAMES_IN_FLIGHT` frames, so a set still bound by an earlier
@@ -208,6 +235,11 @@ else.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
 
+A reset also empties the radiance cache (at the next `recordBeginFrame`), so a capture
+after a reset starts from the same state in any host and repeats bit for bit:
+
+{{cite ohao/render/rt/path_tracer.cpp "m_radianceCache.clear();   // a capture after a reset starts from an empty cache in any host"}}
+
 Setting the seed while the index still sits at the old one — nothing traced since
 the last reset — moves the index too, so a seed set after construction applies to
 the very next frame rather than only after the next reset:
@@ -256,5 +288,7 @@ because freeing them here would double-free.
 - `setSceneBuffers` must run every frame after `RenderScene::recordUpdates`. A handle cached from an earlier frame may belong to a buffer or TLAS that has since been replaced and retired.
 - `destroy()` waits for device idle, tears down the denoisers, nulls the borrowed CDF handles, and only then destroys the SBT, pipeline, descriptors and images. The destructor calls it, so an object outliving its `VkDevice` is a use-after-free.
 - Switching to or from a DLSS upscaling preset reallocates every render target, so `setRenderSettings()` is safe only between frames — never inside a command buffer.
-- Both profiles use the `PathTracerShaderSet` default (`rt_path_tracer.slang.<entry>.spv`, entries `raygen`, `closestHit`, `anyHit`, `miss`). The pipeline takes each stage's entry name from the set, so a set whose names do not match its SPIR-V fails at pipeline creation.
-- `resetAccumulation()` zeroes both clocks; `notifyViewChanged()` restarts only the running mean. A host that resets on every camera move throws away the temporal denoisers' history.
+- Both profiles use the `PathTracerShaderSet` default (`rt_path_tracer.slang.<entry>.spv`, entries `raygen`, `closestHit`, `anyHit`, `miss`, and the cache's `cacheUpdate`). The pipeline takes each stage's entry name from the set, so a set whose names do not match its SPIR-V fails at pipeline creation.
+- The accumulation images carry `TRANSFER_SRC` usage: the HDR readback (`--hdr`) copies them.
+- With the radiance cache on, the update trace and the resolve are recorded before the frame's trace and the push constants are pushed again after the resolve; a new compute dispatch between them must do the same.
+- `resetAccumulation()` zeroes both clocks and clears the radiance cache; `notifyViewChanged()` restarts only the running mean. A host that resets on every camera move throws away the temporal denoisers' history.

@@ -178,6 +178,16 @@ window.OHAO_GLOSSARY = {
     def: "SDK layer that hosts DLSS/DLSS-RR. CMake enables OHAO_DLSS when the static NGX lib is present.",
     group: "Denoise",
   },
+  "radiance cache": {
+    expand: "World-space radiance cache",
+    def: "A hash grid of reflected radiance in world space. OHAO's (shaders/rt/radiance_cache.slang, SHaRC's design) is trained by a sparse update trace each frame; the realtime profile's paths end in it past the first vertex.",
+    group: "Light transport",
+  },
+  SHaRC: {
+    expand: "Spatially Hashed Radiance Cache",
+    def: "NVIDIA's design for a world-space radiance cache addressed by a spatial hash. OHAO implements the design in its own Slang (radiance_cache.slang), not NVIDIA's library.",
+    group: "Light transport",
+  },
   ReSTIR: {
     expand: "Reservoir Spatio-Temporal Importance Resampling",
     def: "Resamples light candidates over space and time for efficient many-light / GI sampling. The frontier renderer spec plans it; no code in the tree implements it yet.",

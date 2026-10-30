@@ -143,7 +143,10 @@ follow the mode:
 
 Without an override, the profile default stands: NRD for the realtime profile,
 OIDN for the offline one. OIDN runs on the CPU inside `readback()` and dispatches
-nothing in the tracer.
+nothing in the tracer. NRD's realtime input is one frame's sample of paths that end in
+the radiance cache past their first vertex (the profile's `radianceCache`), so the
+denoiser sees the cache's light at two bounces' cost; an override of the denoiser does
+not change that, since the cache is a profile setting, not a denoise one.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}

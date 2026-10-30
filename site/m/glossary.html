@@ -215,6 +215,16 @@
         <div class="expand">Path Tracing / Path Tracer</div>
         <p>Monte Carlo method that follows light paths with random bounces. OHAO’s KHR ray-tracing offline/realtime profiles.</p>
       </article>
+      <article class="gloss-card" data-key="radiance cache" data-group="Light transport">
+        <h3>Radiance cache</h3>
+        <div class="expand">World-space radiance cache</div>
+        <p>A hash grid of reflected radiance in world space. OHAO’s (shaders/rt/radiance_cache.slang, SHaRC’s design) is trained by a sparse update trace each frame; the realtime profile’s paths end in it past the first vertex.</p>
+      </article>
+      <article class="gloss-card" data-key="SHaRC" data-group="Light transport">
+        <h3>SHaRC</h3>
+        <div class="expand">Spatially Hashed Radiance Cache</div>
+        <p>NVIDIA’s design for a world-space radiance cache addressed by a spatial hash. OHAO implements the design in its own Slang (radiance_cache.slang), not NVIDIA’s library.</p>
+      </article>
       <article class="gloss-card" data-key="ReSTIR" data-group="Light transport">
         <h3>ReSTIR</h3>
         <div class="expand">Reservoir Spatio-Temporal Importance Resampling</div>

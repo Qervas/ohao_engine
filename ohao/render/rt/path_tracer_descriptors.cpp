@@ -19,7 +19,7 @@ bool PathTracer::createDescriptorResources() {
         props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         props.pNext = &indexing;
         vkGetPhysicalDeviceProperties2(m_physicalDevice, &props);
-        constexpr uint32_t kOtherResources = 64;   // the set's 25 other bindings, with margin
+        constexpr uint32_t kOtherResources = 64;   // the set's 28 other bindings, with margin
         const uint32_t perStageResources = indexing.maxPerStageUpdateAfterBindResources > kOtherResources
                                                ? indexing.maxPerStageUpdateAfterBindResources - kOtherResources
                                                : 1u;
@@ -80,6 +80,9 @@ bool PathTracer::createDescriptorResources() {
     add(36, BUFFER, HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
     add(37, BUFFER, HIT);   // instance material refs
     add(38, BUFFER, RGEN);  // OpenPBR's energy tables (rt/path_tracer.slang)
+    add(39, BUFFER, RGEN);  // the radiance cache: keys,
+    add(40, BUFFER, RGEN);  // this frame's sums,
+    add(41, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -101,7 +104,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 13 * kSets},  // 1-3, 6, 7, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18 + OpenPBR tables 38
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18 + OpenPBR tables 38 + the cache 39-41
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
 

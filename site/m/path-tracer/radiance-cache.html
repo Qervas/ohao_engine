@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · Radiance cache — OHAO Monograph</title>
+  <meta name="description" content="A world-space hash grid of reflected radiance, filled by a sparse update trace and read by realtime paths past their first vertex: SHaRC&#x27;s design in OHAO&#x27;s Slang." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/radiance-cache" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · Radiance cache</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>Radiance cache</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>A world-space hash grid of reflected radiance, filled by a sparse update trace and read by realtime paths past their first vertex: SHaRC&#x27;s design in OHAO&#x27;s Slang.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what-it-is-for">What it is for</a></li><li><a href="#the-cell">The cell</a></li><li><a href="#keys-and-slots-without-64-bit-atomics">Keys and slots without 64-bit atomics</a></li><li><a href="#integer-sums">Integer sums</a></li><li><a href="#resolve">Resolve</a></li><li><a href="#the-update-trace">The update trace</a></li><li><a href="#where-a-path-ends-in-the-cache">Where a path ends in the cache</a></li><li><a href="#the-host">The host</a></li><li><a href="#measured">Measured</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what-it-is-for">What it is for</h2></div>
+<div class="prose reveal">
+<p>The realtime profile traces two bounces a frame. Light that needs more bounces than that would be missing from the image, so a realtime path that reaches its second or later vertex can end there and take, instead of tracing on, the radiance that surface reflects from a world-space cache. The cache is filled by a sparse trace of its own each frame and holds every bounce, because each sample that fills it may itself end in the cache.</p>
+<div class="citation-chip"><code class="citation-code">.maxBounces = 2,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L31" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:31</a></div>
+<p>The design is NVIDIA&#x27;s SHaRC (a hash grid of radiance, filled by sparse long paths, read by short ones); the code is OHAO&#x27;s own Slang, in `shaders/rt/radiance_cache.slang` (the cell, the hash, the integer sums), `shaders/rt/radiance_cache_resolve.slang` (the per-frame blend) and the path tracer&#x27;s `cacheUpdate` raygen. `render::RadianceCache` owns the buffers and the resolve pipeline. The offline profile never reads the cache: it stays the unbiased reference.</p>
+<div class="citation-chip"><code class="citation-code">.radianceCache = true,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L38" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:38</a></div>
+</div>
+<div class="section-rule"><h2 id="the-cell">The cell</h2></div>
+<div class="prose reveal">
+<p>A cell is a voxel at one of 15 levels, plus the side of the voxel a surface faces. The level is camera-relative: 0 within a metre of the camera, then one more for every doubling of the distance, and a voxel at level $l$ is $0.05 \cdot 2^l$ metres on a side, so cells subtend roughly the same angle at any distance.</p>
+<div class="math-block">$$
+l = \min\!\big(\lfloor \log_2 \max(d, 1) \rfloor,\ 14\big), \qquad s_l = 0.05 \cdot 2^{l}\ \text{m}
+$$</div>
+<div class="citation-chip"><code class="citation-code">uint cacheLevel(float d) { return min(uint(max(floor(log2(max(d, 1.0))), 0.0)), kCacheMaxLevel); }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L40" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:40</a></div>
+<div class="citation-chip"><code class="citation-code">static const float kCacheVoxelNear = 0.05;      // a voxel&#x27;s size within 1 m of the camera (m)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L26" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:26</a></div>
+<p>The side is the normal&#x27;s dominant axis and its sign, six values. A thin wall&#x27;s two faces fall in the same voxel; the side keeps the light of one face out of the other.</p>
+<div class="citation-chip"><code class="citation-code">uint cacheSide(float3 n)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L47" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:47</a></div>
+</div>
+<div class="section-rule"><h2 id="keys-and-slots-without-64-bit-atomics">Keys and slots without 64-bit atomics</h2></div>
+<div class="prose reveal">
+<p>The voxel&#x27;s three integer coordinates, the level and the side are hashed into one 32-bit key, forced odd so it is never 0 (0 marks a free slot). A second hash of the same value picks the first slot, and a lookup probes 8 consecutive slots from there in a power-of-two table.</p>
+<div class="citation-chip"><code class="citation-code">h = cacheHash(h ^ (level * 8u + cacheSide(n)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L63" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:63</a></div>
+<div class="citation-chip"><code class="citation-code">const uint key = h | 1u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L64" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:64</a></div>
+<div class="citation-chip"><code class="citation-code">static const uint kCacheProbes = 8u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L23" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:23</a></div>
+<p>Inserting claims the first free probe with a 32-bit compare-exchange; a slot that already holds the same key (another thread claimed it first) is taken as found. When all 8 probes hold other keys the insert fails and the sample is dropped. Two cells whose 32-bit keys collide share a slot: the key is the whole identity, there is no second word to compare.</p>
+<div class="citation-chip"><code class="citation-code">InterlockedCompareExchange(keys[slot], 0u, cell.x, previous);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L92" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:92</a></div>
+<div class="citation-chip"><code class="citation-code">if (previous == 0u || previous == cell.x) return slot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L93" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:93</a></div>
+</div>
+<div class="section-rule"><h2 id="integer-sums">Integer sums</h2></div>
+<div class="prose reveal">
+<p>A frame&#x27;s samples are summed in a `uint4` per slot: the radiance in units of 1/1024 and the sample count, each added with `InterlockedAdd`. Integer addition gives the same sum in any order, so the cache after a frame does not depend on which thread got there first, and a capture repeats bit for bit. A float atomic sum would not.</p>
+<div class="citation-chip"><code class="citation-code">const uint3 q = uint3(clamp(radiance, 0.0, kCacheMaxRadiance) * kCacheScale + 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L101" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:101</a></div>
+<p>Each sample&#x27;s radiance is clamped to 2000 first, so one sample adds at most 2,048,000 to a channel and a slot&#x27;s 32-bit channel overflows only past about 2,097 such samples in one frame.</p>
+<div class="citation-chip"><code class="citation-code">static const float kCacheMaxRadiance = 2000.0;  // a sample&#x27;s radiance is clamped to this (no uint overflow)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L25" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:25</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Integers buy determinism, which the gates need: a lockstep capture must equal itself and a window&#x27;s capture of the same world. The price is the clamp, a bias on very bright samples, and a quantum of 1/1024 per sample.</p></div>
+</div>
+<div class="section-rule"><h2 id="resolve">Resolve</h2></div>
+<div class="prose reveal">
+<p>After the update trace, one compute thread a slot blends the frame into the slot&#x27;s resolved radiance. The frame&#x27;s mean is weighted by its sample count against the count the slot already holds, and that count is capped at 256, so a cell&#x27;s history is at most 256 samples and old light fades within them.</p>
+<div class="math-block">$$
+L \leftarrow \frac{n\,L + m\,\bar{L}_{\text{frame}}}{n + m}, \qquad n \leftarrow \min(n + m,\ 256)
+$$</div>
+<div class="citation-chip"><code class="citation-code">const float3 radiance = count &gt; 0u ? (old * float(count) + mean * float(a.w)) / total : mean;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache_resolve.slang#L36" target="_blank" rel="noopener">shaders/rt/radiance_cache_resolve.slang:36</a></div>
+<div class="citation-chip"><code class="citation-code">count = min(count + a.w, rc.maxSamples);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache_resolve.slang#L37" target="_blank" rel="noopener">shaders/rt/radiance_cache_resolve.slang:37</a></div>
+<p>A slot that got no sample this frame ages by one; past 64 frames unseen its key and radiance are cleared and the slot is free. Every slot&#x27;s frame sums are zeroed for the next update. `resolved.w` packs the count in its low 16 bits and the age in its high 16.</p>
+<div class="citation-chip"><code class="citation-code">if (age &gt; rc.staleFrames)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache_resolve.slang#L45" target="_blank" rel="noopener">shaders/rt/radiance_cache_resolve.slang:45</a></div>
+<div class="citation-chip"><code class="citation-code">accum[slot] = uint4(0u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache_resolve.slang#L55" target="_blank" rel="noopener">shaders/rt/radiance_cache_resolve.slang:55</a></div>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t kStaleFrames = 64;             // frames without a sample before a cell is freed</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/radiance_cache.hpp#L19" target="_blank" rel="noopener">ohao/render/rt/radiance_cache.hpp:19</a></div>
+<p>A lookup finds the slot and returns its radiance only if its count is nonzero: a cell inserted this frame and not yet resolved reads as a miss.</p>
+<div class="citation-chip"><code class="citation-code">if ((r.w &amp; 0xFFFFu) == 0u) return false;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/radiance_cache.slang#L116" target="_blank" rel="noopener">shaders/rt/radiance_cache.slang:116</a></div>
+</div>
+<div class="section-rule"><h2 id="the-update-trace">The update trace</h2></div>
+<div class="prose reveal">
+<p>`cacheUpdate` is a second raygen entry in `path_tracer.slang`. It launches one thread a 5x5 tile, and each traces from one pixel of its tile, chosen by a hash of the frame and the tile, so a different pixel each frame.</p>
+<div class="citation-chip"><code class="citation-code">const uint o = pcg(pc.params.z * 0x9E3779B9u ^ pcg(tile.x ^ pcg(tile.y))) % 25u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L734" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:734</a></div>
+<p>The path runs up to 3 bounces with the same light, environment and BSDF sampling as the frame&#x27;s raygen, and past them ends in the cache. It remembers the slot and the throughput of its last 4 vertices; every contribution found later on the path (a light&#x27;s next-event sample, the environment, an emitter or the sky the bounce meets, emission, the cache at its end) is added to each remembered vertex&#x27;s cell divided by the throughput that reached that vertex.</p>
+<div class="citation-chip"><code class="citation-code">static const uint kCacheUpdateBounces = 3u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L708" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:708</a></div>
+<div class="citation-chip"><code class="citation-code">static const uint kCacheUpdateVertices = 4u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L709" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:709</a></div>
+<div class="citation-chip"><code class="citation-code">cacheAdd(cacheAccum, v[k].slot, float3(t.x &gt; 0.0 ? c.x / t.x : 0.0, t.y &gt; 0.0 ? c.y / t.y : 0.0,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L724" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:724</a></div>
+<p>A contribution $c$ reaching the camera through throughput $T_k$ at vertex $k$ is $T_k \cdot L_r(x_k)$ for the radiance $L_r$ that vertex reflects, so each cell receives an estimate of the light its surface reflects toward the path, one sample a vertex.</p>
+<div class="math-block">$$
+L_r(x_k) \approx \frac{c}{T_k}
+$$</div>
+<p>A vertex&#x27;s own emission is added before its slot is recorded, so it reaches the earlier vertices only: a cell holds reflected light without its surface&#x27;s emission, and a path that ends in it, having already added that emission at the hit, counts it once.</p>
+<div class="citation-chip"><code class="citation-code">cacheContribute(verts, count, throughput * hit.emission);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L770" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:770</a></div>
+<div class="citation-chip"><code class="citation-code">verts[count].slot = cacheInsert(cacheKeys, cacheCell(hit.position, hit.geoNormal, camPos));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L786" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:786</a></div>
+<p>Because the update itself ends in the cache, light from bounce 4 onward arrives through cells filled by earlier frames; over frames the cells carry every bounce.</p>
+</div>
+<div class="section-rule"><h2 id="where-a-path-ends-in-the-cache">Where a path ends in the cache</h2></div>
+<div class="prose reveal">
+<p>The frame&#x27;s raygen reads the cache only with the cache flag set (the realtime profile), only at its second vertex or later, and only when the segment that reached the hit is at least a voxel long and the lobe that drew it spreads over the voxel: a diffuse lobe, or roughness² × length at least a voxel. A sharp reflection keeps tracing, because a voxel&#x27;s average would blur it.</p>
+<div class="citation-chip"><code class="citation-code">if (!stop &amp;&amp; depth &gt; 0u &amp;&amp; (flags &amp; kFlagCache) != 0u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L568" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:568</a></div>
+<div class="citation-chip"><code class="citation-code">if (hit.t &gt;= voxel &amp;&amp; (lastLobe == 1u || lastRough * lastRough * hit.t &gt;= voxel))</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L571" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:571</a></div>
+<p>The query point is jittered across the voxel&#x27;s face in the surface&#x27;s tangent plane (Binder et al. 2019), so neighbouring pixels read neighbouring cells and no voxel shows as a block. A hit adds the cell&#x27;s radiance times the throughput and ends the path; a miss (no slot, or no resolved sample yet) traces on.</p>
+<div class="citation-chip"><code class="citation-code">const float2 j = (float2(float(h &amp; 0xFFFFu), float(h &gt;&gt; 16u)) / 65536.0 - 0.5) * voxel;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L576" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:576</a></div>
+<div class="citation-chip"><code class="citation-code">const float3 c = throughput * cached;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L581" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:581</a></div>
+</div>
+<div class="section-rule"><h2 id="the-host">The host</h2></div>
+<div class="prose reveal">
+<p>`render::RadianceCache` owns three device-local buffers of `capacity` entries (keys 4 bytes, sums and resolved 16 bytes each): 2^21 entries, 72 MiB, for the realtime profile, and a single entry otherwise, so the path tracer&#x27;s bindings 39-41 are always valid.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t kDefaultCapacity = 1u &lt;&lt; 21;   // 2M entries, 72 MiB</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/radiance_cache.hpp#L17" target="_blank" rel="noopener">ohao/render/rt/radiance_cache.hpp:17</a></div>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setRadianceCacheCapacity(m_settings.radianceCache ? render::RadianceCache::kDefaultCapacity : 1u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L94" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:94</a></div>
+<div class="citation-chip"><code class="citation-code">[[vk::binding(39, 0)]] RWStructuredBuffer&lt;uint&gt; cacheKeys;      // the radiance cache (rt/radiance_cache.slang)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L60" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:60</a></div>
+<p>With the setting on and a full-size cache, a frame records the cache&#x27;s begin barrier (the previous frame&#x27;s cache work before this frame&#x27;s, or zero-fills if a clear is pending), the update trace over (w+4)/5 x (h+4)/5 tiles, the resolve, and then the frame&#x27;s trace. The resolve binds its own pipeline layout and push constants, which replace the path tracer&#x27;s, so those are pushed again before the frame&#x27;s trace.</p>
+<div class="citation-chip"><code class="citation-code">const bool cacheOn = m_renderSettings.radianceCache &amp;&amp; m_radianceCache.capacity() &gt; 1u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L511" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:511</a></div>
+<div class="citation-chip"><code class="citation-code">(m_width + 4u) / 5u, (m_height + 4u) / 5u, 1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L533" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:533</a></div>
+<div class="citation-chip"><code class="citation-code">// Push constants are shared by the bind points: the resolve&#x27;s replaced the trace&#x27;s.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L535" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:535</a></div>
+<p>`resetAccumulation` clears the cache (the fill runs at the next frame&#x27;s begin), so a capture after a reset starts from an empty cache in any host and repeats.</p>
+<div class="citation-chip"><code class="citation-code">m_radianceCache.clear();   // a capture after a reset starts from an empty cache in any host</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L214" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:214</a></div>
+<div class="citation-chip"><code class="citation-code">for (VkBuffer b : {m_keys, m_accum, m_resolved}) vkCmdFillBuffer(cmd, b, 0, VK_WHOLE_SIZE, 0u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/radiance_cache.cpp#L119" target="_blank" rel="noopener">ohao/render/rt/radiance_cache.cpp:119</a></div>
+</div>
+<div class="section-rule"><h2 id="measured">Measured</h2></div>
+<div class="prose reveal">
+<p>Measured with `tests/renderer/check_material.py` and captures on this machine: the realtime profile&#x27;s closed box (Le = 1, ρ = 0.5, exactly 2 with every bounce) reaches 1.972 at 256 frames, within 3% of 2 at 2 traced bounces, and two runs give the same bits. Realtime Cornell at 256 frames is within 0.3% of the offline reference overall, its worst 4x3 cell 1.4%. A realtime frame took 1.20 ms of GPU time against 3.62 ms for the offline profile at 640x360.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The cache trades a frame&#x27;s long paths for short ones plus a lookup: its error is the voxel&#x27;s average and the clamp, and the offline profile, which never reads it, is what that error is measured against.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>A cell holds reflected radiance without its own surface&#x27;s emission; a path that ends in it must already have added the hit&#x27;s emission.</li>
+<li>Every write to the cache&#x27;s sums is an integer `InterlockedAdd`; a float accumulation would make captures order-dependent.</li>
+<li>The update raygen, the resolve and the frame&#x27;s raygen are recorded in that order every cached frame, with the push constants pushed again after the resolve.</li>
+<li>`resetAccumulation` clears the cache; a capture after a reset must not see cells from before it.</li>
+<li>The offline profile never sets the cache flag: it stays the unbiased reference.</li>
+<li>Bindings 39-41 are always bound; a profile without the cache gets a one-entry cache, not a missing buffer.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/radiance_cache.slang</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/radiance_cache_resolve.slang</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/radiance_cache.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/radiance_cache.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="raygen.html"><div class="label">← Prev</div><div class="title">Raygen integrator</div></a><a class="next" href="hit-miss.html"><div class="label">Next →</div><div class="title">Hit &amp; miss shaders</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

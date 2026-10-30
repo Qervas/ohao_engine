@@ -78,7 +78,7 @@ The four uniforms — row, column and the point inside the texel — are one 4-D
 the path's Sobol sequence (the vertex's environment group, *Owen-scrambled Sobol*), so
 they are jointly stratified across a pixel's samples:
 
-{{cite shaders/rt/path_tracer.slang "rng.group(2u + 3u * depth);"}}
+{{cite shaders/rt/path_tracer.slang "// bounce d's light choice and point in group 1 + 3d, its environment sample in 2 + 3d, its BSDF"}}
 
 ## One density for both sides of a weight
 

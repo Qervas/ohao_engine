@@ -39,8 +39,9 @@ bool PathTracer::createRTPipeline() {
     auto rmissCode = readFile(m_shaderSet.missSpv);
     auto rchitCode = readFile(m_shaderSet.closestHitSpv);
     auto rahitCode = readFile(m_shaderSet.anyHitSpv);
+    auto cacheCode = readFile(m_shaderSet.cacheUpdateSpv);
 
-    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty()) {
+    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty() || cacheCode.empty()) {
         OHAO_LOG(Error, render, "PathTracer: failed to load RT shader SPVs");
         return false;
     }
@@ -60,10 +61,13 @@ bool PathTracer::createRTPipeline() {
     VkShaderModule rmissModule = createModule(rmissCode);
     VkShaderModule rchitModule = createModule(rchitCode);
     VkShaderModule rahitModule = hasAnyHit ? createModule(rahitCode) : VK_NULL_HANDLE;
+    VkShaderModule cacheModule = createModule(cacheCode);
 
-    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional)
-    uint32_t stageCount = hasAnyHit ? 4 : 3;
-    VkPipelineShaderStageCreateInfo stages[4] = {};
+    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional), then the radiance
+    // cache's update raygen.
+    const uint32_t cacheStage = hasAnyHit ? 4 : 3;
+    uint32_t stageCount = cacheStage + 1;
+    VkPipelineShaderStageCreateInfo stages[5] = {};
 
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
@@ -87,9 +91,13 @@ bool PathTracer::createRTPipeline() {
         stages[3].module = rahitModule;
         stages[3].pName = m_shaderSet.anyHitEntry;
     }
+    stages[cacheStage].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[cacheStage].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    stages[cacheStage].module = cacheModule;
+    stages[cacheStage].pName = m_shaderSet.cacheUpdateEntry;
 
-    // Shader groups: 3 groups (any-hit is part of the hit group, not a separate group)
-    VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
+    // Shader groups: raygen, miss, the hit group (closest-hit + any-hit), the cache's update raygen
+    VkRayTracingShaderGroupCreateInfoKHR groups[4] = {};
 
     groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
@@ -113,6 +121,13 @@ bool PathTracer::createRTPipeline() {
     groups[2].anyHitShader = hasAnyHit ? 3 : VK_SHADER_UNUSED_KHR;
     groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
 
+    groups[3].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+    groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    groups[3].generalShader = cacheStage;
+    groups[3].closestHitShader = VK_SHADER_UNUSED_KHR;
+    groups[3].anyHitShader = VK_SHADER_UNUSED_KHR;
+    groups[3].intersectionShader = VK_SHADER_UNUSED_KHR;
+
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
     pushRange.offset = 0;
@@ -131,6 +146,7 @@ bool PathTracer::createRTPipeline() {
         vkDestroyShaderModule(m_device, rmissModule, nullptr);
         vkDestroyShaderModule(m_device, rchitModule, nullptr);
         if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
+        vkDestroyShaderModule(m_device, cacheModule, nullptr);
         return false;
     }
 
@@ -139,7 +155,7 @@ bool PathTracer::createRTPipeline() {
     pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
     pipelineInfo.stageCount = stageCount;
     pipelineInfo.pStages = stages;
-    pipelineInfo.groupCount = 3;
+    pipelineInfo.groupCount = 4;
     pipelineInfo.pGroups = groups;
     pipelineInfo.maxPipelineRayRecursionDepth = 2;  // path tracing needs bounce recursion
     pipelineInfo.layout = m_pipelineLayout;
@@ -152,6 +168,7 @@ bool PathTracer::createRTPipeline() {
     vkDestroyShaderModule(m_device, rmissModule, nullptr);
     vkDestroyShaderModule(m_device, rchitModule, nullptr);
     if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
+    vkDestroyShaderModule(m_device, cacheModule, nullptr);
 
     if (result != VK_SUCCESS) {
         OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline (err={})", static_cast<int>(result));
@@ -180,8 +197,8 @@ bool PathTracer::createShaderBindingTable() {
     // Aligned handle size (each entry in the SBT must be aligned)
     uint32_t handleSizeAligned = (handleSize + handleAlignment - 1) & ~(handleAlignment - 1);
 
-    // 3 groups: rgen, miss, closest-hit
-    uint32_t groupCount = 3;
+    // 4 groups: rgen, miss, closest-hit, the cache's update rgen
+    uint32_t groupCount = 4;
 
     // Get shader group handles from the pipeline
     std::vector<uint8_t> handles(groupCount * handleSize);
@@ -195,7 +212,7 @@ bool PathTracer::createShaderBindingTable() {
     uint32_t rgenSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t missSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t hitSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t totalSize = rgenSize + missSize + hitSize;
+    uint32_t totalSize = rgenSize + missSize + hitSize + rgenSize;   // the cache's update rgen last
 
     // Create SBT buffer
     VkBufferCreateInfo bufInfo{};
@@ -236,6 +253,8 @@ bool PathTracer::createShaderBindingTable() {
     memcpy(dst + rgenSize, handles.data() + 1 * handleSize, handleSize);
     // Closest-hit at offset rgenSize + missSize
     memcpy(dst + rgenSize + missSize, handles.data() + 2 * handleSize, handleSize);
+    // The cache's update raygen after the hit group
+    memcpy(dst + rgenSize + missSize + hitSize, handles.data() + 3 * handleSize, handleSize);
 
     vkUnmapMemory(m_device, m_sbtMemory);
 
@@ -255,6 +274,10 @@ bool PathTracer::createShaderBindingTable() {
     m_hitRegion.deviceAddress = sbtAddr + rgenSize + missSize;
     m_hitRegion.stride = handleSizeAligned;
     m_hitRegion.size = hitSize;
+
+    m_cacheRgenRegion.deviceAddress = sbtAddr + rgenSize + missSize + hitSize;
+    m_cacheRgenRegion.stride = rgenSize;
+    m_cacheRgenRegion.size = rgenSize;
 
     m_callRegion = {};  // not used
 

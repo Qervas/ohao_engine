@@ -21,9 +21,8 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        // SAMPLED added so DLSS-RR (Phase 5) can bind the accum buffer as its HDR
-        // COLOR_IN guide; harmless for every other mode (usage only, no pixel change).
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // SAMPLED: DLSS-RR's HDR COLOR_IN; TRANSFER_SRC: the HDR readback (`--hdr`) copies it.
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_accumImages[i]) != VK_SUCCESS) return false;

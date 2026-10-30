@@ -91,6 +91,7 @@ public:
               const std::vector<const char*>& instanceExtensions = {},
               const std::vector<const char*>& deviceExtensions = {}) override {
         m_pathTracer.setShaderSet(m_shaderSet);
+        m_pathTracer.setRadianceCacheCapacity(m_settings.radianceCache ? render::RadianceCache::kDefaultCapacity : 1u);
         if (!m_pathTracer.init(device, physicalDevice, width, height,
                                 instance, graphicsQueueFamilyIndex,
                                 instanceExtensions, deviceExtensions)) {

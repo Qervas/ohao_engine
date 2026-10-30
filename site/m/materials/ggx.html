@@ -40,7 +40,7 @@
 <div class="prose reveal">
 <p>The isotropic GGX distribution exists once in the shaders, as `ggxD` in `material/openpbr.slang`, the specular lobe of OpenPBR&#x27;s base. Every renderer that shades a surface imports that module: the path tracer (`rt/path_tracer.slang`, both RT profiles), deferred lighting (`core/deferred_lighting.slang`, through `includes/lighting/clustered_lights.slang`), the forward transparent pass and RT GI&#x27;s hits. A highlight is the same function of the material in all of them.</p>
 <div class="citation-chip"><code class="citation-code">import material.openpbr;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.slang#L17" target="_blank" rel="noopener">shaders/core/deferred_lighting.slang:17</a></div>
-<div class="citation-chip"><code class="citation-code">import material.openpbr;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L27" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:27</a></div>
+<div class="citation-chip"><code class="citation-code">import material.openpbr;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L30" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:30</a></div>
 </div>
 <div class="section-rule"><h2 id="the-convention">The α convention</h2></div>
 <div class="prose reveal">

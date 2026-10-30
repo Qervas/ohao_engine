@@ -339,13 +339,18 @@ window.OHAO_NAV_TREE = [
         "href": "m/path-tracer/raygen.html"
       },
       {
+        "id": "path-tracer/radiance-cache",
+        "title": "Radiance cache",
+        "href": "m/path-tracer/radiance-cache.html"
+      },
+      {
         "id": "path-tracer/hit-miss",
         "title": "Hit & miss shaders",
         "href": "m/path-tracer/hit-miss.html"
       },
       {
         "id": "path-tracer/bindings",
-        "title": "Descriptor map 0\u201338",
+        "title": "Descriptor map 0\u201341",
         "href": "m/path-tracer/bindings.html"
       }
     ]

@@ -20,6 +20,19 @@ one sample a frame, and the denoiser keeps the history.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 
+It also turns the radiance cache on: its paths end in the cache past their first
+vertex (see the raygen and radiance cache units), so two bounces a frame carry the light
+of every later one. The setting defaults to off, which is what the offline profile keeps.
+
+{{cite ohao/render/rt/rt_settings.hpp ".radianceCache = true,"}}
+
+The setting also sizes the cache, once, before the `PathTracer` is built: 2^21 entries
+(`RadianceCache::kDefaultCapacity`, 72 MiB) with it on, one entry with it off. The
+one-entry cache exists only because the shaders bind its buffers in both profiles; the
+host records no cache work for it.
+
+{{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setRadianceCacheCapacity(m_settings.radianceCache ? render::RadianceCache::kDefaultCapacity : 1u);"}}
+
 The offline profile takes 32 bounces (Russian roulette ends most paths long before), no
 clamp, and OIDN as its default post-process. Its constant does not merely clear the
 clamp flag, it also zeroes the threshold:
@@ -107,8 +120,8 @@ are pushed after `init`) costs nothing.
 
 `RTRealtimeRenderer` and `RTOfflineRenderer` are thin finals over a shared base that
 wraps a `PathTracer` and forwards over forty accessors. Both pass
-`PathTracerShaderSet`'s default to that base, the four named entry points of
-`rt/path_tracer.slang`:
+`PathTracerShaderSet`'s default to that base, the named entry points of
+`rt/path_tracer.slang` (the four stages and the cache's update raygen):
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp ": RTProfileRendererBase(kRealtimeRTSettings, PathTracerShaderSet{}) {}   // rt/path_tracer.slang"}}
 {{cite ohao/render/rt/path_tracer.hpp "const char* closestHitEntry{"}}
@@ -184,4 +197,5 @@ next dispatch reads it.
 - `setRenderSettings` must be called between frames, never inside a command buffer: a change of DLSS render scale makes it wait on device idle and reallocate every render target.
 - `preferAccumulation` and `allowExternalDenoiser` exist in the struct, but no code reads them to change behaviour — they appear only in the profile log line. Do not add logic that assumes they are already honoured. {{cite ohao/gpu/vulkan/renderer.cpp "externalDenoiser="}}
 - The offline profile's freedom from firefly clamping holds three ways (flag clear, threshold zero, and a trace that accumulates). Restoring a nonzero threshold and the flag on the offline constant would still clamp nothing while it accumulates, and would clamp the moment a temporal denoiser is chosen.
+- `radianceCache` is read twice: at init, to size the cache (a profile created with it off cannot turn it on later, its cache holds one entry), and every frame, to set `kFlagCache`. Both conditions must hold for a path to end in the cache.
 - `tracerAccumulates` and the denoisers' history are coupled: a mode that returns false must carry its own temporal history (or show raw one-sample frames), because the trace keeps none.

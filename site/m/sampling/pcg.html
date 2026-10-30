@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="a-hash-not-the-sampler">A hash, not the sampler</h2></div>
 <div class="prose reveal">
 <p>The path tracer&#x27;s random numbers are Owen-scrambled Sobol (*Owen-scrambled Sobol*). What it still needs besides them is a hash: something that turns a pixel, a ray or a triangle into a well-mixed 32-bit word. That is the 32-bit PCG-RXS-M-XS permutation, and the RT passes each carry a copy with the same constants: the path tracer (`rt/path_tracer.slang`), the RT shadow trace (`rt/shadow_trace.slang`), the shadow filter (`rt/shadow_filter.slang`) and RT GI&#x27;s trace (`rt/gi_trace.slang`).</p>
-<div class="citation-chip"><code class="citation-code">// sample and Russian roulette in 3 + 3d. PCG hashes the pixel&#x27;s seed and the any-hit&#x27;s coin.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L109" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:109</a></div>
+<div class="citation-chip"><code class="citation-code">// sample and Russian roulette in 3 + 3d. PCG hashes the pixel&#x27;s seed and the any-hit&#x27;s coin.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L117" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:117</a></div>
 </div>
 <div class="section-rule"><h2 id="a-full-period-lcg-behind-a-bit-mixing-permutation">A full-period LCG behind a bit-mixing permutation</h2></div>
 <div class="prose reveal">
@@ -47,21 +47,21 @@
 <div class="math-block">$$
 s' = \left(a\,v + c\right) \bmod 2^{32}, \qquad a = 747796405,\; c = 2891336453
 $$</div>
-<div class="citation-chip"><code class="citation-code">const uint state = v * 747796405u + 2891336453u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L113" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:113</a></div>
+<div class="citation-chip"><code class="citation-code">const uint state = v * 747796405u + 2891336453u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L121" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:121</a></div>
 <p>Here $v$ is the 32-bit input and the modulus is free — it is just uint overflow. Because $a \equiv 1 \pmod 4$ and $c$ is odd, the Hull–Dobell conditions hold for the LCG alone: iterated by itself it would cycle through all $2^{32}$ values from any start.</p>
 <p>A raw LCG is a poor hash: bit $k$ of the state has period $2^{k+1}$, so the low bit merely alternates. The output permutation fixes that — with $\gg$ a logical shift and $\oplus$ xor:</p>
 <div class="math-block">$$
 k = (s' \gg 28) + 4, \qquad w = \big((s' \gg k) \oplus s'\big)\cdot 277803737, \qquad \text{out} = (w \gg 22) \oplus w
 $$</div>
-<div class="citation-chip"><code class="citation-code">const uint word = ((state &gt;&gt; ((state &gt;&gt; 28u) + 4u)) ^ state) * 277803737u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L114" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:114</a></div>
+<div class="citation-chip"><code class="citation-code">const uint word = ((state &gt;&gt; ((state &gt;&gt; 28u) + 4u)) ^ state) * 277803737u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L122" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:122</a></div>
 <p>The first step is the &quot;random xorshift&quot;: the shift distance $k \in [4, 19]$ is chosen by the value&#x27;s own top four bits, so mixing depth varies with the input and no fixed bit-position correlation survives. The odd multiplier propagates low bits upward, and the final fold pushes the top ten bits back down. Every step is invertible, so the whole function permutes the 32-bit words: two different inputs never hash alike.</p>
 </div>
 <div class="section-rule"><h2 id="the-path-tracer-s-two-uses">The path tracer&#x27;s two uses</h2></div>
 <div class="prose reveal">
 <p>The sampler&#x27;s pixel seed is a nested hash of the pixel&#x27;s coordinates and a constant. It does not involve the sample index — that is the sequence&#x27;s index, not part of the seed:</p>
-<div class="citation-chip"><code class="citation-code">Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0x7F4A7C15u)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L446" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:446</a></div>
+<div class="citation-chip"><code class="citation-code">Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0x7F4A7C15u)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L454" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:454</a></div>
 <p>The any-hit shader&#x27;s coin for a blended surface hashes the launch pixel, the triangle and the instance, then the ray&#x27;s origin and direction, and keeps 24 bits as a uniform in $[0, 1)$; the candidate survives when the uniform is below its opacity:</p>
-<div class="citation-chip"><code class="citation-code">uint h = pcg(launch.x ^ pcg(launch.y ^ pcg(PrimitiveIndex() ^ pcg(InstanceID()))));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L816" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:816</a></div>
+<div class="citation-chip"><code class="citation-code">uint h = pcg(launch.x ^ pcg(launch.y ^ pcg(PrimitiveIndex() ^ pcg(InstanceID()))));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L988" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:988</a></div>
 <p>The coin is a function of the ray, not of the sampler&#x27;s state, so an any-hit call — which the traversal may make in any order and any number of times — draws nothing from the path&#x27;s sequence.</p>
 </div>
 <div class="section-rule"><h2 id="the-hybrid-passes-a-stateless-hash">The hybrid passes: a stateless hash</h2></div>

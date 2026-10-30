@@ -202,7 +202,8 @@ the RT buffer; at upload the table flags a sphere in `extra2.z` and a rectangle 
 A light without a mesh (emitters off, or a light whose mesh could not be built) is found by
 light sampling alone, at full weight; a sun always is:
 
-{{cite shaders/rt/path_tracer.slang "const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;"}}
+{{cite shaders/rt/path_tracer.slang "// A sun is a delta (its radiance already over its choice); a light without an"}}
+{{cite shaders/rt/path_tracer.slang "const float3 c = throughput * f * ls.radiance * w;"}}
 
 On the other side, the emitter instance carries its light's index, and the bounce ray that
 hits it evaluates that light's radiance toward the ray's origin and its light-sampling

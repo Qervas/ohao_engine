@@ -87,9 +87,7 @@ The tracer places related draws in one group. Group 0 is the camera jitter; boun
 $d$ takes its light choice and light point from group $1 + 3d$, its environment
 sample from $2 + 3d$, and its BSDF sample and Russian roulette test from $3 + 3d$:
 
-{{cite shaders/rt/path_tracer.slang "rng.group(1u + 3u * depth);"}}
-{{cite shaders/rt/path_tracer.slang "rng.group(2u + 3u * depth);"}}
-{{cite shaders/rt/path_tracer.slang "rng.group(3u + 3u * depth);"}}
+{{cite shaders/rt/path_tracer.slang "// bounce d's light choice and point in group 1 + 3d, its environment sample in 2 + 3d, its BSDF"}}
 
 Because each decision starts at its group's first coordinate, a branch that draws
 fewer numbers (no light sample, no environment) moves no later decision onto another

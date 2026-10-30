@@ -40,6 +40,15 @@ MODULE = {
             why='One estimator for the reference image; the profile picks the shader set and knobs without forking the host API.',
         ),
         page(
+            'radiance-cache',
+            'Radiance cache',
+            "A world-space hash grid of reflected radiance, filled by a sparse update trace and read by realtime paths past their first vertex: SHaRC's design in OHAO's Slang.",
+            files=['shaders/rt/radiance_cache.slang', 'shaders/rt/radiance_cache_resolve.slang', 'shaders/rt/path_tracer.slang', 'ohao/render/rt/radiance_cache.hpp', 'ohao/render/rt/radiance_cache.cpp'],
+            design=['A cell is (camera-relative level floor(log2 distance), voxel 0.05 m x 2^level, the side the surface faces); keys are nonzero 32-bit hashes with 8 linear probes and InterlockedCompareExchange.', 'Samples add radiance x1024 in integers (InterlockedAdd: order-independent, so captures repeat), each clamped at 2000; resolve blends the frame mean weighted by count (capped at 256), ages and frees slots past 64 frames, and clears the sums.', 'cacheUpdate traces 1 pixel per 5x5 tile up to 3 bounces and adds every later contribution, divided by the throughput there, to the cells of the last 4 vertices.', 'The frame ends a path in the cache past the first vertex when hit.t >= voxel and the lobe was diffuse or lastRough^2 x hit.t >= voxel, at a point jittered within the voxel face (Binder 2019).', 'Host: render::RadianceCache owns the buffers (2^21 entries, 72 MiB, for the realtime profile; 1 otherwise), recordBeginFrame, recordResolve; resetAccumulation clears it.'],
+            workflow=['recordBeginFrame', 'cacheUpdate trace ((w+4)/5 x (h+4)/5)', 'recordResolve', 're-push push constants', 'frame trace, paths ending in the cache'],
+            why='One cache lookup stands for the rest of a path: the realtime closed box reaches 2 within 3% at 256 frames.',
+        ),
+        page(
             'hit-miss',
             'Hit & miss shaders',
             'closesthit materials, anyhit alpha, miss env.',
@@ -48,10 +57,10 @@ MODULE = {
         ),
         page(
             'bindings',
-            'Descriptor map 0–38',
-            'Set-0 layout: TLAS, images, AOVs and guides, scene tables, OpenPBR tables.',
+            'Descriptor map 0–41',
+            'Set-0 layout: TLAS, images, AOVs and guides, scene tables, OpenPBR tables, the radiance cache.',
             files=['ohao/render/rt/path_tracer_descriptors.cpp', 'site/assets/plates/pt_bindings.svg'],
-            design=['Binding 0: TLAS. 1–2: accum + output. 3: materials. 11: GPULight SSBO.', '17–18: env CDF. 19–26: motion, depth, roughness, split radiance/albedo AOVs.', '36–37: RenderScene instances and material refs. 38: OpenPBR energy tables (raygen).', 'Bindings 13–16 and 27–35 are unused; 13 storage images in all.', 'Descriptor writes must match the Slang [[vk::binding]] numbers exactly — silent black if wrong.'],
+            design=['Binding 0: TLAS. 1–2: accum + output. 3: materials. 11: GPULight SSBO.', '17–18: env CDF. 19–26: motion, depth, roughness, split radiance/albedo AOVs.', '36–37: RenderScene instances and material refs. 38: OpenPBR energy tables (raygen). 39–41: the radiance cache\'s keys, sums and resolved values.', 'Bindings 13–16 and 27–35 are unused; 13 storage images in all.', 'Descriptor writes must match the Slang [[vk::binding]] numbers exactly — silent black if wrong.'],
         ),
     ],
 }

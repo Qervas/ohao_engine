@@ -11,8 +11,8 @@ The closed box: six walls of Lambertian albedo rho (specular_weight 0, diffuse r
 emitting Le, the camera inside, no lights. Every point's radiance is Le / (1 - rho) with every
 bounce. With N bounces (0: direct light only, which here is the walls' light reflected once) it is
 Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the reference's bounces),
-1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces) 1.875, and
-1.75 at --bounces 1. Deferred: RT GI's one bounce (its rays bring back what the
+1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces, then the
+radiance cache) 2 within 3%, the same bits run twice. Deferred: RT GI's one bounce (its rays bring back what the
 walls emit, rt/gi_trace.slang) gives 1.5, the path tracer's --bounces 0, within 2% (32 frames)
 
   python tests/renderer/check_material.py   # exit 0 pass, 1 fail; last line the JSON summary
@@ -38,6 +38,7 @@ SPHERE_R = 0.5
 FURNACE_TOLERANCE = 0.01
 BOX_TOLERANCE = 0.01
 BOX_DEFERRED_TOLERANCE = 0.02
+BOX_CACHE_TOLERANCE = 0.03   # the radiance cache is a biased estimator: 256 frames reach 1.4% under 2
 
 
 def quat_x(deg):
@@ -141,8 +142,9 @@ def closed_box(failures, results):
     checks = 0
     cases = [("rt_offline", None, le / (1 - rho)), ("rt_offline", 1, le * (1 + rho + rho * rho)),
              ("rt_offline", 0, le * (1 + rho)),
-             # The realtime profile at its own 2 bounces, and at the reference's 1.
-             ("rt_realtime", None, le * (1 + rho + rho ** 2 + rho ** 3)), ("rt_realtime", 1, le * (1 + rho + rho * rho))]
+             # The realtime profile: 2 bounces, then the radiance cache, which carries every later
+             # bounce (render/rt/radiance_cache.hpp): the whole closed form, within the cache's bias.
+             ("rt_realtime", None, le / (1 - rho))]
     for mode, bounces, expected in cases:
         checks += 1
         args = ["--spp", "256", "--denoise", "none"] + (["--bounces", str(bounces)] if bounces is not None else [])
@@ -154,11 +156,19 @@ def closed_box(failures, results):
         got = float((img @ np.array([0.2126, 0.7152, 0.0722])).mean())
         ratio = got / expected
         results["box_%s" % tag] = round(ratio, 4)
-        ok = abs(ratio - 1.0) <= BOX_TOLERANCE
+        ok = abs(ratio - 1.0) <= (BOX_TOLERANCE if mode == "rt_offline" else BOX_CACHE_TOLERANCE)
         print("closed box  bounces %-4s expected %.4f got %.4f (x%.4f) %s" % (tag, expected, got, ratio,
                                                                           "ok" if ok else "FAIL"))
         if not ok:
             failures.append("closed box, bounces %s: x%.4f of %.4f" % (tag, ratio, expected))
+    # The cache sums integers and is emptied by the capture's reset: two runs are the same bits.
+    checks += 1
+    a, err_a = capture("box_repeat_a", box_scene(rho, le), "rt_realtime", ["--spp", "16", "--denoise", "none"])
+    b, err_b = capture("box_repeat_b", box_scene(rho, le), "rt_realtime", ["--spp", "16", "--denoise", "none"])
+    same = a is not None and b is not None and np.array_equal(a, b)
+    print("closed box  realtime twice: %s" % ("the same bits" if same else "DIFFERENT"))
+    if not same:
+        failures.append("closed box, realtime run twice: %s" % (err_a or err_b or "different images"))
     checks += 1
     expected = le * (1 + rho)
     img, err = capture("box_deferred", box_scene(rho, le), "deferred", ["--frames", "32"])

@@ -61,7 +61,7 @@
 <p>The BLAS build gets the same offset as its `firstVertex`, with the buffer base and a byte offset for the mesh&#x27;s slice:</p>
 <div class="citation-chip"><code class="citation-code">mesh.vertexOffset,       // arena indices are mesh-local</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L134" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:134</a></div>
 <p>and the path tracer&#x27;s hit shaders add it by hand when they fetch a triangle&#x27;s corners:</p>
-<div class="citation-chip"><code class="citation-code">c.v0 = mesh.x + indices[baseIndex];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L681" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:681</a></div>
+<div class="citation-chip"><code class="citation-code">c.v0 = mesh.x + indices[baseIndex];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L853" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:853</a></div>
 <p>The coupling is the point. Three consumers each apply the bias in their own idiom, and a change to how indices are stored — biasing at upload, say — would be correct for none of them until all three were edited, and wrong for any one left behind.</p>
 </div>
 <div class="section-rule"><h2 id="geometry-that-is-raster-input-rt-input-and-a-storage-buffer-at-once">Geometry that is raster input, RT input and a storage buffer at once</h2></div>
