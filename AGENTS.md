@@ -66,7 +66,8 @@ failing test's entry carries the last 40 lines of its output. Exit 0 = all passe
 something failed, 2 = the environment is wrong (the message says how).
 
 - **Labels** (one per test, `cmake/ohao_tests.cmake`): `quick` (CPU), `gpu`, `docs` — the
-  default set — and `golden`, `bench`, `slow`, which `--all` adds. `--labels gpu,docs`
+  default set — and `golden`, `bench`, `slow`, which `--all` adds (`monograph`, the frozen
+  site's checks, only by name). `--labels gpu,docs`
   picks your own set; `ctest --test-dir build -C Release -L quick` works without the
   script. GPU tests never run two at once; benchmarks run alone.
 - **Registering a new suite:** `ohao_add_test(<name> LABEL <label> [GPU] COMMAND <exe>)`
@@ -1118,10 +1119,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `site/tools/monograph/tree/<module>.py`, and its `author_rich.py` block, or the stale
   page keeps being served.
 
-```console
-$ python site/tools/check_unit.py reflection/api > /dev/null
-$ python site/tests/test_monograph_structure.py > /dev/null 2>&1
-$ cd site && python -c "from tools.monograph.build import build; build()" > /dev/null   # slow
+The monograph is frozen during the frontier renderer work (Frank, 2026-10-30): its citations
+trail the code, so its checks are in no gate (CTest label `monograph`, run by
+`python tools/check.py --labels monograph`) and `check_docs` does not run these:
+
+```bash
+python site/tools/check_unit.py reflection/api
+python site/tests/test_monograph_structure.py
+cd site && python -c "from tools.monograph.build import build; build()"
 ```
 
 ## Conventions

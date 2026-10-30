@@ -4,7 +4,9 @@
 #
 #   quick     CPU suites and CPU harnesses (seconds)
 #   gpu       suites and harnesses that create a Vulkan device
-#   docs      the doc-command checker and the monograph checks
+#   docs      the doc-command checker
+#   monograph the monograph's checks (site/): frozen during the frontier renderer work (Frank,
+#             2026-10-30), so in no default or --all run; `--labels monograph` runs them
 #   golden    the render goldens (minutes; a GPU)
 #   bench     the benchmark gates (run alone)
 #   slow      exhaustive checks (minutes)
@@ -143,5 +145,5 @@ function(ohao_register_harness_tests)
     # Docs
     ohao_add_python_test(check_docs LABEL docs TIMEOUT 1200 LOCKS cli_tmp check_fixture serve_tmp
         SCRIPT tests/docs/check_docs.py ARGS --cpu-only)
-    ohao_add_python_test(monograph_structure LABEL docs SCRIPT site/tests/test_monograph_structure.py)
+    ohao_add_python_test(monograph_structure LABEL monograph SCRIPT site/tests/test_monograph_structure.py)
 endfunction()

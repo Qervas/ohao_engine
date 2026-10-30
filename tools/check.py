@@ -23,7 +23,8 @@ the last 40 lines of a failing test's output, so no failure is ever reported wit
 it printed. attempts lists a rerun noisy test's runs, [{ok, noisy, seconds}].
 
 Labels (cmake/ohao_tests.cmake): quick, gpu, docs (the default set); --all adds golden,
-bench and slow. selftest is only for this script's own test.
+bench and slow. selftest is only for this script's own test; monograph (site/'s checks, frozen
+during the frontier renderer work) runs only when asked for.
 
 Exit code: 0 when the build and every selected test pass, 1 otherwise, 2 on a usage or
 environment error (wrong cmake, missing module).
@@ -43,7 +44,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LABELS = ["quick", "gpu", "docs"]
 ALL_LABELS = DEFAULT_LABELS + ["golden", "bench", "slow"]
-KNOWN_LABELS = ALL_LABELS + ["selftest"]
+KNOWN_LABELS = ALL_LABELS + ["selftest", "monograph"]
 MAX_JOBS = int(os.environ.get("OHAO_MAX_JOBS", "6"))
 TAIL_LINES = 40
 # Modules the harnesses import, by the label whose tests need them.
@@ -271,7 +272,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Build OHAO and run its tests; one JSON verdict.")
     ap.add_argument("--labels", default=",".join(DEFAULT_LABELS),
                     help="comma-separated CTest labels (default: quick,gpu,docs)")
-    ap.add_argument("--all", action="store_true", help="every label but selftest")
+    ap.add_argument("--all", action="store_true", help="every label but selftest and monograph")
     ap.add_argument("--jobs", type=int, default=MAX_JOBS, help=f"build parallelism (at most {MAX_JOBS})")
     ap.add_argument("--ctest-jobs", type=int, default=4, help="tests run at once (GPU tests never overlap)")
     ap.add_argument("--config", default="Release")
