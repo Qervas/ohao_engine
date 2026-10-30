@@ -75,7 +75,7 @@ inline DlssQuality dlssQualityFromEnv() {
 /// Guide-buffer wiring and the denoise dispatch land in Phase 2 — evaluate() is a
 /// documented stub here.
 ///
-/// Modeled on the house denoiser classes (NrdCompositor / AtrousDenoiser): a thin
+/// Modeled on the house denoiser classes (NrdCompositor): a thin
 /// RAII object with initialize()/shutdown(). NGX handles are stored as opaque
 /// void* so this header stays free of NGX includes; the .cpp casts them back.
 ///

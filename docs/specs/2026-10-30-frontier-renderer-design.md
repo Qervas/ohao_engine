@@ -1,6 +1,6 @@
 # The frontier renderer: retiring the legacy
 
-**Status:** accepted (Frank, 2026-10-30: every ruling as recommended; F-R3 yes, add the DLSS SDK; F-R6 keep the fallback). Step F0 is built (`docs/changes/2026-10-30-frontier-f0.md`); F1 is next.
+**Status:** accepted (Frank, 2026-10-30: every ruling as recommended; F-R3 yes, add the DLSS SDK; F-R6 keep the fallback). Steps F0 and F1 are built (`docs/changes/2026-10-30-frontier-f0.md`, `2026-10-30-frontier-f1.md`); F1's real-time task (T6) and F2 are next.
 Frank, 2026-10-30: "any old code prohibits our frontier pacing that we need to remove it or retire it".
 
 ## 1. Why

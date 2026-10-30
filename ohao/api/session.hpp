@@ -94,7 +94,7 @@ struct RenderRequest {
     int frames{0};                     // frames rendered, the last one read back; 0: deferred 10, path tracer spp
     std::optional<uint32_t> width;     // absent: the host's size (headless 1920x1080; a window its own)
     std::optional<uint32_t> height;
-    std::string denoise{"none"};       // none | oidn | nrd | atrous | dlss
+    std::string denoise{"none"};       // none | oidn | nrd | dlss
     std::vector<std::string> post;     // deferred post effects turned on: bloom, taa, ssao
     std::optional<float> exposure;     // absent: the renderer's own default
     std::string quality{"realtime"};   // deferred: realtime | reference

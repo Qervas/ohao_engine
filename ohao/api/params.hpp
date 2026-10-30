@@ -29,7 +29,7 @@ inline constexpr std::size_t kMaxQueuedInput = 100'000;   // injected events wai
 
 enum class SaveLayout : uint8_t { compact, pretty };
 enum class CaptureMode : uint8_t { deferred, rt_realtime, rt_offline };
-enum class Denoiser : uint8_t { none, oidn, nrd, atrous, dlss };
+enum class Denoiser : uint8_t { none, oidn, nrd, dlss };
 enum class PostEffect : uint8_t { bloom, taa, ssao };
 enum class Quality : uint8_t { realtime, reference };
 enum class LogLevelName : uint8_t { trace, debug, info, warn, error };

@@ -14,7 +14,7 @@ MODULE = {
             'Public API: modes, setScene, ensureRT, denoise, pixels, present.',
             files=['ohao/gpu/vulkan/renderer.hpp', 'ohao/gpu/vulkan/renderer.cpp', 'ohao/gpu/vulkan/renderer_impl.hpp', 'ohao/gpu/gpu_module.hpp'],
             design=['RenderMode: Forward | Deferred | RTRealtime | RTOffline. isRTRenderMode / isRasterRenderMode helpers.', 'PathTracer is lazy (ensureRTRenderer) so deferred-only sessions avoid dual 4K RT OOM.', 'renderer_impl.hpp holds private split of large renderer translation units.', 'CameraUniformBuffer and SimpleVertex are GpuPod-asserted shared layouts.'],
-            workflow=['VulkanRenderer(w,h).initialize()', 'setScene → upload + BLAS/TLAS', 'setRenderMode / ensureRTRenderer', 'setDenoiseMode (None|OIDN|NRD|Atrous|DLSSRR)', 'requestReadback → render() → readback, or present'],
+            workflow=['VulkanRenderer(w,h).initialize()', 'setScene → upload + BLAS/TLAS', 'setRenderMode / ensureRTRenderer', 'setDenoiseMode (None|OIDN|NRD|DLSSRR)', 'requestReadback → render() → readback, or present'],
             why='One facade for every example and test; modes share scene upload and AS.',
         ),
         page(

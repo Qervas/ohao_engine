@@ -37,7 +37,7 @@ ohao query    SCENE [--ids a,b] [--name N] [--name-contains S] [--has T,U] [--fi
 ohao summary  SCENE [--depth D] [--max-children N] [--max-nodes N]
 ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                     [--render OUT.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--bounces N]
-                     [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
+                     [--frames N] [--denoise none|oidn|nrd|dlss] [--size WxH]
                      [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]
                      [--hud] [--hdr out.pfm]]
                     [--save OUT.scene.json]

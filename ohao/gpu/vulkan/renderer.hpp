@@ -325,11 +325,6 @@ public:
     void        setDenoiseMode(DenoiseMode mode);
     [[nodiscard]] DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
 
-    // Realtime/DLSS: genuine per-frame sample count. The realtime raygen traces
-    // N decorrelated paths per pixel in ONE render() dispatch and averages them,
-    // so DLSS/SVGF get a clean N-spp image before denoising. Set by a realtime
-    // host. Clamped to [1, 64]. Survives the per-frame RT
-    // settings reset (re-injected in applyRTRenderSettings).
     // The path tracer's bounces in place of its profile's (a capture's `bounces`); nullopt: the
     // profile's. Re-applied every frame, as the per-frame reset to the profile would drop it.
     void setMaxBouncesOverride(std::optional<uint32_t> bounces) {

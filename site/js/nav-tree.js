@@ -428,11 +428,6 @@ window.OHAO_NAV_TREE = [
         "id": "denoise/dlss",
         "title": "DLSS Ray Reconstruction",
         "href": "m/denoise/dlss.html"
-      },
-      {
-        "id": "denoise/atrous",
-        "title": "\u00c0-trous / SVGF-style",
-        "href": "m/denoise/atrous.html"
       }
     ]
   },

@@ -13,7 +13,7 @@ MODULE = {
             'Denoise modes & traits',
             'DenoiseMode enum + rt_meta\'s denoise policy functions.',
             files=['ohao/render/rt/denoise/denoise_types.hpp', 'ohao/render/rt/rt_meta.hpp', 'ohao/render/rt/denoiser.hpp'],
-            design=['DenoiseMode: None | OIDN | NRD | Atrous | DLSSRR (and related).', 'denoiseNeeds* functions say which AOV guides each backend needs (albedo, normal, hit-dist, motion); NRD is the realtime default.', 'CLI: --denoise=dlssrr | nrd | oidn | atrous | none.'],
+            design=['DenoiseMode: None | OIDN | NRD | DLSSRR; an unknown name parses as None with a warning.', 'denoiseNeeds* functions say which AOV guides each backend needs (albedo, normal, hit-dist, motion); NRD is the realtime default.', 'CLI: --denoise=dlssrr | nrd | oidn | atrous | none.'],
         ),
         page(
             'oidn',
@@ -37,13 +37,6 @@ MODULE = {
             'NGX dlssd init, guides, the display tonemap; the realtime default on NVIDIA.',
             files=['ohao/render/rt/denoise/dlss_rr.hpp', 'ohao/render/rt/denoise/dlss_rr.cpp', 'shaders/compute/dlss_tonemap.comp', 'tools/fetch_dlss.py', 'external/cmake/dlss.cmake'],
             design=['NVIDIA DLSS Ray Reconstruction via NGX; tools/fetch_dlss.py fetches the pinned SDK (v310.9.16, SHA-256 per file) into git-ignored external/DLSS; the static nvsdk_ngx_s.lib links, nvngx_dlssd.dll is copied next to the binaries.', 'rtDefaults picks DLSSRR for the realtime profile when built with the SDK on an NVIDIA device (0x10DE); captures default to no denoiser.', 'NGX logs go through OHAO_LOG (Debug), so stdout stays the protocol\'s.', 'dlss_tonemap.comp: ACES(x * 0.5)^(1/2.2) into the RGBA8 output, one descriptor set per frame in flight.'],
-        ),
-        page(
-            'atrous',
-            'À-trous / SVGF-style',
-            'Internal spatial/temporal denoise compute.',
-            files=['ohao/render/rt/denoise/atrous_denoise.hpp', 'shaders/compute/denoise_atrous.comp', 'shaders/rt/rt_atrous.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp'],
-            design=['In-engine fallback when NRD/DLSS unavailable: edge-aware à-trous + optional SVGF temporal.', 'Does not match NRD quality but has zero external dependency.'],
         ),
     ],
 }

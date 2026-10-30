@@ -18,7 +18,7 @@ namespace ohao {
 [[nodiscard]] constexpr bool denoiseNeedsCpuReadback(DenoiseMode m) noexcept { return m == DenoiseMode::OIDN; }
 
 [[nodiscard]] constexpr bool denoiseNeedsMotionVectors(DenoiseMode m) noexcept {
-    return m == DenoiseMode::NRD || m == DenoiseMode::Atrous || m == DenoiseMode::DLSSRR;
+    return m == DenoiseMode::NRD || m == DenoiseMode::DLSSRR;
 }
 
 [[nodiscard]] constexpr bool denoiseNeedsDiffSpecSplit(DenoiseMode m) noexcept { return m == DenoiseMode::NRD; }
@@ -35,7 +35,6 @@ namespace ohao {
 /// alone; offline NRD denoises the mean of a still view's samples.
 [[nodiscard]] constexpr bool tracerAccumulates(const RTRenderSettings& s) noexcept {
     switch (s.denoiseMode) {
-        case DenoiseMode::Atrous:
         case DenoiseMode::DLSSRR: return false;
         case DenoiseMode::NRD: return !isRealtimeProfile(s.profile);
         default: return true;

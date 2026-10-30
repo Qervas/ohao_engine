@@ -136,7 +136,7 @@ is the Halton offset, the same for every pixel of the frame.
 
 Motion vectors are the second sign. They are written by the raygen as
 `currPix - prevPix` where DLSS wants `prevPix - currPix`. Rather than rewrite the
-raygen — NRD and the à-trous denoiser read the same image — the flip is folded into
+raygen — NRD reads the same image — the flip is folded into
 the scale the caller passes:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "ei.mvScaleX = -1.0f; ei.mvScaleY = -1.0f;"}}
@@ -174,8 +174,8 @@ integrates across time:
 
 Consequently `InReset` is raised only on a genuine first frame or an explicit
 accumulation reset, never on camera movement. Resetting on movement is the
-tempting alternative, and it is wrong for the same reason it is wrong for the
-à-trous path: motion vectors exist so the network can reproject *through* camera
+tempting alternative, and it is wrong for the same reason it is wrong for
+NRD: motion vectors exist so the network can reproject *through* camera
 motion, and discarding history every moved frame yields raw 1-spp noise for as
 long as the user keeps moving.
 

@@ -14,7 +14,6 @@ enum class DenoiseMode : uint32_t {
     None   = 0,
     OIDN   = 1,
     NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)
-    Atrous = 4,   // À-trous / SVGF-style
     DLSSRR = 5,   // DLSS Ray Reconstruction / NGX "dlssd"
 };
 
@@ -30,7 +29,6 @@ enum class DenoiseMode : uint32_t {
         case DenoiseMode::None:
         case DenoiseMode::OIDN:
         case DenoiseMode::NRD:
-        case DenoiseMode::Atrous:
         case DenoiseMode::DLSSRR:
             return true;
     }

@@ -33,7 +33,6 @@ DenoiseMode parseDenoiseMode(std::string_view s) {
         return DenoiseMode::None;
 #endif
     }
-    if (lower == "atrous") return DenoiseMode::Atrous;
     if (lower == "dlssrr" || lower == "dlss" || lower == "dlssd") {
 #ifdef OHAO_DLSS_ENABLED
         return DenoiseMode::DLSSRR;
@@ -52,7 +51,6 @@ const char* denoiseModeName(DenoiseMode mode) {
         case DenoiseMode::None:   return "none";
         case DenoiseMode::OIDN:   return "oidn";
         case DenoiseMode::NRD:    return "nrd";
-        case DenoiseMode::Atrous: return "atrous";
         case DenoiseMode::DLSSRR: return "dlssrr";
     }
     return "unknown";

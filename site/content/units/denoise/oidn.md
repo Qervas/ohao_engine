@@ -82,13 +82,13 @@ runs on.
 
 The rejected alternative buys frame time the offline profile does not need, at
 the cost of a second device/allocator lifetime to keep in sync with the Vulkan
-one — and the realtime slots are already filled by NRD, à-trous and DLSS-RR, all
-of which stay GPU-side. OIDN is the reference backend; latency is explicitly not
+one — and the realtime slots are already filled by NRD and DLSS-RR, both of
+which stay GPU-side. OIDN is the reference backend; latency is explicitly not
 its job.
 :::
 
 The dispatch reflects that. `readback()` returns the requested frame's staging
-copy for every GPU mode — `None`, `Atrous`, `DLSSRR` and `NRD` all leave their
+copy for every GPU mode — `None`, `DLSSRR` and `NRD` all leave their
 result in the output image the frame copied — and hands only `OIDN` to the CPU
 denoising path, by name.
 

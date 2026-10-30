@@ -88,9 +88,9 @@ That keeps the profile constants authoritative over tracer behaviour, but it mea
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
-The injection is not only for the denoisers the tracer dispatches itself (à-trous, DLSS-RR and NRD, each behind a branch on `m_renderSettings.denoiseMode`). The trace's own behaviour follows the mode too: whether it keeps a running mean and whether the firefly clamp is on (`tracerAccumulates`, `rt_meta.hpp`). Without the injection, `--denoise none` on the realtime profile would still trace one sample a frame for an NRD that never runs.
+The injection is not only for the denoisers the tracer dispatches itself (DLSS-RR and NRD, each behind a branch on `m_renderSettings.denoiseMode`). The trace's own behaviour follows the mode too: whether it keeps a running mean and whether the firefly clamp is on (`tracerAccumulates`, `rt_meta.hpp`). Without the injection, `--denoise none` on the realtime profile would still trace one sample a frame for an NRD that never runs.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
 With no `--denoise` flag at all, the defaults decide: RTOffline denoises with OIDN; RTRealtime with DLSS-RR on an NVIDIA GPU in a build with the SDK, else NRD. A capture names its own denoiser and defaults to none.
 
@@ -119,7 +119,7 @@ Three counters let a caller reason about the frames ahead of the one it reads. `
 
 ## readback() and the CPU denoiser
 
-Most denoise modes need nothing from `readback()`. None, Atrous, DLSS-RR and NRD all end with the RGBA8 frame in `m_outputImage`, which is the image the requested frame copies and the one a window presents. Atrous filters that image in place. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then writes it into the same image with the tracer's curve; NRD's compose writes it there too, so the standard copy picks either up unchanged. The DLSS write runs only when NGX feature creation succeeded; where that fails, the copy is the raw trace.
+Most denoise modes need nothing from `readback()`. None, DLSS-RR and NRD all end with the RGBA8 frame in `m_outputImage`, which is the image the requested frame copies and the one a window presents. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then writes it into the same image with the tracer's curve; NRD's compose writes it there too, so the standard copy picks either up unchanged. The DLSS write runs only when NGX feature creation succeeded; where that fails, the copy is the raw trace.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
 

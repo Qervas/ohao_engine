@@ -20,7 +20,7 @@ The glob runs at configure time and, since sub-project 4, carries `CONFIGURE_DEP
 the build re-checks it and re-runs the configure step when a stage source is added or
 removed, so a new `.rgen` is compiled by the next build. It also recurses without exclusions:
 every stage source anywhere under `shaders/` is globbed and compiled, whether or
-not any C++ loads it — 21 GLSL sources, 21 SPIR-V modules. Headers are the opposite
+not any C++ loads it — 15 GLSL sources, 15 SPIR-V modules. Headers are the opposite
 case: a `.glsl` file is compiled only as text spliced into a stage, so a header no
 stage includes is never parsed at all.
 
@@ -63,13 +63,12 @@ underscores, then `.spv` appended:
 
 {{cite shaders/CMakeLists.txt "string(REPLACE "/" "_" SHADER_FLAT_NAME ${SHADER_REL})"}}
 
-So `shaders/rt/rt_svgf_temporal.comp` becomes `rt_rt_svgf_temporal.comp.spv` —
-the stutter is the directory name surviving into the filename. That mangled
-string is not an internal detail; it is hard-coded at every C++ load site, which
-makes the flattening rule a binary interface between the build system and the
-renderer:
+So `shaders/rt/nrd_compose.comp` becomes `rt_nrd_compose.comp.spv` — the
+directory name survives as a prefix of the filename. That flattened string is not an
+internal detail; it is hard-coded at every C++ load site, which makes the flattening
+rule a binary interface between the build system and the renderer:
 
-{{cite ohao/render/rt/denoise/atrous_denoise.cpp "rt_rt_svgf_temporal.comp.spv"}}
+{{cite ohao/render/rt/denoise/nrd_compose.cpp "auto spv = readShaderSpv("rt_nrd_compose.comp.spv");"}}
 
 The mapping is not injective — `a/b.frag` and `a_b.frag` collide — and nothing in
 the build detects that. No collision exists in the tree today, but the invariant
@@ -203,7 +202,7 @@ header rebuilds the world:
 
 {{cite shaders/CMakeLists.txt "DEPENDS ${SHADER} ${SHADER_INCLUDES}"}}
 
-Touching `includes/scene/scene_data.glsl` therefore recompiles all 21 GLSL modules,
+Touching `includes/scene/scene_data.glsl` therefore recompiles all 15 GLSL modules,
 including those whose include closure never reaches it — a deliberate over-approximation that avoids depfile plumbing. The
 under-approximation next to it is the dangerous half. `SHADER_INCLUDES` is built
 from a pattern with a directory component in the middle:

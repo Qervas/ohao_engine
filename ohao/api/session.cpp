@@ -727,7 +727,7 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     std::string hdrFile;
     if (p.hdr && !usePath(s, params, "hdr", *p.hdr, PathUse::Write, ctx, hdrFile)) return false;
     static constexpr const char* kModes[] = {"deferred", "rt_realtime", "rt_offline"};
-    static constexpr const char* kDenoisers[] = {"none", "oidn", "nrd", "atrous", "dlss"};
+    static constexpr const char* kDenoisers[] = {"none", "oidn", "nrd", "dlss"};
     static constexpr const char* kEffects[] = {"bloom", "taa", "ssao"};
     RenderRequest r;
     r.path = file;

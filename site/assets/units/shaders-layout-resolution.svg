@@ -3,7 +3,7 @@
 
   <text x="24" y="28" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">1 · SOURCE TREE</text>
   <rect x="24" y="38" width="248" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
-  <text x="38" y="60" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#e8e2d6">shaders/rt/rt_svgf_temporal.comp</text>
+  <text x="38" y="60" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#e8e2d6">shaders/rt/nrd_compose.comp</text>
   <text x="38" y="76" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">found by GLOB_RECURSE at configure time</text>
 
   <path d="M 272 61 L 316 61" stroke="#3d4a58" stroke-width="1.5" fill="none"/>
@@ -21,7 +21,7 @@
 
   <text x="24" y="160" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">3 · BUILD OUTPUT (flat namespace)</text>
   <rect x="332" y="146" width="364" height="42" rx="4" fill="#1a222c" stroke="#c4784a"/>
-  <text x="346" y="172" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">build/shaders/rt_rt_svgf_temporal.comp.spv</text>
+  <text x="346" y="172" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">build/shaders/rt_nrd_compose.comp.spv</text>
 
   <rect x="24" y="146" width="248" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="38" y="166" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">also CMake&#8217;s own build dir for</text>
@@ -34,7 +34,7 @@
   <text x="24" y="222" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">4 · RUNTIME LOOKUP (relative to the process CWD)</text>
 
   <rect x="24" y="234" width="410" height="34" rx="4" fill="#1a222c" stroke="#7dba8a"/>
-  <text x="38" y="256" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">bin/shaders/rt_rt_svgf_temporal.comp.spv</text>
+  <text x="38" y="256" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">bin/shaders/rt_nrd_compose.comp.spv</text>
   <text x="452" y="256" font-family="DM Sans,sans-serif" font-size="11" fill="#7dba8a">hit, if CWD is build/</text>
 
   <rect x="24" y="274" width="410" height="34" rx="4" fill="#1a222c" stroke="#7dba8a"/>

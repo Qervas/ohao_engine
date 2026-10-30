@@ -264,21 +264,15 @@ which carries no surface material (its `emitterLight` holds its radiance and lig
 
 ## The rest of shaders/rt
 
-Twelve files sit in `shaders/rt/`: the path tracer, its radiance cache module and
+Ten files sit in `shaders/rt/`: the path tracer, its radiance cache module and
 resolve pass, the hybrid pairs above, two Slang modules they import
-(`alpha_test.slang`, `smoke_proxy.slang`), NRD's compose pass, and the à-trous
-denoiser's two passes.
+(`alpha_test.slang`, `smoke_proxy.slang`), and NRD's compose pass, the one GLSL stage
+among them. The path tracer's own frames are denoised only by the external denoisers
+(OIDN, NRD, DLSS-RR); the à-trous filter in the directory is RT GI's
+(`gi_denoise.slang`'s `atrous` entry), which filters GI's half-resolution radiance, not
+the path tracer's beauty.
 
-`DenoiseMode::Atrous` is the variance-guided pair `rt_svgf_temporal.comp` and
-`rt_svgf_atrous.comp`, the two pipelines `AtrousDenoiser` builds. Its 5×5 B3-spline
-tap weight multiplies edge-stopping terms on luminance, normal and depth. The luminance
-term is the one doing the averaging, and its width scales with the local variance, so
-a converged pixel stays sharp; the normal and depth guides only stop the kernel
-crossing geometric edges.
-
-{{cite shaders/rt/rt_svgf_atrous.comp "w *= exp(-abs(cL - sL) / (sqrtVar * pc.sigmaL + 1e-6));"}}
-
-{{cite ohao/render/rt/denoise/atrous_denoise.cpp "rt_rt_svgf_atrous.comp.spv"}}
+{{cite ohao/render/rt/denoise/nrd_compose.cpp "auto spv = readShaderSpv("rt_nrd_compose.comp.spv");"}}
 
 ## Contracts
 

@@ -45,13 +45,9 @@ endif()
 if(OHAO_NRD)
     target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_ENABLED)
     target_link_libraries(ohao_renderer PRIVATE NRD)
-    # Sub-plan 4.C T3a: our own NRDIntegration static lib is named
-    # OhaoNRDIntegration to avoid clash with NRD's upstream INTERFACE target
-    # (which points at nrd-src/Integration/ and carries no symbols).
-    if(TARGET OhaoNRDIntegration)
-        target_link_libraries(ohao_renderer PRIVATE OhaoNRDIntegration)
-        target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_INTEGRATION_AVAILABLE)
-    endif()
+    # Our NRDIntegration static lib (OhaoNRDIntegration: NRD's upstream INTERFACE target of that
+    # name carries no symbols) is what denoises; external/cmake/nrd.cmake always builds it with NRD.
+    target_link_libraries(ohao_renderer PRIVATE OhaoNRDIntegration)
 endif()
 
 # Conditional DLSS Ray Reconstruction (NGX) support (Phase 5). dlss_rr.cpp is

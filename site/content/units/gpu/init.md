@@ -123,8 +123,8 @@ that is not enabled is invalid regardless of its bits.
 
 The 1.3 struct sets one field, `shaderDemoteToHelperInvocation`, and it is not
 optional in practice. `glslc` targeting SPIR-V 1.6 lowers `discard` to
-`OpDemoteToHelperInvocation`, so every shader that discards — deferred lighting, sky,
-SVGF — needs the feature enabled to be valid. It is mandatory on every
+`OpDemoteToHelperInvocation`, so every shader that discards — the sky, the G-buffer's
+alpha-mask variant — needs the feature enabled to be valid. It is mandatory on every
 Vulkan 1.3 device, so enabling it costs no portability. Nothing else from 1.3 is
 used: the tree contains no `vkCmdBeginRendering`, `vkCmdPipelineBarrier2` or
 `vkQueueSubmit2` — the engine is on classic render passes and VK1.0-style barriers

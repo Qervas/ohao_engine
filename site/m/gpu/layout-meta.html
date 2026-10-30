@@ -56,7 +56,7 @@
 <div class="prose reveal">
 <p>Vulkan guarantees only 128 bytes of push-constant space; anything above that is a device capability, not a promise. Exactly one contract sits above the floor — the path tracer&#x27;s 256 — and no code queries `maxPushConstantsSize`; across `ohao/`, `shaders/` and `examples/` the identifier occurs only in comments, each noting that 128 is the floor. On a minimum-spec device the failure surfaces at pipeline-layout creation, not at compile time. The raster blocks are far below the line: the G-buffer pushes 16 bytes and the shadow pass 64.</p>
 <p>The path-tracer block is also the one with no headroom: three matrices and four `uvec4`/`vec4` lanes fill the 256 bytes exactly.</p>
-<div class="citation-chip"><code class="citation-code">};  // total = 256 bytes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L430" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:430</a></div>
+<div class="citation-chip"><code class="citation-code">};  // total = 256 bytes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L424" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:424</a></div>
 <p>The bounce limit, the sample index, the running mean&#x27;s length and the motion-vector flag all share lanes with other values. A size contract that is exactly satisfied has stopped being a check and become a design constraint: a new per-frame value has to find a spare word, not a new field.</p>
 </div>
 <div class="section-rule"><h2 id="the-per-draw-block-that-became-a-record">The per-draw block that became a record</h2></div>

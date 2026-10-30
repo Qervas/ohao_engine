@@ -18,7 +18,7 @@
   <!-- ── row 1: renderer-side copy ───────────────────────────────── -->
   <rect x="16" y="50" width="104" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="68" y="70" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">--denoise=</text>
-  <text x="68" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">nrd | atrous …</text>
+  <text x="68" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">nrd | dlssrr …</text>
 
   <line x1="120" y1="71" x2="146" y2="71" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
 

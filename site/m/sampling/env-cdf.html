@@ -57,7 +57,7 @@ P(x,y) \;=\; \frac{w_{x,y}}{S_y}\cdot\frac{S_y}{T} \;=\; \frac{w_{x,y}}{T}
 \qquad p_{uv} = P\,W H, \qquad p_\omega = \frac{p_{uv}}{2\pi^2\sin\theta} \;\approx\; \frac{L_{x,y}}{T}\cdot\frac{WH}{2\pi^2}
 $$</div>
 <p>The sinθ inserted at build time is cancelled by the Jacobian at sample time (exactly at the row centre, to within the row&#x27;s variation of sinθ elsewhere in it), leaving a solid-angle density proportional to luminance. T is absent from that chain: both tables are already normalised, so sampling never needs the integral. The host still sends it as `tuning.z`, and no shader reads it:</p>
-<div class="citation-chip"><code class="citation-code">glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L428" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:428</a></div>
+<div class="citation-chip"><code class="citation-code">glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L422" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:422</a></div>
 </div>
 <div class="section-rule"><h2 id="two-binary-searches-per-sample">Two binary searches per sample</h2></div>
 <div class="prose reveal">
@@ -84,7 +84,7 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">MIN_RATIO = 1.5             # blue over red, both regions</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/check_env_orientation.py#L34" target="_blank" rel="noopener">tests/renderer/check_env_orientation.py:34</a></div>
 <div class="key-idea reveal"><div class="key-label">Key idea</div><p>The firefly clamp is the one biasing operation near this sampler, and it is not in it: the path&#x27;s whole radiance is scaled down to the `tuning.x` luminance ceiling, once, and only when the host sets the flag. The host sets it only for a profile that asks for it and whose trace does not accumulate (a temporal denoiser fed one sample a frame); a running mean converges without it.</p></div>
 <div class="citation-chip"><code class="citation-code">if (lum &gt; pc.tuning.x) radiance *= pc.tuning.x / lum;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L685" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:685</a></div>
-<div class="citation-chip"><code class="citation-code">if (m_renderSettings.enableFireflyClamp &amp;&amp; !tracerAccumulates(m_renderSettings))</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L524" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:524</a></div>
+<div class="citation-chip"><code class="citation-code">if (m_renderSettings.enableFireflyClamp &amp;&amp; !tracerAccumulates(m_renderSettings))</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L523" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:523</a></div>
 </div>
 <div class="section-rule"><h2 id="what-happens-with-no-environment-map">What happens with no environment map</h2></div>
 <div class="prose reveal">

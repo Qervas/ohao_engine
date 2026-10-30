@@ -566,7 +566,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "denoise/types": {
         "what": ["DenoiseMode enum + rt_meta's constexpr policy saying which AOV guides each backend needs; realtime defaults to DLSS-RR on NVIDIA with the SDK, else NRD."],
-        "how": ["denoise_types.hpp; CLI --denoise=dlssrr|nrd|oidn|atrous|none."],
+        "how": ["denoise_types.hpp; CLI --denoise=dlssrr|nrd|oidn|none (an unknown name is None with a warning)."],
         "why": "The policy keeps each backend's guides and accumulation consistent with the mode actually running.",
     },
     "denoise/oidn": {
@@ -595,11 +595,6 @@ KNOWLEDGE: dict[str, dict] = {
             "dlss_tonemap.comp: ACES(x * 0.5)^(1/2.2) into the output, a set per frame in flight.",
         ],
         "why": "Highest interactive quality on supported NVIDIA hardware.",
-    },
-    "denoise/atrous": {
-        "what": ["In-engine edge-aware à-trous / SVGF-style denoise with zero external dependency."],
-        "how": ["atrous_denoise + denoise_atrous.comp / rt_svgf_*.comp."],
-        "why": "Fallback when NRD/DLSS unavailable.",
     },
     "shaders/layout": {
         "what": ["Shader tree layout: core, rt, postprocess, compute, includes, shadow, vfx. SPIR-V via CMake/compile script."],
@@ -644,7 +639,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "shaders/rt-shaders": {
         "what": [
-            "Full RT program family: path tracer stages, hybrid shadow/GI, NRD compose, SVGF/à-trous.",
+            "Full RT program family: path tracer stages, hybrid shadow/GI, NRD compose.",
         ],
         "how": [
             "path_tracer.slang for full PT; shadow_* / gi_* (Slang compute, inline ray queries) for hybrid; compute post for denoising.",

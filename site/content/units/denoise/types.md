@@ -6,13 +6,12 @@ standard: v2
 figures: [denoise-types-modeflow]
 ---
 
-## Five values, numbered with a gap
+## Four values, numbered with gaps
 
 `DenoiseMode` is the single token every part of the RT stack uses to say which
 denoiser is in play, and its enumerators are numbered explicitly and
-non-contiguously. Value 2 is missing: the OptiX backend was deleted (it
-segfaulted on shutdown), and the survivors kept their old numbers rather than
-closing the gap, so NRD is still 3 and the two later additions took 4 and 5.
+non-contiguously: `None` 0, `OIDN` 1, `NRD` 3, `DLSSRR` 5. Values 2 and 4 name
+nothing.
 
 {{cite ohao/render/rt/denoise/denoise_types.hpp "NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)"}}
 
@@ -22,10 +21,13 @@ an integer back into one. `denoiseModeIndex` is the only function that reads the
 underlying value at all, and it has no callers. The numbering is source hygiene,
 not an ABI.
 
-The parser degrades instead of failing. `optix` still parses, to OIDN, with a
-warning on stderr, so old scripts keep running:
+The parser degrades instead of failing. `optix` parses to OIDN with a warning,
+and any name it does not know (`atrous` among them) parses to `None` with a
+warning, so a script that names an unavailable denoiser still runs:
 
 {{cite ohao/render/rt/denoise/denoise_types.cpp "optix is no longer supported"}}
+
+{{cite ohao/render/rt/denoise/denoise_types.cpp "Denoise: unknown mode '{}' — falling back to None"}}
 
 More importantly, `nrd` and `dlssrr` are gated on the build defines that decide
 whether those backends were compiled in at all; if they weren't, the string
@@ -55,10 +57,10 @@ constant expressions and on a mode that arrived from `argv`:
 
 {{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool denoiseNeedsMotionVectors(DenoiseMode m) noexcept {"}}
 
-Each is a direct predicate: motion vectors for NRD, à-trous and DLSS RR; the
+Each is a direct predicate: motion vectors for NRD and DLSS RR; the
 diffuse/specular split for NRD; a CPU readback for OIDN; sub-pixel jitter for NRD
 and DLSS RR. There is no `switch` with a `default:` arm and no trait class behind
-them, so a sixth enumerator answers `false` to every requirement until a predicate
+them, so a new enumerator answers `false` to every requirement until a predicate
 names it, and no diagnostic says so.
 
 Two of the functions take the settings rather than the mode, because the answer
@@ -67,8 +69,8 @@ depends on the profile as well:
 {{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool tracerAccumulates(const RTRenderSettings& s) noexcept {"}}
 
 `tracerAccumulates` says whether the trace keeps its own running mean of the
-beauty. À-trous and DLSS RR never let it: each is temporal and carries the
-history itself, taking this frame's sample alone. NRD lets it only offline, where
+beauty. DLSS RR never lets it: it is temporal and carries the history itself,
+taking this frame's sample alone. NRD lets it only offline, where
 it denoises the mean of a still view's samples; realtime NRD reprojects its own
 history through the motion vectors. `None` and `OIDN` always accumulate.
 `tracerAccumulatesAOVs` is the matching question for NRD's five guide images:
@@ -84,12 +86,10 @@ wider footprint than centre-sampling would.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (denoiseNeedsPixelJitter(m_renderSettings.denoiseMode)) {"}}
 
-The predicate is an enumerated pair, not a property. `Atrous` owns temporal
-reprojection too — it is SVGF, with a reprojection pass and a persistent history
-buffer — and is still excluded; the else arm groups it with `None` and `OIDN` on
-pixel centres, the stated reason being parity:
+The predicate names the two temporal denoisers. The else arm keeps `None` and
+`OIDN` on pixel centres, the stated reason being parity:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "None/OIDN/Atrous keep pixel-center sampling"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "None and OIDN keep pixel-center sampling"}}
 
 The sequence index is bumped by one before use, because Halton's zeroth term is
 exactly 0 — indistinguishable from "no jitter", and it would waste one of the 16
@@ -116,8 +116,8 @@ one, so offline `--spp N` feeds NRD an N-sample mean:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (tracerAccumulatesAOVs(m_renderSettings)) pc.control.x |= kPTFlagAccumulateAOVs;"}}
 
-The denoisers' own resets read the other clock: à-trous, DLSS RR and NRD restart
-their history only when `m_historyFrameCount` is 0, so a moved view reprojects
+The denoisers' own resets read the other clock: DLSS RR and NRD restart their
+history only when `m_historyFrameCount` is 0, so a moved view reprojects
 through the motion vectors instead of starting over.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "camera.frameIndex = m_historyFrameCount;   // 0 only after resetAccumulation: a moved view reprojects"}}
@@ -160,7 +160,7 @@ The NRD chain is gated on the mode, so it runs only when NRD was chosen:
 
 :::key
 `DenoiseMode` decides three things: which GPU denoiser the tracer dispatches
-(à-trous, DLSS RR, NRD — none of them run unasked), whether the trace keeps its
+(DLSS RR or NRD — neither runs unasked), whether the trace keeps its
 own running mean (and with it the firefly clamp), and whether `readback()` runs
 OIDN on the CPU. Every GPU denoiser writes the frame's output image with the
 tracer's own curve, so a window and a capture read the same image in every mode. The profile default fills it when the user names no mode.

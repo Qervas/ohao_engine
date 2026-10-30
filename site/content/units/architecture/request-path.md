@@ -189,11 +189,10 @@ histories, and the PNG is the last of them, as `ohao run --frames` writes it.
 ## Two exits from the GPU
 
 `readback()` has two exits behind one signature, and which one runs depends on
-the denoiser. Every GPU mode — `None`, `Atrous`, `DLSSRR` and `NRD` — takes the
+the denoiser. Every GPU mode — `None`, `DLSSRR` and `NRD` — takes the
 first: return the requested frame's staging buffer. Each leaves its frame in the
 tracer's RGBA8 output image (`m_outputImage`) with the tracer's own curve: `None`
-as traced, `Atrous` filtered in place, `DLSSRR` through its tonemap pass, `NRD`
-through its compose pass. So none of them needs a readback of its own, and a
+as traced, `DLSSRR` through its tonemap pass, `NRD` through its compose pass. So none of them needs a readback of its own, and a
 window presents the same image a capture reads.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && m_denoiseMode == DenoiseMode::OIDN &&"}}
@@ -247,15 +246,14 @@ and firefly clamp follow the mode (`tracerAccumulates`):
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
-`Atrous` is dispatched by the tracer itself, in place on the beauty image. `DLSSRR`
-is too: `path_tracer_render.cpp` holds an NGX evaluate-and-tonemap block, compiled
+`DLSSRR` is dispatched by the tracer itself: `path_tracer_render.cpp` holds an NGX evaluate-and-tonemap block, compiled
 out unless the DLSS SDK (`tools/fetch_dlss.py`, into the git-ignored
 `external/DLSS`) was present at configure time.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
 
 OIDN is the one genuinely consumer-side mode — it runs on the CPU after readback.
-NRD is dispatched inside the tracer like `Atrous`, and it is the realtime profile's
+NRD is dispatched inside the tracer like `DLSSRR`, and it is the realtime profile's
 default where DLSS-RR cannot run; the tracer runs REBLUR and compose only in NRD
 mode.
 

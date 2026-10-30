@@ -117,9 +117,9 @@ Cornell box and `--frames 30` for the helmet.
 
 ## What each denoiser makes of it
 
-`DenoiseMode` has five values: `None`, `OIDN`, `NRD`, `Atrous` and `DLSSRR`.
+`DenoiseMode` has four values: `None`, `OIDN`, `NRD` and `DLSSRR`.
 `readback()` returns the requested frame's staging copy for every GPU mode — `None`,
-`Atrous`, `DLSSRR` and `NRD` each leave their frame in the tracer's RGBA8 output with
+`DLSSRR` and `NRD` each leave their frame in the tracer's RGBA8 output with
 the tracer's own curve. For `OIDN` it does its own readback of that frame's images,
 a command buffer submitted and waited on once the frame's fence has signalled.
 OIDN's readback takes the accumulation image itself, whose RGB is the running
@@ -128,7 +128,7 @@ mean of every sample so far.
 {{cite ohao/gpu/vulkan/renderer.cpp "if (!readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {"}}
 
 Accumulation splits the set along a different seam. `tracerAccumulates` is false for
-`Atrous`, `DLSSRR`, and `NRD` under the realtime profile: the host then pushes
+`DLSSRR`, and for `NRD` under the realtime profile: the host then pushes
 `pc.control.y = 0` every frame, the raygen skips its history read, and the
 accumulation image is stored with `count = 1.0` forever. Those denoisers own temporal
 accumulation themselves — through camera moves, by the motion vectors — so handing
@@ -142,9 +142,9 @@ a still view's samples.
 {{cite shaders/rt/path_tracer.slang "float count = 1.0;"}}
 
 So under `None` and under `OIDN`, the shipped offline default, the saved frame
-holds exactly `samples` samples. Under `Atrous` or `DLSSRR` the saved PNG is
-1 spp no matter what number you typed: those denoisers carry the history
-themselves, as realtime NRD does: the PNG is that last frame, denoised and
+holds exactly `samples` samples. Under `DLSSRR` the saved PNG is
+1 spp no matter what number you typed: that denoiser carries the history
+itself, as realtime NRD does: the PNG is that last frame, denoised and
 composed on the GPU.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
@@ -289,7 +289,7 @@ an `spp`-sample image under `None` and `OIDN`, and a deferred run's PNG equals
 
 ## Contracts
 
-- A driver calls `requestReadback()` before the `render()` it saves and `readback()` after; `spp` calls then land `spp` accumulated samples under `None` and `OIDN`, and 1 under `Atrous`/`DLSSRR`.
+- A driver calls `requestReadback()` before the `render()` it saves and `readback()` after; `spp` calls then land `spp` accumulated samples under `None` and `OIDN`, and 1 under `DLSSRR` and realtime `NRD`.
 - Camera move → `resetAccumulation()` → render. Reversing the last two mixes viewpoints in the accumulation buffer; skipping the reset entirely does the same.
 - The `ecs::World` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the world second, so reverse-order destruction of locals gets it right; the render extract releases its instances and lights from the `RenderScene` as the world goes, and in `cornell_box` and `model_viewer` the instantiate system releases its meshes. Swapping those two declarations would make the extract release into a render world that has already been shut down.
 - `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp` per orbit position, and `env_demo` has no `deferred` token at all.

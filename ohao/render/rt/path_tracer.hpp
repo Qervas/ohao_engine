@@ -47,7 +47,6 @@
 // different layout than ohao_renderer).
 namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }      // NEW 4.D
-namespace ohao { class AtrousDenoiser; }     // à-trous beauty denoiser (DenoiseMode::Atrous)
 namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5)
 namespace ohao::render { class RenderScene; }
 
@@ -236,11 +235,6 @@ private:
     // no-op on a null held pointer (no need for complete type).
     std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
     std::unique_ptr<NrdCompositor> m_nrdCompositor;   // NEW 4.D
-    // À-trous beauty denoiser (DenoiseMode::Atrous). Unconditional member (not
-    // OHAO_NRD-guarded) so the class layout is identical across ohao_renderer
-    // and ohao_gpu_vulkan; dtor is out-of-line in path_tracer.cpp which sees
-    // the complete type via atrous_denoise.hpp.
-    std::unique_ptr<AtrousDenoiser> m_atrousDenoiser;
 
     // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5). Guarded by
     // OHAO_DLSS_ENABLED — which CMake defines on BOTH ohao_renderer and

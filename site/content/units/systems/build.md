@@ -181,7 +181,7 @@ directories renames its SPIR-V and every hardcoded path stops resolving — with
 build error, because the flattening is a string operation the compiler never sees.
 
 The glob has no exclusion filter: it compiles every stage file it finds under
-`shaders/` — twenty-one GLSL stage files today, besides every Slang entry point — whether or not any C++ loads the result. A syntax error
+`shaders/` — fifteen GLSL stage files today, besides every Slang entry point — whether or not any C++ loads the result. A syntax error
 in a shader nobody ships fails the whole `shaders` target.
 
 ## The include dependency that isn't tracked

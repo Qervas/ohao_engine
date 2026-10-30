@@ -217,7 +217,7 @@ offset.
 {{cite ohao/render/rt/path_tracer.hpp "uint32_t m_accumFrames = 0;         // frames in the trace's running mean (restarts on a moved view)"}}
 
 `m_sampleIndex` seeds the raygen's random numbers. `m_historyFrameCount` is the
-denoisers' clock: NRD's frame index, the à-trous and DLSS-RR reset tests; only
+denoisers' clock: NRD's frame index and DLSS-RR's reset test; only
 `resetAccumulation()` sends it to zero. `m_accumFrames` is the trace's own running
 mean: a moved view (`notifyViewChanged`) restarts it at the top of the next frame
 while the denoisers' history carries on and reprojects.

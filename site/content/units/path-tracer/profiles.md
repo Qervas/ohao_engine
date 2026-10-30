@@ -52,7 +52,7 @@ the flag is set only when the trace does not accumulate:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.enableFireflyClamp && !tracerAccumulates(m_renderSettings))"}}
 
-Under the realtime profile with any denoiser but NRD, à-trous or DLSS-RR, the clamp is
+Under the realtime profile with any denoiser but NRD or DLSS-RR, the clamp is
 therefore off, and a realtime view with no denoiser converges to the same image the
 offline profile does at the same bounce count.
 
@@ -60,7 +60,7 @@ offline profile does at the same bounce count.
 
 `rt_meta.hpp` holds what each denoiser asks of the trace, as plain `constexpr`
 functions of the mode or of the settings: CPU readback (OIDN), motion vectors (NRD,
-à-trous, DLSS-RR), the diffuse/specular split (NRD), sub-pixel jitter (NRD, DLSS-RR),
+DLSS-RR), the diffuse/specular split (NRD), sub-pixel jitter (NRD, DLSS-RR),
 and realtime capability (everything but OIDN). Beside them sit the RT techniques'
 concepts, which document the shadow and GI techniques' virtual surfaces.
 
@@ -106,11 +106,11 @@ hardware that the code makes and never checks.
 {{cite ohao/gpu/layout_meta.hpp "kPTPushConstantsBytes = 256"}}
 
 `denoiseMode` takes neither a push constant nor a pipeline state of its own. It
-selects host-side work — which of the à-trous, DLSS-RR, NRD or OIDN passes runs around
+selects host-side work — which of the DLSS-RR, NRD or OIDN passes runs around
 the trace — and reaches the shader only as derived values: the AOV-accumulation and
 DLSS-RR flag bits, the length of the running mean, and whether the clamp is on.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR && m_dlssRR &&"}}
 
 The pipeline itself carries no profile state: no specialization constant is attached
 to any stage, so `createRTPipeline` running before the profile's settings arrive (they

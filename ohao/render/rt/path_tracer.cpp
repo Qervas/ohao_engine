@@ -13,10 +13,6 @@
 // by OHAO_NRD_ENABLED because definitions only exist in that mode.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
-// Unconditional: PathTracer holds a std::unique_ptr<AtrousDenoiser>, so this
-// TU (which defines the out-of-line dtor) needs the complete type. Not
-// OHAO_NRD-guarded — the à-trous path is independent of NRD.
-#include "render/rt/denoise/atrous_denoise.hpp"
 // DLSS-RR wrapper is only a complete type in this TU (and path_tracer_render.cpp)
 // where OHAO_DLSS_ENABLED is defined; the header only forward-declares DlssRR so
 // the unique_ptr member's out-of-line dtor (below) needs the full type here.
@@ -163,15 +159,6 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     (void)instanceExtensions; (void)deviceExtensions;
 #endif
 
-    // À-trous beauty denoiser (DenoiseMode::Atrous) — independent of NRD.
-    // Cheap to keep resident; only dispatched when the active denoise mode is
-    // Atrous, so None/OIDN/NRD are unaffected.
-    m_atrousDenoiser = std::make_unique<AtrousDenoiser>();
-    if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-        OHAO_LOG(Error, render, "atrous: init failed — --denoise=atrous will pass through noisy beauty");
-        m_atrousDenoiser.reset();
-    }
-
 #ifdef OHAO_DLSS_ENABLED
     // DLSS-RR NGX init is deferred to the first DLSSRR-mode frame (render()), since
     // the active denoiseMode is not yet known here (settings apply per-frame). Just
@@ -243,17 +230,6 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     m_dlssInitAttempted = false;
     m_dlssColorOutFirstFrame = true;
 #endif
-
-    // SVGF (DenoiseMode::Atrous) owns persistent history images sized to the
-    // framebuffer — recreate them so they match the new resolution. The
-    // first-frame latch + resetHistory path handle re-bootstrapping.
-    if (m_atrousDenoiser) {
-        m_atrousDenoiser->shutdown();
-        if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-            OHAO_LOG(Error, render, "svgf: resize re-init failed — atrous will pass through noisy beauty");
-            m_atrousDenoiser.reset();
-        }
-    }
 
     // Reset accumulation since the buffer dimensions changed
     resetAccumulation();
@@ -360,10 +336,6 @@ void PathTracer::destroy() {
     }
 #endif
 
-    if (m_atrousDenoiser) {
-        m_atrousDenoiser->shutdown();
-        m_atrousDenoiser.reset();
-    }
 
 #ifdef OHAO_DLSS_ENABLED
     if (m_dlssRR) {

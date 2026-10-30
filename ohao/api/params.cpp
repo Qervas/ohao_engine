@@ -20,7 +20,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("none", Denoiser::none, "No denoiser")
         .value("oidn", Denoiser::oidn, "Intel Open Image Denoise")
         .value("nrd", Denoiser::nrd, "NVIDIA Real-time Denoisers")
-        .value("atrous", Denoiser::atrous, "A-trous wavelet filter")
         .value("dlss", Denoiser::dlss, "DLSS Ray Reconstruction");
     r.enumeration<PostEffect>("PostEffect").doc("Deferred post effect")
         .value("bloom", PostEffect::bloom, "Bloom")

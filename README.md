@@ -37,7 +37,7 @@ usable at one sample per pixel — see below.
 | GPU/Vulkan layer | ~10K LOC |
 | Physics (Jolt) | ~11K LOC |
 | ECS + asset loaders | ~3K LOC |
-| Denoise backends | 4 (Intel OIDN, NVIDIA NRD, NVIDIA DLSS-RR, built-in a-trous) |
+| Denoise backends | 3 (Intel OIDN, NVIDIA NRD, NVIDIA DLSS-RR) |
 
 ## Real-time path tracing — and the firefly that taught me the most
 
@@ -118,16 +118,15 @@ Lives in `ohao/render/rt/`. Vulkan KHR ray tracing pipeline. Files are split: `p
 - Alpha transparency via the any-hit shader for foliage and hair cards
 - Both profiles run this tracer: the realtime one at 2 bounces, one sample a frame, denoised by NRD (or DLSS RR where the SDK is present)
 
-### Denoising (four backends, runtime switchable)
+### Denoising (three backends, runtime switchable)
 
 All live in `ohao/render/rt/denoise/`.
 
 | Backend | Files | Use |
 |---|---|---|
 | Intel OIDN 2.x | `oidn_denoise.cpp` | CPU post-process for offline reference |
-| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp`, `nrd_cinematic.cpp` | Realtime REBLUR diffuse + specular for `RTRealtime` |
-| NVIDIA DLSS-RR | `dlss_rr.cpp` | Ray Reconstruction, the real-time path's default |
-| built-in à-trous | `atrous_denoise.cpp` | SVGF-style, no external dependency |
+| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp` | Realtime REBLUR diffuse + specular, the vendor-neutral realtime default |
+| NVIDIA DLSS-RR | `dlss_rr.cpp` | Ray Reconstruction, the realtime default on NVIDIA (SDK fetched by `tools/fetch_dlss.py`) |
 
 `--denoise=optix` is still parsed and falls back to OIDN with a warning; that backend was removed in `0873766`.
 
@@ -184,7 +183,7 @@ Requires CMake 3.20+, Vulkan SDK 1.3+ with RT extensions, a **C++20** compiler. 
 ./build/renderer_test                                      # smoke test
 ```
 
-All examples accept `--denoise=none|oidn|nrd|atrous|dlss`; `rt_realtime` selects the real-time path tracer, which denoises with NRD's REBLUR_DIFFUSE_SPECULAR or DLSS-RR.
+All examples accept `--denoise=none|oidn|nrd|dlss`; `rt_realtime` selects the real-time path tracer, which denoises with NRD's REBLUR_DIFFUSE_SPECULAR or DLSS-RR.
 
 The game host renders the **Deferred** raster path (with RT shadows and RT GI where the GPU supports them) straight to a window:
 

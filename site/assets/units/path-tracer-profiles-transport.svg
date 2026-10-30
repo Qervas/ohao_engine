@@ -27,7 +27,7 @@
   <!-- Lane C: denoiseMode selects host-side passes -->
   <rect x="20" y="186" width="340" height="80" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="34" y="208" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">denoiseMode</text>
-  <text x="34" y="228" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">None / OIDN / NRD / Atrous / DLSSRR</text>
+  <text x="34" y="228" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">None / OIDN / NRD / DLSSRR</text>
   <text x="34" y="248" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">rewritten every frame, like lane B</text>
 
   <line x1="360" y1="226" x2="386" y2="226" stroke="#c4a574" stroke-width="1.5"/>
@@ -35,7 +35,7 @@
 
   <rect x="392" y="186" width="308" height="80" rx="4" fill="#1a222c" stroke="#c4a574"/>
   <text x="406" y="208" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">host-side pass selection</text>
-  <text x="406" y="228" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">picks the &#224;-trous / DLSS-RR / NRD / OIDN pass</text>
+  <text x="406" y="228" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">picks the DLSS-RR / NRD / OIDN pass</text>
   <text x="406" y="248" font-family="DM Sans,sans-serif" font-size="11" fill="#c4a574">shader sees only derived control bits</text>
 
   <!-- Lane D: dead -->

@@ -14,7 +14,6 @@
 // dispatch methods are OHAO_NRD_ENABLED-guarded inside this TU.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
-#include "render/rt/denoise/atrous_denoise.hpp"
 #ifdef OHAO_DLSS_ENABLED
 #include "render/rt/denoise/dlss_rr.hpp"
 #endif
@@ -89,7 +88,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         m_jitterCurrent = glm::vec2(halton(idx, 2) - 0.5f, halton(idx, 3) - 0.5f);
         m_haltonIndex++;
     } else {
-        // None/OIDN/Atrous keep pixel-center sampling — zero jitter preserves parity.
+        // None and OIDN keep pixel-center sampling — zero jitter preserves parity.
         m_jitterCurrent = glm::vec2(0.0f);
     }
 
@@ -559,43 +558,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
 
-    // --- À-trous beauty denoise (DenoiseMode::Atrous) ---
-    // Runs edge-aware spatial filtering on the final beauty (binding 2) in
-    // place, using the normal AOV (binding 7, N*0.5+0.5) and linear depth AOV
-    // (binding 20) for edge-stopping. Because it denoises the correct final
-    // PBR image — not demodulated diffuse/specular like NRD — metals/emissive
-    // stay physically correct (no black metals, no magenta cast). Independent
-    // of NRD, so this lives outside the OHAO_NRD_ENABLED block.
-    bool atrousRan = false;
     bool dlssRan   = false;  // Phase 5: set when DLSS-RR tonemap wrote m_outputImage via COMPUTE
     bool nrdRan    = false;  // nrd_compose wrote m_outputImage via COMPUTE
-    if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {
-        // Publish raygen stores (beauty/normal/depth, RAY_TRACING) to the
-        // COMPUTE reads of the first à-trous pass. All three stay in GENERAL.
-        VkMemoryBarrier rayToCompute{};
-        rayToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        rayToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        rayToCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 1, &rayToCompute, 0, nullptr, 0, nullptr);
-
-        AtrousInputs ai{};
-        ai.beautyImage   = m_outputImage;
-        ai.beautyView    = m_outputView;
-        ai.normalView    = m_normalAOVView;
-        ai.depthView     = m_depthAOVView;
-        ai.motionView    = m_motionVectorView;
-        // Reset SVGF history ONLY on the genuine first frame (or explicit
-        // resetAccumulation). Do NOT reset on camera move — SVGF is meant to
-        // REPROJECT through motion via motion vectors + per-pixel disocclusion
-        // rejection. Resetting every moved frame threw away all accumulated
-        // samples → raw 1-spp noise while moving (the bug the user reported).
-        ai.resetHistory  = (m_historyFrameCount == 0u);
-        m_atrousDenoiser->dispatch(cmd, ai);
-        atrousRan = true;  // beauty last written by COMPUTE, still GENERAL
-    }
 
 #ifdef OHAO_DLSS_ENABLED
     // --- Phase 5: DLSS Ray Reconstruction denoise + tonemap ---
@@ -818,12 +782,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // --- Transition output image to TRANSFER_SRC_OPTIMAL for readback/blit ---
     {
-        // In à-trous mode the final beauty write comes from the COMPUTE stage,
-        // so the transfer must wait on COMPUTE (not just RAY_TRACING). Adding
-        // COMPUTE to the wait is harmless for other modes (nothing wrote the
-        // output via compute there).
+        // Under NRD or DLSS RR the output's last write is a COMPUTE stage's.
         const VkPipelineStageFlags outSrcStage =
-            (atrousRan || dlssRan || nrdRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+            (dlssRan || nrdRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                                                  : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
