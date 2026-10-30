@@ -113,7 +113,7 @@ Lives in `ohao/render/rt/`. Vulkan KHR ray tracing pipeline. Files are split: `p
 
 - The reference (offline) path tracer is `shaders/rt/path_tracer.slang`: a correct estimator of OpenPBR Surface's base (`shaders/material/openpbr.slang`: EON diffuse, GGX with bounded VNDF sampling, exact dielectric Fresnel, F82-tint metals, Kulla-Conty energy compensation), held to closed forms (`tests/renderer/check_material.py`, `check_analytic.py`)
 - Next-event estimation to lights and the environment, weighed against BSDF sampling by the power heuristic; Russian roulette
-- Environment map importance sampling: marginal + conditional CDFs built CPU-side in `env_cdf.cpp`
+- Environment map importance sampling: a 2D CDF (marginal, then each row's conditional) built CPU-side in `env_cdf.cpp`, in device-local memory
 - Bindless textures (base colour, normal in the vertex tangents' frame, rough/metal, emissive, KHR specular)
 - Alpha transparency via the any-hit shader for foliage and hair cards
 - Both profiles run this tracer: the realtime one at 2 bounces, one sample a frame, denoised by NRD (or DLSS RR where the SDK is present)

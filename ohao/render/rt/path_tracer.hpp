@@ -48,7 +48,7 @@
 namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }      // NEW 4.D
 namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5)
-namespace ohao::render { class RenderScene; }
+namespace ohao::render { class RenderScene; class GpuPassTimer; }
 
 namespace ohao {
 
@@ -96,6 +96,9 @@ public:
     // just waited: its own descriptor set is rewritten and bound (earlier frames may
     // still read theirs).
     void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj);
+    // Times render()'s stages (pt.cache.update, pt.cache.resolve, pt.trace, pt.denoise); the
+    // caller ends the last one. Null: untimed.
+    void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
 
     void resize(uint32_t width, uint32_t height);
 
@@ -152,16 +155,12 @@ public:
     void setRadianceCacheCapacity(uint32_t entries) noexcept { m_radianceCacheCapacity = entries; }
     static constexpr uint32_t kDefaultBindlessCapacity = 4096;
 
-    // Shader contract: envWidth == 0 means "no env map loaded" — the shader
-    // must skip env importance sampling in this case. The renderer provides
-    // 1-float dummy buffers so descriptor writes remain valid.
-    void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
-                          uint32_t envWidth, uint32_t envHeight, float integral) {
-        m_envMarginalCDFBuffer   = marginal;
-        m_envConditionalCDFBuffer = conditional;
-        m_envCDFWidth            = envWidth;
-        m_envCDFHeight           = envHeight;
-        m_envCDFIntegral         = integral;
+    // The environment's 2D CDF (binding 17, render/rt/env_cdf.hpp) and the map's size;
+    // envWidth 0: no environment to sample (the renderer still binds a one-float buffer).
+    void setEnvSampling(VkBuffer cdf, uint32_t envWidth, uint32_t envHeight) {
+        m_envCdfBuffer = cdf;
+        m_envWidth = envWidth;
+        m_envHeight = envHeight;
     }
 
     // Sub-plan 4.F T1: expose HDR env map view + sampler to the NRD tonemap
@@ -175,7 +174,6 @@ public:
     }
     [[nodiscard]] VkImageView getEnvMapView()    const { return m_envMapView; }
     [[nodiscard]] VkSampler   getEnvMapSampler() const { return m_envMapSampler; }
-    [[nodiscard]] float       getEnvCDFIntegral() const { return m_envCDFIntegral; }
 
     // The view moved: the trace's running mean restarts at the next frame; a temporal denoiser's
     // history does not (it reprojects through the motion vectors).
@@ -269,18 +267,17 @@ private:
     VkBuffer m_materialRefs = VK_NULL_HANDLE;
     VkBuffer m_lightBuffer = VK_NULL_HANDLE;
 
-    // Env CDF storage buffers (bindings 17, 18)
-    VkBuffer m_envMarginalCDFBuffer   = VK_NULL_HANDLE;
+    // The environment's 2D CDF (binding 17) and the map's size.
+    VkBuffer m_envCdfBuffer = VK_NULL_HANDLE;
+    uint32_t m_envWidth = 0;
+    uint32_t m_envHeight = 0;
     // OpenPBR's energy tables, binding 38: written once at init.
     render::OpenPBRTablesBuffer m_openpbrTables;
     // The radiance cache (bindings 39-41): full size for the realtime profile, which ends its paths
     // in it, one cell otherwise (the shaders bind it either way). setRadianceCacheCapacity before init.
     render::RadianceCache m_radianceCache;
+    render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's
     uint32_t m_radianceCacheCapacity = 1;
-    VkBuffer m_envConditionalCDFBuffer = VK_NULL_HANDLE;
-    uint32_t m_envCDFWidth   = 0;
-    uint32_t m_envCDFHeight  = 0;
-    float    m_envCDFIntegral = 0.0f;
 
     // Sub-plan 4.F T1: HDR env map for NRD tonemap's sky composite. Borrowed —
     // the renderer owns the VkImage/VkImageView lifetime.

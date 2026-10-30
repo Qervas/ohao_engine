@@ -438,8 +438,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
 - A window presents path-traced frames too: `renderRTPipeline` acquires, blits the tracer's
-  RGBA8 output (`pt.present`, which follows `pt.render` because the pass registry is in
-  frame order) and presents like the deferred path. What a window presents is a launch
+  RGBA8 output (`pt.present`, which follows the tracer's passes because the pass registry is
+  in frame order) and presents like the deferred path. What a window presents is a launch
   option (`ohao serve --window --mode`, `ohao_game --mode`); a lockstep capture in another
   mode switches, renders, then restores the live mode, denoiser, quality and post. The path
   tracer does not notice a moved camera itself: a host calls `notifyCameraChanged()`
@@ -508,7 +508,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   loads it: every lookup is `u = atan2(z, x) / 2pi + 0.5`, `v = 0.5 - asin(y) / pi` (deferred
   lighting, `equirectUV` in `clustered_lights.slang`, the prefilter's both ways, `gi_trace`,
   the path tracer's miss, the cinematic composite, `env_sun.cpp`), the same number as the path tracer's
-  CDF (`envPdf` in `path_tracer.slang`, `acos(y) / pi`). A new lookup writes that expression; `asin(y) / pi + 0.5`
+  sampling (`envPdf` in `path_tracer.slang`, `acos(y) / pi`). A new lookup writes that expression; `asin(y) / pi + 0.5`
   turns the sky upside down (it did, everywhere, until 2026-10-29) and the unit tests cannot see
   it. `check_env_orientation.py` can: a sky blue above the horizon and orange below must light a
   floor blue in deferred (RT GI and IBL) and the path tracer.
@@ -572,12 +572,24 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Realtime denoising and display** (frontier F1 T4). A realtime window's denoiser is DLSS Ray
   Reconstruction where the build has the SDK (`python tools/fetch_dlss.py` into the git-ignored
   `external/DLSS`; never commit it: NVIDIA's licence) and the GPU is NVIDIA's, else NRD
-  (`VulkanRenderer::rtDefaults`); captures default to `denoise: none`. Every denoiser writes the
+  (`VulkanRenderer::rtDefaults`); captures default to `denoise: none`. DLSS RR upscales: it traces
+  at its preset's size and writes the output's (`OHAO_DLSS_QUALITY`: `quality`, the default, 2/3 a
+  side; `dlaa` native, `balanced`, `performance`, `ultraperf`), so the tracer's images are at the
+  render size and only DLSS's output and the frame's are at the output's. Every denoiser writes the
   frame's output (`m_outputImage`) with the tracer's own curve (ACES at 0.5, gamma 2.2: one display
   transform until F2), so a window presents what a capture reads. Under NRD the camera ray's
   emission (lights, emissive surfaces, the sky) goes to its own guide (binding 13) and never
   through NRD: `nrd_compose` adds it to diffuse x albedo + specular. The first hit's direct light
   is split by lobe (`evalLobes`). NGX logs through the engine's logger (stdout is the protocol's).
+- **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
+  frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
+  transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any
+  buffer a shader reads at random must be device-local**: the environment's sampling table in host
+  memory (read over PCIe at every draw) was 85% of a realtime frame. It is a 2D CDF
+  (`render/rt/env_cdf.hpp`, binding 17: the marginal, then each row's conditional), uploaded through
+  a staging buffer with the map. Keep the draw a continuous warp: an alias table was 1.1 ms faster
+  but scattered neighbouring Sobol points across the map, 14% more error at 16 samples. A view of a 1080p render through an image tool may be palette-reduced and look
+  posterized; judge renders from crops or pixel statistics.
 - **The radiance cache** (frontier F1 T3, `shaders/rt/radiance_cache.slang`, `render/rt/radiance_cache.*`;
   SHaRC's design, our code: RTXGI's licence bars shipping its source in this MIT repo). The realtime
   profile ends a path at a vertex past the first in a world-space hash grid of reflected radiance

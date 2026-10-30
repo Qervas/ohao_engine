@@ -5,9 +5,11 @@
 #include "path_tracer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 #include "core/log.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include <glm/gtc/type_ptr.hpp>
 
 // nrd_denoise.hpp / nrd_compose.hpp are safe to include unconditionally; their
@@ -40,6 +42,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const VkDescriptorSet set = m_descriptorSets[frameSlot];
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
         !m_instances || !m_materialRefs || !m_lightBuffer) return;
+    const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
+    // The frame's setup is timed with its first trace.
+    timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update" : "pt.trace");
 
 #ifdef OHAO_DLSS_ENABLED
     // --- Phase 1: lazy DLSS-RR NGX init + feature creation ---
@@ -54,7 +59,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         if (m_dlssInstance != VK_NULL_HANDLE &&
             m_dlssRR->initialize(m_dlssInstance, m_physicalDevice, m_device,
                                  OHAO_DLSS_SNIPPET_DIR, OHAO_DLSS_APPDATA_DIR)) {
-            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_width, m_height) ||
+            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_outW, m_outH, dlssQualityFromEnv()) ||
                 !m_dlssRR->createTonemapPipeline()) {
                 m_dlssRR->shutdown();
                 m_dlssRR.reset();
@@ -83,8 +88,12 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // pattern NRD uses. The offset is fed to InJitterOffsetX/Y so DLSS can align
     // and integrate the sub-pixel samples across frames.
     // Policy: denoiseNeedsPixelJitter (NRD + DLSS-RR) — single source in rt_meta.
+    // An upscaling DLSS needs more phases to cover each output pixel: 8 x the area ratio
+    // (NVIDIA's DLSS programming guide), 16 at least.
     if (denoiseNeedsPixelJitter(m_renderSettings.denoiseMode)) {
-        const uint32_t idx = (m_haltonIndex % 16u) + 1u;
+        const float ratio = float(m_outW) / float(std::max(m_width, 1u));
+        const uint32_t phases = std::max(16u, uint32_t(std::ceil(8.0f * ratio * ratio)));
+        const uint32_t idx = (m_haltonIndex % phases) + 1u;
         m_jitterCurrent = glm::vec2(halton(idx, 2) - 0.5f, halton(idx, 3) - 0.5f);
         m_haltonIndex++;
     } else {
@@ -197,33 +206,18 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         writeCount++;
     }
 
-    // Binding 17: env marginal CDF (only if set — dummy buffers from env_upload.cpp guarantee this)
-    VkDescriptorBufferInfo envMargInfo{};
-    if (m_envMarginalCDFBuffer != VK_NULL_HANDLE) {
-        envMargInfo.buffer = m_envMarginalCDFBuffer;
-        envMargInfo.offset = 0;
-        envMargInfo.range = VK_WHOLE_SIZE;
+    // Binding 17: the environment's 2D CDF (a one-float buffer without an environment).
+    VkDescriptorBufferInfo envCdfInfo{};
+    if (m_envCdfBuffer != VK_NULL_HANDLE) {
+        envCdfInfo.buffer = m_envCdfBuffer;
+        envCdfInfo.offset = 0;
+        envCdfInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = set;
         writes[writeCount].dstBinding = 17;
         writes[writeCount].descriptorCount = 1;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[writeCount].pBufferInfo = &envMargInfo;
-        writeCount++;
-    }
-
-    // Binding 18: env conditional CDF (only if set)
-    VkDescriptorBufferInfo envCondInfo{};
-    if (m_envConditionalCDFBuffer != VK_NULL_HANDLE) {
-        envCondInfo.buffer = m_envConditionalCDFBuffer;
-        envCondInfo.offset = 0;
-        envCondInfo.range = VK_WHOLE_SIZE;
-        writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[writeCount].dstSet = set;
-        writes[writeCount].dstBinding = 18;
-        writes[writeCount].descriptorCount = 1;
-        writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[writeCount].pBufferInfo = &envCondInfo;
+        writes[writeCount].pBufferInfo = &envCdfInfo;
         writeCount++;
     }
 
@@ -530,8 +524,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // denoiser takes), and whether last frame's view gives motion vectors.
     pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;
     pc.control.z = m_hasPreviousView ? 1u : 0u;
-    pc.control.w = m_envCDFWidth;
-    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral, 0.0f);
+    pc.control.w = m_envWidth;
+    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envHeight), 0.0f, 0.0f);
     pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, 0.0f, 0.0f);
 
     // Store current viewProj for next frame's reprojection
@@ -547,6 +541,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         m_radianceCache.recordBeginFrame(cmd);
         vkCmdTraceRaysKHR(cmd, &m_cacheRgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                           (m_width + 4u) / 5u, (m_height + 4u) / 5u, 1);
+        timePass("pt.cache.resolve");
         m_radianceCache.recordResolve(cmd);
         // Push constants are shared by the bind points: the resolve's replaced the trace's.
         vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -555,8 +550,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     }
 
     // --- Trace rays! ---
+    if (cacheOn) timePass("pt.trace");
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
+    timePass("pt.denoise");
 
     bool dlssRan   = false;  // Phase 5: set when DLSS-RR tonemap wrote m_outputImage via COMPUTE
     bool nrdRan    = false;  // nrd_compose wrote m_outputImage via COMPUTE
@@ -612,6 +609,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         ei.depthImage       = m_depthAOVImage;     ei.depthView       = m_depthAOVView;     ei.depthFormat       = VK_FORMAT_R32_SFLOAT;
         ei.motionImage      = m_motionVectorImage; ei.motionView      = m_motionVectorView; ei.motionFormat      = VK_FORMAT_R16G16_SFLOAT;
         ei.renderW = m_width; ei.renderH = m_height;
+        ei.outW = m_outW; ei.outH = m_outH;   // DLSS upscales into the output size
         ei.jitterX = m_jitterCurrent.x; ei.jitterY = m_jitterCurrent.y;
         ei.mvScaleX = -1.0f; ei.mvScaleY = -1.0f;   // OHAO writes currPix-prevPix; DLSS wants prevPix-currPix
         ei.worldToView = glm::value_ptr(viewM);
@@ -644,7 +642,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 0, 0, nullptr, 0, nullptr, 2, post);
 
             // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (ACES+gamma, matches None).
-            m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);
+            m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_outW, m_outH);
             dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
         }
     }

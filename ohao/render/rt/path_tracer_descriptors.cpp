@@ -68,8 +68,7 @@ bool PathTracer::createDescriptorResources() {
     add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
     add(13, IMAGE, RGEN);   // the camera ray's emission (RGBA16F): nrd_compose adds it back
-    add(17, BUFFER, RGEN | MISS);   // env marginal CDF
-    add(18, BUFFER, RGEN | MISS);   // env conditional CDF
+    add(17, BUFFER, RGEN);  // the environment's 2D CDF (render/rt/env_cdf.hpp)
     add(19, IMAGE, RGEN);   // motion vector AOV (RG16F) — Sub-plan 3.A
     add(20, IMAGE, RGEN);   // depth AOV (R32F) — Sub-plan 3.B
     add(21, IMAGE, RGEN);   // roughness AOV — Sub-plan 3.B
@@ -105,7 +104,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18 + OpenPBR tables 38 + the cache 39-41
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
 

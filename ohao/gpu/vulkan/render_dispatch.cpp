@@ -364,7 +364,8 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Lit by the scene's lights: the RenderScene light table (setSceneBuffers above).
-    m_passTimer.begin(cmd, "pt.render");
+    // The tracer times its own stages (pt.cache.update ... pt.denoise); the last is ended here.
+    rtRenderer->setPassTimer(&m_passTimer);
     rtRenderer->render(cmd, m_currentFrame, ptView, ptProj);
     m_passTimer.end(cmd);
 

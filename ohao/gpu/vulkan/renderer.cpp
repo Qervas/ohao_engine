@@ -206,7 +206,7 @@ void VulkanRenderer::shutdown() {
 
         // The env map's view is owned by the texture manager: release it first.
         destroyEnvMapImage();
-        destroyEnvCDFBuffers();
+        destroyEnvSamplingBuffer();
         m_envPrefilter.reset();
         if (m_envSampler) { vkDestroySampler(m_device, m_envSampler, nullptr); m_envSampler = VK_NULL_HANDLE; }
 
@@ -464,9 +464,8 @@ void VulkanRenderer::prepareRTSceneForFrame(const RTRenderSettings& defaults) {
     // No rebuilds: the RenderScene's tables and TLAS are current once recordUpdates
     // ran (renderRTPipeline binds them after it). Textures, env map and env scale:
     bindRTTextures(*rtRenderer);
-    rtRenderer->setEnvCDFBuffers(m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
-                                 envMapLoaded() ? m_envMapWidth : 0u, envMapLoaded() ? m_envMapHeight : 0u,
-                                 envMapLoaded() ? m_envMapIntegral : 0.0f);
+    rtRenderer->setEnvSampling(m_envCdfBuffer, envMapLoaded() ? m_envMapWidth : 0u,
+                               envMapLoaded() ? m_envMapHeight : 0u);
     rtRenderer->setEnvMapResource(envMapLoaded() ? m_envMapImageView : VK_NULL_HANDLE,
                                   envMapLoaded() ? m_envSampler : VK_NULL_HANDLE);
     m_renderScene->setEnvIntensity(m_envIntensityScale);

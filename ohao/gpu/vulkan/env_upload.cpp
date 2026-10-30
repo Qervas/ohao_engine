@@ -114,13 +114,37 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 m_envMapImage = envImage;    // owned; freed by destroyEnvMapImage()
                 m_envMapMemory = envMem;
 
+                // The path tracer's 2D CDF (render/rt/env_cdf.hpp), uploaded with the pixels through
+                // one staging buffer into device-local memory: its draws are random reads, which host
+                // memory (over PCIe) made most of a realtime frame.
+                EnvCdf envCdf;
+                envCdf.build(hdrPixels, ew, eh);
+                destroyEnvSamplingBuffer();   // the queue is idle: no env map yet, or waited above
+
                 // Upload via staging buffer
                 const VkDeviceSize pixelSize = VkDeviceSize(ew) * eh * 4 * sizeof(float);
+                const VkDeviceSize cdfSize = VkDeviceSize(envCdf.data().size()) * sizeof(float);
+                {
+                    VkBufferCreateInfo bci{};
+                    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                    bci.size = cdfSize;
+                    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                    vkCreateBuffer(m_device, &bci, nullptr, &m_envCdfBuffer);
+                    VkMemoryRequirements mr;
+                    vkGetBufferMemoryRequirements(m_device, m_envCdfBuffer, &mr);
+                    VkMemoryAllocateInfo ai{};
+                    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    ai.allocationSize = mr.size;
+                    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                    vkAllocateMemory(m_device, &ai, nullptr, &m_envCdfMemory);
+                    vkBindBufferMemory(m_device, m_envCdfBuffer, m_envCdfMemory, 0);
+                }
                 VkBuffer stagingBuf = VK_NULL_HANDLE;
                 VkDeviceMemory stagingMem = VK_NULL_HANDLE;
                 VkBufferCreateInfo stagingBci{};
                 stagingBci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                stagingBci.size = pixelSize;
+                stagingBci.size = pixelSize + cdfSize;
                 stagingBci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
                 vkCreateBuffer(m_device, &stagingBci, nullptr, &stagingBuf);
                 VkMemoryRequirements smr;
@@ -133,8 +157,9 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 vkAllocateMemory(m_device, &sai, nullptr, &stagingMem);
                 vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
                 void* sm = nullptr;
-                vkMapMemory(m_device, stagingMem, 0, pixelSize, 0, &sm);
+                vkMapMemory(m_device, stagingMem, 0, pixelSize + cdfSize, 0, &sm);
                 std::memcpy(sm, hdrPixels, static_cast<size_t>(pixelSize));
+                std::memcpy(static_cast<char*>(sm) + pixelSize, envCdf.data().data(), static_cast<size_t>(cdfSize));
                 vkUnmapMemory(m_device, stagingMem);
 
                 VkCommandBuffer uploadCmd = VK_NULL_HANDLE;
@@ -165,6 +190,18 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 region.imageExtent = {static_cast<uint32_t>(ew), static_cast<uint32_t>(eh), 1};
                 vkCmdCopyBufferToImage(uploadCmd, stagingBuf, envImage,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+                const VkBufferCopy cdfCopy{pixelSize, 0, cdfSize};
+                vkCmdCopyBuffer(uploadCmd, stagingBuf, m_envCdfBuffer, 1, &cdfCopy);
+                VkBufferMemoryBarrier cdfReady{};
+                cdfReady.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                cdfReady.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                cdfReady.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                cdfReady.srcQueueFamilyIndex = cdfReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                cdfReady.buffer = m_envCdfBuffer;
+                cdfReady.size = VK_WHOLE_SIZE;
+                vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                                     0, nullptr, 1, &cdfReady, 0, nullptr);
 
                 // Sampled by the path tracer (RT stages) and the deferred passes.
                 VkImageMemoryBarrier toShader{};
@@ -213,35 +250,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 vkFreeMemory(m_device, stagingMem, nullptr);
                 vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
 
-                // Env CDF for MIS. Replaced buffers: the queue is idle (above).
-                EnvCDF envCDF;
-                envCDF.build(hdrPixels, ew, eh);
-                destroyEnvCDFBuffers();
-                const auto uploadCDFBuffer = [&](const std::vector<float>& data, VkBuffer& outBuf,
-                                                 VkDeviceMemory& outMem) {
-                    const VkDeviceSize sz = data.size() * sizeof(float);
-                    VkBufferCreateInfo bci{};
-                    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                    bci.size = sz;
-                    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-                    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-                    vkCreateBuffer(m_device, &bci, nullptr, &outBuf);
-                    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, outBuf, &mr);
-                    VkMemoryAllocateInfo ai{};
-                    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-                    ai.allocationSize = mr.size;
-                    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-                    vkAllocateMemory(m_device, &ai, nullptr, &outMem);
-                    vkBindBufferMemory(m_device, outBuf, outMem, 0);
-                    void* dp = nullptr; vkMapMemory(m_device, outMem, 0, sz, 0, &dp);
-                    std::memcpy(dp, data.data(), static_cast<size_t>(sz));
-                    vkUnmapMemory(m_device, outMem);
-                };
-                uploadCDFBuffer(envCDF.marginalCDF(), m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
-                uploadCDFBuffer(envCDF.conditionalCDF(), m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
-                OHAO_LOG(Debug, gpu, "RT: Env CDF built: {}x{} integral={}", ew, eh,
-                         envCDF.integral());
+                OHAO_LOG(Debug, gpu, "RT: env CDF: {}x{}", ew, eh);
 
                 // Into the one bindless table. The manager now owns the view.
                 const BindlessTextureHandle h =
@@ -249,7 +258,6 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 m_envMapTexIdx = h.valid() ? h.index : 0xFFFFFFFFu;
                 m_envMapWidth = static_cast<uint32_t>(ew);
                 m_envMapHeight = static_cast<uint32_t>(eh);
-                m_envMapIntegral = envCDF.integral();
                 m_envMapLoadedPath = m_envMapPath;
                 m_envMapLoadedSunless = m_envMapSunless;
                 OHAO_LOG(Info, gpu, "RT: Environment map loaded: {}x{} (bindless idx={})", ew, eh,
@@ -259,29 +267,22 @@ void VulkanRenderer::uploadEnvironmentMap() {
         }
     }
 
-    // CDF bindings stay valid without an env map (envWidth 0 tells the shader to skip).
-    if (!m_envMarginalCDFBuffer || !m_envConditionalCDFBuffer) {
-        const auto createDummyCDF = [&](VkBuffer& outBuf, VkDeviceMemory& outMem) {
-            VkBufferCreateInfo bci{};
-            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bci.size = sizeof(float);
-            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            vkCreateBuffer(m_device, &bci, nullptr, &outBuf);
-            VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, outBuf, &mr);
-            VkMemoryAllocateInfo ai{};
-            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            ai.allocationSize = mr.size;
-            ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            vkAllocateMemory(m_device, &ai, nullptr, &outMem);
-            vkBindBufferMemory(m_device, outBuf, outMem, 0);
-            void* dp = nullptr; vkMapMemory(m_device, outMem, 0, sizeof(float), 0, &dp);
-            const float v = 1.0f; std::memcpy(dp, &v, sizeof(float));
-            vkUnmapMemory(m_device, outMem);
-        };
-        if (!m_envMarginalCDFBuffer)    createDummyCDF(m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
-        if (!m_envConditionalCDFBuffer) createDummyCDF(m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
+    // Binding 17 stays valid without an env map (envWidth 0 tells the shader to skip it): one
+    // float, never read.
+    if (!m_envCdfBuffer) {
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = sizeof(float);
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        vkCreateBuffer(m_device, &bci, nullptr, &m_envCdfBuffer);
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(m_device, m_envCdfBuffer, &mr);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkAllocateMemory(m_device, &ai, nullptr, &m_envCdfMemory);
+        vkBindBufferMemory(m_device, m_envCdfBuffer, m_envCdfMemory, 0);
     }
 
     if (m_renderScene) {
@@ -309,11 +310,9 @@ void VulkanRenderer::bindRTTextures(IRTRendererProfile& renderer) {
     renderer.setBindlessTextures(m_rtTextureViews, m_rtTextureSamplers);
 }
 
-void VulkanRenderer::destroyEnvCDFBuffers() {
-    if (m_envMarginalCDFBuffer)    { vkDestroyBuffer(m_device, m_envMarginalCDFBuffer, nullptr); m_envMarginalCDFBuffer = VK_NULL_HANDLE; }
-    if (m_envMarginalCDFMemory)    { vkFreeMemory(m_device, m_envMarginalCDFMemory, nullptr);    m_envMarginalCDFMemory = VK_NULL_HANDLE; }
-    if (m_envConditionalCDFBuffer) { vkDestroyBuffer(m_device, m_envConditionalCDFBuffer, nullptr); m_envConditionalCDFBuffer = VK_NULL_HANDLE; }
-    if (m_envConditionalCDFMemory) { vkFreeMemory(m_device, m_envConditionalCDFMemory, nullptr);    m_envConditionalCDFMemory = VK_NULL_HANDLE; }
+void VulkanRenderer::destroyEnvSamplingBuffer() {
+    if (m_envCdfBuffer) { vkDestroyBuffer(m_device, m_envCdfBuffer, nullptr); m_envCdfBuffer = VK_NULL_HANDLE; }
+    if (m_envCdfMemory) { vkFreeMemory(m_device, m_envCdfMemory, nullptr); m_envCdfMemory = VK_NULL_HANDLE; }
 }
 
 void VulkanRenderer::destroyEnvMapImage() {
@@ -328,7 +327,6 @@ void VulkanRenderer::destroyEnvMapImage() {
     if (m_envMapMemory) { vkFreeMemory(m_device, m_envMapMemory, nullptr); m_envMapMemory = VK_NULL_HANDLE; }
     m_envMapWidth = 0;
     m_envMapHeight = 0;
-    m_envMapIntegral = 0.0f;
     m_envMapLoadedPath.clear();
 }
 

@@ -45,8 +45,7 @@ import rt.radiance_cache;
 [[vk::binding(11, 0)]] StructuredBuffer<float4> lightData;    // header, then 5 rows a light
 [[vk::binding(12, 0)]] Sampler2D textures[4096];
 [[vk::binding(13, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> emissionAOV;   // the camera ray's emission
-[[vk::binding(17, 0)]] StructuredBuffer<float> envMarginal;
-[[vk::binding(18, 0)]] StructuredBuffer<float> envConditional;
+[[vk::binding(17, 0)]] StructuredBuffer<float> envCdf;   // the marginal CDF (H), then each row's conditional (W x H)
 [[vk::binding(19, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> motionVector;
 [[vk::binding(20, 0)]] [[vk::image_format("r32f")]] RWTexture2D<float> depthAOV;
 [[vk::binding(21, 0)]] [[vk::image_format("r16f")]] RWTexture2D<float> roughnessAOV;
@@ -69,8 +68,8 @@ struct PushConstants
     float4 invProj[4];
     float4 prevViewProj[4];
     uint4 params;    // x width, y height, z sample index, w bounces (low 16)
-    uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment CDF's width
-    float4 tuning;   // x firefly clamp, y the environment CDF's height
+    uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment map's width
+    float4 tuning;   // x firefly clamp, y the environment map's height
     float4 jitter;   // xy NRD's sub-pixel offset
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> pc;
@@ -330,20 +329,31 @@ float3 envRadiance(float3 dir)
 
 bool envSampled() { return envTexture() < 4096u && pc.control.w > 0u && pc.tuning.y > 0.0; }
 
-uint searchCdf(StructuredBuffer<float> cdf, uint base, uint n, float u)
+uint searchCdf(uint base, uint n, float u)
 {
     uint lo = 0u, hi = n - 1u;
     while (lo < hi)
     {
         const uint mid = (lo + hi) >> 1u;
-        if (cdf[base + mid] < u) lo = mid + 1u;
+        if (envCdf[base + mid] < u) lo = mid + 1u;
         else hi = mid;
     }
     return lo;
 }
 
-// The density (solid angle) of a direction under the environment's CDF (render/rt/env_cdf's texel
-// histogram: piecewise constant in (u, v)).
+// Texel (x, y)'s probability (render/rt/env_cdf: luminance x sin(theta), piecewise constant in
+// (u, v)) as a density in solid angle at polar angle theta: the texel covers (2 pi / W) x (pi / H)
+// of (phi, theta), times sin(theta).
+float envDensity(uint x, uint y, float theta)
+{
+    const uint W = pc.control.w, H = uint(pc.tuning.y);
+    const uint row = H + y * W;
+    const float cond = envCdf[row + x] - (x > 0u ? envCdf[row + x - 1u] : 0.0);
+    const float marg = envCdf[y] - (y > 0u ? envCdf[y - 1u] : 0.0);
+    return max(cond * marg * float(W) * float(H) / (kTwoPi * kPi * max(sin(theta), 1e-4)), 0.0);
+}
+
+// The density (solid angle) of a direction under the environment's sampling.
 float envPdf(float3 dir)
 {
     if (!envSampled()) return 0.0;
@@ -352,22 +362,22 @@ float envPdf(float3 dir)
     const float u = atan2(dir.z, dir.x) / kTwoPi + 0.5;
     const uint x = min(uint(u * float(W)), W - 1u);
     const uint y = min(uint(theta / kPi * float(H)), H - 1u);
-    const uint row = y * W;
-    const float cond = envConditional[row + x] - (x > 0u ? envConditional[row + x - 1u] : 0.0);
-    const float marg = envMarginal[y] - (y > 0u ? envMarginal[y - 1u] : 0.0);
-    return max(cond * marg * float(W) * float(H) / (kTwoPi * kPi * max(sin(theta), 1e-4)), 0.0);
+    return envDensity(x, y, theta);
 }
 
-// A direction drawn by the CDF: a texel, then a point uniformly in it.
-float3 sampleEnv(inout Sampler rng)
+// A direction drawn by inverting the CDFs (a row by the marginal, a texel by its row's
+// conditional), then a point uniformly in the texel: a continuous warp, so the Sobol points stay
+// stratified on the sphere. `pdf` its density.
+float3 sampleEnv(inout Sampler rng, out float pdf)
 {
     const uint W = pc.control.w, H = uint(pc.tuning.y);
-    const uint y = searchCdf(envMarginal, 0u, H, rng.next());
-    const uint x = searchCdf(envConditional, y * W, W, rng.next());
+    const uint y = searchCdf(0u, H, rng.next());
+    const uint x = searchCdf(H + y * W, W, rng.next());
     const float u = (float(x) + rng.next()) / float(W);
     const float v = (float(y) + rng.next()) / float(H);
     const float phi = (u - 0.5) * kTwoPi;
     const float theta = v * kPi;
+    pdf = envDensity(x, y, theta);
     return float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
 }
 
@@ -641,8 +651,8 @@ void raygen()
         if (envSampled())
         {
             rng.group(2u + 3u * depth);
-            const float3 L = sampleEnv(rng);
-            const float pdfL = envPdf(L);
+            float pdfL;
+            const float3 L = sampleEnv(rng, pdfL);
             const float3 wi = toLocal(L, t, b, n);
             float3 fs, fd;
             base.evalLobes(wo, wi, tables, fs, fd);
@@ -818,8 +828,8 @@ void cacheUpdate()
         if (envSampled())
         {
             rng.group(2u + 3u * depth);
-            const float3 L = sampleEnv(rng);
-            const float pdfL = envPdf(L);
+            float pdfL;
+            const float3 L = sampleEnv(rng, pdfL);
             const float3 wi = toLocal(L, t, b, n);
             const float3 f = base.eval(wo, wi, tables);
             if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))

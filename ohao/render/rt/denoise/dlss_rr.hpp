@@ -52,18 +52,21 @@ inline bool dlssIEq(const char* a, const char* b) {
     return *a == *b;
 }
 
+// Unset: Quality (2/3 of the output's size a side), how Ray Reconstruction is meant to run; at 1080p it
+// halves the realtime frame against native (DLAA) for a slightly softer image (frontier F1 T6).
 inline DlssQuality parseDlssQuality(const char* s) {
-    if (!s || !*s) return DlssQuality::DLAA;
+    if (!s || !*s) return DlssQuality::Quality;
+    if (dlssIEq(s, "dlaa") || dlssIEq(s, "native"))    return DlssQuality::DLAA;
     if (dlssIEq(s, "quality"))                            return DlssQuality::Quality;
     if (dlssIEq(s, "balanced"))                           return DlssQuality::Balanced;
     if (dlssIEq(s, "performance") || dlssIEq(s, "perf"))  return DlssQuality::Performance;
     if (dlssIEq(s, "ultraperf") || dlssIEq(s, "ultra") ||
         dlssIEq(s, "ultraperformance"))                   return DlssQuality::UltraPerformance;
-    return DlssQuality::DLAA;   // "dlaa" or anything unrecognized
+    return DlssQuality::Quality;   // anything unrecognized
 }
 
-/// Reads OHAO_DLSS_QUALITY once (cached for the process). Default DLAA so the
-/// existing native-res behavior is unchanged unless the env var is set.
+/// Reads OHAO_DLSS_QUALITY once (cached for the process): dlaa | quality | balanced | performance |
+/// ultraperf; unset, Quality.
 inline DlssQuality dlssQualityFromEnv() {
     static const DlssQuality q = parseDlssQuality(std::getenv("OHAO_DLSS_QUALITY"));
     return q;

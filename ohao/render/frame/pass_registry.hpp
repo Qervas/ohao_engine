@@ -50,7 +50,10 @@ inline constexpr PassInfo kPasses[] = {
     {"capture.preview", PassKind::Compute, "only during an inline capture: the final image box-filtered to the preview's size, into the frame's staging buffer"},
     {"present", PassKind::Transfer, "the final image blitted to the swapchain, and a requested readback copy"},
     {"readback", PassKind::Transfer, "headless: the final image copied to the frame's staging buffer"},
-    {"pt.render", PassKind::RayTracing, "the path tracer: trace, accumulate, denoise, tonemap"},
+    {"pt.cache.update", PassKind::RayTracing, "the realtime path tracer: the radiance cache's sparse update trace (and the frame's setup)"},
+    {"pt.cache.resolve", PassKind::Compute, "the realtime path tracer: the radiance cache's blend and eviction"},
+    {"pt.trace", PassKind::RayTracing, "the path tracer's trace: a sample a pixel, accumulated or handed to the denoiser"},
+    {"pt.denoise", PassKind::Compute, "the path tracer's denoiser (NRD, DLSS RR) and display transform"},
     {"pt.present", PassKind::Transfer, "a window: the path tracer's output blitted to the swapchain, and a requested readback copy"},
     {"pt.readback", PassKind::Transfer, "headless: the path tracer's output copied to the frame's staging buffer"},
 };

@@ -1484,7 +1484,7 @@ static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() 
     for (const char* name : {"scene.upload", "cull.instances", "gbuffer.early", "hiz.build", "cull.late", "gbuffer.late",
                              "ssao", "lighting", "post.bloom", "post.taa", "post.tonemap", "readback"})
         EXPECT(hasPass(last, name), "a frame with SSAO, TAA and bloom runs " + std::string(name));
-    EXPECT(!hasPass(last, "present") && !hasPass(last, "pt.render"), "a headless deferred frame has no present");
+    EXPECT(!hasPass(last, "present") && !hasPass(last, "pt.trace"), "a headless deferred frame has no present");
     // The timer reports a refused pass once per process: read the whole run's errors.
     const auto errors = ohao::log::read(0, ohao::log::Level::Error, ohao::log::Channel::render, 4096);
     for (const auto& rec : errors.lines)

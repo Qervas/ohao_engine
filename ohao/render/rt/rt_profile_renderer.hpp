@@ -61,14 +61,14 @@ public:
     virtual void setBindlessTextures(std::span<const VkImageView> views,
                                      std::span<const VkSampler> samplers) = 0;
 
-    virtual void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
-                                   uint32_t envWidth, uint32_t envHeight, float integral) = 0;
+    virtual void setEnvSampling(VkBuffer cdf, uint32_t envWidth, uint32_t envHeight) = 0;
 
     // Sub-plan 4.F T1: wire HDR env map resource through to PathTracer for
     // NRD tonemap's sky composite. Pass {NULL, NULL} to signal no env loaded.
     virtual void setEnvMapResource(VkImageView view, VkSampler sampler) = 0;
 
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
+    virtual void setPassTimer(render::GpuPassTimer* timer) = 0;
     virtual void notifyViewChanged() = 0;
     virtual void resetAccumulation() = 0;
     virtual void setRenderSeed(uint32_t seed) = 0;
@@ -102,6 +102,7 @@ public:
     void destroy() override { m_pathTracer.destroy(); }
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
 
+    void setPassTimer(render::GpuPassTimer* timer) override { m_pathTracer.setPassTimer(timer); }
     void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) override {
         m_pathTracer.render(cmd, frameSlot, view, proj);
     }
@@ -138,9 +139,8 @@ public:
         m_pathTracer.setBindlessTextures(views, samplers);
     }
 
-    void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
-                          uint32_t envWidth, uint32_t envHeight, float integral) override {
-        m_pathTracer.setEnvCDFBuffers(marginal, conditional, envWidth, envHeight, integral);
+    void setEnvSampling(VkBuffer cdf, uint32_t envWidth, uint32_t envHeight) override {
+        m_pathTracer.setEnvSampling(cdf, envWidth, envHeight);
     }
 
     void setEnvMapResource(VkImageView view, VkSampler sampler) override {

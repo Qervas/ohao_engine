@@ -339,7 +339,7 @@ def test_path_tracer_window():
           "a lockstep rt_offline capture: 16 sample passes, deterministic (%s ms)" % offline.get("ms"))
     stats = result(s.call("render.stats", {"frames": 1})) or {}
     names = [p[0] for p in stats.get("passes", [])]
-    check("pt.render" in names and "pt.present" in names,
+    check("pt.trace" in names and "pt.present" in names,
           "its frames were traced and presented (passes %s)" % ", ".join(names))
     realtime = result(s.call("render.capture", {"path": out + "/realtime.png", "mode": "rt_realtime", "spp": 8})) or {}
     check(realtime.get("frames") == 8, "a lockstep rt_realtime capture: 8 frames")

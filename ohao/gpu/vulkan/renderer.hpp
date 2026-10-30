@@ -459,20 +459,18 @@ private:
     // Path tracer profiles (the acceleration structures belong to m_renderScene)
     std::unique_ptr<RTRealtimeRenderer> m_rtRealtimeRenderer;
     std::unique_ptr<RTOfflineRenderer> m_rtOfflineRenderer;
-    // Environment map (env_upload.cpp): HDR image in the bindless table, its CDFs,
+    // Environment map (env_upload.cpp): HDR image in the bindless table, its CDF,
     // and the RT bindless view/sampler arrays rebuilt each RT frame.
     void uploadEnvironmentMap();          // once per path (render()); stamps env index + scale into the RenderScene
     void bindRTTextures(IRTRendererProfile& renderer);
-    void destroyEnvCDFBuffers();
+    void destroyEnvSamplingBuffer();
     [[nodiscard]] bool envMapLoaded() const noexcept {
         return m_envMapImageView != VK_NULL_HANDLE && m_envMapTexIdx != 0xFFFFFFFFu;
     }
     std::vector<VkImageView> m_rtTextureViews;
     std::vector<VkSampler> m_rtTextureSamplers;
-    VkBuffer m_envMarginalCDFBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_envMarginalCDFMemory{VK_NULL_HANDLE};
-    VkBuffer m_envConditionalCDFBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_envConditionalCDFMemory{VK_NULL_HANDLE};
+    VkBuffer m_envCdfBuffer{VK_NULL_HANDLE};   // the path tracer's 2D CDF (render/rt/env_cdf.hpp)
+    VkDeviceMemory m_envCdfMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
     std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
     std::string m_envMapAttemptedPath;  // path render() last handed to uploadEnvironmentMap
@@ -492,7 +490,6 @@ private:
     uint32_t m_envMapTexIdx{0xFFFFFFFFu};           // bindless index in light header
     uint32_t m_envMapWidth{0};
     uint32_t m_envMapHeight{0};
-    float m_envMapIntegral{0.0f};
     float m_envIntensityScale{1.0f}; // light header offset 8
     uint32_t m_renderSeed{0};        // setRenderSeed; applied to renderers as they are created
     RenderQuality m_renderQuality{RenderQuality::Realtime};

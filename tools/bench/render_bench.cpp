@@ -94,6 +94,13 @@ struct SceneSpec {
     // Sub-project 12 step 4: the smoke proxies out of RT shadows and GI (render.settings vfx.smokeInGi off).
     // The proxies' cost is a scene's rt.shadows + rt.gi against this scene's (the passesDelta budgets).
     bool smokeGiOff{false};
+    // Frontier F1 T6: the realtime path tracer (pt.cache.update, pt.cache.resolve, pt.trace and, under a
+    // denoiser, pt.denoise) in place of the deferred frame.
+    const char* mode{"deferred"};
+    const char* denoise{"none"};
+    // The level, physics, combat and vfx systems installed as the CLI installs them, without the vfx
+    // scene's script (the vfx scenes imply it): the blockout expanded, the player at its spawn.
+    bool level{false};
 };
 
 // anim16_1080p: the blockout room with 16 test rigs (tests/anim/fixtures/rig.glb) on a 4 x 4 grid,
@@ -124,12 +131,22 @@ const std::vector<SceneSpec>& sceneSpecs() {
         // posed every frame, as in a window: the play scene's skin, skin.bounds and rt.blas.refit.
         {"play_anim_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
         // The play scene's effects (sub-project 12): a grenade's boom and smoke, the rifle's muzzles
-        // and impacts, stepped before every frame: vfx.expand, vfx.sort and transparent. Last: it
-        // installs the combat systems (physics, combat, vfx) on the bench's world.
+        // and impacts, stepped before every frame: vfx.expand, vfx.sort and transparent. After the
+        // deferred scenes: it installs the combat systems (physics, combat, vfx) on the bench's world.
         {"play_vfx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true},
         // The same moment with the smoke proxies out of RT shadows and GI (step 4's proxy cost: the budget
         // is play_vfx_1080p's rt.shadows + rt.gi less this scene's).
         {"play_vfx_nosmoke_gi_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true, true},
+        // The realtime path tracer at 1080p (frontier F1 T6): the trace alone (no denoiser) in the helmet
+        // room and the play scene, and the play scene's whole realtime frame under DLSS Ray Reconstruction
+        // at its default preset (Quality: traced at 1280x720), which falls back to the raw trace without
+        // the DLSS SDK or an NVIDIA GPU.
+        {.name = "helmet_rt_1080p", .path = "assets/scenes/helmet_game.scene.json", .width = 1920, .height = 1080,
+         .mode = "rt_realtime"},
+        {.name = "play_rt_1080p", .path = "assets/scenes/blockout_play.scene.json", .width = 1920, .height = 1080,
+         .mode = "rt_realtime", .level = true},
+        {.name = "play_rt_dlss_1080p", .path = "assets/scenes/blockout_play.scene.json", .width = 1920, .height = 1080,
+         .mode = "rt_realtime", .denoise = "dlss", .level = true},
     };
     return s;
 }
@@ -744,7 +761,7 @@ struct Gpu {
 
     // Loads the scene and renders `frames` frames of it; empty on success, else why not.
     std::string render(const SceneSpec& spec, int frames) {
-        if (spec.vfx && !vfxInstalled) {
+        if ((spec.vfx || spec.level) && !vfxInstalled) {
             // As the CLI context installs them (before the load: the level's nodes and colliders, the play
             // scene's bodies and records). Without the level the blockout renders empty, with no spawns: the
             // other blockout scenes (play_hud, play_anim) still measure that, as their budgets were set.
@@ -781,7 +798,8 @@ struct Gpu {
             "render.settings", std::string(R"({"set":{"vfx":{"smokeInGi":)") + (spec.smokeGiOff ? "false" : "true") + "}}}");
         if (smoke.rfind("{\"result\"", 0) != 0) return "render.settings failed: " + smoke.substr(0, 300);
         api::RenderRequest r;
-        r.mode = "deferred";
+        r.mode = spec.mode;
+        r.denoise = spec.denoise;
         r.frames = spec.animate ? 1 : frames;   // animated: the capture sets the view and the passes up
         r.width = spec.width;
         r.height = spec.height;

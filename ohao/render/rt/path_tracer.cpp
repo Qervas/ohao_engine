@@ -346,11 +346,9 @@ void PathTracer::destroy() {
 
     // CDF buffers are owned by VulkanRenderer, not by the path tracer.
     // Clear the cached handles so later destroy calls or reuse don't touch freed memory.
-    m_envMarginalCDFBuffer = VK_NULL_HANDLE;
-    m_envConditionalCDFBuffer = VK_NULL_HANDLE;
-    m_envCDFWidth = 0;
-    m_envCDFHeight = 0;
-    m_envCDFIntegral = 0.0f;
+    m_envCdfBuffer = VK_NULL_HANDLE;
+    m_envWidth = 0;
+    m_envHeight = 0;
 
     m_openpbrTables.destroy();
     m_radianceCache.destroy();
