@@ -8,19 +8,19 @@ figures: [materials-pack-matrow]
 
 ## A struct that exists on only one side
 
-There is no material struct on the GPU. The realtime path tracer's GLSL hit shader binds
-the table as a flat array of `vec4` and nothing else:
+There is no material struct on the GPU. The path tracer binds the table as a flat array
+of `float4` and nothing else:
 
-{{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer"}}
+{{cite shaders/rt/path_tracer.slang "[[vk::binding(10, 0)]] StructuredBuffer<float4> materials;    // kMaterialRows a material"}}
 
-The reference path tracer binds the same binding as a `StructuredBuffer<float4>`, and the
-G-buffer fragment shader binds the *same buffer* in its own set under a third name and the
-same element type, `vec4 matRows[]`. A material is therefore a convention rather than a
+The G-buffer fragment shader binds the *same buffer* in its own set under another name and
+the same element type:
+
+{{cite shaders/includes/scene/gbuffer_body.glsl "layout(set = 1, binding = 1, std430) readonly buffer Materials { vec4 matRows[]; };"}}
+ A material is therefore a convention rather than a
 type: seven consecutive vec4s, twenty-eight float lanes, and a meaning per lane that the
-producer and each consumer have to agree on independently. The hit shaders reassemble the
-rows by hand, one indexed load per row, before they know what any lane holds:
-
-{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * kMaterialRows + 2u];"}}
+producer and each consumer have to agree on independently. The closest hit reassembles the
+rows by hand, one indexed load per row, before it knows what any lane holds:
 
 {{cite shaders/rt/path_tracer.slang "const float4 row0 = materials[m], row1 = materials[m + 1u], row2 = materials[m + 2u];"}}
 
@@ -43,11 +43,8 @@ converting the value:
 {{cite ohao/render/scene/material_table.cpp "const auto bits = [](uint32_t u) { return std::bit_cast<float>(u); };"}}
 
 The "no texture" case is the all-ones uint32, `kNoTexture`, and it goes through the
-same cast. The GLSL closest-hit shader reverses it with `floatBitsToUint` before testing
-against the sentinel; the reference's tests `asuint` against the bindless table's size,
-4096, which the sentinel also fails:
-
-{{cite shaders/rt/pt_closesthit.rchit "if (diffuseTexIdx != 0xFFFFFFFFu) {"}}
+same cast. The path tracer reverses it with `asuint` and tests the result against the
+bindless table's size, 4096, which the sentinel also fails:
 
 {{cite shaders/rt/path_tracer.slang "if (albedoTex < 4096u) baseColor *= sampleTex(albedoTex, uv).rgb;"}}
 
@@ -100,9 +97,9 @@ a registration into a full table (capacity 4096) logs once and returns it.
 
 Which row a hit uses is decided per instance, not per material: the closest-hit
 shader reads the triangle's slot from the mesh's slot stream, then the instance's
-material-reference list: the GLSL one with the same `OHAO_MATERIAL_INDEX` macro the
-G-buffer uses, the reference with the same arithmetic written out in `cornersOf`, so
-raster and RT agree about which material a triangle has.
+material-reference list, with the same arithmetic as the G-buffer's `OHAO_MATERIAL_INDEX`
+macro written out in `cornersOf`, so raster and RT agree about which material a triangle
+has.
 
 Row 2 holds the roughness/metal texture index, the emissive strength and the
 subsurface strength, which only the raster G-buffer reads (to flag SSS tiles and sign
@@ -114,13 +111,13 @@ from its R channel, for the ambient terms), since a path tracer needs no baked o
 
 Row 3 holds the alpha mode (as a float), the alpha cutoff, the opacity and the base
 colour's alpha. They are plain floats, read by the G-buffer's alpha-tested variant, the
-path tracers' any-hit shaders and the transparent pass:
+path tracer's any-hit shader and the transparent pass:
 
 {{cite ohao/render/scene/material_table.cpp "static_cast<float>(static_cast<uint32_t>(d.alphaMode)), d.alphaCutoff, d.opacity, d.baseAlpha,"}}
 
 Rows 4 to 6 are OpenPBR's: specular colour and weight; specular IOR, diffuse roughness,
 base weight and the specular-weight texture; emission colour and the specular-colour
-texture. The reference path tracer's closest hit and the G-buffer both read all three,
+texture. The path tracer's closest hit and the G-buffer both read all three,
 and both form emission as row 6's colour times row 2's strength (emission_color ×
 emission_luminance). The G-buffer stores the rest for deferred lighting in its two OpenPBR
 targets and folds `base_weight` into the albedo:
@@ -160,8 +157,7 @@ every producer uses:
 
 Every shader consumer takes the stride from `kMaterialRows`, a constant generated from
 `shaders/shared/layout.json` — `matRows[m * kMaterialRows + 0u]` in the G-buffer,
-`matID * kMaterialRows` in the GLSL closest-hit, `c.material * kMaterialRows` in the
-reference's. `kMaterialVec4s` repeats that number by hand
+`c.material * kMaterialRows` in the path tracer's closest hit. `kMaterialVec4s` repeats that number by hand
 (its comment names `gpu::shared::kMaterialRows`), so the static asserts are a lock, not
 a derivation: editing one without the other breaks the size checks on the C++ side
 only.
@@ -169,25 +165,20 @@ only.
 ## A header that only looks like padding
 
 The light SSBO plays the same game with a sharper move. `GPULight` is five vec4s,
-80 bytes, and the realtime raygen declares binding 11 as a header followed by
-`GPULight lights[]`. Under std430 a struct of vec4s aligns to 16, so the array
-cannot begin at offset 4 — it begins at 16, and the light table names exactly that
-as its header size:
+80 bytes, and binding 11 holds a header followed by the lights. Under std430 an
+array of vec4-aligned structs cannot begin at offset 4 — it begins at 16, and the light
+table names exactly that as its header size:
 
 {{cite ohao/render/scene/light_table.hpp "static constexpr VkDeviceSize kHeaderBytes = 16;"}}
 
 The 12 bytes between the count and the first light look like alignment slack.
-They are not. `pt_miss.rmiss` declares the *same binding* as a different block —
-four scalars, no light array — and reads the environment-map index and HDRI
-intensity out of that gap; the reference path tracer reads the binding as bare
-`float4`s, the header at index 0 and light $i$ at rows $1+5i$ to $5+5i$:
-
-{{cite shaders/rt/pt_miss.rmiss "uint envMapTexIdx;"}}
+They are not: they hold the environment-map index, the HDRI intensity and the
+alpha-rays flag. The path tracer reads the binding as bare `float4`s, the header at
+index 0 and light $i$ at rows $1+5i$ to $5+5i$:
 
 {{cite shaders/rt/path_tracer.slang "const uint b = 1u + i * 5u;"}}
 
-One buffer, three structurally different views chosen per shader. The header is
-written whole whenever the table is dirty: the light count, the environment index,
+The header is written whole whenever the table is dirty: the light count, the environment index,
 the intensity scale and the alpha-rays flag.
 
 {{cite ohao/render/scene/light_table.cpp "const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,"}}
@@ -195,7 +186,7 @@ the intensity scale and the alpha-rays flag.
 The environment index and intensity are stored in the light table itself
 (`setEnvMapTextureIndex`, `setEnvIntensity`), and changing either marks the table
 dirty, so a rebuild of the lights cannot lose them. What remains of the coupling is
-its shape: a miss shader reading words that a light-list type owns.
+its shape: environment state riding in a light list's header.
 
 ## What the layout assertion cannot see
 
@@ -205,9 +196,8 @@ Both packs are guarded by one macro:
 
 It expands to two static asserts — that the type satisfies `GpuPod` (trivially
 copyable, standard layout) and that `sizeof` equals the stated number. Both are
-facts about C++. Nothing in the tree reflects the SPIR-V: the GLSL `GPULight` is
-hand-copied into `pt_raygen_realtime.rgen`, and the reference's `loadLight` decodes
-the five rows by hand. The assertion catches a C++ edit and is blind to a shader
+facts about C++. Nothing in the tree reflects the SPIR-V: the path tracer's `loadLight`
+decodes the five rows by hand. The assertion catches a C++ edit and is blind to a shader
 edit.
 
 The same header carries a constant that reads like a hard limit and is not one:
@@ -216,7 +206,7 @@ The same header carries a constant that reads like a hard limit and is not one:
 
 It is referenced: the light table sizes the
 device buffer as the header plus 64 lights and truncates a longer list with a
-one-time log. The shaders clamp their light choice against `lightBuf.lightCount`,
+one-time log. The path tracer clamps its light choice against the header's count,
 which is already post-truncation. The deferred side bounds its table the same way but
 at a different scale: up to `kLightCapacity` 65,536 `LightGpu` records, generated from
 `shaders/shared/layout.json` into the C++, GLSL and Slang copies at once, so its shader
@@ -234,13 +224,10 @@ angle in degrees for spot lights:
 {{cite ohao/render/rt/gpu_light.hpp "w=param (sphere:radius, spot:innerAngle)"}}
 {{cite ohao/render/scene/light_table.cpp "dirParam = d.innerConeDeg;"}}
 
-The overload is resolved twice, by hand, once in each tracer. The reference takes a
-spot's radius from `extra2.y` and a sphere's from `dirAndParam.w`; the realtime raygen
-does the same through `ptLightRadius`:
+The overload is resolved by hand in `loadLight`, which takes a spot's radius from
+`extra2.y` and a sphere's from `dirAndParam.w`:
 
 {{cite shaders/rt/path_tracer.slang "l.radius = max(l.type == 2u ? f.y : d.w, 0.01);"}}
-
-{{cite shaders/includes/rt/pt_lights.glsl "return (type > 1.5 && type < 2.5) ? extra2.y : dirParam;"}}
 
 The C++ comment on `dirAndParam` names both meanings and does not say that a spot's
 radius moved; `extra2`'s comment does. A reader that took `dirAndParam.w` as the radius
@@ -266,5 +253,5 @@ underneath a size contract that passes.
 - Nothing may do arithmetic on the seven index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
 - Row 0 is the default material and the fallback for a short material list and a full table. Code that registers materials must not assume a returned handle is distinct from 0.
 - The light-buffer header is written by `LightTable::recordUploads`, whole, whenever the table is dirty. The environment index and intensity live in the table, so a light rebuild keeps them; anything else writing binding 11 would have to reproduce the 16-byte header.
-- The shader `GPULight` lives in two hand-maintained decoders, the realtime raygen's GLSL struct and the reference's `loadLight`. `OHAO_ASSERT_GPU_LAYOUT` sees neither, and no test reflects the SPIR-V.
+- The shader `GPULight` lives in one hand-maintained decoder, the path tracer's `loadLight`. `OHAO_ASSERT_GPU_LAYOUT` does not see it, and no test reflects the SPIR-V.
 - `MAX_GPU_LIGHTS` bounds the RT light list: the device buffer is sized for 64 and a longer list is truncated with a log.

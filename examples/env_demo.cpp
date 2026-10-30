@@ -52,13 +52,6 @@ int main(int argc, char* argv[]) {
     bool groundEnabled = true;
     enum class LightingMode { Studio, HdrOnly, None, Cinema };
     LightingMode lightingMode = LightingMode::Studio;
-    // Sub-plan 4.K: global anisotropic specular override. 0 = isotropic;
-    // 0.5–0.85 gives visible brushed-metal/chrome streaks. Rotation in
-    // radians orients the tangent frame around N. Both 0 → no change.
-    float anisoStrength = 0.0f;
-    float anisoRotation = 0.0f;
-    // Sub-plan 4.L: SSS strength for skin. 0.5-0.7 = realistic skin.
-    float sssStrength = 0.0f;
     // --crop=face: tight portrait framing on subject head for SSS close-up.
     bool faceCrop = false;
     // --flip: rotate model 180° about Y for assets whose front faces away from
@@ -132,12 +125,6 @@ int main(int argc, char* argv[]) {
             else if (v == "hdr-only" || v == "hdr") lightingMode = LightingMode::HdrOnly;
             else if (v == "none")    lightingMode = LightingMode::None;
             else if (v == "cinema")  lightingMode = LightingMode::Cinema;
-        } else if (arg.starts_with("--aniso=")) {
-            anisoStrength = std::clamp(std::stof(std::string(arg.substr(8))), 0.0f, 0.95f);
-        } else if (arg.starts_with("--aniso-rot=")) {
-            anisoRotation = std::stof(std::string(arg.substr(12)));
-        } else if (arg.starts_with("--sss=")) {
-            sssStrength = std::clamp(std::stof(std::string(arg.substr(6))), 0.0f, 1.0f);
         } else if (arg == "--crop=face") {
             faceCrop = true;
         } else if (arg == "--flip") {
@@ -423,19 +410,6 @@ int main(int argc, char* argv[]) {
         renderer.setDenoiseMode(*denoiseOverride);
     }
     std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
-
-    if (anisoStrength > 0.0f || sssStrength > 0.0f) {
-        auto settings = renderer.getRTRenderSettings();
-        settings.anisotropyStrength = anisoStrength;
-        settings.anisotropyRotation = anisoRotation;
-        settings.subsurfaceStrength = sssStrength;
-        renderer.setRTRenderSettings(settings);
-        if (anisoStrength > 0.0f)
-            std::cout << "Anisotropic specular: strength=" << anisoStrength
-                      << " rotation=" << anisoRotation << " rad" << std::endl;
-        if (sssStrength > 0.0f)
-            std::cout << "Subsurface scattering: strength=" << sssStrength << std::endl;
-    }
 
     // ---- Debug: consecutive per-frame capture (--seq=K) ----
     // Renders K consecutive frames, dumping each frame (read back) to a

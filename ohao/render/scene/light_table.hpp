@@ -48,7 +48,7 @@ public:
     // at full weight. Flagged at upload (GPULight extra2.z for a point or spot, extra.w for a
     // rectangle).
     void setEmitterLights(std::vector<uint32_t> rtIndices);
-    void setEnvIntensity(float scale);   // header word 2, read by pt_miss (<= 0 means 1)
+    void setEnvIntensity(float scale);   // header word 2, read by the path tracer's miss (<= 0 means 1)
 
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
     // Changes whenever raster() does (from 1: 0 means "always upload" to LightClusters).

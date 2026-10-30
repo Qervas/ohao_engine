@@ -11,25 +11,21 @@ figures: [denoise-atrous-pingpong]
 Every other denoiser here wants linear radiance: NRD demodulated by albedo and
 split diffuse/specular, OIDN as HDR colour with albedo and normal AOVs.
 OHAO's own SVGF takes the opposite input — the RGBA8 beauty, already run through
-ACES and a 1/2.2 gamma curve by the realtime raygen or, with the realtime
-profile's internal denoise on, by the spatial-denoise pass after it:
+ACES at exposure 0.5 and a 1/2.2 gamma curve by the path tracer's raygen:
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 ldr = ACES(acc * 0.5);"}}
+{{cite shaders/rt/path_tracer.slang "outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);"}}
 
 It is also the last pass's destination — overwritten in place, so nothing
 downstream changes.
 
 {{cite ohao/render/rt/denoise/atrous_denoise.hpp "beautyImage  = VK_NULL_HANDLE; // m_outputImage (RGBA8)"}}
 
-Nor is that input raw. `kRealtimeRTSettings` turns the internal spatial denoise
-on and nothing on the Atrous path clears it, so before SVGF runs a compute pass
-has already applied a 5×5 edge-aware bilateral to every pixel whose local
-variance clears a threshold, then rescaled to preserve luminance, and tonemapped.
-(Inside the raygen, until sub-project 2b step 5, the same filter read neighbours
-other invocations were still writing; its two wider passes, algebraically
-identity, are gone.)
+That input is this frame's sample alone. À-trous is one of the temporal
+denoisers `tracerAccumulates` names, so the trace keeps no running mean of its
+own under it, and the firefly clamp, which applies only when the trace does not
+accumulate, is on by the realtime profile's defaults (the offline profile's is off):
 
-{{cite ohao/render/rt/rt_settings.hpp ".enableInternalDenoise = true,"}}
+{{cite ohao/render/rt/rt_meta.hpp "case DenoiseMode::Atrous:"}}
 
 :::why
 Demodulation — divide out albedo, filter the illumination, multiply back — is the
@@ -79,9 +75,9 @@ $$\mathrm{Var} = m_2 - m_1^2$$
 
 with $l = 0.2126R + 0.7152G + 0.0722B$. This is the point of Pass 1: the spatial
 filter needs a per-pixel estimate of *how noisy this pixel still is*, and a
-temporal moment pair gives one for free — with the caveat above, that on the
-realtime profile $l$ is already-filtered luminance, so the moments measure
-residual noise, not Monte-Carlo variance.
+temporal moment pair gives one for free. With the firefly clamp on (the realtime
+profile's default), $l$ is clamped luminance, so the moments measure the
+clamped estimator's variance, not the unclamped Monte-Carlo variance.
 
 A two-frame history gives a meaningless variance, so below four frames the pass
 also computes the spatial 3×3 luminance variance of the current beauty and takes
@@ -138,8 +134,7 @@ at matched flat-metal noise.
 {{cite ohao/render/rt/denoise/atrous_denoise.cpp "constexpr float kSigmaL"}}
 
 The recorded rationale is structural: Pass 1 has already removed most of the
-noise, so Pass 2 only cleans a residual — and on the realtime profile the
-in-raygen bilateral took some first. A spatial stage doing the heavy
+noise, so Pass 2 only cleans a residual. A spatial stage doing the heavy
 lifting needs a permissive σ_l; one following a strong temporal stage must not.
 
 ## The schedule, and the image that is three things at once
@@ -159,41 +154,33 @@ dispatches would be invalid.
 
 ## The motion vectors SVGF actually receives
 
-Atrous mode forces `historyFrameCount = 0` in the raygen push constants every
-frame, so the engine's cross-frame accumulation is bypassed and the denoiser owns
-temporal integration. (How many paths it carries is a separate control,
-`samplesPerFrame`, averaged in-raygen.) The reference path tracer, the offline
-profile's raygen, gates motion-vector output on that same zeroed counter: the
-vector starts at zero and is computed only while history frames are counted.
+Under à-trous the push constants carry no running-mean frames, so the trace's
+beauty is this frame's sample and the denoiser owns temporal integration. The
+raygen writes motion vectors whenever last frame's view is known — the push
+constant's `control.z`, set once the tracer has rendered a frame since its last
+reset — independent of accumulation:
 
-{{cite shaders/rt/path_tracer.slang "float2 motion = float2(0.0);"}}
+{{cite shaders/rt/path_tracer.slang "if (pc.control.z != 0u)"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.z = m_hasPreviousView ? 1u : 0u;"}}
 
-With the offline profile bound the counter is 0 on every Atrous frame, so the
-motion-vector AOV is identically zero and reprojection degenerates to
-`prevPixel == pixel` — the smaller problem there. That profile also resets
-accumulation on view change, which raises `pc.reset` and makes Pass 1 discard
-*all* history unconditionally — not per-pixel, not by geometry test — for every
-frame the camera moves. The realtime raygen gates on the frame index instead,
-which advances in all modes:
+What differs between the profiles is what a moved view does. The realtime
+profile only tells the tracer the view moved: the trace's running mean restarts,
+the history clock does not, and SVGF reprojects through the vectors. The offline
+profile resets accumulation on a view change, which zeroes the history clock and
+clears the previous view, so `pc.reset` is raised and Pass 1 discards all history
+unconditionally — not per pixel, not by geometry test — for every frame the
+camera moves, with zero motion vectors:
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "if (firstHitDist > 0.0 && frameIdx > 0u) {"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp "bool resetsAccumulationOnViewChange() const override { return true; }"}}
 
-So an `rt_realtime --denoise=atrous` run gets correct vectors; an offline one does
-not.
-
-## Two compiled shaders that nothing runs
-
-`AtrousDenoiser` creates exactly two pipelines, from
-`rt_rt_svgf_temporal.comp.spv` and `rt_rt_svgf_atrous.comp.spv`. The CMake glob
-compiles every `.comp` under `shaders/`, so `rt_atrous.comp` and
-`denoise_atrous.comp` also produce SPIR-V — but nothing loads either name, and
-the `RTDenoiser` that would have driven them is a header with no translation unit
-and no callers.
+So an `rt_realtime --denoise=atrous` run filters a moving view temporally; an
+offline one filters each moved frame alone.
 
 ## Contracts
 
 - Beauty, normal, depth and motion must be in `VK_IMAGE_LAYOUT_GENERAL` behind a `RAY_TRACING → COMPUTE` barrier before `dispatch()`; the denoiser barriers its own six dispatches but never transitions borrowed inputs.
 - Iteration 0's colour output *is* next frame's history. Editing the ping-pong tables without moving the history binding breaks accumulation silently — the image still denoises, it never converges.
 - `resetHistory` fires when `m_historyFrameCount == 0`: first frame, or any `resetAccumulation()`. The realtime profile does not call it on a camera move, so history survives the drag; the offline profile's `resetsAccumulationOnViewChange()` returns true, so every moved frame resets and SVGF filters one frame alone.
+- À-trous must stay in `tracerAccumulates`' non-accumulating arms: fed a running mean, its temporal pass would average an average that restarts on every move.
 - History images are framebuffer-sized, destroyed and re-created on resize; the first-frame `UNDEFINED → GENERAL` latch re-arms with them.
 - `--denoise=atrous` has no build-time gate, unlike `nrd` and `dlssrr`, which fall back to `none` when their libraries were not built.

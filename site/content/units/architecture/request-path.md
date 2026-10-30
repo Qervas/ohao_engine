@@ -171,9 +171,9 @@ last:
 {{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : samples;"}}
 {{cite examples/cornell_box.cpp "if (i == frames - 1) renderer.requestReadback();"}}
 
-With `samplesPerFrame` at its default of 1, one `render()` call adds one sample to
-the accumulator, so the last of `samples` frames has integrated exactly `samples`
-samples. The request makes that frame, and no other, copy its image into its ring
+One `render()` call traces one sample a pixel and adds it to the trace's running
+mean (under `None` and `OIDN`, the offline default), so the last of `samples` frames
+has integrated exactly `samples` samples. The request makes that frame, and no other, copy its image into its ring
 slot's staging buffer, and `readback()` waits on that frame's fence alone.
 
 {{cite ohao/render/frame/frame_resources.hpp "constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;"}}
@@ -222,50 +222,54 @@ after `render()` returns, on the thread that called it.
 
 ## The settings reset that eats your overrides
 
-Once the loop starts, the renderer re-derives its RT settings from the pipeline
-object on every single frame:
+Once the loop starts, the renderer re-derives its RT settings from the active mode's
+profile defaults on every single frame. `rtDefaults` maps the mode to
+`kRealtimeRTSettings` or `kOfflineRTSettings`, and `prepareRTSceneForFrame` starts the
+frame from them:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = pipeline.getDefaultSettings();"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = defaults;"}}
 
-An override a driver configured once does not survive even to its first dispatch.
-`renderRTPipeline` calls `prepareRTSceneForFrame` — the function that performs that
-reset — before it records the command buffer that dispatches the tracer:
+An override a driver configured once does not survive even to its first dispatch
+unless something puts it back. `renderRTPipeline` calls `prepareRTSceneForFrame` —
+the function that performs that reset — before it records the command buffer that
+dispatches the tracer:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(defaults);"}}
 
-The same call is where the frame's scene-side bindings are refreshed — the light
-buffer, the bindless texture list, the environment CDFs and the HDRI scale — so it
-is the single per-frame seam between the renderer and the `RenderScene`. Four values
-are explicitly re-injected around the reset — anisotropy strength and
-rotation, subsurface strength, and the realtime per-frame sample count:
+The same call is where the frame's scene-side bindings are refreshed — the bindless
+texture list, the environment CDFs and image, and the HDRI scale — so it is the single
+per-frame seam between the renderer and the `RenderScene`. Right after the reset it
+calls `applyRTRenderSettings`, which puts back the two per-run overrides: the bounce
+count (`--bounces`, `render.capture {bounces}`) and the denoiser.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "so restore the user's choice here (same pattern as aniso/SSS preservation)."}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;"}}
 
-The denoiser gets a different mechanism: `setDenoiseMode()` raises a sticky
-`m_denoiseModeOverridden` flag that blocks the per-frame resync, and the override is
-pushed down into the tracer's own settings for exactly two modes, `Atrous` and
-`DLSSRR`.
+The denoiser's override is sticky: `setDenoiseMode()` raises `m_denoiseModeOverridden`,
+which blocks the per-frame resync, and the chosen mode — any mode, `None` and `OIDN`
+included — is pushed down into the tracer's settings, because the tracer's running mean
+and firefly clamp follow the mode (`tracerAccumulates`):
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
-`Atrous` needs it because the RT pipeline dispatches that denoiser itself, in place
-on the beauty image. `DLSSRR` rides the same branch: `path_tracer_render.cpp` holds
+`Atrous` is dispatched by the tracer itself, in place on the beauty image. `DLSSRR`
+is too: `path_tracer_render.cpp` holds
 a real NGX evaluate-and-tonemap block, compiled out unless the vendored NGX static
 library is present.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView"}}
 
 OIDN is the one genuinely consumer-side mode — it runs on the CPU after readback.
-NRD is dispatched inside the RT pipeline like `Atrous`, off the same gate since
-sub-project 2b step 5: the override is pushed down to the tracer, which runs
-REBLUR, compose and the cinematic chain only in NRD mode.
+NRD is dispatched inside the tracer like `Atrous`, and it is the realtime profile's
+default; the tracer runs REBLUR, compose and the cinematic chain only in NRD mode.
+
+{{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
 :::key
 Scene data reaches the GPU along one chain — spin, game hooks, instantiate,
 `TransformSystem`, `RenderExtract`, `RenderScene::recordUpdates`, passes — and there is one authority
-over RT behaviour (the active `IRTRenderPipeline`, reasserted every frame). Ordering
+over RT behaviour (the active mode's profile defaults, reasserted every frame). Ordering
 mistakes around the chain fail *silently* — an extract that was never installed, a
 refused mode, a stale override — never with an error. When an OHAO driver renders an
 empty frame or ignores a flag, suspect call order before suspecting the shaders.
@@ -278,4 +282,4 @@ empty frame or ignores a flag, suspect call order before suspecting the shaders.
 - The `RenderScene` must outlive the `ecs::World`. `LiveHost::shutdown` resets the session and then the world before the renderer; in `cornell_box` the `VulkanRenderer` is declared above the `ecs::World`, so reverse declaration order destroys the world first.
 - `setRenderMode()` may refuse. Read back `getRenderMode()` rather than trusting the value you passed; the examples do not, and print the requested mode.
 - Pixels come from one place: `requestReadback()` before the `render()` you want, `readback()` after it. A frame that was not requested copies nothing, and `readback()` after it returns an empty span.
-- Any new per-run RT setting must be re-injected in `applyRTRenderSettings`, or the `getDefaultSettings()` reset inside `prepareRTSceneForFrame` silently reverts it before the next dispatch.
+- Any new per-run RT setting must be re-injected in `applyRTRenderSettings`, or the reset to the profile defaults inside `prepareRTSceneForFrame` silently reverts it before the next dispatch.

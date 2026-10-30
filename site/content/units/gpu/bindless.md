@@ -247,20 +247,19 @@ every other slot gets the manager's default one.
 The path tracer writes those into binding 12 of its own descriptor set. The binding
 is sized to the manager's capacity — `ensureRTRenderer` passes `getMaxTextures()` —
 and is a partially bound, update-after-bind array visible to the raygen as well as the
-hit and miss stages (the reference path tracer's raygen samples the environment
-itself), with every element below the capacity written (entries past the table's views
+hit and miss stages (the path tracer's raygen samples the environment itself), with
+every element below the capacity written (entries past the table's views
 repeat view 0) so no index reads an unwritten descriptor.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "slot->setBindlessCapacity(m_textureManager ? m_textureManager->getMaxTextures()"}}
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,"}}
-{{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 12) uniform sampler2D textures[];"}}
 {{cite shaders/rt/path_tracer.slang "[[vk::binding(12, 0)]] Sampler2D textures[4096];"}}
 
-Both pipelines use `nonuniformEXT` and the same `0xFFFFFFFF` sentinel, and — unlike a
-separate layered image — they share one slot numbering: an index meaning "brick
-albedo" in the G-buffer means the same image in either path tracer's closest hit (the
-Slang reference spells the qualifier `NonUniformResourceIndex` and treats any index at
-or past 4096 as none). What differs is the
+Both pipelines mark the index non-uniform (`nonuniformEXT` in the G-buffer's GLSL,
+`NonUniformResourceIndex` in the path tracer's Slang) and treat `0xFFFFFFFF` as no
+texture, and — unlike a separate layered image — they share one slot numbering: an
+index meaning "brick albedo" in the G-buffer means the same image in the path tracer's
+closest hit, which treats any index at or past 4096 as none. What differs is the
 descriptor, not the identity. Two sets name the same images, and a texture upload
 reaches the path tracer only when the next RT frame rebuilds the array.
 

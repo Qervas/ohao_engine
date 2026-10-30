@@ -282,7 +282,7 @@ void VulkanRenderer::render() {
     }
 
     // Check render mode
-    if (const auto* rtPipeline = getRTPipeline(m_renderMode);
+    if (const auto* rtPipeline = rtDefaults(m_renderMode);
         rtPipeline && getRTRenderer(m_renderMode) && isRTSupported()) {
         renderRTPipeline(*rtPipeline);
         m_denoiseCacheValid = false;
@@ -340,13 +340,12 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
 }
 
 void VulkanRenderer::setRenderMode(RenderMode mode) {
-    const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
-    if (rtPipeline) {
+    if (const RTRenderSettings* defaults = rtDefaults(mode)) {
         if (!ensureRTRenderer(mode)) {
             OHAO_LOG(Warn, gpu, "Path tracing not available, staying in current mode");
             return;
         }
-        m_rtSettings = rtPipeline->getDefaultSettings();
+        m_rtSettings = *defaults;
         applyRTRenderSettings();
     }
 
@@ -436,20 +435,12 @@ void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
 }
 
 void VulkanRenderer::applyRTRenderSettings() {
-    // Atrous, DLSS-RR and NRD are GPU-side denoisers the PathTracer dispatches
-    // itself, so it must see their mode to run them (NRD: the chain that writes
-    // the binding-30 image the NRD readback copies). The profile default (reset
-    // each frame) doesn't carry the user's --denoise override, so inject it here.
-    // None and OIDN (CPU, in readback) keep the profile default.
-    if (m_denoiseModeOverridden &&
-        (m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR ||
-         m_denoiseMode == DenoiseMode::NRD)) {
+    // The profile default (reset each frame) doesn't carry the user's --denoise override, so
+    // inject it here, whatever it is: the tracer dispatches the GPU denoisers itself, and its
+    // running mean and firefly clamp follow the mode (tracerAccumulates), None and OIDN included.
+    if (m_denoiseModeOverridden) {
         m_rtSettings.denoiseMode = m_denoiseMode;
     }
-    // Re-inject the realtime per-frame sample count: prepareRTSceneForFrame
-    // resets m_rtSettings to the pipeline default (samplesPerFrame=1) each frame,
-    // so restore the user's choice here (same pattern as aniso/SSS preservation).
-    m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
     if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
@@ -462,21 +453,12 @@ void VulkanRenderer::applyRTRenderSettings() {
     }
 }
 
-void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline) {
+void VulkanRenderer::prepareRTSceneForFrame(const RTRenderSettings& defaults) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer) return;
 
-    // Keep the active RT pipeline authoritative over path tracer behavior.
-    // Preserve user-set anisotropy overrides (4.K) across the per-frame reset —
-    // pipeline defaults always have aniso=0, so a non-zero strength means the
-    // caller explicitly opted in via setRTRenderSettings.
-    float preservedAnisoStrength = m_rtSettings.anisotropyStrength;
-    float preservedAnisoRotation = m_rtSettings.anisotropyRotation;
-    float preservedSssStrength   = m_rtSettings.subsurfaceStrength;  // 4.L
-    m_rtSettings = pipeline.getDefaultSettings();
-    m_rtSettings.anisotropyStrength = preservedAnisoStrength;
-    m_rtSettings.anisotropyRotation = preservedAnisoRotation;
-    m_rtSettings.subsurfaceStrength = preservedSssStrength;
+    // The active profile's defaults, with the overrides applyRTRenderSettings re-applies.
+    m_rtSettings = defaults;
     applyRTRenderSettings();
 
     // No rebuilds: the RenderScene's tables and TLAS are current once recordUpdates
@@ -490,12 +472,12 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline) {
     m_renderScene->setEnvIntensity(m_envIntensityScale);
 }
 
-const IRTRenderPipeline* VulkanRenderer::getRTPipeline(RenderMode mode) const {
+const RTRenderSettings* VulkanRenderer::rtDefaults(RenderMode mode) {
     switch (mode) {
     case RenderMode::RTRealtime:
-        return &m_rtRealtimePipeline;
+        return &kRealtimeRTSettings;
     case RenderMode::RTOffline:
-        return &m_rtOfflinePipeline;
+        return &kOfflineRTSettings;
     default:
         return nullptr;
     }
@@ -750,16 +732,6 @@ void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
     if (mode != m_denoiseMode) {
         m_denoiseMode = mode;
         m_denoiseCacheValid = false;
-    }
-}
-
-void VulkanRenderer::setRealtimeSamplesPerFrame(uint32_t n) {
-    m_realtimeSamplesPerFrame = std::clamp(n, 1u, 64u);
-    // Push immediately so the value takes effect even outside the per-frame
-    // prepareRTSceneForFrame path; the next frame re-injects it anyway.
-    m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
-    if (auto* renderer = getRTRenderer(m_renderMode)) {
-        renderer->setRenderSettings(m_rtSettings);
     }
 }
 

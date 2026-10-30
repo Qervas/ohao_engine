@@ -25,10 +25,9 @@ upload:
 {{cite ohao/gpu/vulkan/env_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
 
 Out come a conditional CDF per row (W floats × H rows) and a marginal CDF over
-rows (H floats), handed to every RT profile with the map's width, height and
-unnormalised integral. Two samplers read them: `env_sampling.glsl`, which the
-realtime raygen and the miss shader include, and the reference path tracer's own
-`sampleEnv` and `envPdf` in `rt/path_tracer.slang`.
+rows (H floats), handed to the path tracer with the map's width, height and
+unnormalised integral. One sampler reads them: the path tracer's own `sampleEnv`
+and `envPdf` in `rt/path_tracer.slang`, which both RT profiles run.
 
 ## The sinθ that has to be there
 
@@ -46,147 +45,63 @@ exactly what the builder writes, with θ taken at the row centre,
 
 {{cite ohao/render/rt/env_cdf.cpp "float w = luminance(pixels[base], pixels[base + 1], pixels[base + 2]) * sinTheta;"}}
 
-The payoff shows up on the GPU. Each row CDF is normalised by its own row sum
-S_y and the marginal by the grand total T, so the probability of a texel is the
-product of one step from each table, and the row sums cancel:
+Each row CDF is normalised by its own row sum S_y and the marginal by the grand
+total T, so the probability of a texel is the product of one step from each
+table, and the row sums cancel:
 
 $$P(x,y) \;=\; \frac{w_{x,y}}{S_y}\cdot\frac{S_y}{T} \;=\; \frac{w_{x,y}}{T}
-\qquad p_{uv} = P\,W H, \qquad p_\omega = \frac{p_{uv}}{2\pi^2\sin\theta_y} \;\propto\; L_{x,y}$$
+\qquad p_{uv} = P\,W H, \qquad p_\omega = \frac{p_{uv}}{2\pi^2\sin\theta} \;\approx\; \frac{L_{x,y}}{T}\cdot\frac{WH}{2\pi^2}$$
 
-The sinθ inserted at build time is annihilated by the Jacobian at sample time,
-leaving a solid-angle density proportional to luminance alone. Note what is
-*absent* from that chain: T. Because both tables are already normalised,
-*sampling* never needs the integral — which is why `sampleEnvMap` takes an
-`envIntegral` argument its own body does not read.
+The sinθ inserted at build time is cancelled by the Jacobian at sample time
+(exactly at the row centre, to within the row's variation of sinθ elsewhere in
+it), leaving a solid-angle density proportional to luminance. T is absent from
+that chain: both tables are already normalised, so sampling never needs the
+integral. The host still sends it as `tuning.z`, and no shader reads it:
 
-{{cite shaders/includes/rt/env_sampling.glsl "void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,"}}
-
-It is not dead weight. The realtime raygen hands over `pc.tuning.z`, and
-it is kept in the signature because inverting the chain above needs it — a
-next-event estimator that wants RADIANCE rather than a density has to undo the
-normalisation the builder applied. Rearranging p_ω = P·WH / (2π²sinθ_y) with
-P = w/T and w = L·sinθ_y gives L back from the density alone, provided T is
-known:
-
-$$L \;=\; p_\omega \cdot \frac{2\pi^{2}\,T}{W H}$$
-
-Here T is the grand total the builder accumulated — the `envIntegral` argument —
-and the sinθ_y that the build-time weight and the sample-time Jacobian cancelled
-against each other never appears. That inversion is the only thing whose answer
-depends on the integral reaching the GPU intact, which is why the argument
-survives in a signature that does not read it.
-
-> The estimator that used this was removed from this engine, which is why the
-> parameter survives in a signature that does not read it.
+{{cite ohao/render/rt/path_tracer.hpp "glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused"}}
 
 ## Two binary searches per sample
 
 Sampling is a `lower_bound` over the marginal to choose a row, then a second one
 over that row's conditional to choose a column:
 
-{{cite shaders/includes/rt/env_sampling.glsl "if (envMarg.data[uint(mid)] < u) lo = mid + 1;"}}
-
-For a 4096×2048 HDRI that is 11 plus 12 dependent, warp-divergent SSBO loads to
-locate the texel, and `pt_raygen_realtime.rgen` takes one such sample at bounce 0
-plus one per bounce of each of its specular and diffuse chains. The reference
-takes one per vertex of its single path, with the same two searches:
-
 {{cite shaders/rt/path_tracer.slang "const uint x = searchCdf(envConditional, y * W, W, rng.next());"}}
 
-In `env_sampling.glsl` the density is then
-reconstructed by differencing the two tables — four further loads, 27 per
-environment sample away from the tables' first entries — rather than read from a
-separate PDF image. The same
-CDF answers "which texel" and "how likely", so there is nothing to keep in sync:
+For a 4096×2048 HDRI that is 11 plus 12 dependent, warp-divergent loads to locate
+the texel, once per vertex of the path. The direction is then placed uniformly
+inside the chosen texel in (u, v), so the strategy covers the whole texel rather
+than a grid of fixed directions:
 
-{{cite shaders/includes/rt/env_sampling.glsl "float pdfUV = condDiff * margDiff * float(W) * float(H);  // density in UV space"}}
+{{cite shaders/rt/path_tracer.slang "const float u = (float(x) + rng.next()) / float(W);"}}
 
-Dividing that by the Jacobian needs sinθ in the denominator, and it is clamped to
-1e-4 first — bounding the PDF at the poles instead of letting it run away for a
-texel that subtends nothing.
+## One density for both sides of a weight
 
-The same file exports `pdfEnvMap`, which quantises an arbitrary direction back to
-the texel grid and differences the same two tables. The miss shader calls it and
-reports the result in the ray payload, so a BSDF-sampled ray that escapes into
-the sky can be MIS-weighted against the light strategy:
+`envPdf` turns any direction back into that density: it bins the direction into
+its texel, differences the two tables (four further loads) and divides by the
+Jacobian at the direction's own sinθ, clamped to 1e-4 so a texel that subtends
+almost nothing at a pole cannot run the density away:
 
-{{cite shaders/rt/pt_miss.rmiss "payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));"}}
+{{cite shaders/rt/path_tracer.slang "return max(cond * marg * float(W) * float(H) / (kTwoPi * kPi * max(sin(theta), 1e-4)), 0.0);"}}
 
-The two are not the same function of ω, and that matters for the balance
-heuristic, which only sums to one if both strategies evaluate the *same* density
-for a given direction. `sampleEnvMap` takes sinθ from the centre of the row it
-just chose; `pdfEnvMap` takes it from the direction it was handed. The CDF steps
-are shared, the Jacobian is not: the sampler's sinθ is a step function of the
-row, `pdfEnvMap`'s varies continuously within it.
+That is the exact solid-angle density of `sampleEnv`'s sampling: piecewise
+constant in (u, v), divided by the true Jacobian at ω. The same CDF answers
+"which texel" and "how likely", so there is no separate PDF image to keep in sync.
+Next-event estimation calls `envPdf` on the direction it drew, and a bounce ray
+that escapes calls it on the direction the BSDF drew, so both halves of the power
+heuristic's weight come from one function and sum to one:
 
-{{cite shaders/includes/rt/env_sampling.glsl "float theta = (float(y) + 0.5) / float(H) * OHAO_PI;"}}
-
-On the directions the sampler itself emits the two agree, because those
-directions *are* row centres. For a BSDF-sampled direction they differ by
-sinθ_y/sinθ(ω), which is within a texel's worth of 1 across most of the sphere
-and worst at the poles, where sinθ varies fastest across a row: for a direction
-inside 1e-4 rad of the pole `pdfEnvMap`'s denominator bottoms out at the clamp
-while `sampleEnvMap` uses sinθ₀ ≈ 7.7e-4 for that same top row of a 2048-high
-map — a factor of 7.7 between the two sides of one weight.
-
-## Which of the two densities a caller wants
-
-That gap makes `pdfEnvMap` the wrong function for half the callers, so the file
-exports both halves. `envTexelPdfUV` does the binning once and returns the
-texel's UV-space mass together with *both* polar angles; the two entry points
-differ only in which one they divide by. `pdfEnvMap` divides by sinθ of the
-direction it was handed:
-
-{{cite shaders/includes/rt/env_sampling.glsl "float sinT = max(sin(thetaQuery), 1e-4);"}}
-
-`pdfEnvMapTexel` divides by sinθ of the centre of the texel that direction landed
-in, which makes it exactly the density `sampleEnvMap` would have reported for
-that texel — piecewise constant, with no dependence on where inside the texel ω
-fell:
-
-{{cite shaders/includes/rt/env_sampling.glsl "float sinT = max(sin(thetaCentre), 1e-4);"}}
-
-The choice is not a tuning knob; it follows from whether the caller is forming a
-*ratio* or a *magnitude*.
-
-A **balance-heuristic weight** is a ratio, p_A/(p_A+p_B), and both halves of one
-partition are built from the same density pair — so the sinθ_y/sinθ(ω) factor
-cancels out of the weight entirely and `pdfEnvMap` is correct there. That is what
-the miss shader reports in the payload.
-
-**Recovering radiance** by inverting the density is a magnitude, and only the
-texel density inverts. Feed `pdfEnvMap`'s answer at an off-centre direction into
-the L formula above and it returns L·sinθ_centre/sinθ_query instead of L — an
-energy error reaching several times L near the poles, and a firefly source once
-it is accumulated into a film. `wf_scatter.comp` did exactly that for one commit.
-`pdfEnvMapTexel` exists so that no caller has to reconstruct sinθ_centre from the
-binning by hand:
-
-{{cite shaders/includes/rt/env_sampling.glsl "float pdfEnvMapTexel(vec3 dir, uint W, uint H) {"}}
+{{cite shaders/rt/path_tracer.slang "const float w = depth == 0u ? 1.0 : powerHeuristic(lastPdf, envPdf(dir));"}}
 
 ## One latitude convention: the file's
 
-`sampleEnvMap` returns a direction, never a radiance. The realtime raygen fires an
-occlusion ray along it and takes whatever colour the miss shader hands back:
+The sampler and the density measure latitude from the zenith, so row 0 is
+straight up, as `stbi_loadf` hands the file's first row over (θ = acos y in
+`envPdf`). The radiance lookup, and every other lookup of the environment
+(deferred lighting, the prefiltered and irradiance images, RT GI's escaped rays,
+the forward and particle passes, the cinematic composite), writes
+v = ½ − asin(y)/π, which is the same number, since acos(y)/π = ½ − asin(y)/π:
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 envContribution = envRadiance * (diff + spec) * NdotL_env * w / envPdf;"}}
-
-That leaves two functions responsible for one texel↔direction map:
-`equirectPixelToDir` and its inverse `envTexelPdfUV` — the shared binning behind
-both `pdfEnvMap` and `pdfEnvMapTexel` — in `env_sampling.glsl`, and
-`dirToEquirect` in `pt_miss.rmiss`. They must agree, or the CDF steers samples at
-one row and the miss shader shades them from another. The sampler measures
-latitude from the zenith, so row 0 is straight up, as `stbi_loadf` hands the file's
-first row over:
-
-{{cite shaders/includes/rt/env_sampling.glsl "float theta = acos(clamp(dir.y, -1.0, 1.0));"}}
-
-The miss shader, the reference's `envRadiance`, and every other lookup of the environment (deferred lighting, the
-prefiltered and irradiance images, RT GI's escaped rays, the forward and particle
-passes, the cinematic composite), takes arcsine and writes v = ½ − asin(y)/π, which is
-the same number, since acos(y)/π = ½ − asin(y)/π:
-
-{{cite shaders/rt/pt_miss.rmiss "return vec2(phi / 6.2831853 + 0.5, 0.5 - theta / 3.1415926);"}}
+{{cite shaders/rt/path_tracer.slang "const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith"}}
 {{cite shaders/rt/cinematic_composite.comp "vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);"}}
 
 The unit tests cannot see a mismatch here: the sinθ weight is mirror-invariant
@@ -200,63 +115,34 @@ it blue.
 {{cite tests/renderer/check_env_orientation.py "MIN_RATIO = 1.5"}}
 
 :::key
-The realtime tracer's env-IS is not an unbiased estimator. `sampleEnvMap` returns `equirectPixelToDir(x, y, W, H)` unmodified —
-the exact texel centre, with no intra-texel jitter — so the strategy draws from
-W·H fixed directions and the expectation of its NEE term is a texel-by-texel
-midpoint quadrature of L·f·cosθ·w rather than the integral. That error is set by
-the map's resolution and does not shrink with spp.
+The firefly clamp is the one biasing operation near this sampler, and it is not
+in it: the path's whole radiance is scaled down to the `tuning.x` luminance
+ceiling, once, and only when the host sets the flag. The host sets it only for a
+profile that asks for it and whose trace does not accumulate (a temporal denoiser
+fed one sample a frame); a running mean converges without it.
 :::
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "if (payload.envPdf > 0.0 && pc.control.w > 0u && !specLastBounceWasDelta) {"}}
-{{cite shaders/includes/rt/env_sampling.glsl "dir = equirectPixelToDir(x, y, W, H);"}}
-
-The reference does not share either defect. Its `sampleEnv` places the direction
-uniformly inside the chosen texel in $(u, v)$,
-
-{{cite shaders/rt/path_tracer.slang "const float u = (float(x) + rng.next()) / float(W);"}}
-
-so its expectation is the integral over the whole texel, and its `envPdf` divides by
-sinθ of the direction itself — the exact solid-angle density of that sampling,
-piecewise constant in $(u, v)$ — and is the one function both sides of its MIS
-weight evaluate:
-
-{{cite shaders/rt/path_tracer.slang "return max(cond * marg * float(W) * float(H) / (kTwoPi * kPi * max(sin(theta), 1e-4)), 0.0);"}}
-
-The realtime env-NEE block carries a second biasing operation, gated on the `PT_FLAG_ENABLE_FIREFLY_CLAMP` bit of `control.x`:
-`envContribution` and its diffuse and specular AOV splits are each scaled down to
-the `pc.tuning.x` luminance ceiling. `kOfflineRTSettings` clears that bit;
-`kRealtimeRTSettings` sets it.
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "float lumD = dot(envDiffuse"}}
-
-The reference clamps under the same flag, once, on the whole path's radiance
-rather than per term:
-
 {{cite shaders/rt/path_tracer.slang "if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;"}}
-{{cite ohao/render/rt/rt_settings.hpp "    .enableFireflyClamp = true,"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.enableFireflyClamp && !tracerAccumulates(m_renderSettings))"}}
 
 ## What happens with no environment map
 
-Bindings 17 and 18 are declared unconditionally in the RT descriptor layout, for
-raygen and miss stages both, and both shaders reference them statically — so
+Bindings 17 and 18 are declared unconditionally in the RT descriptor layout, so
 something must be bound there in every scene, including a Cornell box with no
 HDRI at all.
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "add(17, BUFFER, RGEN | MISS);   // env marginal CDF"}}
 
 :::why
-Rather than compile a second pipeline (or specialise the raygen) for the no-env
-case, the upload path binds a one-float dummy and signals "no environment"
-out-of-band through push constants: width, height and integral all go out as
-zero, and the shaders gate every env-IS block on `pc.control.w > 0u` (the
-reference's `envSampled()` checks the width, the height and the environment's
-texture index). One
-pipeline, one layout, two four-byte allocations — against the alternative of
-doubling the shader permutation count to save eight bytes.
+Rather than compile a second pipeline for the no-env case, the upload path binds a
+one-float dummy and signals "no environment" out of band: width and height go out
+as zero in the push constants, and the shader gates every environment sample on
+`envSampled()`, which checks the width, the height and the environment's texture
+index. One pipeline, one layout, two four-byte allocations.
 :::
 
 {{cite ohao/gpu/vulkan/env_upload.cpp "const float v = 1.0f; std::memcpy(dp, &v, sizeof(float));"}}
-{{cite ohao/render/rt/path_tracer.hpp "// control.w = envCDFWidth. If 0, shader must skip env importance sampling."}}
+{{cite shaders/rt/path_tracer.slang "bool envSampled() { return envTexture() < 4096u && pc.control.w > 0u && pc.tuning.y > 0.0; }"}}
 
 The builder has a second degenerate case. A completely black row sums to zero, so
 its conditional CDF would be all zeros; the builder fills it with a uniform ramp
@@ -264,21 +150,19 @@ instead:
 
 {{cite ohao/render/rt/env_cdf.cpp "// Degenerate black row — fall back to uniform"}}
 
-In a map with any light in it that ramp is unreachable. `searchMarginal` returns
-the lowest row whose marginal entry reaches u, and a zero-sum row's entry is the
+In a map with any light in it that ramp is unreachable. `searchCdf` returns the
+lowest index whose entry reaches u, and a zero-sum row's marginal entry is the
 same running total over the same grand total as its predecessor's — identical
 bits — so for any u > 0 the search resolves to the earlier row and never lands on
 the black one.
 
 It earns its keep in exactly one case: a map whose *every* row is black. The
 marginal then falls back to a uniform ramp too, every row becomes reachable, and
-the two ramps compose into uniform sampling in (u,v) with `pdfUV` of exactly 1 —
-which, over the 2π²sinθ Jacobian, is the correctly normalised solid-angle density
-for that sampling. Without the row fallback that case would instead walk
-`searchConditional` to column W−1 with a `condDiff` of zero, and the caller's
-`envPdf > 0.0` guard would reject every env sample.
+the two ramps compose into uniform sampling in (u,v) — the correctly normalised
+density for that sampling. Without the row fallback a row search would end at the
+last column with a zero step, and `envPdf` would be 0 for every sample.
 
-## Where the tables live, and what leaks
+## Where the tables live
 
 The HDR image is staged through a transfer buffer into `DEVICE_LOCAL` memory. The
 CDFs are not: they are allocated `HOST_VISIBLE | HOST_COHERENT`, mapped,
@@ -298,7 +182,7 @@ replaces both tables rather than leaking them. The same two calls run at shutdow
 
 ## Contracts
 
-- Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, so a stale handle cannot survive a frame — but the write is *skipped* when the handle is null, and raygen and miss reference those bindings statically. A scene that reaches its first render without `setEnvCDFBuffers` ever having run would dispatch against two descriptors that were never written. The dummy pair `env_upload.cpp` allocates is what makes that unreachable.
-- Width, height and integral travel in push constants (`control.w`, `tuning.y`, `tuning.z`), not in the buffers. A `control.w` of 0 means "skip env importance sampling entirely", not "the map is 0 wide".
-- `sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row's centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so for the RT pipeline's own pairing the balance weights do not sum to exactly one for BSDF-sampled directions. The fault is in the *pairing*, not in either function: route both sides of a balance weight through the same `pdfEnvMap` and the weights do sum to one. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness. The reference's `sampleEnv` and `envPdf` agree everywhere: both sides of its weights call `envPdf`.
+- Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, but the write is skipped when the handle is null. The dummy pair `env_upload.cpp` allocates is what keeps a scene that never loaded an environment from dispatching against unwritten descriptors.
+- Width and height travel in push constants (`control.w`, `tuning.y`), not in the buffers. A width of 0 means "skip environment sampling entirely", not "the map is 0 wide". The integral (`tuning.z`) is sent and read by no shader.
+- `sampleEnv` and `envPdf` share the tables, the acos latitude and the texel binning; both sides of every environment MIS weight call `envPdf`. A new strategy that samples the environment must report its density through the same function, or the weights stop summing to one.
 - The CDF is rebuilt only when the environment *path* changes, so `envIntensity` relighting never touches it — correctly, since a uniform scale leaves the normalised distribution identical.

@@ -127,20 +127,12 @@ every reader tests for "no HDRI":
 
 {{cite ohao/render/scene/light_table.hpp "uint32_t m_envMapTexIdx{kNoTexture};"}}
 
-Binding 11 is read in three shapes. The reference path tracer, `rt/path_tracer.slang`,
-declares it as a plain `float4` array and reads each header word by its index, the scale
-with the same `<= 0` means 1 rule as the miss shader:
+Binding 11 is read by the path tracer, `rt/path_tracer.slang`, which declares it as a
+plain `float4` array and reads each header word by its index — the light count, the
+environment's texture index, its scale (`<= 0` means 1) and the alpha-rays flag:
 
 {{cite shaders/rt/path_tracer.slang "float envScale() { const float s = lightData[0].z; return s > 0.0 ? s : 1.0; }"}}
 {{cite shaders/rt/path_tracer.slang "bool alphaRays() { return asuint(lightData[0].w) == 1u; }"}}
-
-The realtime raygen names all four words in a GLSL block, the last as `alphaRays`;
-`pt_miss.rmiss`, the realtime profile's miss shader, names the first three and calls the
-fourth `_pad`, because it is the stage that samples the environment and needs only the
-index and the scale:
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "uint alphaRays;   // 1: an instance is non-opaque"}}
-{{cite shaders/rt/pt_miss.rmiss "payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb * envS;"}}
 
 That side channel is owned by the table, not by the upload. The index, the scale and the
 flag are held as members, their setters mark the table dirty only when the value actually
@@ -157,12 +149,12 @@ radius moves to `extra2.y`.
 {{cite ohao/render/scene/light_table.cpp "float dirParam = d.radius;"}}
 {{cite ohao/render/rt/gpu_light.hpp "glm::vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius, spot:innerAngle)"}}
 
-Both tracers resolve the overload before using a radius: the reference in `loadLight`, the
-realtime raygen through `ptLightRadius` in `pt_lights.glsl`. The radius is clamped at 1 cm.
+The path tracer resolves the overload in `loadLight` before using a radius, and clamps the
+radius at 1 cm.
 
 {{cite shaders/rt/path_tracer.slang "l.radius = max(l.type == 2u ? f.y : d.w, 0.01);"}}
 
-The reference gives each kind the radiance the deferred frame measures. Write $c$ and $I$
+The path tracer gives each kind the radiance the deferred frame measures. Write $c$ and $I$
 for the packed colour and intensity, $r$ for the radius, $W(d)=\big(1-(d/\text{range})^4\big)^2$
 clamped for the range window, and $s$ for a spot's cone falloff toward the shading point:
 
@@ -177,16 +169,10 @@ over the rectangle with $r$ as a parameter, which both renderers share.
 {{cite shaders/rt/path_tracer.slang "float3 le = l.radiance / (kPi * r * r);"}}
 {{cite shaders/rt/path_tracer.slang "s.radiance = l.radiance / (4.0 * kPi * l.radius * l.radius);"}}
 
-The realtime raygen reaches the same irradiances through `ptEmitterArea`, which divides by
-$\pi r^2$ for a sphere, $4\pi r^2$ for a spot and an area light (whose estimator weights
-carry $4\pi r^2$ back), and 1 for a sun:
-
-{{cite shaders/includes/rt/pt_lights.glsl "float ptEmitterArea(float type, float r) {"}}
-
 ## One light per shadow ray, and the density that pays for it
 
 Each next-event sample picks a single light uniformly rather than looping over all of them.
-With $N_\ell$ entries in the buffer the selection density is $1/N_\ell$. The reference folds
+With $N_\ell$ entries in the buffer the selection density is $1/N_\ell$. The path tracer folds
 it into each sample's solid-angle density: a sphere is sampled uniformly over its cone of
 directions, a rectangle uniformly over its area,
 
@@ -203,7 +189,7 @@ alone.
 {{cite shaders/rt/path_tracer.slang "s.radiance = l.radiance / choose;   // a delta: no density to weigh"}}
 
 Point, spot and area lights are also meshes (`RenderScene`'s emitter instances), and a
-reference bounce ray traces the emitter mask with the scene, so it can meet a light that
+bounce ray traces the emitter mask with the scene, so it can meet a light that
 light sampling also finds. Each such light is weighed by the power heuristic on both sides.
 The table learns which lights have a mesh from `RenderScene`, which passes their indices in
 the RT buffer; at upload the table flags a sphere in `extra2.z` and a rectangle in
@@ -224,13 +210,7 @@ density for that direction:
 
 {{cite shaders/rt/path_tracer.slang "add = throughput * le * powerHeuristic(lastPdf, lightPdf);"}}
 
-The realtime raygen keeps the older arrangement: uniform selection with the factor written
-out as `* float(lightBuf.lightCount)`, its bounce rays tracing `kRayMaskScene` alone so they
-never meet an emitter.
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);"}}
-
-The reference's shadow ray leaves from the hit point pushed 10⁻³ along the geometric
+The shadow ray leaves from the hit point pushed 10⁻³ along the geometric
 normal, with `TMin` 10⁻⁴, and stops 10⁻³ short of the light: at the sphere's near side
 along the sampled direction, at the sampled point of a rectangle, at 10⁴ for a sun.
 
@@ -243,7 +223,7 @@ No header names the light-type codes for either table. The raster readers compar
 
 {{cite shaders/includes/lighting/clustered_lights.slang "type = int(light.position.w);"}}
 
-The reference path tracer does the same against `GPULight`'s codes, where 1 is
+The path tracer does the same against `GPULight`'s codes, where 1 is
 directional and 0 a point light. The two tables use the same small integers for
 different kinds, so a reader that borrows a constant from the other table inverts the
 two most common light types.
@@ -251,9 +231,9 @@ two most common light types.
 ## Contracts
 
 - `positionAndType.w` is the raw `LightKind`; `LightData.position.w` is the remapped raster code. Anything reading a light type must know which buffer it came from.
-- `dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot; a spot's radius is `extra2.y`. Every reader resolves the radius through `loadLight` or `ptLightRadius`, never from `dirAndParam.w` alone.
+- `dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot; a spot's radius is `extra2.y`. The path tracer resolves the radius through `loadLight`, never from `dirAndParam.w` alone.
 - Emissive stand-ins are in the raster table only. Adding them to the RT buffer counts an emissive surface's light twice in the path tracer.
 - The raster table holds 65,536 lights and the RT SSBO 64; both truncate with a one-time log. Past the eighth shadow caster a raster light renders unshadowed (no RT channel), and a froxel keeps at most 256 lights, the overflow reported as `lightsOverflow` in `render.stats`.
 - The environment-map index, intensity scale and alpha-rays flag are members of the light table, and the 16-byte header is rewritten whole whenever any of them, or the light list, changes. Code that writes binding 11 by any other route would have to reproduce that header.
 - The emitter flags (`extra2.z`, `extra.w`) must name exactly the lights with an emitter mesh in the TLAS. A flagged light without a mesh is under-counted (its MIS weight assumes a bounce ray could find it); an unflagged light with one is counted twice.
-- Both tracers select one light uniformly. Replacing uniform selection with importance sampling means replacing the $1/N_\ell$ in the reference's densities, and the realtime raygen's `lightCount` factor, with the real inverse density.
+- The path tracer selects one light uniformly. Replacing uniform selection with importance sampling means replacing the $1/N_\ell$ in its densities with the real inverse density, on both sides of the MIS weight (`sampleLight` and `emitterRadiance`).

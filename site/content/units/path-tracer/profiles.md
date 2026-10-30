@@ -6,311 +6,182 @@ standard: v2
 figures: [path-tracer-profiles-transport]
 ---
 
-## Two constants, and the two things they do not cover
+## Two constants, one integrator
 
 OHAO ships one ray-tracing renderer with two personalities. `PathTracer` has no
-subclass anywhere in the tree and no `#ifdef` picks a profile: most of the
-difference between the two is a pair of `constexpr` aggregates in
-`rt_settings.hpp`.
+subclass anywhere in the tree and no `#ifdef` picks a profile: the difference between
+the two is a pair of `constexpr` aggregates in `rt_settings.hpp`.
 
 {{cite ohao/render/rt/rt_settings.hpp "inline constexpr RTRenderSettings kRealtimeRTSettings{"}}
 
-Two differences sit outside the aggregates. Each profile object binds its own
-shaders, and they are different integrators: the offline profile runs the Slang
-reference path tracer (`rt/path_tracer.slang`), the realtime one the GLSL
-`pt_raygen_realtime.rgen` and its hit shaders. And each answers one virtual
-differently. Both come back below.
+Both profiles run the same shaders, `rt/path_tracer.slang`. The realtime profile takes
+two bounces, a firefly clamp at luminance 10, and NRD as its denoiser: a moving view is
+one sample a frame, and the denoiser keeps the history.
 
-The realtime profile takes two bounces, a PCG sampler, in-shader spatial
-denoising, and a firefly clamp at luminance 10. The offline profile takes 32
-bounces (Russian roulette ends most paths long before), no in-shader denoise, no
-clamp, and OIDN as its default post-process. Its aggregate names a Sobol sampler,
-but the reference raygen has no sampler switch: it draws every number from one PCG
-stream per pixel and sample.
+{{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 
-The transported 10 is not the operative threshold everywhere. The realtime
-raygen uses `pc.tuning.x` directly at each NEE and environment contribution,
-but scales it by 0.75 for the final clamp on accumulated beauty, so that one
-clamps at 7.5:
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "float realtimeClamp = pc.tuning.x * 0.75;"}}
-
-The reference applies it once, to the whole path's radiance, and only when both
-conditions hold:
-
-{{cite shaders/rt/path_tracer.slang "if ((flags & kFlagFireflyClamp) != 0u && pc.tuning.x > 0.0)"}}
-
-The offline constant deserves attention for the opposite reason: it does not
-merely clear the flag, it also zeroes the threshold.
+The offline profile takes 32 bounces (Russian roulette ends most paths long before), no
+clamp, and OIDN as its default post-process. Its constant does not merely clear the
+clamp flag, it also zeroes the threshold:
 
 {{cite ohao/render/rt/rt_settings.hpp ".fireflyClampLuminance = 0.0f,"}}
 
-That redundancy is deliberate. Both raygens gate the clamp on *both* the flag
-bit and a positive threshold, so an offline render stays unbiased even if some
-future caller flips the boolean by accident. Clamping outliers is exactly the
-kind of variance-for-bias trade an interactive preview wants and a reference
-render must never make.
+The raygen gates the clamp on *both* the flag bit and a positive threshold, and applies
+it once, to the whole path's radiance:
 
-## The trait layer is a mirror, barely held flat
+{{cite shaders/rt/path_tracer.slang "if ((flags & kFlagFireflyClamp) != 0u && pc.tuning.x > 0.0)"}}
 
-`rt_meta.hpp` restates the same numbers a second time, as individual
-`static constexpr` members of `RTProfileTraits<Profile>`. This is genuine
-duplication — the aggregates are already usable in constant expressions — and
-the header holds almost none of it in sync. Exactly three `static_assert`s tie
-a trait back to the aggregate it mirrors: `default_max_bounces` for each
-profile, and `Offline::default_denoise`.
+The host adds a third condition. The clamp trades variance for bias, which only a
+temporal denoiser fed one sample a frame needs; a running mean converges without it. So
+the flag is set only when the trace does not accumulate:
 
-{{cite ohao/render/rt/rt_meta.hpp "static_assert(RTProfileTraits<RTRenderProfile::Realtime>::default_max_bounces =="}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.enableFireflyClamp && !tracerAccumulates(m_renderSettings))"}}
 
-The rest can drift unchecked. `default_sampler`, `firefly_clamp_luminance`,
-`enable_firefly_clamp`, `enable_internal_denoise`, `enable_auxiliary_aovs`,
-`allow_external_denoiser`, `prefer_accumulation` and
-`Realtime::default_denoise` are duplicated with no assertion at all — changing
-the trait below to Sobol compiles clean while `kRealtimeRTSettings` still
-declares PCG.
+Under the realtime profile with any denoiser but NRD, à-trous or DLSS-RR, the clamp is
+therefore off, and a realtime view with no denoiser converges to the same image the
+offline profile does at the same bounce count.
 
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr SamplerType default_sampler      = SamplerType::PCG;"}}
+## The denoise policy is a handful of functions
 
-What the duplication is *for* is a type that carries a profile:
-`RTFeatureFlags<Profile, Mode>` pairs a profile trait with a denoise-mode trait
-and exposes the pair as compile-time booleans. The aggregate could have carried
-that weight itself — `makeFeatureSettings` reads and writes `RTRenderSettings`
-fields directly inside a `constexpr` function guarded by `if constexpr`:
+`rt_meta.hpp` holds what each denoiser asks of the trace, as plain `constexpr`
+functions of the mode or of the settings: CPU readback (OIDN), motion vectors (NRD,
+à-trous, DLSS-RR), the diffuse/specular split (NRD), sub-pixel jitter (NRD, DLSS-RR),
+and realtime capability (everything but OIDN). Beside them sit the RT techniques'
+concepts, which document the shadow and GI techniques' virtual surfaces.
 
-{{cite ohao/render/rt/rt_meta.hpp "if constexpr (DenoiseModeTraits<Mode>::needs_cpu_readback) {"}}
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool denoiseNeedsPixelJitter(DenoiseMode m) noexcept {"}}
 
-And nothing in the shipping engine instantiates any of it. `RTProfileTraits`,
-`RTFeatureFlags`, `makeProfileSettings<Profile>()` and the wrapper below have
-their only call sites in `tests/engine/engine_tests.cpp`; a grep over `ohao/`
-and `examples/` finds none. The engine reaches the two constants directly,
-through the two object hierarchies the later sections describe.
+Two functions decide what the trace keeps. `tracerAccumulates` says whether the trace
+keeps its own running mean of the beauty. A temporal denoiser carries the history
+itself, through camera moves by the motion vectors, and takes this frame's sample
+alone; offline NRD denoises the mean of a still view's samples.
 
-{{cite ohao/render/rt/path_tracer.hpp "setRenderSettings(makeFeatureSettings<Profile, Mode>());"}}
+{{cite ohao/render/rt/rt_meta.hpp "case DenoiseMode::NRD: return !isRealtimeProfile(s.profile);"}}
 
-## Denoise policy written as a table instead of an if-chain
+`tracerAccumulatesAOVs` says whether NRD's five inputs are themselves running means,
+which is the offline NRD case only. Both are read by the per-frame path, which turns
+them into the `control.y` length of the running mean and an AOV-accumulation flag.
 
-`DenoiseModeTraits<Mode>` answers nine yes/no questions about a denoiser as
-`static constexpr bool` members: CPU readback, motion vectors, a
-diffuse/specular split, sub-pixel jitter, multi-sample AOV means, ownership of
-temporal accumulation, realtime capability, offline capability, and whether the
-backend runs on the GPU. They are not independent: `is_gpu_backend` selects the
-same mode set as `needs_motion_vectors`, {NRD, Atrous, DLSSRR}.
+{{cite ohao/render/rt/path_tracer_render.cpp "if (tracerAccumulatesAOVs(m_renderSettings)) pc.control.x |= kPTFlagAccumulateAOVs;"}}
 
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr bool is_gpu_backend ="}}
-
-Each is a boolean expression over the mode enum, mirrored by a constexpr free
-function for runtime callers. Three of them are read directly by the per-frame
-path — jitter, AOV accumulation, and the fresh-sample rule that forces
-`historyFrameCount` to zero for SVGF and DLSS-RR.
-
-{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = freshSample ? 0u : m_historyFrameCount;"}}
-
-Three more feed `applyDenoisePolicy`, which is allowed to override the profile:
-motion vectors or a diff/spec split force auxiliary AOVs on, and CPU readback
-raises `allowExternalDenoiser`.
-
-{{cite ohao/render/rt/rt_meta.hpp "if (denoiseNeedsMotionVectors(s.denoiseMode) || denoiseNeedsDiffSpecSplit(s.denoiseMode)) {"}}
-
-`applyDenoisePolicy` runs inside `PathTracer::setRenderSettings`, so in
-principle selecting NRD on a profile that ships with auxiliary AOVs off would
-turn them on.
+`applyDenoisePolicy` runs inside `PathTracer::setRenderSettings` and is allowed to
+override the profile: motion vectors or a diffuse/specular split force auxiliary AOVs
+on, and CPU readback raises `allowExternalDenoiser`.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_renderSettings = applyDenoisePolicy(settings);"}}
 
-In practice it is a no-op on every shipping path. Both profile constants
-already set `enableAuxiliaryAOVs = true`, and every settings object that
-reaches `PathTracer` descends from one of the two, so the AOV branch cannot
-fire; the other branch writes `allowExternalDenoiser`, which nothing reads.
+In practice it is a no-op on every shipping path. Both profile constants already set
+`enableAuxiliaryAOVs = true`, and every settings object that reaches `PathTracer`
+descends from one of the two, so the AOV branch cannot fire; the other branch writes
+`allowExternalDenoiser`, which nothing reads. `denoiseIsRealtimeCapable` is exercised
+only by the engine test suite: nothing in the engine refuses to run OIDN interactively,
+the CPU readback simply makes it slow.
 
-Three traits are decorative. `is_offline_capable` has zero references anywhere
-in the repository, tests included. `is_realtime_capable` and its runtime
-wrapper `denoiseIsRealtimeCapable` are exercised only by the engine test suite
-— nothing in the engine refuses to run OIDN interactively; the CPU readback
-simply makes it slow. And `needs_cpu_readback`'s single effect is the dead
-`allowExternalDenoiser` write above.
+## One transport, and the mode that takes none
 
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr bool is_offline_capable ="}}
+{{figure path-tracer-profiles-transport "Conceptual map of how RTRenderSettings fields reach the GPU: per-frame values packed into push constants, denoiseMode selecting host-side passes, and fields with no consumer. Groupings read from path_tracer_render.cpp and renderer.cpp; no measured numbers."}}
 
-## Two transports, two lifetimes
-
-Settings reach the GPU by two mechanisms with very different update rates, and
-the split is the single most important thing to internalise about this unit.
-
-{{figure path-tracer-profiles-transport "Conceptual map of how each RTRenderSettings field reaches the GPU. Groupings and packing are read from path_tracer_pipeline.cpp, path_tracer_render.cpp and renderer.cpp; no measured numbers."}}
-
-Nearly everything that can change per frame travels in the 256-byte
-push-constant block. Bounce count and per-frame sample count share one 32-bit
-word rather than taking a field each, because the block is already at the size
-the code fixes as its ceiling:
-
-{{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);"}}
-
-That ceiling is a compile-time constant asserted against the struct, not a
-device limit read back from `VkPhysicalDeviceLimits` — `maxPushConstantsSize`
-occurs in this tree only inside a comment. Vulkan guarantees 128 bytes; 256 is
-a bet on RT-class hardware that the code makes and never checks.
+Everything per frame that reaches the shader travels in the 256-byte push-constant
+block: the bounce limit in `params.w`, the clamp threshold in `tuning.x`, the flags in
+`control.x`, and the two clock answers in `control.y` and `control.z`. That ceiling is
+a compile-time constant asserted against the struct, not a device limit read back from
+`VkPhysicalDeviceLimits`. Vulkan guarantees 128 bytes; 256 is a bet on RT-class
+hardware that the code makes and never checks.
 
 {{cite ohao/gpu/layout_meta.hpp "kPTPushConstantsBytes = 256"}}
 
-Only the realtime raygen unpacks the high half and loops on it; the offline
-reference masks it off and traces one path per dispatch.
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "uint samplesPerFrame = max(pc.params.w >> 16, 1u);"}}
-
-`denoiseMode` is the field this dichotomy has to admit as an exception. It is
-rewritten every frame like the rest, but the mode itself takes neither
-transport: it selects host-side work — which of the à-trous, DLSS-RR, NRD or
-OIDN passes runs around the trace — and reaches the shader only as derived
-values, two control bits and the zeroed history count above.
+`denoiseMode` takes neither a push constant nor a pipeline state of its own. It
+selects host-side work — which of the à-trous, DLSS-RR, NRD or OIDN passes runs around
+the trace — and reaches the shader only as derived values: the AOV-accumulation and
+DLSS-RR flag bits, the length of the running mean, and whether the clamp is on.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {"}}
 
-The sampler choice takes the other route. It is a Vulkan specialization
-constant baked into the GLSL raygen's SPIR-V at pipeline creation (the Slang
-reference declares no such constant, and specializing an id a module does not
-use changes nothing):
-
-{{cite ohao/render/rt/path_tracer_pipeline.cpp "uint32_t samplerTypeVal = static_cast<uint32_t>(m_renderSettings.samplerType);"}}
-
-:::why
-The sampler dispatch sits in the innermost loop of the tracer — every
-dimension of every bounce goes through `getSample1D` / `getSample2D`. A
-push-constant or uniform branch there would be live in every invocation. As a
-specialization constant the branch folds away entirely during SPIR-V
-specialization, at the price of making the sampler *pipeline-creation state*
-rather than per-frame state. That price is real, and the next section is what
-it cost.
-:::
-
-## The sampler that never actually switches
-
-`PathTracer::init` builds the RT pipeline as one of its steps, and
-`createRTPipeline` is called from nowhere else in the class.
-
-{{cite ohao/render/rt/path_tracer.cpp "if (!createRTPipeline()) {"}}
-
-But the profile's settings are pushed into the tracer *after* `init` returns —
-`RTProfileRendererBase::init` calls `setShaderSet`, then `init`, and only then
-`setRenderSettings`.
+The pipeline itself carries no profile state: no specialization constant is attached
+to any stage, so `createRTPipeline` running before the profile's settings arrive (they
+are pushed after `init`) costs nothing.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
 
-At the moment the pipeline is created, `m_renderSettings` therefore still holds
-its default member initializer, which is the offline profile:
+## A profile is an object
 
-{{cite ohao/render/rt/path_tracer.hpp "RTRenderSettings m_renderSettings{kOfflineRTSettings};"}}
+`RTRealtimeRenderer` and `RTOfflineRenderer` are thin finals over a shared base that
+wraps a `PathTracer` and forwards over forty accessors. Both pass
+`PathTracerShaderSet`'s default to that base, the four named entry points of
+`rt/path_tracer.slang`:
 
-So the realtime raygen is specialized with `constant_id = 0` set to Sobol.
-`kRealtimeRTSettings` declares PCG and that value never reaches SPIR-V. The failure is silent because
-the value that *is* specialized happens to be a usable sampler, not because the
-shader has a safety net: `createRTPipeline` attaches a `VkSpecializationInfo`
-with one map entry to every pipeline it builds, so a supplied value always wins.
-
-{{cite ohao/render/rt/path_tracer_pipeline.cpp "samplerSpecInfo.mapEntryCount = 1;"}}
-
-The GLSL side declares Sobol as its own default, but that initializer is
-unreachable in both profiles for exactly that reason:
-
-{{cite shaders/includes/rt/sampler_api.glsl "layout(constant_id = 0) const uint SAMPLER_TYPE = SAMPLER_SOBOL;"}}
-
-The consequence is a quality question, not a crash: the realtime profile pays
-for a QMC sampler it was not designed around. Fixing it means either applying
-the settings before `init` or recreating the pipeline when `samplerType`
-changes — the same shape of fix `setRenderSettings` already applies to images
-when the DLSS render scale moves.
-
-## A profile is an object, and it owns its shaders
-
-`RTRealtimeRenderer` and `RTOfflineRenderer` are thin finals over a shared base
-that wraps a `PathTracer` and forwards over forty accessors. What they
-genuinely differ on is the constructor's `PathTracerShaderSet`. The offline
-profile passes the struct's default, the Slang reference, whose four stages are
-named entry points of one file:
-
-{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp ": RTProfileRendererBase(kRealtimeRTSettings, PathTracerShaderSet{}) {}   // rt/path_tracer.slang"}}
 {{cite ohao/render/rt/path_tracer.hpp "const char* closestHitEntry{"}}
 
-The realtime profile names four GLSL modules and gives each the entry `main`:
-
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
-
-The pipeline takes each stage's entry name from the set, so the same
-`createRTPipeline` builds both:
+The pipeline takes each stage's entry name from the set:
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pName = m_shaderSet.raygenEntry;"}}
 
-## What the two finals actually decide
-
-`RTProfileRendererBase` implements the forwarding, and leaves four pure
-virtuals to the finals: `getName`, `getProfile`, `getDefaultSettings` and
-`resetsAccumulationOnViewChange`. The first three return identity and
-constants, and `IRTRendererProfile::getDefaultSettings` has no callers at all.
-The profiles' real payload — the settings aggregate and the shader set — is not
-virtual: it is handed up through the base constructor.
+The base leaves four pure virtuals to the finals: `getName`, `getProfile`,
+`getDefaultSettings` and `resetsAccumulationOnViewChange`. The first three return
+identity and constants, and `IRTRendererProfile::getDefaultSettings` has no callers.
+The settings aggregate is not virtual: it is handed up through the base constructor.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "RTProfileRendererBase(RTRenderSettings settings, PathTracerShaderSet shaderSet)"}}
 
-Only the fourth virtual changes behaviour, and what it decides is what a camera
-move means.
+Only the fourth virtual changes behaviour, and what it decides is what a camera move
+means.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "if (resetsAccumulationOnViewChange()) {"}}
 
-Offline answers yes and hard-resets — sample index back to the render seed,
-history counters to zero, NRD's previous matrices to identity. Realtime answers
-no:
+Offline answers yes and hard-resets: sample index back to the render seed, both clocks
+to zero, NRD's previous matrices to identity. Realtime answers no:
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "bool resetsAccumulationOnViewChange() const override { return false; }"}}
 
-and instead raises a per-frame flag that the raygen reads as a temporal
-bootstrap hint. Keeping the accumulation buffer alive across a camera move is
-what makes an interactive viewport usable; throwing it away is what makes a
-reference render correct.
+and instead raises a per-frame flag. The next frame restarts the trace's running mean
+and keeps the denoisers' history, which reprojects through the motion vectors; the
+motion vectors are valid because last frame's view-projection is a rendered frame's.
 
-A change to the traced scene takes the same path. After `recordUpdates`, a frame
-whose TLAS was built or refit, or that uploaded instance data or lights, calls
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.z = m_hasPreviousView ? 1u : 0u;"}}
+
+Keeping the denoiser's history alive across a camera move is what makes an interactive
+viewport usable; throwing everything away is what makes a reference render correct.
+
+A change to the traced scene takes the same path. After `recordUpdates`, a frame whose
+TLAS was built or refit, or that uploaded instance data or lights, calls
 `notifyViewChanged` on the active profile, so an offline render restarts on a moved
 instance and a still scene keeps accumulating:
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->notifyViewChanged();"}}
 
-## What the per-frame reset stomps
+## What the per-frame reset keeps
 
-There is a second profile hierarchy, and this is where it surfaces.
-`IRTRenderPipeline` — `RTRealtimePipeline`, `RTOfflinePipeline` — is a
-stateless description of a mode rather than a renderer: four const methods, no
-Vulkan objects, held by value on `VulkanRenderer`. It shares three method names
-with `IRTRendererProfile` and nothing else.
+`VulkanRenderer` maps a render mode to its profile's constant with one static
+function, and a null answer means the mode is not path traced:
 
-{{cite ohao/render/rt/rt_render_pipeline.hpp "class RTRealtimePipeline final : public IRTRenderPipeline {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "const RTRenderSettings* VulkanRenderer::rtDefaults(RenderMode mode) {"}}
 
-Per frame, `prepareRTSceneForFrame` overwrites the renderer's settings with
-that pipeline object's defaults before doing anything else. The values come
-from the pipeline; the profile renderer's identically-named
-`getDefaultSettings` is not what supplies them.
+Per frame, `prepareRTSceneForFrame` overwrites the renderer's settings with those
+defaults before doing anything else, and `renderRTPipeline` calls it before it records
+the trace:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = pipeline.getDefaultSettings();"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = defaults;"}}
 
-Only anisotropy strength, anisotropy rotation and subsurface strength are
-carried across that assignment; `applyRTRenderSettings` then re-injects the
-interactive sample count and — for Atrous and DLSS-RR only — the user's
-`--denoise` override. Anything else set through `setRTRenderSettings`,
-`maxBounces` most obviously, never survives to a dispatch at all:
-`renderRTPipeline` calls `prepareRTSceneForFrame` first and records the trace
-afterwards, so the value is overwritten before any raygen can read it.
+`applyRTRenderSettings` then re-injects the two overrides a caller can hold: a
+`--denoise` mode, whatever it is (None and OIDN included), and a bounce limit
+(`--bounces`, `render.capture {bounces}`).
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline);"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;"}}
+
+Anything else set through `setRTRenderSettings` lasts until the next RT frame: it is
+overwritten before any raygen reads it.
 
 :::key
-The profile constants are authoritative every frame, not just at startup. A
-knob that is not on the explicit preserve list is not a setting, it is a value
-discarded before the next dispatch reads it. The sampler is the mirror image:
-it is authoritative once, at init, and for the realtime raygen currently
-authoritative with the wrong profile's value.
+The profile constants are authoritative every frame, not just at startup. A knob that
+is not one of the two overrides is not a setting; it is a value discarded before the
+next dispatch reads it.
 :::
 
 ## Contracts
 
-- Both profile renderers are created lazily by `ensureRTRenderer` and released only in `VulkanRenderer::shutdown`. Switching modes at runtime leaves two full `PathTracer` instances resident, each owning its own set of over twenty screen-sized storage images (roughly half of them RGBA32F), and `forEachRTRenderer` applies resizes and render seeds to both. Scene data is not duplicated: both read the one `RenderScene` and the one bindless table.
+- Both profile renderers are created lazily by `ensureRTRenderer` and released only in `VulkanRenderer::shutdown`. Switching modes at runtime leaves two full `PathTracer` instances resident, each owning its own screen-sized storage images (several of them RGBA32F), and `forEachRTRenderer` applies resizes and render seeds to both. Scene data is not duplicated: both read the one `RenderScene` and the one bindless table.
 - `setRenderSettings` must be called between frames, never inside a command buffer: a change of DLSS render scale makes it wait on device idle and reallocate every render target.
-- `preferAccumulation` and `allowExternalDenoiser` exist in the struct and in the traits, but no code reads them to change behaviour — they appear only in the profile log line. Do not add logic that assumes they are already honoured. {{cite ohao/gpu/vulkan/renderer.cpp "externalDenoiser="}}
-- The offline profile's freedom from firefly clamping depends on two independent conditions (flag clear, threshold zero). Restoring the struct default of 10.0 without also clearing the flag would silently bias reference renders. {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;"}}
+- `preferAccumulation` and `allowExternalDenoiser` exist in the struct, but no code reads them to change behaviour — they appear only in the profile log line. Do not add logic that assumes they are already honoured. {{cite ohao/gpu/vulkan/renderer.cpp "externalDenoiser="}}
+- The offline profile's freedom from firefly clamping holds three ways (flag clear, threshold zero, and a trace that accumulates). Restoring a nonzero threshold and the flag on the offline constant would still clamp nothing while it accumulates, and would clamp the moment a temporal denoiser is chosen.
+- `tracerAccumulates` and the denoisers' history are coupled: a mode that returns false must carry its own temporal history (or show raw one-sample frames), because the trace keeps none.

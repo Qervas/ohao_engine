@@ -104,8 +104,10 @@ in whichever header owns the struct:
 All three macro sites take their number from one header,
 `ohao/gpu/layout_meta.hpp`, which gives each one a name: 128 bytes for `LightData`, 80
 for `GPULight` (five `vec4`s of std430), 256 for the path tracer's push block. The
-same header carries the 48-byte three-`vec4` material row, which has no owning C++
-struct and is asserted in place against it.
+same header carries the 112-byte seven-`vec4` material row, `MaterialGpuPack`, whose
+size is asserted beside it with a plain `static_assert`:
+
+{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 112"}}
 
 {{cite ohao/render/rt/gpu_light.hpp "OHAO_ASSERT_GPU_LAYOUT(GPULight, layout::kGPULightBytes);"}}
 
@@ -118,14 +120,15 @@ shared header buys is that two owners of the same ABI cannot independently write
 different numbers for it.
 
 The 256 is not a stylistic budget — it is the device ceiling, and the renderer
-visibly lives against it. `PTPushConstants` is full at 256 bytes, so the
-per-frame sample count could not be given a field of its own. It is packed into the
-high 16 bits of `params.w` beside `maxBounces` in the low 16, and each raygen
-variant either unpacks it or masks it off:
+visibly lives against it. `PTPushConstants` is three matrices and four four-lane rows,
+exactly 256 bytes, and its lanes are spoken for: `control` alone carries the flags, the
+frames in the running mean, whether last frame's view gives motion vectors, and the
+environment CDF's width.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "256-byte device maxPushConstantsSize, so we cannot append a field"}}
+{{cite ohao/render/rt/path_tracer.hpp "glm::uvec4 control;             // x=flags, y=frames in the running mean, z=motion vectors valid, w=envCDFWidth"}}
 
-The device limit is the cause of the bit-packing; the macro from `core/` is what
+The one free lane is `tuning.w`. New per-frame state packs into what is there or moves
+into a descriptor-bound buffer; the macro from `core/` is what
 turns overrunning it into a compile error at the struct rather than a runtime
 validation failure at pipeline-layout creation.
 
@@ -218,7 +221,7 @@ yields a BLAS built over the wrong triangles — a wrong picture, not a validati
 
 - Any struct written into mapped device memory must assert `GpuPod` at its own declaration. Nothing checks at the cast — `LightClusters::setLights` casts the raw `void*` mapping to `LightGpu*` unguarded — so a struct that skips the assertion and later gains a `std::string`, a virtual function, or mixed-access data members compiles and corrupts silently. The generated `LightGpu` relies on `gen_layout.py` only ever emitting scalars and fixed-size arrays of floats and integers.
 - `LightData` must stay padding-free and trivially copyable: the light table's version check is a `memcmp` over the array.
-- `GpuPod` does not imply the shader layout matches. Structs with a GLSL counterpart must also carry `OHAO_ASSERT_GPU_LAYOUT`: against a `layout::` constant if the owning header may include `gpu/layout_meta.hpp`, against a literal if it may not, as in `core/`. Adding a field without updating the number is a compile error; updating the number without updating the GLSL is not caught by anything.
+- `GpuPod` does not imply the shader layout matches. Structs with a shader counterpart must also carry `OHAO_ASSERT_GPU_LAYOUT`: against a `layout::` constant if the owning header may include `gpu/layout_meta.hpp`, against a literal if it may not, as in `core/`. Adding a field without updating the number is a compile error; updating the number without updating the shader is not caught by anything.
 - `PTPushConstants` sits at the 256-byte ceiling. New per-frame path-tracer state has to be packed into an existing field or moved into a descriptor-bound buffer.
 - Mesh offsets (`MeshInfo`, `MeshGpu`) are in elements. Only the BLAS build converts them to bytes.
 - Entity components have no gating concept: any struct can be emplaced. A component that is also uploaded to the GPU must carry its own `GpuPod` or layout assertion.

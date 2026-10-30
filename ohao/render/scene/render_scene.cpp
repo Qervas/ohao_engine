@@ -158,7 +158,7 @@ struct RenderScene::Impl {
         // Its materials' alpha modes: an instance with an alpha-tested or blended material is
         // non-opaque to every ray (the BLAS is per mesh and opaque), so ray queries see its
         // triangles as candidates and test them by their own material (rt/alpha_test.slang,
-        // pt_anyhit); one whose every material is blended is seen by camera rays only.
+        // the path tracer's any-hit); one whose every material is blended is seen by camera rays only.
         bool anyAlpha = false, allBlend = g.materialRefCount > 0;
         if ((g.flags & (kInstanceEmitter | kInstanceViewModel)) == 0)
             for (uint32_t k = 0; k < g.materialRefCount; ++k) {

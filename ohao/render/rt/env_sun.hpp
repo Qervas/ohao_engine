@@ -21,7 +21,7 @@
 //   - it covers at most kSunMaxSolidAngle steradians (a sun with its glare, not a bright sky).
 // Its texels are set to the mean of the texels bordering it: the sky around the sun.
 //
-// Directions use the engine's lookup (gi_trace.slang, deferred_lighting.frag, pt_miss.rmiss):
+// Directions use the engine's lookup (gi_trace.slang, deferred_lighting.slang, rt/path_tracer.slang):
 // u = atan2(z, x) / 2pi + 0.5, v = 0.5 - asin(y) / pi, row 0 at v = 0 (the zenith, as the file
 // stores it).
 

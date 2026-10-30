@@ -24,9 +24,9 @@ The two modes are distinguishable from outside: `isPresenting()` reports whether
 
 ## Three modes, two of which can be refused
 
-`RenderMode` is one raster mode (Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — a pipeline descriptor for the mode, a live renderer profile, and ray-tracing support reported by the render world — and falls through to deferred if any is missing.
+`RenderMode` is one raster mode (Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — default settings for the mode, a live renderer profile, and ray-tracing support reported by the render world — and falls through to deferred if any is missing.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (const auto* rtPipeline = getRTPipeline(m_renderMode);"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (const auto* rtPipeline = rtDefaults(m_renderMode);"}}
 
 `setRenderMode` returns `void` and is allowed to refuse: if the device has no RT support, or the profile for the requested mode fails to initialise, it logs and leaves the previous mode in place. Deferred is never refused, because `initialize()` treats a failed deferred renderer as fatal — a renderer that initialised has one.
 
@@ -38,23 +38,20 @@ The mode you asked for is therefore not necessarily the mode you got. The field 
 
 Anything that reports "rendering in mode X" from its own local variable rather than from `getRenderMode()` can print a lie.
 
-## Two RT abstractions that are not duplicates
+## Defaults always, a tracer only on demand
 
-The facade holds *both* `IRTRenderPipeline` objects and `IRTRendererProfile` objects for each RT mode, which reads like redundancy until you look at their storage class. The pipelines are plain value members with no GPU state — pure constant policy, always answerable — so `getRTPipeline(mode)` can report "this is an RT mode, and here are its default settings" before a single Vulkan object exists. The profiles are `unique_ptr`s, each owning a whole `PathTracer`, and they are the thing that might be null.
+The facade answers two questions about an RT mode separately. `rtDefaults(mode)` is a static function returning the profile's `constexpr` settings, or null for a raster mode, so "is this an RT mode, and what are its defaults" is answerable before a single Vulkan object exists. The profiles are `unique_ptr`s, each owning a whole `PathTracer`, and they are the thing that might be null.
 
-The two profiles are not the same tracer with different knobs; they load different shaders. `RTProfileRendererBase::init` installs the profile's shader set before `PathTracer::init` runs. `RTOfflineRenderer` takes the struct's default, the Slang reference path tracer (`rt/path_tracer.slang`, four named entry points in one file):
+{{cite ohao/gpu/vulkan/renderer.hpp "static const RTRenderSettings* rtDefaults(RenderMode mode);"}}
+
+The two profiles are the same tracer with different settings: both install `PathTracerShaderSet`'s default, the path tracer in `rt/path_tracer.slang` (four named entry points in one file), before `PathTracer::init` runs.
 
 {{cite ohao/render/rt/path_tracer.hpp "rt_path_tracer.slang.raygen.spv"}}
-{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
-
-`RTRealtimeRenderer` names the GLSL set explicitly, `pt_raygen_realtime.rgen` with the GLSL closest-hit, any-hit and miss, every entry `main`. Reading one profile's shaders and concluding "that is what the other mode runs" is the mistake this indirection invites; the two are different integrators.
-
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
 ## Why the path tracer is not built during initialize()
 
 :::why
-`initialize()` builds the device, the deferred renderer and the render world (which owns the acceleration structures), but no `PathTracer`. Each profile owns one, and a `PathTracer` declares nineteen scalar `VkImage` members: beauty and accumulation; the albedo and normal guide pair; nine denoiser guide AOVs (motion, depth, roughness, diffuse and specular radiance, diffuse albedo, specular colour, packed normal-roughness, specular hit distance); NRD's denoised diffuse and specular and its composed HDR; the cinematic chain's pre-DoF and final tonemapped LDR; and the DLSS-RR HDR colour output — plus four image *arrays*: three bloom mips, ping-pong surface and shading history, and a 3×2 GI reservoir set. Only the DLSS output is `#ifdef`-guarded; the other eighteen are unconditional.
+`initialize()` builds the device, the deferred renderer and the render world (which owns the acceleration structures), but no `PathTracer`. Each profile owns one, and a `PathTracer` owns some two dozen images: the accumulation pair and the beauty; the albedo and normal guide pair; nine denoiser guide AOVs (motion, depth, roughness, diffuse and specular radiance, diffuse albedo, specular colour, packed normal-roughness, specular hit distance); NRD's denoised diffuse and specular and its composed HDR; the cinematic chain's pre-DoF and final tonemapped LDR and three bloom mips; and the DLSS-RR HDR colour output. Only the DLSS output is `#ifdef`-guarded.
 
 {{cite ohao/render/rt/path_tracer.hpp "VkImage        m_dlssColorOutImage"}}
 
@@ -73,37 +70,29 @@ Laziness costs the scene nothing. Meshes, materials, textures and lights live in
 
 ## The settings that are thrown away every frame
 
-Every RT frame begins by discarding the current settings and reloading the active pipeline's compile-time defaults.
+Every RT frame begins by discarding the current settings and reloading the active profile's compile-time defaults.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = pipeline.getDefaultSettings();"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = defaults;"}}
 
-That keeps the pipeline authoritative over tracer behaviour, but it means every user-settable field has to be rescued by hand across the reset. Three are stashed in locals and written back immediately: anisotropy strength, anisotropy rotation, subsurface strength.
+That keeps the profile constants authoritative over tracer behaviour, but it means every user-settable field has to be re-applied across the reset. Two are, in `applyRTRenderSettings`: a denoise mode chosen through `setDenoiseMode`, and a bounce limit set through `setMaxBouncesOverride`.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "float preservedAnisoStrength = m_rtSettings.anisotropyStrength;"}}
-
-A fourth, the realtime per-frame sample count set through `setRealtimeSamplesPerFrame`, is re-injected one level down in `applyRTRenderSettings` instead. Nothing in the tree calls that setter today, so the rescue keeps the value at its default of 1; it exists for a realtime host that exposes the sample count.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "// Re-inject the realtime per-frame sample count: prepareRTSceneForFrame"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;"}}
 
 :::key
-`RTRenderSettings` is not a settings object in the usual sense — it is a per-frame scratch struct with a hand-maintained rescue list. Adding a field and a setter is not enough to make it stick; the field must also be named in `prepareRTSceneForFrame` or `applyRTRenderSettings`, or it silently reverts to the profile default on the very next frame.
+`RTRenderSettings` is not a settings object in the usual sense — it is a per-frame scratch struct with a hand-maintained list of overrides. Adding a field and a setter is not enough to make it stick; the field must also be re-applied in `applyRTRenderSettings`, or it silently reverts to the profile default on the very next frame.
 :::
 
 ## Who wins the argument about the denoiser
 
-`setDenoiseMode` latches a `m_denoiseModeOverridden` bit that does two things. It stops the per-frame settings sync from overwriting the user's choice with the profile default, and it gates an injection back into the tracer's own settings — scoped to the three denoisers the tracer dispatches itself, Atrous, DLSS-RR and NRD, and not to OIDN.
+`setDenoiseMode` latches a `m_denoiseModeOverridden` bit that does two things. It stops the per-frame settings sync from overwriting the user's choice with the profile default, and it injects the choice back into the tracer's own settings, whatever it is, None and OIDN included.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseModeOverridden &&"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
-NRD joined in sub-project 2b step 5. Its block used to be gated on `enableAuxiliaryAOVs` alone, a profile flag, so REBLUR ran on every RT frame of a profile that produces AOVs and nothing needed injecting for it to fire; gated on the mode too, it needs the injection like the other two.
+The injection is not only for the denoisers the tracer dispatches itself (à-trous, DLSS-RR and NRD, each behind a branch on `m_renderSettings.denoiseMode`). The trace's own behaviour follows the mode too: whether it keeps a running mean and whether the firefly clamp is on (`tracerAccumulates`, `rt_meta.hpp`). Without the injection, `--denoise none` on the realtime profile would still trace one sample a frame for an NRD that never runs.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD)"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {"}}
 
-All three blocks branch on `m_renderSettings.denoiseMode`, and the per-frame reload sets that field to `None` (realtime) or `OIDN` (offline) — never one of the three. Without the injection those branches are unreachable from the command line. OIDN needs nothing: it never enters the tracer at all.
-
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser)"}}
-
-Widening that condition to "always inject" would look like a cleanup and would clobber each profile's default. Those defaults matter: with no `--denoise` flag at all, RTOffline denoises with OIDN because its settings constant says so, while RTRealtime starts at None.
+With no `--denoise` flag at all, each profile's constant decides: RTOffline denoises with OIDN, RTRealtime with NRD.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 
@@ -153,7 +142,7 @@ Below that sits the bulk of the translation unit, more than half of `renderer.cp
 - `requestedReadbackCount()` counts copies, every one of them requested. A host that counts more copies than it asked for has found a bug.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
 - `resize()` destroys and recreates every RT image. The tracer rewrites its image bindings at the top of every `render()`, so nothing needs rebinding afterwards; a descriptor cached anywhere else would be stale.
-- Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.
+- Any new `RTRenderSettings` field a caller can set must be re-applied in `applyRTRenderSettings`, or the per-frame reload will discard it.
 - `readback()` is not reentrant with GPU work in flight: under NRD or OIDN it allocates a command buffer, submits and waits on the graphics queue. It skips that while `m_denoiseCacheValid` holds, so only the first call after each `render()` costs the stall.
 - `getDevice()`, `getPhysicalDevice()`, `graphicsQueue()` and `graphicsQueueFamily()` are wiring for consumers outside the renderer; `render_bench`'s GPU calibration kernel is the one in the tree. Work submitted on the queue must finish before the next `render()`.
 

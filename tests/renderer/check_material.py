@@ -11,7 +11,8 @@ The closed box: six walls of Lambertian albedo rho (specular_weight 0, diffuse r
 emitting Le, the camera inside, no lights. Every point's radiance is Le / (1 - rho) with every
 bounce. With N bounces (0: direct light only, which here is the walls' light reflected once) it is
 Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the reference's bounces),
-1.75 at --bounces 1, 1.5 at --bounces 0. Deferred: RT GI's one bounce (its rays bring back what the
+1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces) 1.875, and
+1.75 at --bounces 1. Deferred: RT GI's one bounce (its rays bring back what the
 walls emit, rt/gi_trace.slang) gives 1.5, the path tracer's --bounces 0, within 2% (32 frames)
 
   python tests/renderer/check_material.py   # exit 0 pass, 1 fail; last line the JSON summary
@@ -138,11 +139,15 @@ def box_scene(rho, le):
 def closed_box(failures, results):
     rho, le = 0.5, 1.0
     checks = 0
-    for bounces, expected in ((None, le / (1 - rho)), (1, le * (1 + rho + rho * rho)), (0, le * (1 + rho))):
+    cases = [("rt_offline", None, le / (1 - rho)), ("rt_offline", 1, le * (1 + rho + rho * rho)),
+             ("rt_offline", 0, le * (1 + rho)),
+             # The realtime profile at its own 2 bounces, and at the reference's 1.
+             ("rt_realtime", None, le * (1 + rho + rho ** 2 + rho ** 3)), ("rt_realtime", 1, le * (1 + rho + rho * rho))]
+    for mode, bounces, expected in cases:
         checks += 1
         args = ["--spp", "256", "--denoise", "none"] + (["--bounces", str(bounces)] if bounces is not None else [])
-        tag = "all" if bounces is None else str(bounces)
-        img, err = capture("box_%s" % tag, box_scene(rho, le), "rt_offline", args)
+        tag = ("all" if bounces is None else str(bounces)) + ("" if mode == "rt_offline" else "_realtime")
+        img, err = capture("box_%s" % tag, box_scene(rho, le), mode, args)
         if err:
             failures.append("closed box, bounces %s: %s" % (tag, err))
             continue
@@ -173,8 +178,11 @@ def closed_box(failures, results):
 def main():
     os.makedirs(os.path.join(ROOT, OUT), exist_ok=True)
     failures, results = [], {}
-    checks = furnace([("rt_offline", ["--spp", "256", "--denoise", "none"]), ("deferred", ["--frames", "32"])],
-                     failures, results)
+    # Both path tracer profiles run one tracer (rt/path_tracer.slang): the realtime one answers as
+    # the reference does where its bounces reach (a convex sphere under the sky: one).
+    checks = furnace([("rt_offline", ["--spp", "256", "--denoise", "none"]),
+                      ("rt_realtime", ["--spp", "256", "--denoise", "none"]),
+                      ("deferred", ["--frames", "32"])], failures, results)
     checks += closed_box(failures, results)
     with open(os.path.join(ROOT, OUT, "material.json"), "w", newline="\n") as f:
         json.dump(results, f, indent=2)

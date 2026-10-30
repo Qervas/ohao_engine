@@ -33,12 +33,12 @@
         <p>F0, ORM convention, roughness floors.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-lie-artists-can-paint">The lie artists can paint</a></li><li><a href="#f0-the-0-04-that-is-not-arbitrary">F0: the 0.04 that is not arbitrary</a></li><li><a href="#one-input-set-two-brdfs">One input set, two BRDFs</a></li><li><a href="#the-reference-s-base">The reference&#x27;s base</a></li><li><a href="#the-realtime-tracer-s-specular">The realtime tracer&#x27;s specular</a></li><li><a href="#the-deferred-frame-s-evaluation">The deferred frame&#x27;s evaluation</a></li><li><a href="#where-the-paths-disagree">Where the paths disagree</a></li><li><a href="#the-k-remaps-and-where-each-one-lives">The k-remaps, and where each one lives</a></li><li><a href="#where-the-packed-roughness-comes-from">Where the packed roughness comes from</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-lie-artists-can-paint">The lie artists can paint</a></li><li><a href="#f0-the-0-04-that-is-not-arbitrary">F0: the 0.04 that is not arbitrary</a></li><li><a href="#one-input-set-one-bsdf">One input set, one BSDF</a></li><li><a href="#the-base">The base</a></li><li><a href="#the-deferred-frame-s-evaluation">The deferred frame&#x27;s evaluation</a></li><li><a href="#where-the-renderers-still-differ">Where the renderers still differ</a></li><li><a href="#one-geometry-term">One geometry term</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="the-lie-artists-can-paint">The lie artists can paint</h2></div>
 <div class="prose reveal">
-<p>The physically-correct microfacet BRDF wants a spectral, complex index of refraction at every surface point. No artist authors that. OHAO collapses it to a few scalars an artist can paint into textures — base color, metallic, roughness, and OpenPBR&#x27;s specular weight, colour and IOR beside them — and reconstructs the physics at shade time. This page is about what that reconstruction gets right, and about the one split that remains: the same sliders are reconstructed by two surface models — OpenPBR&#x27;s base, which the reference path tracer, the deferred frame, the forward transparent pass and RT GI&#x27;s hits all evaluate, and a GLSL metal-roughness Cook-Torrance in the realtime tracer — and the two do not agree.</p>
+<p>The physically-correct microfacet BRDF wants a spectral, complex index of refraction at every surface point. No artist authors that. OHAO collapses it to a few scalars an artist can paint into textures — base color, metallic, roughness, and OpenPBR&#x27;s specular weight, colour and IOR beside them — and reconstructs the physics at shade time, once: OpenPBR&#x27;s base (`material/openpbr.slang`) is the one surface model the path tracer (both RT profiles), the deferred frame, the forward transparent pass and RT GI&#x27;s hits all evaluate.</p>
 </div>
 <div class="section-rule"><h2 id="f0-the-0-04-that-is-not-arbitrary">F0: the 0.04 that is not arbitrary</h2></div>
 <div class="prose reveal">
@@ -46,52 +46,29 @@
 <div class="math-block">$$
 F_0^{\text{dielectric}} = \left(\frac{1.5 - 1}{1.5 + 1}\right)^2 \approx 0.04
 $$</div>
-<p>Metals have no meaningful single-scalar IOR in this model and absorb all transmitted light within nanometers, so they get zero diffuse and reuse base color as F0. The realtime GLSL tracer collapses the two cases into one branch-free `mix` in its raygen shading loop, just after the hit is unpacked:</p>
-<div class="citation-chip"><code class="citation-code">vec3 F0 = mix(vec3(0.04), albedo, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L496" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:496</a></div>
-<p>OpenPBR&#x27;s base keeps the IOR instead of its F0. A material&#x27;s `specular_ior` (default 1.5) gives the dielectric its exact Fresnel at every angle, and `specular_weight` scales that F0 by returning the IOR that has the scaled value; a metal&#x27;s F0 is `base_weight × base_color`:</p>
+<p>Metals have no meaningful single-scalar IOR in this model and absorb all transmitted light within nanometers, so they get zero diffuse and reuse base color as F0. OpenPBR&#x27;s base keeps the IOR instead of its F0. A material&#x27;s `specular_ior` (default 1.5) gives the dielectric its exact Fresnel at every angle, and `specular_weight` scales that F0 by returning the IOR that has the scaled value; a metal&#x27;s F0 is `base_weight × base_color`:</p>
 <div class="citation-chip"><code class="citation-code">eta = clamp(modulatedIor(m.specularIor, m.specularWeight), 1.0, kPbrEtaMax);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L424" target="_blank" rel="noopener">shaders/material/openpbr.slang:424</a></div>
 <div class="citation-chip"><code class="citation-code">metalF0 = rho;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L426" target="_blank" rel="noopener">shaders/material/openpbr.slang:426</a></div>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The intermediate values of the metallic slider (metallic = 0.5) are not physical — no real material is half-conductor. Every renderer keeps the slider continuous anyway, because a continuous, monotonic control is all an artist needs and the pure 0/1 endpoints are exactly right; OpenPBR mixes its metal and dielectric lobes by it, and the realtime tracer mixes F0 and the diffuse weight by it.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The intermediate values of the metallic slider (metallic = 0.5) are not physical — no real material is half-conductor. Every renderer keeps the slider continuous anyway, because a continuous, monotonic control is all an artist needs and the pure 0/1 endpoints are exactly right; OpenPBR mixes its metal and dielectric lobes by it.</p></div>
 </div>
-<div class="section-rule"><h2 id="one-input-set-two-brdfs">One input set, two BRDFs</h2></div>
+<div class="section-rule"><h2 id="one-input-set-one-bsdf">One input set, one BSDF</h2></div>
 <div class="prose reveal">
-<p>Here is the fact that governs everything else on this page. The offline reference, `rt/path_tracer.slang`, and the deferred lighting shader, `core/deferred_lighting.slang`, both import OpenPBR&#x27;s base from `material/openpbr.slang`; each resolves its material into `MaterialInputs`, OpenPBR&#x27;s names — the path tracer&#x27;s closest hit from the material rows and textures, deferred lighting from the G-buffer:</p>
+<p>The path tracer, `rt/path_tracer.slang`, and the deferred lighting shader, `core/deferred_lighting.slang`, both import OpenPBR&#x27;s base from `material/openpbr.slang`; each resolves its material into `MaterialInputs`, OpenPBR&#x27;s names — the path tracer&#x27;s closest hit from the material rows and textures, deferred lighting from the G-buffer:</p>
 <div class="citation-chip"><code class="citation-code">struct MaterialInputs</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L363" target="_blank" rel="noopener">shaders/material/openpbr.slang:363</a></div>
 <div class="citation-chip"><code class="citation-code">mi.baseDiffuseRoughness = pbr.r;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.slang#L212" target="_blank" rel="noopener">shaders/core/deferred_lighting.slang:212</a></div>
-<p>The realtime raygen includes `ggx_aniso.glsl` instead:</p>
-<div class="citation-chip"><code class="citation-code">float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L85" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:85</a></div>
-<p>The two agree on being &quot;GGX metallic-roughness,&quot; and diverge on almost everything expensive: the Fresnel, the geometry term, energy compensation and the diffuse model. The rest of this page walks each, then the gaps between them.</p>
 </div>
-<div class="section-rule"><h2 id="the-reference-s-base">The reference&#x27;s base</h2></div>
+<div class="section-rule"><h2 id="the-base">The base</h2></div>
 <div class="prose reveal">
 <p>`OpenPBRBase` is OpenPBR Surface&#x27;s base layer: a metal lobe and a dielectric lobe over a diffuse one, mixed by `base_metalness`. The metal is GGX with the F82-tint Fresnel; the dielectric is GGX with the exact Fresnel of its IOR, tinted by `specular_color`, over EON diffuse (Portsmouth, Kutz and Hill 2025), which takes what the specular does not reflect toward the viewer:</p>
 <div class="citation-chip"><code class="citation-code">diffuse = (1.0 - metalness) * (1.0 - dielectricAlbedo(wo.z, t)) * eonEval(rho, diffRough, wi, wo) * wi.z;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L477" target="_blank" rel="noopener">shaders/material/openpbr.slang:477</a></div>
 <p>GGX is single scatter plus Kulla-Conty&#x27;s multiple-scattering lobe, so a white metal and a white dielectric over a white base reflect what they receive. The lobe&#x27;s directional albedos come from tables generated from the module itself (`tools/material/openpbr_tables`), compiled into `openpbr_tables.hpp` and uploaded once to binding 38:</p>
 <div class="citation-chip"><code class="citation-code">return (1.0 - t.E1(wo.z, rough)) * (1.0 - t.E1(wi.z, rough)) / (kPbrPi * max(1.0 - e1Avg, 1e-6)) * wi.z;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L438" target="_blank" rel="noopener">shaders/material/openpbr.slang:438</a></div>
-<div class="citation-chip"><code class="citation-code">add(38, BUFFER, RGEN);  // OpenPBR&#x27;s energy tables (rt/path_tracer.slang)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L91" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:91</a></div>
+<div class="citation-chip"><code class="citation-code">add(38, BUFFER, RGEN);  // OpenPBR&#x27;s energy tables (rt/path_tracer.slang)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L82" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:82</a></div>
 <p>The base samples as well as evaluates: the specular lobe by bounded VNDF sampling, the diffuse by EON&#x27;s own sampler, chosen by each lobe&#x27;s share of the albedo&#x27;s luminance, and the path tracer weighs light samples against that density. The GGX unit has the details.</p>
-</div>
-<div class="section-rule"><h2 id="the-realtime-tracer-s-specular">The realtime tracer&#x27;s specular</h2></div>
-<div class="prose reveal">
-<p>The realtime profile binds `pt_raygen_realtime.rgen` (the `--denoise=nrd`/DLSS path). Its direct lighting is next-event estimation: for each light sample it evaluates analytic Cook-Torrance inline — the anisotropy-aware GGX D, a Schlick Fresnel, a Smith-Schlick geometry term using the `(roughness + 1)^2 / 8` direct-lighting k remap, then a plain Lambert diffuse (not EON):</p>
-<div class="citation-chip"><code class="citation-code">vec3 diff = kD * albedo / 3.14159;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L628" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:628</a></div>
-<p>The D term is anisotropy-aware; at anisotropy = 0 it falls back to the exact isotropic GGX. The anisotropy direction is not read from a tangent attribute — it is reconstructed by projecting world-up onto the surface:</p>
-<div class="citation-chip"><code class="citation-code">t = normalize(ref - n * dot(ref, n));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L27" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:27</a></div>
-<p>That detail matters more than it looks: Frisvad&#x27;s cheaper basis varies discontinuously with the normal, so on a sphere neighbouring pixels get scrambled tangents and the anisotropic highlight averages back into something that looks isotropic. Projecting a fixed world axis gives a smoothly-varying tangent (a lathe-turned look on spheres).</p>
-<p>Its first glossy bounce is Heitz-2018 sampling of the *visible* normal distribution:</p>
-<div class="citation-chip"><code class="citation-code">vec3 Hloc = sampleGGXVNDF(Vloc, alpha, alpha, u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L802" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:802</a></div>
-<p>With a VNDF sample the Monte-Carlo estimator weight `f·cosθ / pdf` collapses to a single height-correlated Smith ratio once Fresnel is factored out —</p>
-<div class="math-block">$$
-\frac{f\,\cos\theta_L}{p(\omega_L)} \;=\; F \cdot \frac{G_2(\omega_o,\omega_i)}{G_1(\omega_o)}
-$$</div>
-<p>— so that branch returns exactly `F · G2/G1` instead of forming D and the pdf separately:</p>
-<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L820" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:820</a></div>
-<p>Deeper bounces in that raygen are *not* VNDF-sampled — they use a cosine-weighted hemisphere sample narrowed by roughness, i.e. a roughness-widened reflection lobe, tinted by the metal colour:</p>
-<div class="citation-chip"><code class="citation-code">specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1065" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1065</a></div>
 </div>
 <div class="section-rule"><h2 id="the-deferred-frame-s-evaluation">The deferred frame&#x27;s evaluation</h2></div>
 <div class="prose reveal">
-<p>The rasteriser cannot importance-sample per pixel, so it evaluates OpenPBR&#x27;s base analytically, light by light, through `includes/lighting/clustered_lights.slang`. The BSDF is the reference&#x27;s; what differs is how a light is integrated. A sphere light&#x27;s specular is taken at the point of the sphere nearest the reflection with the lobe widened by its angular size, its diffuse toward its centre; a rectangle&#x27;s diffuse by its exact irradiance and its specular at the representative point. `evalLobes` returns the two lobes separately for that purpose:</p>
+<p>The rasteriser cannot importance-sample per pixel, so it evaluates the base analytically, light by light, through `includes/lighting/clustered_lights.slang`. The BSDF is the path tracer&#x27;s; what differs is how a light is integrated. A sphere light&#x27;s specular is taken at the point of the sphere nearest the reflection with the lobe widened by its angular size, its diffuse toward its centre; a rectangle&#x27;s diffuse by its exact irradiance and its specular at the representative point. `evalLobes` returns the two lobes separately for that purpose:</p>
 <div class="citation-chip"><code class="citation-code">void evalLobes(float3 wo, float3 wi, OpenPBRTables t, out float3 specular, out float3 diffuse)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L458" target="_blank" rel="noopener">shaders/material/openpbr.slang:458</a></div>
 <p>Single scatter models exactly one bounce off the microsurface, so rough metal comes out visibly too dark; Kulla-Conty&#x27;s lobe (2017) returns the lost energy:</p>
 <div class="math-block">$$
@@ -101,54 +78,35 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">return favg * favg * e1Avg / (1.0 - favg * (1.0 - e1Avg));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L221" target="_blank" rel="noopener">shaders/material/openpbr.slang:221</a></div>
 <p>Deferred lighting binds the tables at binding 20, the path tracer at 38.</p>
 <div class="citation-chip"><code class="citation-code">// 20: OpenPBR&#x27;s energy tables (SSBO)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L535" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:535</a></div>
-<figure class="unit-figure reveal"><img src="../../assets/units/ggx_multiscatter_energy.svg" alt="Single-scatter GGX droops with roughness; a multiple-scattering compensation term returns total energy to ~1. Conceptual, not a captured render. OpenPBR&#x27;s base (the reference, the deferred frame, the transparent pass) does it from tabulated albedos; the realtime tracer (ggx_aniso.glsl) has no equivalent term." loading="lazy" /><figcaption>Single-scatter GGX droops with roughness; a multiple-scattering compensation term returns total energy to ~1. Conceptual, not a captured render. OpenPBR&#x27;s base (the reference, the deferred frame, the transparent pass) does it from tabulated albedos; the realtime tracer (ggx_aniso.glsl) has no equivalent term.</figcaption></figure>
+<figure class="unit-figure reveal"><img src="../../assets/units/ggx_multiscatter_energy.svg" alt="Single-scatter GGX droops with roughness; a multiple-scattering compensation term returns total energy to ~1. Conceptual, not a captured render. OpenPBR&#x27;s base does it from albedos tabulated from the module itself, in every renderer." loading="lazy" /><figcaption>Single-scatter GGX droops with roughness; a multiple-scattering compensation term returns total energy to ~1. Conceptual, not a captured render. OpenPBR&#x27;s base does it from albedos tabulated from the module itself, in every renderer.</figcaption></figure>
 <p>The environment&#x27;s specular is the split sum, the prefiltered environment times the specular lobes&#x27; own directional albedo (`specularAlbedo`, the same tables), and every indirect diffuse term is weighed by the diffuse lobe&#x27;s albedo beneath the specular (`diffuseAlbedo`), so a metal takes no diffuse fill at all.</p>
 </div>
-<div class="section-rule"><h2 id="where-the-paths-disagree">Where the paths disagree</h2></div>
+<div class="section-rule"><h2 id="where-the-renderers-still-differ">Where the renderers still differ</h2></div>
 <div class="prose reveal">
-<div class="why-callout reveal"><div class="why-label">Why</div><p>The deferred frame and the reference evaluate one model, so a material&#x27;s look no longer depends on which of them renders it; what still separates them is transport (one GI bounce, the split-sum environment, representative points for area and sphere specular). The realtime tracer keeps its own GLSL model: Schlick at F0 0.04, uncorrelated Smith in its NEE, Lambert diffuse and no multiple-scattering term, so its rough metals are darker than either and its rough dielectric silhouettes brighter.</p></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The deferred frame and the path tracer evaluate one model, so a material&#x27;s look does not depend on which of them renders it. What separates them is transport: one GI bounce against many, the split-sum environment, representative points for sphere and rectangle specular. `check_parity.py` measures that distance; it is not a material difference.</p></div>
 </div>
-<div class="section-rule"><h2 id="the-k-remaps-and-where-each-one-lives">The k-remaps, and where each one lives</h2></div>
+<div class="section-rule"><h2 id="one-geometry-term">One geometry term</h2></div>
 <div class="prose reveal">
-<p>A Smith-Schlick geometry approximation needs a roughness remap, and engine docs love to get this wrong, so here is the honest map for OHAO. There are three distinct geometry treatments in the shaders that run:</p>
-<ul>
-<li>**Realtime NEE direct light** uses the classic `(roughness + 1)^2 / 8`</li>
-</ul>
-<p>direct-lighting remap, inlined in the analytic Cook-Torrance block cited above, repeated once per NEE branch of `pt_raygen_realtime.rgen`.</p>
-<ul>
-<li>**Realtime VNDF first bounce** uses height-correlated Smith</li>
-</ul>
-<p>(`smithG2overG1GGX`), which needs no remap.</p>
-<ul>
-<li>**OpenPBR&#x27;s base** uses height-correlated Smith from the Λ function in</li>
-</ul>
-<p>`ggxSingle`: the reference&#x27;s light samples and bounces, the deferred frame&#x27;s lights, and (through the tables generated from it) the split sum&#x27;s weight; no remap.</p>
-<p>The `(r+1)^2/8` Schlick-k remap has no named function in the tree; it ships inlined as the realtime tracer&#x27;s NEE geometry term, so a search for a function name finds nothing while the formula still runs.</p>
-</div>
-<div class="section-rule"><h2 id="where-the-packed-roughness-comes-from">Where the packed roughness comes from</h2></div>
-<div class="prose reveal">
-<p>At the realtime tracer&#x27;s closest-hit shader the material arrives packed into a payload vector. The encoding is continuous roughness in `.x`, metallic in `.y`, and the unpack still accepts an older signed form:</p>
-<div class="citation-chip"><code class="citation-code">if (att.x &lt; 0.0 &amp;&amp; att.y &lt; 1e-4) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/pbr_unpack.glsl#L9" target="_blank" rel="noopener">shaders/includes/pbr_unpack.glsl:9</a></div>
-<p>A negative `.x` with `.y` near 0 is read as &quot;binary metal&quot;. No producer in the tree writes that form — the closest hit writes roughness clamped to at least 0.04 — so the branch is unreachable (the shaders/rt-includes unit has the detail). The reference has no packing step: its payload carries each OpenPBR input as its own field.</p>
+<p>There is one masking-shadowing treatment in the shaders: height-correlated Smith from the Λ function in `ggxSingle`, used by the path tracer&#x27;s light samples and bounces, the deferred frame&#x27;s lights and, through the tables generated from it, the split sum&#x27;s weight. It needs no roughness remap; no Smith-Schlick `k` appears anywhere in the tree.</p>
+<div class="citation-chip"><code class="citation-code">const float G2 = 1.0 / (1.0 + ggxLambda(wo.z, a2) + ggxLambda(wi.z, a2));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/material/openpbr.slang#L133" target="_blank" rel="noopener">shaders/material/openpbr.slang:133</a></div>
+<p>The path tracer&#x27;s closest hit carries each OpenPBR input as its own payload field; there is no packed material vector to decode.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>The realtime tracer derives F0 = mix(0.04, albedo, metallic). OpenPBR&#x27;s base — the reference and the deferred frame — derives a dielectric&#x27;s reflectance from `specular_ior` and `specular_weight`, a metal&#x27;s from base colour, and never forms the 0.04; the G-buffer carries those inputs (`kSpecular`, `kOpenPBR`) for it.</li>
-<li>Roughness is clamped away from 0 (`max(roughness, 0.01)` in the realtime unpack, `kMinSpecularRoughness` 0.01 in OpenPBR&#x27;s base; the G-buffer stores it as authored) so the specular lobe never becomes a zero-width delta.</li>
-<li>The reference and the deferred frame are energy-compensated from the same tables; the realtime tracer is not. Its rough metals are darker than either.</li>
-<li>VNDF specular sampling is in the realtime raygen&#x27;s first glossy bounce and in every vertex of the reference (bounded VNDF); the realtime raygen&#x27;s deeper bounces use cosine-jittered mirror directions.</li>
+<li>A dielectric&#x27;s reflectance comes from `specular_ior` and `specular_weight`, a metal&#x27;s from base colour; no renderer forms a fixed F0 of 0.04. The G-buffer carries those inputs (`kSpecular`, `kOpenPBR`) so deferred lighting rebuilds the same `MaterialInputs` the path tracer resolves.</li>
+<li>Roughness is floored once, at 0.01 (`kMinSpecularRoughness`), in the module; the G-buffer and the closest hit pass it as authored.</li>
+<li>The path tracer and the deferred frame are energy-compensated from the same tables (bindings 38 and 20); regenerate them from the module after any change to it.</li>
+<li>The base samples by bounded VNDF for its specular lobe and EON&#x27;s sampler for its diffuse, and the density MIS weighs against is that mixture.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
         <div class="row"><code>shaders/material/openpbr.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.slang</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/material/ggx_aniso.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/material_table.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

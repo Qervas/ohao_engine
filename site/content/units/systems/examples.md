@@ -80,13 +80,17 @@ copy reached the CPU three `render()` calls later, and these loops ran
 `samples + 3` frames to land on the right one.
 
 What accumulates is not the push-constant sample index. `pc.params.z` carries
-`m_sampleIndex`, which seeds the random numbers (and, in accumulate mode, weighs
-the denoiser AOVs' running mean). The accumulation
-weight is `pc.control.y`, holding `m_historyFrameCount`, and the running sample
-count lives in the alpha channel of the accumulation image, incremented by the
-raygen itself. The two counters advance together at the bottom of every
-dispatch, which is why the distinction stays invisible until something resets
-one of them.
+`m_sampleIndex`, which only seeds the random numbers. The accumulation weight — of
+the beauty and, in accumulate-AOVs mode, of the denoiser AOVs — is `pc.control.y`: the
+frames already in the trace's running mean, `m_accumFrames`, which a moved view
+restarts, and the running sample count lives in the alpha channel of the
+accumulation image, incremented by the raygen itself. A second clock,
+`m_historyFrameCount`, is the denoisers' history and restarts only on
+`resetAccumulation`. All three counters advance together at the bottom of every
+dispatch, which is why the distinctions stay invisible until something resets one
+of them.
+
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_viewChangedThisFrame) m_accumFrames = 0;"}}
 
 {{cite shaders/rt/path_tracer.slang "accumBuffer[pixel] = float4(acc, count);"}}
 
@@ -122,22 +126,24 @@ mean of every sample so far.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (!readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {"}}
 
-Accumulation splits the set along a different seam. `Atrous` and `DLSSRR` are
-flagged `wants_fresh_sample`: the host forces `pc.control.y = 0` every frame,
-the raygen skips its history read, and the accumulation image is stored
-with `count = 1.0` forever. Those denoisers own temporal accumulation
-themselves, so handing them a converged image would double-filter it.
+Accumulation splits the set along a different seam. `tracerAccumulates` is false for
+`Atrous`, `DLSSRR`, and `NRD` under the realtime profile: the host then pushes
+`pc.control.y = 0` every frame, the raygen skips its history read, and the
+accumulation image is stored with `count = 1.0` forever. Those denoisers own temporal
+accumulation themselves — through camera moves, by the motion vectors — so handing
+them a converged image would double-filter it. Offline NRD denoises the running mean of
+a still view's samples.
 
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr bool wants_fresh_sample ="}}
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool tracerAccumulates(const RTRenderSettings& s) noexcept {"}}
 
-{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = freshSample ? 0u : m_historyFrameCount;"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;"}}
 
 {{cite shaders/rt/path_tracer.slang "float count = 1.0;"}}
 
 So under `None` and under `OIDN`, the shipped offline default, the saved frame
 holds exactly `samples` samples. Under `Atrous` or `DLSSRR` the saved PNG is
 1 spp no matter what number you typed: those denoisers carry the history
-themselves. `NRD` returns its own GPU-tonemapped composite of the last frame.
+themselves, as realtime NRD does. `NRD` returns its own GPU-tonemapped composite of the last frame.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 

@@ -40,9 +40,9 @@ MODULE = {
         page(
             'rt-includes',
             'RT shader includes',
-            'pbr_unpack and the NRD frontend used by raygen.',
-            files=['shaders/includes/pbr_unpack.glsl', 'shaders/includes/rt/nrd_frontend.glsl'],
-            design=['pbr_unpack: material row → albedo/metal/rough/F0 for hit and raygen.', 'nrd_frontend: YCoCg pack + norm hit-dist — wrong pack = magenta REBLUR.'],
+            'The NRD frontend and the scene includes.',
+            files=['shaders/includes/rt/nrd_frontend.glsl', 'shaders/includes/scene/scene_data.glsl', 'shaders/includes/scene/gbuffer_body.glsl'],
+            design=['nrd_frontend: YCoCg pack + norm hit-dist and its inverse, included by nrd_compose.comp; path_tracer.slang carries its own pack.', 'includes/scene: the scene tables and the G-buffer body shared by the raster shaders.'],
         ),
         page(
             'compute',
@@ -68,8 +68,8 @@ MODULE = {
             'rt-shaders',
             'RT program family',
             'path_tracer.slang, pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.',
-            files=['shaders/rt/path_tracer.slang', 'shaders/rt/pt_raygen_realtime.rgen', 'shaders/rt/pt_closesthit.rchit', 'shaders/rt/pt_anyhit.rahit', 'shaders/rt/pt_miss.rmiss', 'shaders/rt/shadow_trace.slang', 'shaders/rt/shadow_filter.slang', 'shaders/rt/gi_trace.slang', 'shaders/rt/gi_denoise.slang', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
-            design=['path_tracer.slang = the offline reference (Slang, four entry points, OpenPBR base); pt_raygen_realtime.rgen + pt_closesthit/anyhit/miss = the realtime GLSL tracer.', 'Hybrid (Slang compute, inline ray queries): shadow_* visibility; gi_* one-bounce diffuse GI into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
+            files=['shaders/rt/path_tracer.slang', 'shaders/rt/shadow_trace.slang', 'shaders/rt/shadow_filter.slang', 'shaders/rt/gi_trace.slang', 'shaders/rt/gi_denoise.slang', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
+            design=['path_tracer.slang = the path tracer of both RT profiles (Slang, four entry points, OpenPBR base).', 'Hybrid (Slang compute, inline ray queries): shadow_* visibility; gi_* one-bounce diffuse GI into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
         ),
     ],
 }

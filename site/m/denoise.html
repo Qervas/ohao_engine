@@ -88,14 +88,14 @@
         <thead><tr><th>Mode</th><th>Typical use</th><th>Trait needs</th></tr></thead>
         <tbody>
           <tr><td>OIDN</td><td>Offline stills</td><td>CPU readback; albedo+normal guides</td></tr>
-          <tr><td>NRD</td><td>Realtime PT</td><td>motion, diff/spec split, Halton jitter</td></tr>
-          <tr><td>DLSS-RR</td><td>Realtime + NGX</td><td>motion, extended guides, hit-dist (binding 35)</td></tr>
-          <tr><td>Atrous</td><td>Internal spatial</td><td>optional motion</td></tr>
+          <tr><td>NRD</td><td>Realtime PT (default)</td><td>motion, diff/spec split, Halton jitter</td></tr>
+          <tr><td>DLSS-RR</td><td>Realtime + NGX</td><td>motion, extended guides</td></tr>
+          <tr><td>Atrous</td><td>À-trous compute</td><td>optional motion</td></tr>
           <tr><td>None</td><td>Debug noise</td><td>—</td></tr>
         </tbody>
       </table>
       <div class="prose reveal">
-        <p><code>RTProfileTraits</code>: offline allows external denoise (OIDN default); realtime enables internal denoise flags / firefly clamp. CLI <code>--denoise=</code> overrides. Changing mode may require image/pipeline features already allocated at PT init.</p>
+        <p><code>rt_meta.hpp</code>’s constexpr policy (<code>denoiseNeeds*</code>, <code>denoiseIsRealtimeCapable</code>, <code>tracerAccumulates</code>, <code>applyDenoisePolicy</code>) decides what each mode needs: the offline profile accumulates for OIDN; the realtime profile hands each frame’s sample to NRD by default. Any CLI <code>--denoise=</code> override (None and OIDN included) is injected by <code>applyRTRenderSettings</code>.</p>
       </div>
 
       <div class="section-rule"><h2 id="oidn">OIDN full path</h2></div>
@@ -167,7 +167,7 @@
         <a class="tree-card" href="denoise/types.html">
           <div class="num">types</div>
           <h3>Denoise modes &amp; traits</h3>
-          <p>DenoiseMode enum + DenoiseModeTraits resource needs.</p>
+          <p>DenoiseMode enum + rt_meta&#x27;s denoise policy functions.</p>
         </a>
         <a class="tree-card" href="denoise/oidn.html">
           <div class="num">oidn</div>

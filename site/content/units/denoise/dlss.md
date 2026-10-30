@@ -10,16 +10,15 @@ figures: [denoise-dlss-guides]
 
 OIDN is a post-process with a shopping list: the finished frame plus the albedo and
 normal AOVs the tracer already writes. Its one structural demand on the pipeline is
-a CPU readback — it is the only mode flagged `needs_cpu_readback`.
+a CPU readback — it is the only mode `denoiseNeedsCpuReadback` names.
 
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr bool needs_cpu_readback ="}}
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool denoiseNeedsCpuReadback(DenoiseMode m) noexcept { return m == DenoiseMode::OIDN; }"}}
 
 DLSS Ray Reconstruction is a different contract — a trained reconstruction network
 that owns the temporal history, so it dictates what the path tracer must emit
 before it produces anything at all. Passing `--denoise=dlssrr` stops the raygen
 accumulating, adds a deterministic Halton sub-pixel offset to the primary ray,
-repurposes one AOV binding into a different encoding, adds a second luminance clamp
-on top of the one the realtime profile already applies, and moves tonemapping into a
+repurposes one AOV binding into a different encoding, and moves tonemapping into a
 compute pass. This page is about that blast radius, and about the two pieces of it
 that are built but not wired.
 
@@ -58,11 +57,11 @@ size, because that is what the network reconstructs into:
 {{cite ohao/render/rt/path_tracer_images.cpp "// OUTPUT/display resolution: DLSS-RR upscales the render-res guide buffers"}}
 
 Binding 25 is not F0, whatever `pInSpecularAlbedo` suggests. The raygen writes
-`mix(F0, vec3(1.0), metallic)`: a dielectric carries its F0, a metal carries white,
-because a metal's F0 is already folded into the specular throughput and re-applying
-it at demodulation double-darkens the result.
+the primary hit's directional albedo toward the viewer (OpenPBR's `albedo(wo)`,
+from its energy tables) minus its diffuse albedo: the share of the surface's
+reflectance the specular lobes carry at this view, Fresnel and roughness included.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "firstHitSpecColor  = mix(F0, vec3(1.0), metallic);"}}
+{{cite shaders/rt/path_tracer.slang "specColor = max(a - diffAlbedo, float3(0.0));"}}
 
 One of the six does double duty. DLSS-RR accepts normals and roughness as one image
 if the feature is created in packed mode, which is what the create params ask for:
@@ -76,20 +75,19 @@ and then the *same* `NVSDK_NGX_Resource_VK` is handed to both eval slots:
 No image is dedicated to that encoding — the R10G10B10A2 pack at binding 26 is
 NRD's canonical encoder and its format is unsigned, while DLSS wants signed
 world-space normals. So binding 7 — the RGBA32F normal AOV every other denoiser
-reads as `N * 0.5 + 0.5` — is overwritten in place with the normal in `xyz` and
-perceptual roughness in `w`, gated on the DLSSRR push-constant flag so other modes
-stay byte-identical:
+reads as `N * 0.5 + 0.5` — holds the normal in `xyz` and the specular roughness in
+`w` instead, chosen by the DLSSRR push-constant flag in the one store the raygen
+makes to it, so other modes stay byte-identical:
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "imageStore(normalAOV, pixel, vec4(N, roughness));"}}
+{{cite shaders/rt/path_tracer.slang "normalAOV[pixel] = (flags & kFlagDLSSRR) != 0u ? float4(n, hit.specularRoughness) : float4(n * 0.5 + 0.5, 1.0);"}}
 
 {{figure denoise-dlss-guides "Conceptual: the guide-to-parameter mapping as it exists in dlss_rr.cpp and path_tracer_render.cpp. Binding numbers and formats read from the code; not a captured render."}}
 
 :::key
-That overwrite must stay *after* the ordinary `enableAOVs` normal write, not
-before it. Both stores target binding 7 and the DLSSRR store wins only because it
-is second. Reorder them while tidying the shading block and DLSS silently receives
-half-space-encoded normals — a guide that is wrong but never NaN, so nothing
-errors and the image just reconstructs badly.
+The two encodings share binding 7 and are told apart only by the DLSSRR flag. A
+second store to it elsewhere in the raygen would decide by ordering which survives,
+and a wrong one is never NaN: DLSS would silently receive half-space-encoded
+normals and reconstruct badly.
 :::
 
 ## Three conventions, and the one that only looks like one
@@ -106,7 +104,10 @@ the matrix handed to DLSS is `glm::inverse(pc.invProj)` — unjittered. The nega
 is nvpro-samples' convention for a projection jitter, and applies unchanged to a
 ray-coordinate jitter of the same sub-pixel size.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);"}}
+{{cite shaders/rt/path_tracer.slang "const float2 uv = (float2(pixel) + jit + pc.jitter.xy) / float2(size);"}}
+
+`jit` is the path's own uniform point in the pixel (the anti-aliasing); `pc.jitter`
+is the Halton offset, the same for every pixel of the frame.
 
 Motion vectors are the second sign. They are written by the raygen as
 `currPix - prevPix` where DLSS wants `prevPix - currPix`. Rather than rewrite the
@@ -138,50 +139,44 @@ in R32F, not a hardware depth buffer, so the feature declares it as such.
 
 ## Who owns the history
 
-DLSSRR is declared `wants_fresh_sample` in the render-mode traits, alongside
-à-trous and against NRD. That single trait forces the raygen's history counter to
-zero every frame, so the accumulation buffer holds a clean N-spp *frame* rather
-than a temporally accumulated average — the denoiser, not the tracer, integrates
-across time:
+DLSSRR is one of the two modes `tracerAccumulates` refuses in both profiles. The
+raygen's running mean is then given zero frames, so the accumulation buffer holds
+this frame's sample alone rather than an average — the denoiser, not the tracer,
+integrates across time:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = freshSample ? 0u : m_historyFrameCount;"}}
+{{cite ohao/render/rt/rt_meta.hpp "case DenoiseMode::DLSSRR: return false;"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;"}}
 
 Consequently `InReset` is raised only on a genuine first frame or an explicit
 accumulation reset, never on camera movement. Resetting on movement is the
-tempting alternative, and it is wrong for the same reason it was wrong for the
+tempting alternative, and it is wrong for the same reason it is wrong for the
 à-trous path: motion vectors exist so the network can reproject *through* camera
 motion, and discarding history every moved frame yields raw 1-spp noise for as
 long as the user keeps moving.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "ei.reset = (m_historyFrameCount == 0u);"}}
 
-## A second clamp on top of one that was already there
+## The clamp in front of the network
 
-The realtime profile is already a biased estimator, in every realtime mode and
-independent of the denoiser. `kRealtimeRTSettings` enables the firefly clamp at
-luminance 10.0; the raygen applies it per-contribution inside each NEE, env-sampling
-and GI branch, then once more to the whole radiance at 0.75× the threshold. Only the
-offline profile sets `enableFireflyClamp = false` and leaves the estimator alone,
-which is what the engine's no-bias-offline rule demands.
+Because DLSSRR keeps no running mean, the firefly clamp applies whenever the
+profile enables it: the clamp is gated on the trace *not* accumulating, since a
+running mean converges without it. The realtime profile enables it at luminance
+10.0; the offline profile disables it, which is what the engine's no-bias-offline
+rule demands.
 
 {{cite ohao/render/rt/rt_settings.hpp ".enableFireflyClamp = true,"}}
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "float realtimeClamp = pc.tuning.x * 0.75;"}}
+The raygen scales the whole path's radiance down to the threshold, once, before
+anything is stored:
+
+{{cite shaders/rt/path_tracer.slang "if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;"}}
 
 :::why
-DLSSRR adds a *third* clamp, at 10.0, applied to the accumulated pixel value just
-before the accumulation store and gated on the DLSSRR flag alone. It is not
-redundant: the 0.75× whole-radiance clamp runs before the ReSTIR GI term is added to
-`radiance`, so this is the only clamp that sees the final per-pixel sum. At 1 spp a
-stochastic bright pixel lands somewhere different each frame; a temporal
-reconstruction network reads that as motion and blinks. The rejected alternative was
-to let the network absorb the spikes — cheaper and one less bias, but that blink is
-exactly what this exists to remove. The threshold is not arbitrary either — the
-shader comment records the reason: 10.0 sits above the emissive HUD's ~5.7, so
-overlay glyphs survive the clamp.
+At one sample a frame a stochastic bright pixel lands somewhere different each
+frame; a temporal reconstruction network reads that as motion and blinks. The
+rejected alternative is to let the network absorb the spikes — one less bias, but
+that blink is exactly what the clamp exists to remove.
 :::
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "const float kFireflyMax = 10.0;"}}
 
 ## Display space, and why the beauty image still works
 
@@ -204,7 +199,7 @@ largest shift it can realise is one texel per axis:
 {{cite shaders/compute/dlss_tonemap.comp "ivec2 off = ivec2(d * s * r2 * 6.0);"}}
 
 The whole pass is downstream of the estimator, so none of it biases the render; the
-firefly clamps above do, and the two should not be confused.
+firefly clamp above does, and the two should not be confused.
 
 The pass writes back into `m_outputImage`, the same RGBA8 image the raygen would
 have written, which is why the DLSS result reaches the screen through the ordinary
@@ -216,30 +211,18 @@ the copy races the dispatch.
 
 Two subsystems here read as working features and are not.
 
-The specular hit-distance guide looks finished from either side alone: binding 35 is
-in the descriptor set *layout*, an R32F image is allocated at render resolution, the
-realtime raygen ends with an `imageStore` into it, and the wrapper forwards it as
-`pInSpecularHitDistance` whenever the view handle is non-null. Only the producer half
-is connected.
+The specular hit-distance guide is the first. The wrapper forwards a
+`pInSpecularHitDistance` whenever `EvalInputs` carries its view, and the tracer
+allocates an R32F image for it at render resolution:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(35, IMAGE, RGEN);   // DLSS-RR specular hit-distance guide (R32F)"}}
+{{cite ohao/render/rt/path_tracer_images.cpp "if (vkCreateImage(m_device, &imageInfo, nullptr, &m_specHitDistImage) != VK_SUCCESS) return false;"}}
 
-The write side works. The RT descriptor set is updated by exactly one
-`vkUpdateDescriptorSets`, and binding 35 is now among its writes — it has to be,
-because the realtime raygen stores to it every frame and an unwritten storage image
-there lost the device. A barrier takes the image from `UNDEFINED` to `GENERAL` before
-each trace (the raygen rewrites every pixel, so nothing is preserved), and the shader
-store lands in `m_specHitDistImage`:
+Nothing writes it — it is in no descriptor set, and the raygen has no store for it
+— and the one site that fills `EvalInputs` never assigns `specHitDistView`, so the
+guide is always omitted and the glossy-reflection reprojection it would feed is
+not in effect.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "addImage(35, &specHitDistInfo);"}}
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "imageStore(specHitDistAOV, pixel, vec4(specHitDist, 0.0, 0.0, 0.0));"}}
-
-The read side is still detached: the one site that fills `EvalInputs` never
-assigns `specHitDistView`, and the two `getSpecHitDistAOV*` accessors have no callers
-anywhere. The guide is always omitted, so the glossy-reflection reprojection it was
-written to fix is not in effect even though the image it would forward is now
-written every frame.
+{{cite ohao/render/rt/denoise/dlss_rr.cpp "const bool haveSpecHitDist = (in.specHitDistView != VK_NULL_HANDLE);"}}
 
 The upscaling presets are the second. `OHAO_DLSS_QUALITY` is parsed into a
 `DlssQuality`, and the tracer really does shrink its internal trace resolution to an
@@ -255,13 +238,14 @@ and the tonemap dispatches a render-res grid:
 {{cite ohao/render/rt/path_tracer_render.cpp "createFeature(cmd, m_width, m_height, m_width, m_height)"}}
 
 DLAA — native-resolution pure denoise, and the default — is therefore the only
-configuration that currently produces a full frame. An upscaling preset reduces
-the traced pixel count as advertised but leaves DLSS reconstructing to the reduced
-size inside output-sized images.
+configuration that produces a full frame. An upscaling preset reduces the traced
+pixel count as advertised but leaves DLSS reconstructing to the reduced size inside
+output-sized images.
 
 ## Contracts
 
-- The DLSSRR normal write must remain the last store to binding 7 in the raygen. Both encodings target the same image and only ordering decides which survives.
+- Binding 7 carries two encodings, chosen by the DLSSRR flag in the raygen's one store to it. Any second store to binding 7 must respect the same flag.
+- DLSSRR must stay in `tracerAccumulates`' refusing arms in both profiles; fed a running mean, the network would see a history that restarts on every moved view.
 - `createFeature` records GPU work into the command buffer it is given; the caller must submit that buffer or the feature is never really created.
 - Any render- or output-resolution change must release the feature and clear the init latch — an NGX feature is bound to the dimensions it was created with.
 - The tonemap's SPIR-V is found by a relative search list (`build/shaders/…`, `bin/shaders/…`), so the binary must launch from a directory where one of those resolves.

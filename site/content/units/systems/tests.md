@@ -15,17 +15,18 @@ committed one, and every decision here lives inside *diffed*.
 
 ## Determinism had to be bought before it could be tested
 
-You cannot diff renders that are not reproducible, and OHAO's were not. The
-raygens' temporal reprojection sampled the accumulation buffer at a *reprojected
-neighbour* pixel, and the realtime profile's in-shader spatial denoise read its
-neighbours too — texels that sibling invocations of the same dispatch write at the
-end of the very same shader. That is a cross-invocation read-after-write with no
-defined ordering, so a static scene did not render the same way twice. The cure is
-structural: the accumulation is a ping-pong pair, the trace writes this frame's and
-reads only the previous frame's, and the spatial denoise is a compute pass after
-the trace, when every texel it reads is finished.
+You cannot diff renders that are not reproducible. A trace that read the accumulation
+buffer at any pixel but its own — a reprojected neighbour, a filter's footprint — would
+read texels that sibling invocations of the same dispatch write at the end of the very
+same shader: a cross-invocation read-after-write with no defined ordering, so a static
+scene would not render the same way twice. The accumulation is therefore a ping-pong
+pair: the trace writes this frame's image and reads only the previous frame's, at its
+own pixel, and every filter that reads neighbours is a pass after the trace, when every
+texel it reads is finished.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumHistory;"}}
+{{cite shaders/rt/path_tracer.slang "RWTexture2D<float4> accumHistory;"}}
+
+{{cite shaders/rt/path_tracer.slang "const float4 prev = accumHistory[pixel];"}}
 
 What remains is not the engine's. The driver's BVH builder lays out a mesh's nodes
 differently run to run, and a ray that hits exactly on an edge two triangles share
@@ -117,33 +118,23 @@ offline profile's raygen, miss, closest hit and any hit.
 
 {{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};"}}
 
-The realtime profile shares none of those stages. `RTRealtimeRenderer` names the
-GLSL family — its own raygen and the GLSL miss, closest-hit and any-hit modules —
-so the offline goldens say nothing about any of its four stages, and
-`cornell_box_rt_realtime` is their only gate.
+The realtime profile runs the same four stages: `RTRealtimeRenderer` takes the same
+default shader set, so every path-traced golden gates the one tracer, and the realtime
+scenes differ only in the profile's settings — two bounces, and under
+`--denoise=none` a plain running mean of their 16 frames.
 
-{{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp ": RTProfileRendererBase(kRealtimeRTSettings, PathTracerShaderSet{}) {}   // rt/path_tracer.slang"}}
 
-The same split holds for includes. The reference imports two Slang modules, the
-generated `shared/layout` and the OpenPBR base, `material/openpbr`; the realtime
-raygen includes the GLSL headers `pbr_unpack.glsl`, `mis.glsl`,
-`env_sampling.glsl`, `sampler_api.glsl`, `nrd_frontend.glsl`, `ggx_aniso.glsl` and
-`pt_lights.glsl`, plus what those pull in turn — all of which only the realtime
-golden reaches.
+The tracer imports two Slang modules, the generated `shared/layout` and the OpenPBR
+base, `material/openpbr`, so the path-traced goldens also gate the BSDF the deferred
+frame shades with.
 
 {{cite shaders/rt/path_tracer.slang "import material.openpbr;"}}
 
-The realtime scene was added after `rt_realtime` lost the device and wrote an
-all-black frame — bindings 29–35 were never written into the descriptor set. It
-holds to the same 1-LSB floor as the offline scenes since its temporal history
-became the previous frame's image and its spatial denoise a pass after the trace.
-It also puts the PCG branch of `sampler_api.glsl` under the gate: the sampler is a
-specialization constant baked at pipeline creation and the realtime profile bakes
-PCG. The offline settings still name Sobol, but the reference raygen declares no
-such constant and draws from its own PCG stream, so the Sobol branch reaches no
-golden. What has no golden is every denoised path.
+The realtime scenes hold to the same 1-LSB floor as the offline ones. What has no
+golden is every denoised path, the realtime default (NRD) included.
 
-{{cite tests/golden/manifest.json "bindings 29-35 (reservoirs, spec hit-distance) were never written into the descriptor set"}}
+{{cite tests/golden/manifest.json "As cli_cornell_box, against cornell_box_rt_realtime's golden. Re-captured 2026-10-30 (frontier F1 T1)"}}
 
 The deferred pair covers the other half. They render the G-buffer, the cascaded
 shadow pass, deferred lighting, the post chain and, where the device supports it, the
@@ -226,24 +217,9 @@ $2^{31}$ the dimension-1 direction number is `0xFFFFFFFF`, which a naive
 
 {{cite tests/renderer/sobol_test.cpp "float v = SobolGenerator::sample1D(2147483648u, 1);"}}
 
-`SobolGenerator` and `owenScramble` have zero callers anywhere in the engine. The
-sampler that ships is the GLSL port in `shaders/includes/rt/sampler_sobol.glsl`;
-the C++ is a hand-maintained mirror kept as a testable oracle for it.
-
-{{cite ohao/render/rt/owen_scramble.hpp "keeping the two implementations in lock-step"}}
-
-Nothing automated enforces that mirroring — they do currently agree, hash
-constants and 24-bit shift included. A divergence on the GLSL side would not fail
-`sobol_test` at all; it would surface as a golden failure, because the offline
-profile's settings select Sobol.
-
-{{cite ohao/render/rt/rt_settings.hpp ".samplerType = SamplerType::Sobol,"}}
-
-That field is what actually reaches the shader: the pipeline builder copies
-`m_renderSettings.samplerType` into a `VkSpecializationInfo` for constant id 0,
-which is the `SAMPLER_TYPE` the dispatch functions in `sampler_api.glsl` branch on.
-
-{{cite ohao/render/rt/path_tracer_pipeline.cpp "uint32_t samplerTypeVal = static_cast<uint32_t>(m_renderSettings.samplerType);"}}
+`SobolGenerator` and `owenScramble` have zero callers anywhere in the engine, and no
+shader samples a Sobol sequence: the path tracer draws from its own PCG stream.
+`sobol_test` is what keeps the two C++ files correct; it gates nothing that renders.
 
 `env_cdf_test` asserts the invariants the GPU inverse-CDF lookup depends on:
 marginal and conditional rows monotone non-decreasing and terminating at 1.0, and
@@ -297,10 +273,10 @@ boxes exactly as double-sided ones.
 `EventBus` and `CommandHistory` — and a third, `Assets`, checks the loader's extension
 list; scene entities are covered by `ecs_tests`. The fourth, `runMetaTests`, is the only
 place the renderer's compile-time contracts are exercised at all:
-fourteen cases covering RT profile traits (offline four bounces, realtime two),
-`DenoiseModeTraits` against their runtime mirrors, `RTFeatureFlags` and
-`makeFeatureSettings`, `applyDenoisePolicy` and the jitter / fresh-sample /
-AOV-accumulation predicates, `as_span` and `span_covers_image`, `Result` and
+thirteen cases covering the two RT profiles (offline 32 bounces and OIDN, realtime
+two and NRD), the denoise policy (`denoiseNeeds*`, `tracerAccumulates` and
+`tracerAccumulatesAOVs` in each profile), the GPU layout sizes, `applyDenoisePolicy`
+and the jitter predicate, `as_span` and `span_covers_image`, `Result` and
 `VoidResult`, render-graph handles and the camera, physics
 handles with `ShapeInfo`, and a rigid body that exists and carries a name with no
 scene component behind it.

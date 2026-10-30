@@ -11,9 +11,9 @@ MODULE = {
         page(
             'types',
             'Denoise modes & traits',
-            'DenoiseMode enum + DenoiseModeTraits resource needs.',
+            'DenoiseMode enum + rt_meta\'s denoise policy functions.',
             files=['ohao/render/rt/denoise/denoise_types.hpp', 'ohao/render/rt/rt_meta.hpp', 'ohao/render/rt/denoiser.hpp'],
-            design=['DenoiseMode: None | OIDN | NRD | Atrous | DLSSRR (and related).', 'Traits declare which AOV guides each backend needs (albedo, normal, hit-dist, motion).', 'CLI: --denoise=dlssrr | nrd | oidn | atrous | none.'],
+            design=['DenoiseMode: None | OIDN | NRD | Atrous | DLSSRR (and related).', 'denoiseNeeds* functions say which AOV guides each backend needs (albedo, normal, hit-dist, motion); NRD is the realtime default.', 'CLI: --denoise=dlssrr | nrd | oidn | atrous | none.'],
         ),
         page(
             'oidn',
@@ -28,7 +28,7 @@ MODULE = {
             'Pack YCoCg, dispatch, unpack compose, cinematic post.',
             files=['ohao/render/rt/denoise/nrd_denoise.hpp', 'ohao/render/rt/denoise/nrd_compose.hpp', 'ohao/render/rt/denoise/nrd_cinematic.hpp', 'shaders/includes/rt/nrd_frontend.glsl', 'shaders/rt/nrd_compose.comp'],
             design=['REBLUR expects IN_DIFF/SPEC as YCoCg + normalized hit-distance — not linear RGB.', 'nrd_frontend.glsl: nrdPackRadianceHitDist / nrdYCoCgToLinear.', 'Compose unpacks after REBLUR; wrong pack = magenta or washed output (classic bug).', 'NrdCinematicPost optional bloom/DoF after stable denoised HDR.'],
-            workflow=['pack AOVs in raygen', 'NRD dispatch', 'nrd_compose.comp unpack', 'optional cinematic'],
+            workflow=['pack AOVs in path_tracer.slang\'s raygen', 'NRD dispatch', 'nrd_compose.comp unpack', 'optional cinematic'],
             why='Realtime temporal denoise that reuses engine AOVs already required for hybrid GI.',
         ),
         page(

@@ -19,7 +19,7 @@ bool PathTracer::createDescriptorResources() {
         props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         props.pNext = &indexing;
         vkGetPhysicalDeviceProperties2(m_physicalDevice, &props);
-        constexpr uint32_t kOtherResources = 64;   // the set's 36 other bindings, with margin
+        constexpr uint32_t kOtherResources = 64;   // the set's 25 other bindings, with margin
         const uint32_t perStageResources = indexing.maxPerStageUpdateAfterBindResources > kOtherResources
                                                ? indexing.maxPerStageUpdateAfterBindResources - kOtherResources
                                                : 1u;
@@ -53,7 +53,7 @@ bool PathTracer::createDescriptorResources() {
     add(1, IMAGE, RGEN);                                           // accumulation, this frame's (RGBA32F)
     add(2, IMAGE, RGEN);                                           // output (RGBA8)
     add(3, IMAGE, RGEN);                                           // accumulation, the previous frame's (read)
-    // RenderScene scene data, read by the hit shaders (pt_closesthit / pt_anyhit):
+    // RenderScene scene data, read by the hit shaders (closestHit / anyHit):
     add(4, BUFFER, HIT);    // vertex arena (Vertex = 25 floats)
     add(5, BUFFER, HIT);    // index arena (mesh-local indices)
     add(6, IMAGE, RGEN);    // albedo AOV (RGBA32F)
@@ -67,10 +67,6 @@ bool PathTracer::createDescriptorResources() {
     // (VUID 03004), and every set is allocated at the full capacity anyway.
     add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
-    add(13, IMAGE, RGEN);   // previous-frame surface history
-    add(14, IMAGE, RGEN);   // current-frame surface history
-    add(15, IMAGE, RGEN);   // previous-frame shading history
-    add(16, IMAGE, RGEN);   // current-frame shading history
     add(17, BUFFER, RGEN | MISS);   // env marginal CDF
     add(18, BUFFER, RGEN | MISS);   // env conditional CDF
     add(19, IMAGE, RGEN);   // motion vector AOV (RG16F) — Sub-plan 3.A
@@ -81,11 +77,6 @@ bool PathTracer::createDescriptorResources() {
     add(24, IMAGE, RGEN);   // diffuse albedo AOV (RGBA8) — Sub-plan 3.C.6
     add(25, IMAGE, RGEN);   // specular color AOV (RGBA8) — Sub-plan 3.C.6
     add(26, IMAGE, RGEN);   // normal+roughness packed AOV — Sub-plan 4.B
-    add(27, IMAGE, RGEN);   // NRD denoised diffuse — Sub-plan 4.C (raygen flag for layout parity)
-    add(28, IMAGE, RGEN);   // NRD denoised specular — Sub-plan 4.C
-    // 29-31: ReSTIR GI prev reservoir planes 0-2 (read); 32-34: curr planes 0-2 (write)
-    for (uint32_t b = 29; b <= 34; ++b) add(b, IMAGE, RGEN);
-    add(35, IMAGE, RGEN);   // DLSS-RR specular hit-distance guide (R32F)
     add(36, BUFFER, HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
     add(37, BUFFER, HIT);   // instance material refs
     add(38, BUFFER, RGEN);  // OpenPBR's energy tables (rt/path_tracer.slang)
@@ -109,7 +100,7 @@ bool PathTracer::createDescriptorResources() {
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},  // 1-3,6,7,13-16,19-35
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 13 * kSets},  // 1-3, 6, 7, 19-26
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18 + OpenPBR tables 38
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };

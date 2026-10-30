@@ -49,7 +49,7 @@ raygen, closest-hit, any-hit and miss stages —
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "add(37, BUFFER, HIT);"}}
 
 fifteen host-side checks are still a thin instrument. They catch *someone added
-a float to the struct*. They are blind to *someone reordered the GLSL block*, and
+a float to the struct*. They are blind to *someone reordered the shader's struct*, and
 blind by construction rather than by omission.
 
 `engine_tests` sits in the same tier and inherits the same ceiling: its GPU-layout
@@ -147,8 +147,8 @@ floor from non-associative GPU reduction order,
 {{cite tests/golden/render_golden.py "DEFAULT_MAX_ABS_DIFF = 4"}}
 
 which is the standard argument, and the corpus no longer leans on it: where a floor
-was found, it was traced to its cause and either removed (the deferred races, the
-realtime path tracer's) or measured and named (the BVH), and the tolerance set to
+was found, it was traced to its cause and either removed (the deferred races,
+a race in the path tracer) or measured and named (the BVH), and the tolerance set to
 exactly that.
 
 The two path-traced goldens are a hash of an unchanged sampler rather than a
@@ -188,17 +188,20 @@ scene. Each TLAS instance's custom index is the instance's slot in the
 and the hit shaders use that single number to fetch the instance row, which names
 the mesh, its index range and its material refs.
 
-{{cite shaders/rt/pt_closesthit.rchit "InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];"}}
+{{cite shaders/rt/path_tracer.slang "const uint4 info = asuint(instances[slot * stride + 8u]);   // mesh, refOffset, refCount, flags"}}
 
 That makes the instance key explicit — the same slot addresses the TLAS entry, the
 instance row and the draw list — but two positional joins survive underneath it.
-The per-triangle material slot is read at `triangleSlotOffset + gl_PrimitiveID`,
-so the slot stream must run parallel to the mesh's index order:
+The per-triangle material slot is read at the mesh's triangle-slot offset plus the
+primitive index, so the slot stream must run parallel to the mesh's index order:
 
-{{cite shaders/rt/pt_closesthit.rchit "uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];"}}
+{{cite shaders/rt/path_tracer.slang "const uint triSlot = triangleSlots[mesh.w + primitive];"}}
 
 and the slot indexes the instance's material refs, with anything past the ref count
-falling back to material 0 rather than failing:
+falling back to material 0 rather than failing — the same rule in the path tracer and
+in the raster passes' macro:
+
+{{cite shaders/rt/path_tracer.slang "c.material = triSlot < info.z ? materialRefs[info.y + triSlot] : 0u;"}}
 
 {{cite shaders/includes/scene/scene_data.glsl "((slot) < (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)"}}
 
@@ -242,7 +245,7 @@ a key column in the hot path.
 :::
 
 :::key
-Every invariant in this engine that spans the C++/GLSL boundary is enforced by a
+Every invariant in this engine that spans the C++/shader boundary is enforced by a
 person reading two files. The compile-time asserts stop at the boundary,
 validation is opt-in, the golden corpus is coarse, and no
 automation starts any of them.

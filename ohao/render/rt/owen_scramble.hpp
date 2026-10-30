@@ -7,7 +7,7 @@
 // which composes several rounds of bit-level XOR/shift/multiply. Cheap on
 // GPU, deterministic, produces per-pixel decorrelation.
 //
-// The GLSL implementation in shaders/includes/rt/sampler_sobol.glsl mirrors
+// rt/path_tracer.slang's sampler (frontier F1 T2) mirrors
 // this exactly; keeping the two implementations in lock-step lets the CPU
 // unit tests validate the GPU algorithm.
 

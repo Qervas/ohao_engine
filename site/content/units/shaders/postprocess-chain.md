@@ -75,15 +75,14 @@ SSS's is 48. The generated C++ structs assert both sizes:
 
 Nothing checks the budget against the device. The pipeline layout is created
 straight from `sizeof` of the struct with no query of `maxPushConstantsSize`, and
-the only place the limit is reasoned about at all is a path-tracer comment that
-assumes a 256-byte device. Outside this directory the same helper builds SSAO, whose
+the path tracer's 256-byte block simply assumes a device that allows it. Outside this directory the same helper builds SSAO, whose
 block is held to the 128-byte guarantee at compile time: its 16 noise rotations travel
 as 4-bit strata indices, two uints.
 
 {{cite ohao/render/deferred/ssao_pass.cpp "static_assert(sizeof(shared::SSAOPush) <= 128);"}}
 
 {{cite ohao/render/deferred/ssr_pass.cpp "sizeof(gpu::shared::SSRPush), m_pipelineLayout, m_pipeline) ||"}}
-{{cite ohao/render/rt/path_tracer_render.cpp "256-byte device maxPushConstantsSize"}}
+{{cite ohao/render/rt/path_tracer.hpp "};  // total = 256 bytes"}}
 
 :::why
 Pushing everything, rather than giving each pass a small uniform buffer, is what

@@ -7,7 +7,7 @@
 // Used for:
 //   - Unit testing the GLSL Sobol sampler (shader mirrors this math exactly)
 //   - Generating the constant table committed as
-//     shaders/includes/rt/sampler_sobol_tables.glsl
+//     the tables rt/path_tracer.slang's sampler reads (frontier F1 T2)
 //
 // Pure CPU. No Vulkan dependency.
 

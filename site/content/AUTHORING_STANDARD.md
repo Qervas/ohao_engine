@@ -19,9 +19,8 @@ even called. Two earlier drafts of the exemplar cited real, uniquely-resolving
 lines and were still wrong:
 
 - They attributed the deferred pipeline's multi-scatter compensation to the path
-  tracer. In fact `brdf_ggx.glsl`'s `evaluateBRDF` was then called only from the
-  raster lighting shaders; the path tracer included `ggx_aniso.glsl` instead and
-  had no such term.
+  tracer. In fact the compensation was called only from the raster lighting
+  shaders; the path tracer had its own GGX and no such term.
 - They called a `(r+1)²/8` remap "dead code" because the *named* function
   `geometrySchlickGGX` had no callers — while the identical formula was inlined
   in every NEE branch of the raygen shaders of the time. Function unused ≠ formula unused.
@@ -32,12 +31,10 @@ lines and were still wrong:
   fact worth stating, but check for inlined copies of the same math first.
 - For a shader claim, trace the `#include` graph: which stage pulls this file?
   `grep -rn "include.*<file>" shaders/`
-- For "the path tracer does X", know *which* shader set. `PathTracerShaderSet`'s
-  default, which `RTOfflineRenderer` uses, is the Slang reference
-  `shaders/rt/path_tracer.slang` (see `ohao/render/rt/path_tracer.hpp`);
-  `RTRealtimeRenderer` binds the GLSL `pt_raygen_realtime.rgen` with
-  `pt_closesthit`/`pt_anyhit`/`pt_miss` (`ohao/render/rt/rt_profile_renderer.hpp`).
-  They are different integrators and genuinely differ in behaviour.
+- For "the path tracer does X", know *which* profile. Both RT profiles run
+  `shaders/rt/path_tracer.slang` (`PathTracerShaderSet`'s default, see
+  `ohao/render/rt/path_tracer.hpp`); they differ in their settings
+  (`ohao/render/rt/rt_settings.hpp`): bounces, accumulation, the denoiser.
 - If you cannot verify a claim, **do not make it**. A shorter true page beats a
   longer plausible one. Say "not verified here" or omit.
 - Where the code has a real limitation, say so. Honest gaps are the most

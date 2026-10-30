@@ -142,7 +142,7 @@ void main() {
     if (dot(geometric, N) > 0.0) N = -N;
 
     // Albedo: the material's base colour, times the albedo texture when there is one, as the
-    // path tracer's hit computes it (rt/pt_closesthit.rchit). The vertex colour is not a
+    // path tracer's hit computes it (rt/path_tracer.slang's closestHit). The vertex colour is not a
     // factor: primitives carry their colour as vertex colour and base colour both, and
     // multiplying the two squared it.
     uint albedoTexIdx = floatBitsToUint(row0.w);

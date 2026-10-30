@@ -115,14 +115,13 @@ The RT path discards the camera's matrix and builds a fresh one from the camera'
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);"}}
 
-The comment above that line says it uses the same FOV and aspect as deferred, for consistent framing. Only the FOV half of that reaches a ray. `PathTracer::render` inverts the matrix into the 256-byte push-constant block, and the ray-generation code in both raygens the two RT profiles bind — `pt_raygen_realtime.rgen` for `RTRealtime`, `rt/path_tracer.slang`'s `raygen` for `RTOffline` — takes exactly one number out of `invProj`: element `[1][1]`, which for a `glm::perspective` matrix is $\tan(\theta_v/2)$ and carries no aspect at all. The horizontal extent is rebuilt inside the shader from the framebuffer dimensions the push constant already carries in `params.xy`.
+The comment above that line says it uses the same FOV and aspect as deferred, for consistent framing. Only the FOV half of that reaches a ray. `PathTracer::render` inverts the matrix into the 256-byte push-constant block, and the raygen both RT profiles bind, `rt/path_tracer.slang`'s `raygen`, takes exactly one number out of `invProj`: element `[1][1]`, which for a `glm::perspective` matrix is $\tan(\theta_v/2)$ and carries no aspect at all. The horizontal extent is rebuilt inside the shader from the framebuffer dimensions the push constant already carries in `params.xy`.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "float tanFovX = tanFovY * aspect;"}}
 {{cite shaders/rt/path_tracer.slang "const float tanX = tanY * float(size.x) / float(size.y);"}}
 
-So the aspect argument at the `glm::perspective` call reaches no ray: passing 1.6 there would leave every primary direction bit-identical. It is not wholly dead — the realtime raygen inverts `invProj` back into a view-projection matrix for the motion-vector AOV, and that use is aspect-sensitive (the reference reads the previous frame's `prevViewProj` instead) — but it has no say in the framing.
+So the aspect argument at the `glm::perspective` call reaches no ray: passing 1.6 there would leave every primary direction bit-identical. It is not wholly dead — the host keeps `proj * view` as next frame's `prevViewProj`, through which the raygen projects a hit into last frame's pixel for the motion-vector AOV, and that use is aspect-sensitive — but it has no say in the framing.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "mat4 currViewProj = inverse(pc.invProj) * inverse(pc.invView);"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "m_prevViewProj = proj * view;"}}
 
 The framing still diverges, one layer lower down.
 

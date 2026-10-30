@@ -6,7 +6,7 @@ standard: v2
 figures: [denoise-types-modeflow]
 ---
 
-## Five values, and a hole where OptiX used to be
+## Five values, numbered with a gap
 
 `DenoiseMode` is the single token every part of the RT stack uses to say which
 denoiser is in play, and its enumerators are numbered explicitly and
@@ -51,52 +51,40 @@ live `VkImage`, returns success, and hands back contents nothing ever wrote.
 Degrading at parse time keeps that mode out of the switch entirely.
 :::
 
-## The same table written twice
+## What each denoiser asks of the trace
 
-`rt_meta.hpp` states the per-mode requirements once as a class template whose
-members are constant expressions, then again as free functions that switch on a
-runtime value and return the corresponding trait. Both spellings exist because
-the two callers differ: `if constexpr` needs the compile-time form, a mode that
-arrived from `argv` needs the runtime one.
+`rt_meta.hpp` states the per-mode requirements once, as plain `constexpr`
+functions of a `DenoiseMode` (or of a whole `RTRenderSettings`), usable both in
+constant expressions and on a mode that arrived from `argv`:
 
-`DenoiseModeTraits` is not the dead half. The runtime functions do not restate
-its table; they switch on the mode and return the trait, so editing the class is
-what changes behaviour — with one exception, below. What is unreached is the
-`if constexpr` convenience layer stacked on top of it: `RTFeatureFlags` is named
-only by `tests/engine/engine_tests.cpp`, `makeFeatureSettings` only there and
-inside `PathTracer::setFeatureSettings`, and `setFeatureSettings` itself has no
-callers anywhere in the tree. The chain ends in the test file or in nothing.
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool denoiseNeedsMotionVectors(DenoiseMode m) noexcept {"}}
 
-The seam is in the runtime mirror. Every query delegates to the trait class
-except the AOV-accumulation one, which restates the predicate directly:
+Each is a direct predicate: motion vectors for NRD, à-trous and DLSS RR; the
+diffuse/specular split for NRD; a CPU readback for OIDN; sub-pixel jitter for NRD
+and DLSS RR. There is no `switch` with a `default:` arm and no trait class behind
+them, so a sixth enumerator answers `false` to every requirement until a predicate
+names it, and no diagnostic says so.
 
-{{cite ohao/render/rt/rt_meta.hpp "constexpr bool denoiseNeedsAovAccumulation(DenoiseMode m) noexcept {"}}
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr bool needs_aov_accumulation ="}}
+Two of the functions take the settings rather than the mode, because the answer
+depends on the profile as well:
 
-Editing `needs_aov_accumulation` in the traits class therefore changes nothing
-that runs. It is the one place where the header's "same numbers, switch →
-traits" promise is not kept.
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool tracerAccumulates(const RTRenderSettings& s) noexcept {"}}
 
-A second seam is structural. The five requirement queries — CPU readback, motion
-vectors, diff/spec split, pixel jitter, fresh sample — each carry a `default:`
-arm, so a sixth enumerator would silently answer `false` to all of them. The
-three exhaustive ones (`denoiseModeName`, `isValidDenoiseMode`,
-`denoiseIsRealtimeCapable`) list every case and then fall through to a trailing
-`return`, so the same enumerator would read as invalid and print as `"unknown"`.
-The project's CMake adds no `-Wall` or `-Werror`, which leaves `-Wswitch` off, so
-neither shape produces a diagnostic: a newly added mode arrives requiring
-nothing, and the build stays green.
+`tracerAccumulates` says whether the trace keeps its own running mean of the
+beauty. À-trous and DLSS RR never let it: each is temporal and carries the
+history itself, taking this frame's sample alone. NRD lets it only offline, where
+it denoises the mean of a still view's samples; realtime NRD reprojects its own
+history through the motion vectors. `None` and `OIDN` always accumulate.
+`tracerAccumulatesAOVs` is the matching question for NRD's five guide images:
+true only for offline NRD.
 
-## What the traits actually gate
+## What the policy gates
 
-Three trait queries reach the raygen from inside the tracer's per-frame record,
-all as push-constant state rather than as pipeline selection. The other three —
-motion vectors, diff/spec split, CPU readback — have their only production
-consumer in `applyDenoisePolicy`, two sections down.
-
-Sub-pixel jitter is the first: for `NRD` and `DLSSRR`, the tracer offsets the
-sample grid by a Halton(2,3) point each frame so the denoiser's temporal
-accumulation integrates a wider footprint than centre-sampling would.
+Three answers reach the raygen inside the tracer's per-frame record, all as
+push-constant state rather than as pipeline selection. Sub-pixel jitter is the
+first: for `NRD` and `DLSSRR`, the tracer offsets the sample grid by a
+Halton(2,3) point each frame so the denoiser's temporal accumulation integrates a
+wider footprint than centre-sampling would.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (denoiseNeedsPixelJitter(m_renderSettings.denoiseMode)) {"}}
 
@@ -113,56 +101,63 @@ slots in the period:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t idx = (m_haltonIndex % 16u) + 1u;"}}
 
-Second, `denoiseNeedsAovAccumulation` sets a raygen control bit that makes the
-five NRD guide images hold a running mean over the frame's samples instead of
-the last one. Third, `denoiseWantsFreshSample` zeroes the history counter the
-raygen uses, so the beauty image is a genuine 1-spp sample and the denoiser —
-not the tracer — owns temporal integration:
+Second, `tracerAccumulates` sets how many frames the raygen's running mean
+already holds. The tracer keeps two clocks: `m_historyFrameCount`, the denoisers'
+history, which only `resetAccumulation` restarts, and `m_accumFrames`, the
+trace's own mean, which a moved view restarts. The push constant carries the
+second, or 0 when a temporal denoiser takes this frame's sample alone:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = freshSample ? 0u : m_historyFrameCount;"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;"}}
 
-## The copy the tracer reads is not the copy you set
+The same answer gates the firefly clamp. The clamp is biased, and a running mean
+converges without it, so it is applied only when the trace does not accumulate:
+
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.enableFireflyClamp && !tracerAccumulates(m_renderSettings))"}}
+
+Third, `tracerAccumulatesAOVs` sets a raygen control bit that makes the five NRD
+guide images hold the running mean of the accumulated frames instead of the last
+one, so offline `--spp N` feeds NRD an N-sample mean:
+
+{{cite ohao/render/rt/path_tracer_render.cpp "if (tracerAccumulatesAOVs(m_renderSettings)) pc.control.x |= kPTFlagAccumulateAOVs;"}}
+
+The denoisers' own resets read the other clock: à-trous, DLSS RR and NRD restart
+their history only when `m_historyFrameCount` is 0, so a moved view reprojects
+through the motion vectors instead of starting over.
+
+{{cite ohao/render/rt/path_tracer_render.cpp "camera.frameIndex = m_historyFrameCount;   // 0 only after resetAccumulation: a moved view reprojects"}}
+
+## The copy the tracer reads, and the override
 
 The mode is stored twice. `--denoise` writes `VulkanRenderer::m_denoiseMode` and
 latches an override flag; the path tracer reads its own
-`RTRenderSettings::denoiseMode`, which is overwritten from the active RT
-pipeline's defaults at the top of every frame:
+`RTRenderSettings::denoiseMode`, which is reset to the active profile's defaults
+at the top of every RT frame:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = pipeline.getDefaultSettings();"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = defaults;"}}
 
-Immediately afterwards the user's choice is re-seeded into it — but only when
-`--denoise` latched the override, and then only for the three modes the tracer
-dispatches itself:
+`applyRTRenderSettings` then re-injects the user's choice, whatever it is —
+`None` and `OIDN` included, because the tracer's running mean and firefly clamp
+follow the mode:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "(m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR ||"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
-So the set of values that can actually appear in
-`PathTracer::m_renderSettings.denoiseMode` during a frame is: `None` (the
-realtime profile default), `OIDN` (the offline profile default), `Atrous`,
-`DLSSRR` and `NRD`. `None` and `OIDN` keep the profile default untouched: OIDN
-runs on the CPU inside `readback()` and never enters the tracer. The aniso, SSS,
-and samples-per-frame fields survive the same reset for every mode.
+Without an override, the profile default stands: NRD for the realtime profile,
+OIDN for the offline one. OIDN runs on the CPU inside `readback()` and dispatches
+nothing in the tracer.
 
+{{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 
-{{figure denoise-types-modeflow "Conceptual data flow, not measured: how the parsed mode reaches its two independent storage sites and which readers consult each. Box contents are read from renderer.cpp, rt_settings.hpp and path_tracer_render.cpp."}}
+{{figure denoise-types-modeflow "Conceptual data flow, not measured: how the parsed mode reaches its two storage sites and which readers consult each. Box contents are read from renderer.cpp, rt_settings.hpp and path_tracer_render.cpp."}}
 
-NRD joined the re-seed in sub-project 2b step 5. Until then its dispatch did not
-consult the mode at all: REBLUR, compose and the cinematic chain ran on every RT
-frame of a profile with auxiliary AOVs, whatever the user asked for, and the
-override never needed to reach the tracer — so it never did. The chain is now
-gated on the mode as well:
+The NRD chain is gated on the mode, so it runs only when NRD was chosen:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
-and under `--denoise=nrd` the two traits whose definitions name NRD first,
-`denoiseNeedsPixelJitter` and `denoiseNeedsAovAccumulation`, finally evaluate
-`true`: Halton jitter and multi-sample AOV averaging reach the frames NRD
-denoises.
-
 :::key
-`DenoiseMode` decides two things: which GPU denoiser the tracer dispatches
-(Atrous, DLSS-RR, NRD — none of them run unasked) and which image `readback()`
+`DenoiseMode` decides three things: which GPU denoiser the tracer dispatches
+(à-trous, DLSS RR, NRD — none of them run unasked), whether the trace keeps its
+own running mean (and with it the firefly clamp), and which image `readback()`
 hands back. The profile default fills it when the user names no mode.
 :::
 
@@ -172,56 +167,27 @@ One function reconciles a mode with the settings it needs, and it has exactly
 one production call site — the tracer's settings setter, which every path
 funnels through:
 
-{{cite ohao/render/rt/rt_meta.hpp "constexpr RTRenderSettings applyDenoisePolicy(RTRenderSettings s) noexcept {"}}
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr RTRenderSettings applyDenoisePolicy(RTRenderSettings s) noexcept {"}}
 {{cite ohao/render/rt/path_tracer.cpp "m_renderSettings = applyDenoisePolicy(settings);"}}
 
 Both of its rules are monotone — they only flip a flag from false to true — which
 is what makes it safe on every frame's settings push. It is also, on every input
 the running engine can produce, a no-op: both stock profiles already set
-`enableAuxiliaryAOVs`, and the only mode wanting CPU readback (OIDN) only ever
-arrives attached to the offline profile, which already allows an external
-denoiser. The unit test hand-constructs `enableAuxiliaryAOVs = false` — a state
-no pipeline default produces — to make the function do any work at all.
+`enableAuxiliaryAOVs` and `allowExternalDenoiser`.
 
-What it does *not* do is reject. The traits declare capability —
+What it does *not* do is reject. Capability is declared —
 
-{{cite ohao/render/rt/rt_meta.hpp "static constexpr bool is_realtime_capable ="}}
+{{cite ohao/render/rt/rt_meta.hpp "[[nodiscard]] constexpr bool denoiseIsRealtimeCapable(DenoiseMode m) noexcept { return m != DenoiseMode::OIDN; }"}}
 
-— but nothing consults capability before running a mode.
-`denoiseIsRealtimeCapable`'s only caller is an assertion in the engine test
-suite; `is_offline_capable` has no caller at all, tests included — its definition
-is its sole occurrence in the tree. `isValidDenoiseMode` is uncalled too, and
-guards a boundary that does not exist: no integer is ever cast into a
+— but nothing consults it before running a mode: its only caller is an assertion
+in the engine test suite. `isValidDenoiseMode` and `denoiseModeIndex` have no
+callers, and guard a boundary that does not exist: no integer is ever cast into a
 `DenoiseMode` anywhere.
-
-## A header and a shader that were never wired
-
-`denoiser.hpp` declared `RTDenoiser`, an à-trous wavelet filter with an
-`init`/`denoise`/`destroy` shape and a five-iteration default. No matching
-`.cpp` was ever committed, and no translation unit ever included the header: the
-identifier appeared exactly once in the repository, at its own declaration, whose
-own comment pointed at the replacement. **Both have since been deleted** — this
-section is kept for the trap, not the file.
-
-Both halves landed dead, together, in commit `3e48342` — a bilateral-filter
-change whose message says the compute shader was "added for future multi-pass
-A-Trous implementation — not wired up yet". `denoise_atrous.comp` matches the
-never-implemented class exactly: four bindings in the order `denoise()` took
-its views, and the identical `{stepSize, sigmaColor, sigmaNormal, sigmaDepth}`
-push block.
-
-Its shader was still being compiled into
-`build/shaders/compute_denoise_atrous.comp.spv` with nothing loading it. The live
-`DenoiseMode::Atrous` path is a later, unrelated implementation: full SVGF, two
-compute passes with persistent history, driven by `AtrousDenoiser` out of
-`shaders/rt/`. The header and the shader have both been deleted. The lesson
-outlives them: assuming a file name tells you which à-trous is running is how two
-dead halves survived this long next to a live implementation sharing their name.
 
 ## Contracts
 
-- `applyDenoisePolicy` runs on every per-frame settings push, so it must stay monotone and idempotent. A rule that clears a flag would fight the pipeline defaults once per frame.
-- Adding a `DenoiseMode` means touching `denoiseModeName`, `isValidDenoiseMode`, the traits class, and every `default:`-carrying runtime mirror. Nothing in the build will tell you if you miss one.
-- `denoiseNeedsAovAccumulation` bypasses `DenoiseModeTraits`. Change the trait and the free function together or they disagree silently.
-- A mode that must influence the raygen has to survive the per-frame reset in `prepareRTSceneForFrame`, i.e. be listed in the re-seed condition in `applyRTRenderSettings`. Setting it once through `setRTRenderSettings` does not stick.
+- `applyDenoisePolicy` runs on every per-frame settings push, so it must stay monotone and idempotent. A rule that clears a flag would fight the profile defaults once per frame.
+- Adding a `DenoiseMode` means touching `denoiseModeName`, `isValidDenoiseMode` and every predicate in `rt_meta.hpp` that should name it. Nothing in the build will tell you if you miss one.
+- A temporal denoiser must be named in `tracerAccumulates`' non-accumulating arms, or the trace hands it a running mean that a moved view restarts.
+- The tracer's mode is reset to the profile default every RT frame; a user's choice reaches it only through `applyRTRenderSettings`. Setting it once through `setRTRenderSettings` does not stick unless `setDenoiseMode` latched the override.
 - `parseDenoiseMode` must never return a mode whose backend was compiled out; the denoise switch in `readback()` assumes the mode implies its resources were written.

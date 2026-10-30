@@ -5,29 +5,25 @@ title: Raygen integrator
 standard: v2
 ---
 
-## Two raygens, one per profile
+## One raygen, both profiles
 
-Each ray-tracing profile binds its own ray-generation program. `RTOfflineRenderer`
-takes `PathTracerShaderSet`'s default, the reference path tracer in
-`rt/path_tracer.slang`, whose four stages are entry points of one Slang file:
+Both ray-tracing profiles bind the same ray-generation program: `PathTracerShaderSet`'s
+default, the path tracer in `rt/path_tracer.slang`, whose four stages are entry points
+of one Slang file:
 
 {{cite ohao/render/rt/path_tracer.hpp "rt_path_tracer.slang.raygen.spv"}}
-{{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)"}}
+{{cite ohao/render/rt/rt_profile_renderer.hpp ": RTProfileRendererBase(kRealtimeRTSettings, PathTracerShaderSet{}) {}   // rt/path_tracer.slang"}}
 
-`RTRealtimeRenderer` names the GLSL set, `pt_raygen_realtime.rgen` with its
-closest-hit, any-hit and miss, every entry `main`:
-
-{{cite ohao/render/rt/rt_profile_renderer.hpp "// GLSL: every stage's entry is main"}}
-
-The base installs the profile's set on the `PathTracer` before the pipeline is
-built, so the set a profile names is the one that runs:
+The base installs the set on the `PathTracer` before the pipeline is built:
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
 
-The two raygens are different integrators. The reference one is the estimator the
-deferred frame is judged by; the realtime one trades bias for a frame budget.
+The program is a correct estimator of OpenPBR's base, the reference the deferred frame
+is judged by. The profiles differ only in settings: the realtime one traces two bounces
+a frame for NRD to denoise, the offline one 32 into a running mean (see the profiles
+page).
 
-## The reference: one path a sample
+## One path a sample
 
 `path_tracer.slang`'s raygen traces one path per pixel per dispatch through
 OpenPBR's base BSDF (`material/openpbr.slang`). At every surface vertex it does
@@ -152,7 +148,7 @@ weighted.
 {{cite shaders/rt/path_tracer.slang "if (stop || depth > bounces) break;"}}
 
 Random numbers are one PCG stream per pixel and sample, seeded from the pixel and
-the sample index; the reference does not use the GLSL sampler API.
+the sample index.
 
 {{cite shaders/rt/path_tracer.slang "rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));"}}
 
@@ -168,14 +164,21 @@ Rays leave 1 mm off the surface along the geometric normal on the side the ray c
 from, and a light or environment sample on the other side of that normal is
 rejected.
 
-## What the reference writes
+## What the raygen writes
 
-Besides radiance, the raygen writes the running mean of every sample since the last
-reset (binding 1, read from the previous frame's image at binding 3: the offline
-camera is still, and a view change resets), the ACES image at exposure 0.5 (binding
-2), OIDN's albedo and normal, and NRD's and DLSS's guides.
+Besides radiance, the raygen writes the running mean of every sample since the view
+last moved (binding 1, read from the previous frame's image at binding 3), the ACES
+image at exposure 0.5 (binding 2), OIDN's albedo and normal, and NRD's and DLSS's
+guides. The host says how many frames the mean already holds in `control.y`; 0 means
+this frame's sample alone, which is what a temporal denoiser takes.
 
 {{cite shaders/rt/path_tracer.slang "acc = (prev.rgb * prev.w + radiance) / count;"}}
+
+Motion vectors are written whenever last frame's view-projection belongs to a rendered
+frame (`control.z`), whether or not the trace accumulates, so a temporal denoiser can
+reproject across a moved view:
+
+{{cite shaders/rt/path_tracer.slang "if (pc.control.z != 0u)"}}
 
 The NRD split is by the lobe the first vertex sampled: everything after a diffuse
 first bounce goes to the diffuse image, after a specular one to the specular image.
@@ -190,53 +193,29 @@ Read from the code: a metal's diffuse albedo is 0, so its direct specular, which
 in the diffuse image, is multiplied by 0 when the compositor remodulates. The OIDN
 path and the plain accumulation are not affected.
 
-## The realtime raygen
+## 256 bytes of push constants
 
-`pt_raygen_realtime.rgen` keeps the GLSL design: at the first hit it forks a specular
-and a diffuse sub-path, each with its own throughput, so REBLUR and DLSS-RR get both
-channels every frame. Sphere lights are sampled by their subtended cone, the first
-glossy bounce by GGX's visible normals, and the diffuse sub-path is a ReSTIR GI
-reservoir with temporal and spatial reuse.
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "weight = 6.2831853 * (1.0 - cosThetaMax);"}}
-{{cite shaders/rt/pt_raygen_realtime.rgen "specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);"}}
-{{cite shaders/rt/pt_raygen_realtime.rgen "giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);"}}
-
-Past the first bounce its specular chain still jitters the mirror direction by a
-roughness-scaled cosine vector and carries `mix(1, albedo, metallic)` without a
-density, so it is not an estimator of any BSDF; it is a fast approximation that the
-reference exists to check.
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;"}}
-
-## Two fields in one word, because the push constant is full
-
-`params.w` carries `maxBounces` in its low 16 bits and the realtime per-frame sample
-count in its high 16. The push-constant block is three `mat4`s, two `uvec4`s and two
-`vec4`s, exactly 256 bytes, and a static assert holds it there. That 256 is a device
-limit, not a spec floor: core Vulkan only guarantees 128 bytes.
+The push-constant block is three `mat4`s, two `uvec4`s and two `vec4`s, exactly 256
+bytes, and a static assert holds it there. That 256 is a device limit, not a spec
+floor: core Vulkan only guarantees 128 bytes.
 
 {{cite ohao/render/rt/path_tracer.hpp "OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);"}}
-{{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);"}}
-
-The realtime raygen loops that many decorrelated paths per dispatch; the reference
-masks the high half off and traces one.
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "uint samplesPerFrame = max(pc.params.w >> 16, 1u);"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces);"}}
 
 :::key
-The offline profile's pixels come from `path_tracer.slang`: one path a sample,
-next-event estimation to one light and to the environment, BSDF sampling of OpenPBR's
-base, every strategy weighted by the power heuristic, Russian roulette from the third
-vertex. The realtime profile's come from `pt_raygen_realtime.rgen`, a split diffuse and
-specular tracer built for the denoisers.
+Every path-traced pixel comes from `path_tracer.slang`: one path a sample, next-event
+estimation to one light and to the environment, BSDF sampling of OpenPBR's base, every
+strategy weighted by the power heuristic, Russian roulette from the third vertex. The
+realtime profile is the same estimator at two bounces, its frames denoised instead of
+averaged.
 :::
 
 ## Contracts
 
-- A profile's raygen is the one its `PathTracerShaderSet` names: the default (the Slang reference) for `RTOfflineRenderer`, the GLSL realtime set for `RTRealtimeRenderer`. A set's entry names must match its SPIR-V (`raygen`, `closestHit`, `anyHit`, `miss` for Slang; `main` for GLSL).
+- Both profiles run `PathTracerShaderSet`'s default. A set's entry names must match its SPIR-V (`raygen`, `closestHit`, `anyHit`, `miss`).
 - A light found by both strategies must be weighted on both sides. A bounce ray meets an emitter only when its mask includes `kTlasMaskEmitter`; a light with no emitter mesh must not be flagged by `LightTable::setEmitterLights`, or its light sampling is halved for a hit that never comes.
 - An emitter instance's `emitterLight.w` is its light's index in the RT light buffer. If the two orders differ, a bounce ray weighs one light's emission against another's density.
-- Emissive surfaces reach the reference by BSDF sampling only. Putting proxy lights for them back into the RT buffer counts their light twice.
+- Emissive surfaces reach the path tracer by BSDF sampling only. Putting proxy lights for them back into the RT buffer counts their light twice.
 - A shadow ray's payload must start with `kHit` set; with the closest hit skipped, nothing else sets it on a hit.
-- The bounce cap lives in `params.w`'s low 16 bits; the high 16 are the realtime samples per frame.
+- The bounce cap lives in `params.w`'s low 16 bits.
+- `control.y` is the number of frames already in the running mean; the raygen reads the history image only when it is above zero.

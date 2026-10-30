@@ -60,14 +60,13 @@ struct PushConstants
     float4 invProj[4];
     float4 prevViewProj[4];
     uint4 params;    // x width, y height, z sample index, w bounces (low 16)
-    uint4 control;   // x flags, y history frames, w the environment CDF's width
+    uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment CDF's width
     float4 tuning;   // x firefly clamp, y the environment CDF's height
     float4 jitter;   // xy NRD's sub-pixel offset
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> pc;
 
 static const uint kFlagAOVs = 1u;
-static const uint kFlagInternalDenoise = 2u;
 static const uint kFlagFireflyClamp = 4u;
 static const uint kFlagAccumulateAOVs = 8u;
 static const uint kFlagDLSSRR = 16u;
@@ -340,7 +339,7 @@ uint searchCdf(StructuredBuffer<float> cdf, uint base, uint n, float u)
     return lo;
 }
 
-// The density (solid angle) of a direction under the environment's CDF (env_sampling's texel
+// The density (solid angle) of a direction under the environment's CDF (render/rt/env_cdf's texel
 // histogram: piecewise constant in (u, v)).
 float envPdf(float3 dir)
 {
@@ -449,7 +448,7 @@ void raygen()
     const uint bounces = pc.params.w & 0xFFFFu;
     const uint flags = pc.control.x;
     const bool accumulateAOVs = (flags & kFlagAccumulateAOVs) != 0u;
-    const bool blendAOVs = accumulateAOVs && pc.params.z > 0u;
+    const bool blendAOVs = accumulateAOVs && pc.control.y > 0u;
     Rng rng;
     rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));
 
@@ -531,7 +530,7 @@ void raygen()
             if (firstHitT > 0.0)
             {
                 viewZ = dot(hit.position - camPos, fwd);
-                if (pc.control.y > 0u)
+                if (pc.control.z != 0u)
                 {
                     const float4 prev = pc.prevViewProj[0] * hit.position.x + pc.prevViewProj[1] * hit.position.y +
                                         pc.prevViewProj[2] * hit.position.z + pc.prevViewProj[3];
@@ -553,9 +552,9 @@ void raygen()
                     normalAOV[pixel] = float4(0.0);
                 }
                 const float4 zero = float4(0.0);
-                diffuseAlbedoAOV[pixel] = blendAOVs ? lerp(diffuseAlbedoAOV[pixel], zero, 1.0 / float(pc.params.z + 1u)) : zero;
-                specColorAOV[pixel] = blendAOVs ? lerp(specColorAOV[pixel], zero, 1.0 / float(pc.params.z + 1u)) : zero;
-                normalRoughnessAOV[pixel] = blendAOVs ? lerp(normalRoughnessAOV[pixel], zero, 1.0 / float(pc.params.z + 1u)) : zero;
+                diffuseAlbedoAOV[pixel] = blendAOVs ? lerp(diffuseAlbedoAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
+                specColorAOV[pixel] = blendAOVs ? lerp(specColorAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
+                normalRoughnessAOV[pixel] = blendAOVs ? lerp(normalRoughnessAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
             }
         }
         if (stop || depth > bounces) break;
@@ -578,7 +577,7 @@ void raygen()
             }
             diffAlbedo = base.rho * (1.0 - base.metalness);
             specColor = max(a - diffAlbedo, float3(0.0));
-            const float k = blendAOVs ? 1.0 / float(pc.params.z + 1u) : 1.0;
+            const float k = blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0;
             diffuseAlbedoAOV[pixel] = lerp(diffuseAlbedoAOV[pixel], float4(diffAlbedo, 1.0), k);
             specColorAOV[pixel] = lerp(specColorAOV[pixel], float4(specColor, 1.0), k);
             normalRoughnessAOV[pixel] = lerp(normalRoughnessAOV[pixel], nrdPackNormalRoughness(n, firstRough), k);
@@ -644,7 +643,7 @@ void raygen()
         if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;
     }
 
-    // The running mean of every sample since the last reset (the offline camera is still).
+    // The running mean of every sample since the view last moved (0 frames: this one alone).
     float3 acc = radiance;
     float count = 1.0;
     if (pc.control.y > 0u)
@@ -655,13 +654,12 @@ void raygen()
     }
     accumBuffer[pixel] = float4(acc, count);
 
-    const float k = blendAOVs ? 1.0 / float(pc.params.z + 1u) : 1.0;
+    const float k = blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0;
     const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));
     diffuseRadiance[pixel] = lerp(diffuseRadiance[pixel], nrdPackRadianceHitDist(diffDemod, firstLobe == 1u ? secondHitT : 0.0, viewZ, firstRough), k);
     specularRadiance[pixel] = lerp(specularRadiance[pixel], nrdPackRadianceHitDist(specularOut, firstLobe == 0u ? secondHitT : 0.0, viewZ, firstRough), k);
 
-    const bool spatialDenoise = (flags & kFlagInternalDenoise) != 0u && (flags & kFlagAOVs) != 0u;
-    if (!spatialDenoise) outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);
+    outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);
 }
 
 // ---- hit shaders ----------------------------------------------------------------------------

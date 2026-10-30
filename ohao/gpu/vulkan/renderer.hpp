@@ -27,7 +27,7 @@
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
-#include "render/rt/rt_render_pipeline.hpp"
+#include "render/rt/rt_profile_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
 #include "render/scene/render_scene_types.hpp"
@@ -330,8 +330,6 @@ public:
     // so DLSS/SVGF get a clean N-spp image before denoising. Set by a realtime
     // host. Clamped to [1, 64]. Survives the per-frame RT
     // settings reset (re-injected in applyRTRenderSettings).
-    void        setRealtimeSamplesPerFrame(uint32_t n);
-    [[nodiscard]] uint32_t    getRealtimeSamplesPerFrame() const { return m_realtimeSamplesPerFrame; }
     // The path tracer's bounces in place of its profile's (a capture's `bounces`); nullopt: the
     // profile's. Re-applied every frame, as the per-frame reset to the profile would drop it.
     void setMaxBouncesOverride(std::optional<uint32_t> bounces) {
@@ -431,14 +429,15 @@ private:
     // without lights, as in the path tracer); sets the ambient intensity.
     void setFrameLights();
 
-    void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline);
+    void prepareRTSceneForFrame(const RTRenderSettings& defaults);
 
 
     // Rendering internals
-    void renderRTPipeline(const IRTRenderPipeline& pipeline);
+    void renderRTPipeline(const RTRenderSettings& defaults);
 public:
 private:
-    const IRTRenderPipeline* getRTPipeline(RenderMode mode) const;
+    // The profile defaults of an RT mode (kRealtimeRTSettings, kOfflineRTSettings), null for deferred.
+    static const RTRenderSettings* rtDefaults(RenderMode mode);
     IRTRendererProfile* getRTRenderer(RenderMode mode);
     const IRTRendererProfile* getRTRenderer(RenderMode mode) const;
     void forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn);
@@ -465,8 +464,6 @@ private:
     std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_slotSubmitted{};   // the submitted frame each slot holds
 
     // Path tracer profiles (the acceleration structures belong to m_renderScene)
-    RTRealtimePipeline m_rtRealtimePipeline;
-    RTOfflinePipeline m_rtOfflinePipeline;
     std::unique_ptr<RTRealtimeRenderer> m_rtRealtimeRenderer;
     std::unique_ptr<RTOfflineRenderer> m_rtOfflineRenderer;
     // Environment map (env_upload.cpp): HDR image in the bindless table, its CDFs,
@@ -559,10 +556,6 @@ private:
     // Denoise state
     DenoiseMode                  m_denoiseMode{DenoiseMode::None};
     bool                         m_denoiseModeOverridden{false}; // true = setDenoiseMode() called; blocks applyRTRenderSettings from resetting it
-    // Realtime per-frame sample count (setRealtimeSamplesPerFrame). Re-injected into
-    // m_rtSettings each frame in applyRTRenderSettings so the per-frame reset in
-    // prepareRTSceneForFrame doesn't clobber it (same pattern as aniso/SSS).
-    uint32_t                     m_realtimeSamplesPerFrame{1};
     std::optional<uint32_t>      m_maxBouncesOverride;   // setMaxBouncesOverride
     // The requested frame, denoised on the CPU (OIDN) or read from NRD's tonemapped
     // output: what readback() returns for those modes, until the next render().

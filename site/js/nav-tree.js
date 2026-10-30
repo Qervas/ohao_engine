@@ -347,11 +347,6 @@ window.OHAO_NAV_TREE = [
         "id": "path-tracer/bindings",
         "title": "Descriptor map 0\u201338",
         "href": "m/path-tracer/bindings.html"
-      },
-      {
-        "id": "path-tracer/restir",
-        "title": "ReSTIR GI reservoirs",
-        "href": "m/path-tracer/restir.html"
       }
     ]
   },
@@ -361,18 +356,13 @@ window.OHAO_NAV_TREE = [
     "href": "m/sampling.html",
     "children": [
       {
-        "id": "sampling/sampler-api",
-        "title": "Sampler API",
-        "href": "m/sampling/sampler-api.html"
-      },
-      {
         "id": "sampling/sobol",
         "title": "Sobol + Owen",
         "href": "m/sampling/sobol.html"
       },
       {
         "id": "sampling/pcg",
-        "title": "PCG realtime",
+        "title": "PCG stream",
         "href": "m/sampling/pcg.html"
       },
       {

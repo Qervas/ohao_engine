@@ -179,16 +179,11 @@ protected:
 class RTRealtimeRenderer final : public RTProfileRendererBase {
 public:
     RTRealtimeRenderer()
-        : RTProfileRendererBase(kRealtimeRTSettings,
-            PathTracerShaderSet{
-                "bin/shaders/rt_pt_raygen_realtime.rgen.spv",
-                "bin/shaders/rt_pt_miss.rmiss.spv",
-                "bin/shaders/rt_pt_closesthit.rchit.spv",
-                "bin/shaders/rt_pt_anyhit.rahit.spv",
-                "main", "main", "main", "main"}) {}   // GLSL: every stage's entry is main
+        : RTProfileRendererBase(kRealtimeRTSettings, PathTracerShaderSet{}) {}   // rt/path_tracer.slang
     const char* getName() const override { return "RTRealtimeRenderer"; }
     RTRenderProfile getProfile() const override { return RTRenderProfile::Realtime; }
     RTRenderSettings getDefaultSettings() const override { return kRealtimeRTSettings; }
+    // A moved view restarts the trace's running mean; the denoiser's history carries on.
     bool resetsAccumulationOnViewChange() const override { return false; }
 };
 

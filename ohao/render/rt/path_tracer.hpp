@@ -26,9 +26,7 @@
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
 #include "render/rt/rt_meta.hpp"
-#include "render/rt/sampler_types.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
-#include "render/rt/denoise/spatial_denoise.hpp"
 #include "core/concepts.hpp"
 #include "gpu/layout_meta.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -56,11 +54,10 @@ namespace ohao::render { class RenderScene; }
 namespace ohao {
 
 // RTRenderProfile / RTRenderSettings / kRealtimeRTSettings / kOfflineRTSettings
-// live in render/rt/rt_settings.hpp (shared with rt_meta traits).
+// live in render/rt/rt_settings.hpp; render/rt/rt_meta.hpp holds the denoise policy.
 
-// A profile's shaders: SPIR-V files and their entry points (GLSL's are main; a Slang file with
-// several stages names each).
-// The default is the reference path tracer (rt/path_tracer.slang, RTOfflineRenderer's).
+// A profile's shaders: SPIR-V files and their entry points (a Slang file with several stages
+// names each). The default, rt/path_tracer.slang, is both profiles'.
 struct PathTracerShaderSet {
     const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};
     const char* missSpv{"bin/shaders/rt_path_tracer.slang.miss.spv"};
@@ -122,7 +119,7 @@ public:
     [[nodiscard]] VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
     [[nodiscard]] VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
     [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
-    // DLSS-RR specular hit-distance guide (R32F, binding 35).
+    // DLSS-RR specular hit-distance guide (R32F; written by the tracer from frontier F1 T4).
     [[nodiscard]] VkImageView getSpecHitDistAOV()      const { return m_specHitDistView; }
     [[nodiscard]] VkImage     getSpecHitDistAOVImage() const { return m_specHitDistImage; }
     [[nodiscard]] VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
@@ -142,8 +139,7 @@ public:
     void setSceneBuffers(const render::RenderScene& scene);
     // Bindless textures (binding 12): views[i] is bindless index i, one sampler per
     // view. Every one of the bindingCapacity() entries is written each frame; entries
-    // past views.size() repeat views[0]. Hit/miss shaders treat an index >=
-    // bindingCapacity() (specialization constant OHAO_BINDLESS_COUNT) as no texture.
+    // past views.size() repeat views[0]. The shaders treat an index >= 4096 as no texture.
     void setBindlessTextures(std::span<const VkImageView> views,
                              std::span<const VkSampler> samplers) {
         m_bindlessImageViews.assign(views.begin(), views.end());
@@ -155,7 +151,6 @@ public:
     void setBindlessCapacity(uint32_t capacity) noexcept { m_bindlessCapacity = std::max(1u, capacity); }
     [[nodiscard]] uint32_t bindlessCapacity() const noexcept { return m_bindlessCapacity; }
     static constexpr uint32_t kDefaultBindlessCapacity = 4096;
-    static constexpr uint32_t kBindlessCountSpecConstantId = 1;   // hit + miss shaders
 
     // Shader contract: envWidth == 0 means "no env map loaded" — the shader
     // must skip env importance sampling in this case. The renderer provides
@@ -182,10 +177,11 @@ public:
     [[nodiscard]] VkSampler   getEnvMapSampler() const { return m_envMapSampler; }
     [[nodiscard]] float       getEnvCDFIntegral() const { return m_envCDFIntegral; }
 
-    // Reset accumulation — call when camera moves so the buffer restarts
+    // The view moved: the trace's running mean restarts at the next frame; a temporal denoiser's
+    // history does not (it reprojects through the motion vectors).
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
-    /// Base sample index after reset (inverse/FD stability). samplerInit uses m_sampleIndex.
+    /// Base sample index after reset: the tracer's random streams are seeded by m_sampleIndex.
     // Takes effect at the next resetAccumulation, or now when nothing has accumulated since
     // the last one (a fresh tracer starts its sample index at the seed).
     void setRenderSeed(uint32_t seed) noexcept {
@@ -202,11 +198,6 @@ public:
     /// Apply settings + denoise policy. Out-of-line: may reallocate images when
     /// DLSS render scale changes.
     void setRenderSettings(const RTRenderSettings& settings);
-
-    template<RTRenderProfile Profile, DenoiseMode Mode>
-    void setFeatureSettings() {
-        setRenderSettings(makeFeatureSettings<Profile, Mode>());
-    }
 
     [[nodiscard]] const RTRenderSettings& getRenderSettings() const noexcept { return m_renderSettings; }
     [[nodiscard]] DenoiseMode getDenoiseMode() const noexcept { return m_renderSettings.denoiseMode; }
@@ -306,8 +297,10 @@ private:
 
     uint32_t m_sampleIndex = 0;
     uint32_t m_renderSeed = 0;  // resetAccumulation() restores sample index to this
-    uint32_t m_historyFrameCount = 0;
+    uint32_t m_historyFrameCount = 0;   // frames since resetAccumulation: the denoisers' history
+    uint32_t m_accumFrames = 0;         // frames in the trace's running mean (restarts on a moved view)
     bool m_viewChangedThisFrame = false;
+    bool m_hasPreviousView = false;     // m_prevViewProj is a rendered frame's (motion vectors are valid)
 
     // Accumulation — RGBA32F HDR, two images ping-ponged per frame: the trace writes
     // this frame's (binding 1) and reads the previous frame's (binding 3, read-only), so
@@ -320,9 +313,6 @@ private:
     uint32_t m_accumWriteIndex = 0;
     VkImage m_accumBuffer = VK_NULL_HANDLE;
     VkImageView m_accumView = VK_NULL_HANDLE;
-
-    // The internal spatial denoise (enableInternalDenoise), a compute pass after the trace.
-    SpatialDenoise m_spatialDenoise;
 
     // Output image — RGBA8 tonemapped
     VkImage m_outputImage = VK_NULL_HANDLE;
@@ -377,7 +367,7 @@ private:
     VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
     VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
 
-    // DLSS-RR: specular hit-distance guide (R32F, world-space ray length, binding 35).
+    // DLSS-RR: specular hit-distance guide (R32F, world-space ray length; frontier F1 T4).
     VkImage        m_specHitDistImage  = VK_NULL_HANDLE;
     VkDeviceMemory m_specHitDistMemory = VK_NULL_HANDLE;
     VkImageView    m_specHitDistView   = VK_NULL_HANDLE;
@@ -437,28 +427,6 @@ private:
     uint32_t       m_bloomMipHeight[3]      = {0, 0, 0};
     bool           m_bloomFirstFrame[3]     = {true, true, true};
 
-    // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
-    VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkDeviceMemory m_surfaceHistoryMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkImageView m_surfaceHistoryViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    bool m_surfaceHistoryInitialized[2] = {false, false};
-    uint32_t m_surfaceHistoryWriteIndex = 0;
-
-    // Shading history ping-pong for realtime validation (xyz = first-hit normal, w = roughness)
-    VkImage m_shadingHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkDeviceMemory m_shadingHistoryMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkImageView m_shadingHistoryViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    bool m_shadingHistoryInitialized[2] = {false, false};
-    uint32_t m_shadingHistoryWriteIndex = 0;
-
-    // ReSTIR GI reservoir ping-pong. 3 RGBA32F planes × 2 (curr/prev):
-    //   plane0 xyz=x_s w=M | plane1 xyz=n_s w=W | plane2 xyz=Lo w=valid.
-    VkImage        m_giReservoirImages[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
-    VkDeviceMemory m_giReservoirMemory[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
-    VkImageView    m_giReservoirViews[3][2]    = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
-    bool           m_giReservoirInitialized[2] = {false, false};
-    uint32_t       m_giReservoirWriteIndex     = 0;
-
     // RT Pipeline
     VkPipeline m_rtPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
@@ -481,10 +449,10 @@ private:
         glm::mat4 invProj;              // 64 bytes
         glm::mat4 prevViewProj;         // 64 bytes — for temporal reprojection
         glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=sampleIndex, w=maxBounces)
-        glm::uvec4 control;             // x=flags, y=historyFrameCount, z=viewChanged, w=envCDFWidth
+        glm::uvec4 control;             // x=flags, y=frames in the running mean, z=motion vectors valid, w=envCDFWidth
                                         // control.w = envCDFWidth. If 0, shader must skip env importance sampling.
         glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
-        glm::vec4 jitter;               // 4.F T4: xy=Halton(2,3) pixel offset (0 outside NRD mode), zw=pad
+        glm::vec4 jitter;               // xy=Halton(2,3) pixel offset (0 without NRD or DLSS RR), zw=0
     };  // total = 256 bytes
     OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);
 

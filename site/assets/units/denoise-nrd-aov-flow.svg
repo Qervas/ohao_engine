@@ -7,7 +7,7 @@
 
   <!-- Stage 1: raygen -->
   <rect x="20" y="82" width="680" height="72" fill="#1a222c" stroke="#3d4a58" rx="4"/>
-  <text x="32" y="100" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">path_tracer.slang / pt_raygen_realtime.rgen</text>
+  <text x="32" y="100" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">path_tracer.slang (raygen)</text>
   <text x="330" y="100" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">(both #include nrd_frontend.glsl)</text>
 
   <rect x="32" y="110" width="96" height="32" fill="#0f1419" stroke="#3d4a58" rx="3"/>
@@ -55,7 +55,7 @@
   <text x="107" y="324" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA8</text>
 
   <rect x="192" y="300" width="150" height="30" fill="#0f1419" stroke="#3d4a58" rx="3"/>
-  <text x="267" y="313" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">25 spec colour (F0-ish)</text>
+  <text x="267" y="313" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">25 spec albedo (albedo − diffuse)</text>
   <text x="267" y="324" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA8</text>
 
   <text x="356" y="319" font-family="IBM Plex Mono,monospace" font-size="14" fill="#6e685c">&#8594;</text>

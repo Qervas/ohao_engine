@@ -17,10 +17,12 @@ descriptor sets, so nothing is allocated mid-frame.
 
 Read "binding 29", "30" and "32" as the sub-plan nicknames the code comments use
 for those three images, not as descriptor indices. Inside the cinematic pipelines
-each is `set = 0`, bindings 0–2; slots 29–34 of the RT descriptor set layout hold
-ReSTIR GI reservoir planes.
+each is `set = 0`, bindings 0–2. The path tracer's own descriptor set layout has
+no slot between 26 and 36 at all: its storage images end at the packed
+normal-roughness guide, and the next binding is the instance table.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "29-31: ReSTIR GI prev reservoir planes 0-2"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(26, IMAGE, RGEN);   // normal+roughness packed AOV"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(36, BUFFER, HIT);   // instances"}}
 
 Only surface pixels pass through binding 29. The composite reads the depth AOV
 first and, where the primary ray missed, rebuilds a world-space direction from
@@ -30,9 +32,7 @@ never touch the denoised image at all:
 {{cite shaders/rt/cinematic_composite.comp "hdr = sampleEnv(normalize(world.xyz));"}}
 
 The gating repays a second reading. The outer condition is that an NRD instance
-came up, the auxiliary AOVs are being written and NRD is the active mode (since
-sub-project 2b step 5; before, the chain ran on every RT frame with AOVs, whatever
-denoiser the user asked for):
+came up, the auxiliary AOVs are being written and NRD is the active mode:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
@@ -66,9 +66,8 @@ the tone curve:
 
 {{cite shaders/rt/cinematic_composite.comp "hdr += bloom * pc.bloomStrength;"}}
 
-Depth of field went the other way. Since sub-plan 4.J the composite no longer
-writes the final image; it writes an RGBA8 intermediate at binding 32 that the
-DoF gather consumes:
+Depth of field goes the other way. The composite does not write the final image;
+it writes an RGBA8 intermediate at binding 32 that the DoF gather consumes:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "ci.tonemappedOut   = m_preDofLdrView;"}}
 
@@ -223,8 +222,8 @@ focuses on nothing in particular.
 {{cite ohao/render/rt/path_tracer_render.cpp "di.focusDistance = focusDist > 0.5f ? focusDist : 8.0f;"}}
 
 Sky is the case worth reading. `1e30` would saturate the formula to $C_{\max}$,
-which is what the pass used to do, and an infinitely defocused background smeared
-black halos into subject silhouettes. So miss depths never reach the formula at
+and an infinitely defocused background would smear black halos into subject
+silhouettes. So miss depths never reach the formula at
 all — they short-circuit to 8 pixels at the shipping cap:
 
 {{cite shaders/rt/cinematic_dof.comp "return min(pc.maxCoCPixels * 0.4, 8.0);"}}

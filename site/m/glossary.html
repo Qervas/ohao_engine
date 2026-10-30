@@ -218,7 +218,7 @@
       <article class="gloss-card" data-key="ReSTIR" data-group="Light transport">
         <h3>ReSTIR</h3>
         <div class="expand">Reservoir Spatio-Temporal Importance Resampling</div>
-        <p>Resamples light candidates over space and time for efficient many-light / GI sampling. Reservoir planes live at set-0 bindings 29–34 in the path tracer.</p>
+        <p>Resamples light candidates over space and time for efficient many-light / GI sampling. The frontier renderer spec plans it; no code in the tree implements it yet.</p>
       </article>
       <article class="gloss-card" data-key="spp" data-group="Light transport">
         <h3>spp</h3>
@@ -279,7 +279,7 @@
       <article class="gloss-card" data-key="GGX" data-group="Materials">
         <h3>GGX</h3>
         <div class="expand">Trowbridge–Reitz / GGX normal distribution</div>
-        <p>Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in material/openpbr.slang (ggx_aniso.glsl for the realtime GLSL path tracer).</p>
+        <p>Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in material/openpbr.slang.</p>
       </article>
       <article class="gloss-card" data-key="Lambert" data-group="Materials">
         <h3>Lambert</h3>
@@ -402,12 +402,12 @@
       <article class="gloss-card" data-key="PCG" data-group="Sampling">
         <h3>PCG</h3>
         <div class="expand">Permuted Congruential Generator</div>
-        <p>Fast hash-style RNG used for the realtime path-tracer profile when Sobol is too heavy.</p>
+        <p>Fast hash-style RNG. The path tracer draws every sample from one PCG stream a pixel and sample, in both profiles.</p>
       </article>
       <article class="gloss-card" data-key="Sobol" data-group="Sampling">
         <h3>Sobol</h3>
         <div class="expand">Sobol quasi-Monte Carlo sequence</div>
-        <p>Low-discrepancy sample sequence (often Owen-scrambled). Default offline path-tracer sampler for faster convergence than pure random.</p>
+        <p>Low-discrepancy sample sequence (often Owen-scrambled). OHAO has a host-side generator (sobol_generator.*), tested by sobol_test; no shader draws Sobol points.</p>
       </article>
       </div>
       <h2 class="gloss-group" id="g-scene">Scene</h2>

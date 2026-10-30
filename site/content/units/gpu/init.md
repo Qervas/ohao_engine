@@ -144,7 +144,9 @@ also enable `drawIndirectFirstInstance` beside `multiDrawIndirect`:
 Of the descriptor-indexing seven, `runtimeDescriptorArray` plus
 `shaderSampledImageArrayNonUniformIndexing` let shaders declare an unsized
 `uniform sampler2D textures[]` and index it with `nonuniformEXT(...)`, which
-`gbuffer.frag`, `pt_closesthit.rchit`, `pt_anyhit.rahit` and `pt_miss.rmiss` all do.
+`gbuffer.frag` does; the path tracer declares its array at a fixed 4096 and marks
+indices with Slang's `NonUniformResourceIndex`, which needs the same non-uniform
+indexing feature.
 Three more — `descriptorBindingPartiallyBound`,
 `descriptorBindingSampledImageUpdateAfterBind`,
 `descriptorBindingVariableDescriptorCount` — are precisely the three binding flags

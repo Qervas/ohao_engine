@@ -3,7 +3,7 @@
 // a well-mixed hash, then reverses back.
 //
 // Must remain in sync with the GLSL port in
-// shaders/includes/rt/sampler_sobol.glsl.
+// rt/path_tracer.slang's sampler (frontier F1 T2).
 
 #include "render/rt/owen_scramble.hpp"
 

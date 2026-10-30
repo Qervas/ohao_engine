@@ -288,7 +288,7 @@ KNOWLEDGE: dict[str, dict] = {
             "OpenPBR's base (material/openpbr.slang) for the path tracer and deferred lighting, from glTF's metallic-roughness plus specular colour/weight, IOR and diffuse roughness. ORM packing follows glTF (occlusion/roughness/metal).",
         ],
         "how": [
-            "The 7-row material table carries the inputs; the path tracer's closest hit and the G-buffer resolve them from rows and textures (pbr_unpack.glsl serves the realtime GLSL tracer).",
+            "The 7-row material table carries the inputs; the path tracer's closest hit and the G-buffer resolve them from rows and textures.",
             "OpenPBR's base: a dielectric's F0 from specular_ior (1.5 gives 0.04); metals use base colour as F0 under F82-tint, with zero diffuse.",
             "OpenPBR floors specular roughness at 0.01; the G-buffer stores it as authored.",
         ],
@@ -304,7 +304,6 @@ KNOWLEDGE: dict[str, dict] = {
         ],
         "how": [
             "openpbr.slang: ggxD, ggxSingle, ggxSampleBounded/ggxPdfBounded, msFresnel; energy tables at the binding each pass names.",
-            "ggx_aniso.glsl: the realtime GLSL path tracer's GGX (anisotropic roughness, Schlick F).",
         ],
         "why": "Two BRDFs = two lookdevs. One GGX is a product decision.",
         "math": [
@@ -447,7 +446,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "path-tracer/profiles": {
         "what": [
-            "RTRenderSettings profiles: kRealtime vs kOffline — spp, bounces, sampler type, denoise defaults.",
+            "RTRenderSettings profiles: kRealtime vs kOffline — bounces, accumulation, AOVs, denoiser (NRD realtime by default); both run path_tracer.slang.",
         ],
         "how": [
             "rt_settings.hpp / rt_meta.hpp traits; rt_profile_renderer bridges mode dispatch.",
@@ -461,7 +460,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "path-tracer/raygen": {
         "what": [
-            "Offline reference path_tracer.slang: one path a sample estimating OpenPBR's base BSDF, NEE to lights and the environment under the power heuristic, AOV packing for denoisers; the realtime profile keeps pt_raygen_realtime.rgen.",
+            "Offline reference path_tracer.slang: one path a sample estimating OpenPBR's base BSDF, NEE to lights and the environment under the power heuristic, AOV packing for denoisers; both RT profiles run it.",
         ],
         "how": [
             "Camera ray from the inverse view/projection push constants; the closest hit resolves OpenPBR inputs into the payload.",
@@ -492,13 +491,13 @@ KNOWLEDGE: dict[str, dict] = {
             "closesthit: barycentrics → material → PBR payload; anyhit: alpha cutout; miss: environment contribution.",
         ],
         "how": [
-            "Offline: path_tracer.slang's closestHit, anyHit and miss entries; realtime: pt_closesthit.rchit, pt_anyhit.rahit, pt_miss.rmiss.",
+            "path_tracer.slang's closestHit, anyHit and miss entries, for both profiles.",
         ],
         "why": "Split shader stages keep anyhit cheap and miss free of material state.",
     },
     "path-tracer/bindings": {
         "what": [
-            "Descriptor set 0 map bindings 0–38: TLAS, accum, materials, lights, env CDF, AOVs, ReSTIR 29–34, DLSS hit-dist 35, RenderScene tables 36–37, OpenPBR tables 38.",
+            "Descriptor set 0 map: TLAS, accum, materials, lights, env CDF, AOVs and guides, RenderScene tables 36–37, OpenPBR tables 38; 13–16 and 27–35 unused.",
         ],
         "how": [
             "path_tracer_descriptors.cpp writes all slots; the shaders' binding numbers (Slang [[vk::binding]], GLSL layout) must match exactly.",
@@ -506,36 +505,21 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Wrong binding = silent black. Plate SVG documents the shipped map.",
         "contracts": [
             "0 TLAS, 1 accum, 2 output, 3 materials, 11 lights",
-            "29–34 ReSTIR, 35 DLSS hit-dist when enabled",
         ],
-    },
-    "path-tracer/restir": {
-        "what": [
-            "ReSTIR GI reservoirs as set-0 storage images for realtime light sample reuse.",
-        ],
-        "how": [
-            "Ping-pong planes on bindings 29–34; the offline reference (path_tracer.slang) does not read them.",
-        ],
-        "why": "Realtime GI needs temporal reuse; reservoirs keep it inside the same descriptor set as PT.",
-    },
-    "sampling/sampler-api": {
-        "what": ["Unified next1D/next2D sampler API; backend selected by profile specialization."],
-        "how": ["sampler_api.glsl dispatches for the GLSL realtime raygen; sampler_types.hpp mirrors host enum. path_tracer.slang does not use it."],
-        "why": "Integrator code should not branch on RNG brand at every sample site.",
     },
     "sampling/sobol": {
-        "what": ["Sobol + Owen scramble low-discrepancy sampling behind sampler_api.glsl (the GLSL raygen); the offline reference uses its own PCG stream."],
-        "how": ["Host tables + sampler_sobol.glsl; owen_scramble.cpp."],
+        "what": ["Host-side Sobol + Owen scramble low-discrepancy generator, tested by sobol_test; no shader reads it."],
+        "how": ["sobol_generator.cpp + owen_scramble.cpp."],
         "why": "Lower discrepancy → faster convergence than white noise.",
     },
     "sampling/pcg": {
         "what": ["PCG hash RNG for interactive path tracing."],
-        "how": ["sampler_pcg.glsl — cheap per-pixel streams; path_tracer.slang has its own PCG Rng."],
+        "how": ["path_tracer.slang's Rng: one PCG stream a pixel and sample."],
         "why": "Interactive budgets cannot afford full Sobol table traffic every frame.",
     },
     "sampling/mis": {
         "what": ["Multiple importance sampling balance/power heuristics for NEE vs BRDF samples."],
-        "how": ["mis.glsl; weights use pdf_light and pdf_bsdf in the same measure."],
+        "how": ["path_tracer.slang's powerHeuristic; weights use pdf_light and pdf_bsdf in the same measure."],
         "why": "Either strategy alone is high variance on glossy + small lights.",
         "math": [
             "w_{\\mathrm{bal}}(p_a,p_b)=\\frac{p_a}{p_a+p_b}",
@@ -546,7 +530,7 @@ KNOWLEDGE: dict[str, dict] = {
         "what": ["Environment map CDF for importance-sampled sky lighting."],
         "how": [
             "CPU builds marginal + conditional CDFs from HDR luminance (env_cdf.cpp).",
-            "GPU sampleEnvMap / pdfEnvMap in env_sampling.glsl.",
+            "GPU sampleEnv / envPdf in path_tracer.slang.",
         ],
         "why": "Uniform env sampling wastes paths on dark texels.",
     },
@@ -629,7 +613,7 @@ KNOWLEDGE: dict[str, dict] = {
         "workflow": ["threshold", "downsample", "upsample", "TAA", "tonemap"],
     },
     "shaders/rt-includes": {
-        "what": ["RT-specific includes: pbr_unpack, nrd_frontend; the ray masks are shared layout constants."],
+        "what": ["Shader includes: nrd_frontend (for nrd_compose.comp) and the scene includes; the ray masks are shared layout constants."],
         "how": ["Included by raygen/hit; nrd_frontend is the YCoCg pack source of truth."],
         "why": "Wrong NRD pack is a one-line bug with a magenta symptom — keep pack code centralized.",
     },

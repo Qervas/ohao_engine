@@ -1,9 +1,8 @@
 #pragma once
 
-// RT render profile + default settings (shared by PathTracer and rt_meta traits).
+// The path tracer's two profiles and their default settings. Both run rt/path_tracer.slang.
 
 #include "render/rt/denoise/denoise_types.hpp"
-#include "render/rt/sampler_types.hpp"
 
 #include <cstdint>
 
@@ -20,18 +19,9 @@ struct RTRenderSettings {
     bool preferAccumulation{true};
     bool enableAuxiliaryAOVs{true};
     bool allowExternalDenoiser{true};
-    bool enableInternalDenoise{false};
     bool enableFireflyClamp{false};
     float fireflyClampLuminance{10.0f};
-    SamplerType samplerType{SamplerType::Sobol};
     DenoiseMode denoiseMode{DenoiseMode::None};
-    // Sub-plan 4.K: global anisotropic specular override
-    float anisotropyStrength{0.0f};
-    float anisotropyRotation{0.0f};
-    // Sub-plan 4.L: subsurface scattering override
-    float subsurfaceStrength{0.0f};
-    // Realtime/DLSS: genuine per-frame sample count [1, 64]
-    uint32_t samplesPerFrame{1};
 };
 
 inline constexpr RTRenderSettings kRealtimeRTSettings{
@@ -39,12 +29,10 @@ inline constexpr RTRenderSettings kRealtimeRTSettings{
     .maxBounces = 2,
     .preferAccumulation = true,
     .enableAuxiliaryAOVs = true,
-    .allowExternalDenoiser = false,
-    .enableInternalDenoise = true,
+    .allowExternalDenoiser = true,
     .enableFireflyClamp = true,
     .fireflyClampLuminance = 10.0f,
-    .samplerType = SamplerType::PCG,
-    .denoiseMode = DenoiseMode::None,
+    .denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history
 };
 
 inline constexpr RTRenderSettings kOfflineRTSettings{
@@ -53,10 +41,8 @@ inline constexpr RTRenderSettings kOfflineRTSettings{
     .preferAccumulation = true,
     .enableAuxiliaryAOVs = true,
     .allowExternalDenoiser = true,
-    .enableInternalDenoise = false,
     .enableFireflyClamp = false,
     .fireflyClampLuminance = 0.0f,
-    .samplerType = SamplerType::Sobol,
     .denoiseMode = DenoiseMode::OIDN,
 };
 
@@ -66,10 +52,6 @@ inline constexpr RTRenderSettings kOfflineRTSettings{
 
 [[nodiscard]] constexpr bool isOfflineProfile(RTRenderProfile p) noexcept {
     return p == RTRenderProfile::Offline;
-}
-
-[[nodiscard]] constexpr uint32_t clampSamplesPerFrame(uint32_t n) noexcept {
-    return n < 1u ? 1u : (n > 64u ? 64u : n);
 }
 
 } // namespace ohao

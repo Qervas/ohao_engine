@@ -94,7 +94,7 @@ public:
     [[nodiscard]] const InstanceGpu& instance(uint32_t slot) const;
     // Bindless index of the environment map, stamped into the RT light header.
     void setEnvMapTextureIndex(uint32_t texIdx);
-    // HDRI scale stamped into the RT light header (pt_miss); default 1.
+    // HDRI scale stamped into the RT light header (the path tracer's miss); default 1.
     void setEnvIntensity(float scale);
 
     // Start of a frame's command buffer, after the slot's fence was waited. Records

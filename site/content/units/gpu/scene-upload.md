@@ -80,9 +80,9 @@ byte offset for the mesh's slice:
 
 {{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset,       // arena indices are mesh-local"}}
 
-and the closest-hit shader adds it by hand when it fetches a triangle's corners:
+and the path tracer's hit shaders add it by hand when they fetch a triangle's corners:
 
-{{cite shaders/rt/pt_closesthit.rchit "uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];"}}
+{{cite shaders/rt/path_tracer.slang "c.v0 = mesh.x + indices[baseIndex];"}}
 
 The coupling is the point. Three consumers each apply the bias in their own idiom, and
 a change to how indices are stored — biasing at upload, say — would be correct for

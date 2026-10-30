@@ -70,54 +70,22 @@ bool PathTracer::createRTPipeline() {
     stages[0].module = rgenModule;
     stages[0].pName = m_shaderSet.raygenEntry;
 
-    // Specialization constant: sampler type baked into the raygen SPIR-V
-    // (see shaders/includes/rt/sampler_api.glsl, layout(constant_id=0)).
-    VkSpecializationMapEntry samplerEntry{};
-    samplerEntry.constantID = kSamplerSpecConstantId;
-    samplerEntry.offset = 0;
-    samplerEntry.size = sizeof(uint32_t);
-
-    uint32_t samplerTypeVal = static_cast<uint32_t>(m_renderSettings.samplerType);
-
-    VkSpecializationInfo samplerSpecInfo{};
-    samplerSpecInfo.mapEntryCount = 1;
-    samplerSpecInfo.pMapEntries = &samplerEntry;
-    samplerSpecInfo.dataSize = sizeof(uint32_t);
-    samplerSpecInfo.pData = &samplerTypeVal;
-
-    stages[0].pSpecializationInfo = &samplerSpecInfo;
-
-    // Miss, closest-hit and any-hit: binding 12's size (OHAO_BINDLESS_COUNT). A
-    // texture index at or past it is treated as "no texture".
-    VkSpecializationMapEntry bindlessEntry{};
-    bindlessEntry.constantID = kBindlessCountSpecConstantId;
-    bindlessEntry.offset = 0;
-    bindlessEntry.size = sizeof(uint32_t);
-    const uint32_t bindlessCount = m_bindlessCapacity;
-    VkSpecializationInfo bindlessSpecInfo{};
-    bindlessSpecInfo.mapEntryCount = 1;
-    bindlessSpecInfo.pMapEntries = &bindlessEntry;
-    bindlessSpecInfo.dataSize = sizeof(uint32_t);
-    bindlessSpecInfo.pData = &bindlessCount;
 
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
     stages[1].module = rmissModule;
     stages[1].pName = m_shaderSet.missEntry;
-    stages[1].pSpecializationInfo = &bindlessSpecInfo;
 
     stages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[2].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
     stages[2].module = rchitModule;
     stages[2].pName = m_shaderSet.closestHitEntry;
-    stages[2].pSpecializationInfo = &bindlessSpecInfo;
 
     if (hasAnyHit) {
         stages[3].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[3].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
         stages[3].module = rahitModule;
         stages[3].pName = m_shaderSet.anyHitEntry;
-        stages[3].pSpecializationInfo = &bindlessSpecInfo;
     }
 
     // Shader groups: 3 groups (any-hit is part of the hit group, not a separate group)

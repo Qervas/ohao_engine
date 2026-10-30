@@ -173,12 +173,6 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         m_atrousDenoiser.reset();
     }
 
-    // The internal spatial denoise (realtime profile): a compute pass after the trace.
-    if (!m_spatialDenoise.initialize(m_device)) {
-        OHAO_LOG(Error, render, "PathTracer: spatial denoise init failed");
-        return false;
-    }
-
 #ifdef OHAO_DLSS_ENABLED
     // DLSS-RR NGX init is deferred to the first DLSSRR-mode frame (render()), since
     // the active denoiseMode is not yet known here (settings apply per-frame). Just
@@ -209,13 +203,9 @@ void PathTracer::setSceneBuffers(const render::RenderScene& scene) {
 void PathTracer::resetAccumulation() {
     m_sampleIndex = m_renderSeed;
     m_historyFrameCount = 0;
+    m_accumFrames = 0;
     m_viewChangedThisFrame = false;
-    m_surfaceHistoryWriteIndex = 0;
-    m_surfaceHistoryInitialized[0] = false;
-    m_surfaceHistoryInitialized[1] = false;
-    m_shadingHistoryWriteIndex = 0;
-    m_shadingHistoryInitialized[0] = false;
-    m_shadingHistoryInitialized[1] = false;
+    m_hasPreviousView = false;
 
     // Sub-plan 4.E T2: keep NRD's prev matrices in sync with frameIndex=0
     // bootstrap. Leaving them stale across a view change / resize could
@@ -267,12 +257,6 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
 
     // Reset accumulation since the buffer dimensions changed
     resetAccumulation();
-    m_surfaceHistoryWriteIndex = 0;
-    m_surfaceHistoryInitialized[0] = false;
-    m_surfaceHistoryInitialized[1] = false;
-    m_shadingHistoryWriteIndex = 0;
-    m_shadingHistoryInitialized[0] = false;
-    m_shadingHistoryInitialized[1] = false;
 
     // Sub-plan 4.E T2: keep NRD's prev matrices in sync with frameIndex=0
     // bootstrap after resize.
@@ -327,7 +311,6 @@ void PathTracer::computeRenderResolution() {
 // rebinds all image views, so no stale descriptors survive.
 void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
     m_renderSettings = applyDenoisePolicy(settings);
-    m_renderSettings.samplesPerFrame = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
     m_maxBounces = m_renderSettings.maxBounces;
 
     // If images haven't been created yet (pre-init), just store the settings.
@@ -355,9 +338,6 @@ void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
 
     // Buffer dimensions changed → restart accumulation + temporal history.
     resetAccumulation();
-    m_giReservoirInitialized[0] = false;
-    m_giReservoirInitialized[1] = false;
-    m_giReservoirWriteIndex     = 0;
 
     OHAO_LOG(Info, render, "PathTracer: render res {}x{} → output {}x{} (scale {})",
              m_width, m_height, m_outW, m_outH, m_dlssRenderScale);
@@ -388,7 +368,6 @@ void PathTracer::destroy() {
         m_atrousDenoiser->shutdown();
         m_atrousDenoiser.reset();
     }
-    m_spatialDenoise.shutdown();
 
 #ifdef OHAO_DLSS_ENABLED
     if (m_dlssRR) {

@@ -138,7 +138,7 @@
 +6  vec4(emission_color, specularColorTex)
 // kNoTexture = 0xFFFFFFFFu</pre></div>
       <div class="prose reveal">
-        <p>Texture indices are bit-cast through floats so a single vec4 stream stays std430-friendly. <code>OHAO_ASSERT_GPU_LAYOUT</code> / concepts catch C++ vs GLSL drift at compile time.</p>
+        <p>Texture indices are bit-cast through floats so a single vec4 stream stays std430-friendly. <code>OHAO_ASSERT_GPU_LAYOUT</code> / concepts catch C++ vs shader drift at compile time.</p>
       </div>
       <div class="decision reveal">
         <div class="decision-head"><span class="decision-tag">Invariant</span><h4>matID / instance order</h4></div>
@@ -171,7 +171,7 @@
         F_{0,\mathrm{dielectric}}=\left(\frac{\eta-1}{\eta+1}\right)^{2}
       \]</div>
       <div class="prose reveal">
-        <p>Geometry: height-correlated Smith G2. Metals take F82-tint Fresnel; dielectrics the exact Fresnel of <code>specular_ior</code> (modulated by <code>specular_weight</code>), over EON diffuse scaled by what the specular lets through. Kulla-Conty's multiple-scattering lobe, from tabulated energies, makes a white furnace return what it receives. Sampling is bounded VNDF. The reference path tracer, deferred lighting, the transparent pass and RT GI hits all evaluate this one module; the realtime GLSL path tracer (<code>pt_raygen_realtime.rgen</code>) keeps its own GGX in <code>includes/material/ggx_aniso.glsl</code> (Schlick F, F0 0.04).</p>
+        <p>Geometry: height-correlated Smith G2. Metals take F82-tint Fresnel; dielectrics the exact Fresnel of <code>specular_ior</code> (modulated by <code>specular_weight</code>), over EON diffuse scaled by what the specular lets through. Kulla-Conty's multiple-scattering lobe, from tabulated energies, makes a white furnace return what it receives. Sampling is bounded VNDF. The path tracer (both RT profiles), deferred lighting, the transparent pass and RT GI hits all evaluate this one module.</p>
       </div>
       <div class="why-callout reveal"><div class="why-label">Why GGX</div>
         <p>Industry default for real-time + offline PBR assets. Matches glTF expectations so DamagedHelmet-class models look “right” without custom artist tuning.</p>
@@ -202,7 +202,7 @@
         <div class="row"><code>layout_meta.hpp</code><span class="desc">Pack + byte sizes</span></div>
         <div class="row"><code>material/openpbr.slang</code><span class="desc">OpenPBR base: eval, pdf, sample</span></div>
         <div class="row"><code>gbuffer.frag</code><span class="desc">Deferred sample + MRT</span></div>
-        <div class="row"><code>pt_closesthit.rchit</code><span class="desc">RT sample → payload</span></div>
+        <div class="row"><code>rt/path_tracer.slang</code><span class="desc">closestHit: RT sample → payload</span></div>
         <div class="row"><code>gpu_light.hpp / light_upload.cpp</code><span class="desc">Lights</span></div>
         <div class="row"><code>bindless_texture_manager.*</code><span class="desc">Indices</span></div>
       </div>

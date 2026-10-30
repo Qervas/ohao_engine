@@ -60,8 +60,8 @@
 <div class="citation-chip"><code class="citation-code">static_assert(sizeof(ShadowPushConstant) == 64);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.hpp#L121" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.hpp:121</a></div>
 <p>The BLAS build gets the same offset as its `firstVertex`, with the buffer base and a byte offset for the mesh&#x27;s slice:</p>
 <div class="citation-chip"><code class="citation-code">mesh.vertexOffset,       // arena indices are mesh-local</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L134" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:134</a></div>
-<p>and the closest-hit shader adds it by hand when it fetches a triangle&#x27;s corners:</p>
-<div class="citation-chip"><code class="citation-code">uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L65" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:65</a></div>
+<p>and the path tracer&#x27;s hit shaders add it by hand when they fetch a triangle&#x27;s corners:</p>
+<div class="citation-chip"><code class="citation-code">c.v0 = mesh.x + indices[baseIndex];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L685" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:685</a></div>
 <p>The coupling is the point. Three consumers each apply the bias in their own idiom, and a change to how indices are stored — biasing at upload, say — would be correct for none of them until all three were edited, and wrong for any one left behind.</p>
 </div>
 <div class="section-rule"><h2 id="geometry-that-is-raster-input-rt-input-and-a-storage-buffer-at-once">Geometry that is raster input, RT input and a storage buffer at once</h2></div>
@@ -114,7 +114,7 @@ $$</div>
 <p>The sun is the brightest texel&#x27;s connected region over 64 times the median sky, when the peak is at least $10^4$ times it and the region at most 0.02 sr; its texels take the mean of the sky bordering it. RT GI&#x27;s cosine rays met the outdoor HDRI&#x27;s sun, half the map&#x27;s power on 0.003% of the sphere, about once in $10^4$ rays and brought back tens of thousands: fireflies.</p>
 <div class="citation-chip"><code class="citation-code">if (!(sun.median &gt; 0.0f) || sun.peak &lt; kSunPeakOverMedian * sun.median) return sun;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/env_sun.cpp#L32" target="_blank" rel="noopener">ohao/render/rt/env_sun.cpp:32</a></div>
 <p>A scene with no lights and no emissive meshes therefore still gets its environment map: `env_demo --lighting=none` loads the HDR and creates no light at all, and the HDRI is still sampled by the path tracer&#x27;s miss shader and the deferred sky reflections.</p>
-<div class="citation-chip"><code class="citation-code">// LightingMode::None → no lights, HDR env IBL only (pure environment)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L389" target="_blank" rel="noopener">examples/env_demo.cpp:389</a></div>
+<div class="citation-chip"><code class="citation-code">// LightingMode::None → no lights, HDR env IBL only (pure environment)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L376" target="_blank" rel="noopener">examples/env_demo.cpp:376</a></div>
 <p>The loader is guarded by a path cache: when the requested path matches the one already loaded, the function skips the decode and the CDF build and only re-stamps the index and the scale into the render scene. Without it every call would re-decode and re-upload a multi-megabyte HDR, so a caller that changed the path every frame would turn a scene-load cost into a per-frame one.</p>
 <div class="citation-chip"><code class="citation-code">float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &amp;ew, &amp;eh, &amp;ec, 4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/env_upload.cpp#L53" target="_blank" rel="noopener">ohao/gpu/vulkan/env_upload.cpp:53</a></div>
 <p>The image is `R32G32B32A32_SFLOAT` — 16 bytes per texel, so a 4096×2048 panorama is 128 MB resident plus an equal host staging buffer.</p>
@@ -144,7 +144,7 @@ $$</div>
         <div class="row"><code>ohao/render/scene/light_table.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/cull/instances.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/csm_pass.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/model_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/render_extract.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>

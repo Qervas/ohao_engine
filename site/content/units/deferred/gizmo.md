@@ -196,10 +196,10 @@ The push constant block is `mat4 + mat4 + vec4` = 144 bytes.
 {{cite ohao/render/deferred/gizmo_pass.cpp "pushConstant.size = sizeof(GizmoPushConstants);"}}
 
 Vulkan's guaranteed minimum `maxPushConstantsSize` is 128. Nothing in the tree
-queries the actual limit; the only record of it is a comment in the path
-tracer, which packs two values into one field rather than exceed 256 bytes:
+queries the actual limit; the path tracer's own block is sized to a 256-byte
+device, and its header says so:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "// 256-byte device maxPushConstantsSize, so we cannot append a field"}}
+{{cite ohao/render/rt/path_tracer.hpp "// Push constants — 256 bytes (Vulkan max on most RT GPUs)"}}
 
 So on the development hardware nothing fails, but this layout is not portable to
 a minimum-spec device. That failure lands somewhere quite different from the

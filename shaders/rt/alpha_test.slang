@@ -4,7 +4,7 @@
 // force opacity sees its triangles as candidates; alphaHit decides each from its own material:
 //   opaque   a hit (the instance's other materials made it non-opaque);
 //   mask     a hit where coverage >= the cutoff: base colour alpha x the albedo texture's alpha
-//            (lod 0) x opacity, as core/gbuffer_mask.frag and pt_anyhit test it;
+//            (lod 0) x opacity, as core/gbuffer_mask.frag and the path tracer's anyHit test it;
 //   blend    never: a transparent surface casts no shadow and bounces no GI in the hybrid frame.
 // Set 1 is RenderScene's tables (render/rt/rt_alpha_tables), set 2 the bindless textures.
 // import rt.alpha_test;

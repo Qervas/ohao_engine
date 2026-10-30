@@ -41,18 +41,19 @@ registration time with the arena's first-vertex bias:
 
 {{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset,       // arena indices are mesh-local"}}
 
-The payoff is in the hit shaders. `gl_InstanceCustomIndexEXT` is the instance's slot
-in the instance table. The closest-hit shader resolves it in three hops — slot to
-instance, instance to mesh table entry, mesh entry plus `gl_PrimitiveID` to three
-mesh-local indices, each biased by the mesh's `vertexOffset`:
+The payoff is in the hit shaders. `InstanceID()` is the instance's slot in the
+instance table. The path tracer's hit shaders (`cornersOf` in `rt/path_tracer.slang`)
+resolve it in three hops — slot to instance, instance to mesh table entry, mesh entry
+plus `PrimitiveIndex()` to three mesh-local indices, each biased by the mesh's vertex
+offset:
 
-{{cite shaders/rt/pt_closesthit.rchit "uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];"}}
+{{cite shaders/rt/path_tracer.slang "c.v0 = mesh.x + indices[baseIndex];"}}
 
 Material parameters sit a hop further out. The triangle's slot comes from the
-triangle-slot stream at `mesh.triangleSlotOffset + gl_PrimitiveID`, and the instance
+triangle-slot stream at the mesh's slot offset plus the primitive, and the instance
 maps the slot to a material through its own reference list:
 
-{{cite shaders/rt/pt_closesthit.rchit "uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);"}}
+{{cite shaders/rt/path_tracer.slang "c.material = triSlot < info.z ? materialRefs[info.y + triSlot] : 0u;"}}
 
 So the shared arenas buy one geometry binding per kind, not a dependency-free hit
 path: the instance and mesh loads come before any index can be read.
@@ -180,35 +181,36 @@ stay valid. A light's emitter mesh (`kTlasMaskEmitter`) and a first-person gun's
 specular ray, the traces that pass `kRayMaskCamera` (7); the light samples, bounces
 and other specular rays pass `kRayMaskScene` (1) (hybrid/visibility).
 
-## Everything is opaque, so the any-hit cannot run
+## Opacity is decided per instance
 
 Both BLAS constructors set `geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR` — the same
 line, byte for byte, twice in `rt_acceleration_structure.cpp`, which is why no
 single citation can point at it and `grep -c` is the honest check. Opaque geometry
-does not invoke any-hit shaders. Two escapes exist and neither is used: the
-per-instance `VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR`, absent from the flags
-line above, and the per-ray `gl_RayFlagsNoOpaqueEXT`, which appears nowhere in the
-shader tree — every `traceRayEXT` in every raygen passes `gl_RayFlagsOpaqueEXT`
-instead, forcing opacity a second time.
+does not invoke any-hit shaders. The escape is per instance: `RenderScene` sets
+`FORCE_NO_OPAQUE` on every instance with an alpha material (mask or blend):
 
-Meanwhile the any-hit stage is compiled and bound into the path tracer's hit group:
+{{cite ohao/render/scene/render_scene.cpp "(anyAlpha ? VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR : 0u);"}}
+
+The rays decide the rest. The path tracer forces opacity on every ray while no
+instance has an alpha material (the light buffer's header says whether one does), and
+traces with no flag otherwise, so the any-hit stage runs only on the instances that
+asked for it:
+
+{{cite shaders/rt/path_tracer.slang "uint traceFlags() { return alphaRays() ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE; }"}}
+
+The any-hit stage is bound into the path tracer's hit group:
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "groups[2].anyHitShader = hasAnyHit ? 3 : VK_SHADER_UNUSED_KHR;"}}
 
-and it contains a working alpha lookup, resolved through the same instance → mesh →
-triangle-slot → material chain as the closest-hit:
+and it resolves coverage through the same instance → mesh → triangle-slot → material
+chain as the closest hit: an opaque material returns at once, a masked one is ignored
+below its cutoff, a blended one is present with probability equal to its coverage.
 
-{{cite shaders/rt/pt_anyhit.rahit "uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];"}}
-
-It cannot execute. Alpha-tested transparency in the path tracer is a wired-up
-capability, not shipping behaviour; enabling it means clearing the opaque bit here
-for the geometries that need it *and* dropping `gl_RayFlagsOpaqueEXT` at the trace
-sites, at a traversal cost paid by every ray.
+{{cite shaders/rt/path_tracer.slang "if (mode == kAlphaOpaque) return;"}}
 
 :::key
-Opacity is decided in the acceleration structure, not the shader. Two identical
-lines in this file determine whether an entire stage of the ray-tracing pipeline is
-reachable at all.
+Opacity lives in the acceleration structure and the ray flags, not the shader. A new
+trace that forces opacity on its rays shadows through every alpha-tested hole.
 :::
 
 ## Build or refit, inside the frame
@@ -305,7 +307,7 @@ and the 256 is a hardcoded literal, not a limit read back from the device.
 - Indices in the shared index arena are mesh-local, so a BLAS build must pass the mesh's `vertexOffset` as `firstVertex`. Passing zero makes every triangle in that mesh read the first mesh's vertices.
 - `instanceCustomIndex` holds the instance slot, and it is 24 bits wide. Any slot past 16,777,215 wraps onto a lower one and reads that instance's transform and materials.
 - A hidden or released instance stays in the TLAS with mask zero. The TLAS is sized to the instance table's high-water mark, so slot numbers are stable for the lifetime of a slot.
-- Geometry is flagged opaque, so `pt_anyhit.rahit` is bound but unreachable. Alpha cutout needs the flag cleared here before any shader change matters.
+- Geometry is flagged opaque; an instance with an alpha material carries `FORCE_NO_OPAQUE`, and the path tracer's rays force opacity only while no instance does. A new trace must not force opacity on such instances.
 - A structural change (create, destroy, mask or mesh change) forces a full TLAS build; a transform-only change refits. An update must use the instance count of the build it refines, so a changed count rebuilds.
 - Replaced TLAS storage and scratch are retired, not destroyed; the owner destroys them after the frames that may still read them have completed.
 - One scratch buffer serves all BLAS builds with no inter-build barrier, and is safe only because each build is a blocking single-time submit. Recording more than one BLAS build onto a caller-supplied command buffer requires calling `ensureScratchBuffer` first and inserting your own barriers.

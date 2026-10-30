@@ -116,7 +116,7 @@ Lives in `ohao/render/rt/`. Vulkan KHR ray tracing pipeline. Files are split: `p
 - Environment map importance sampling: marginal + conditional CDFs built CPU-side in `env_cdf.cpp`
 - Bindless textures (base colour, normal in the vertex tangents' frame, rough/metal, emissive, KHR specular)
 - Alpha transparency via the any-hit shader for foliage and hair cards
-- The realtime profile keeps the GLSL tracer (`pt_raygen_realtime.rgen`)
+- Both profiles run this tracer: the realtime one at 2 bounces, one sample a frame, denoised by NRD (or DLSS RR where the SDK is present)
 
 ### Denoising (four backends, runtime switchable)
 
@@ -219,6 +219,11 @@ after the fact:
 - **Animation, the OptiX denoiser, the tscn loader and scene serialization**
   were removed in `0873766`. `--denoise=optix` is still accepted on the command
   line and falls back to OIDN with a warning.
+- **The GLSL realtime path tracer** (`pt_raygen_realtime.rgen`) and its ReSTIR GI,
+  internal spatial denoiser and pre-OpenPBR BRDF were removed on 2026-10-30
+  (`docs/specs/2026-10-30-frontier-renderer-design.md`, step F1): both path tracer
+  profiles run the OpenPBR reference tracer. The real-time path tracing write-up
+  above describes that earlier tracer.
 
 Deeper docs: `docs/render_pipelines.md`, `docs/bugs_solved/`, and the monograph in `site/`.
 

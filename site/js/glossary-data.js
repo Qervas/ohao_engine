@@ -32,7 +32,7 @@ window.OHAO_GLOSSARY = {
   },
   GGX: {
     expand: "Trowbridge–Reitz / GGX normal distribution",
-    def: "Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in material/openpbr.slang (ggx_aniso.glsl for the realtime GLSL path tracer).",
+    def: "Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in material/openpbr.slang.",
     group: "Materials",
   },
   NDF: {
@@ -180,18 +180,18 @@ window.OHAO_GLOSSARY = {
   },
   ReSTIR: {
     expand: "Reservoir Spatio-Temporal Importance Resampling",
-    def: "Resamples light candidates over space and time for efficient many-light / GI sampling. Reservoir planes live at set-0 bindings 29–34 in the path tracer.",
+    def: "Resamples light candidates over space and time for efficient many-light / GI sampling. The frontier renderer spec plans it; no code in the tree implements it yet.",
     group: "Light transport",
   },
   // ── Sampling ────────────────────────────────────────────────────
   Sobol: {
     expand: "Sobol quasi-Monte Carlo sequence",
-    def: "Low-discrepancy sample sequence (often Owen-scrambled). Default offline path-tracer sampler for faster convergence than pure random.",
+    def: "Low-discrepancy sample sequence (often Owen-scrambled). OHAO has a host-side generator (sobol_generator.*), tested by sobol_test; no shader draws Sobol points.",
     group: "Sampling",
   },
   PCG: {
     expand: "Permuted Congruential Generator",
-    def: "Fast hash-style RNG used for the realtime path-tracer profile when Sobol is too heavy.",
+    def: "Fast hash-style RNG. The path tracer draws every sample from one PCG stream a pixel and sample, in both profiles.",
     group: "Sampling",
   },
   CDF: {

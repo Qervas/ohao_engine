@@ -8,17 +8,17 @@ standard: v2
 ## One id resolves a material, and nothing is walked
 
 A path-traced hit resolves its material through four lookups and no per-scene walk.
-The TLAS instance carries the render-world instance slot as its custom index. The
-closest-hit shader uses that slot to find the instance, the instance to find the mesh,
-and `gl_PrimitiveID` to find the triangle's submesh slot in the mesh's per-triangle
+The TLAS instance carries the render-world instance slot as its custom index. The path
+tracer's hit shaders use that slot to find the instance, the instance to find the mesh,
+and the primitive index to find the triangle's submesh slot in the mesh's per-triangle
 stream. The slot is then resolved through the instance's material-reference list to a
 row of the material table:
 
-{{cite shaders/rt/pt_closesthit.rchit "uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];"}}
-{{cite shaders/rt/pt_closesthit.rchit "uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);"}}
+{{cite shaders/rt/path_tracer.slang "const uint triSlot = triangleSlots[mesh.w + primitive];"}}
+{{cite shaders/rt/path_tracer.slang "c.material = triSlot < info.z ? materialRefs[info.y + triSlot] : 0u;"}}
 
-The resolution is a macro shared by the raster and RT shaders, and it is total: a slot
-past the instance's reference list falls back to material 0, the default.
+The resolution is total: a slot past the instance's reference list falls back to
+material 0, the default. The raster shaders spell the same rule as a GLSL macro:
 
 {{cite shaders/includes/scene/scene_data.glsl "((slot) < (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)"}}
 
@@ -126,12 +126,12 @@ structure.
 
 ## Base color, applied once
 
-The closest-hit shader seeds `albedo` with the material's base colour and multiplies in
-the albedo texture when there is one — the glTF convention:
+The closest-hit shader seeds the base colour with the material's and multiplies in the
+albedo texture when there is one — the glTF convention:
 
-{{cite shaders/rt/pt_closesthit.rchit "vec3 albedo = matColor.rgb;"}}
+{{cite shaders/rt/path_tracer.slang "float3 baseColor = row0.rgb;"}}
 
-{{cite shaders/rt/pt_closesthit.rchit "if (diffuseTexIdx != 0xFFFFFFFFu) {"}}
+{{cite shaders/rt/path_tracer.slang "if (albedoTex < 4096u) baseColor *= sampleTex(albedoTex, uv).rgb;"}}
 
 Albedo textures are uploaded as `R8G8B8A8_SRGB`, so the sampler returns linear values
 and no decode appears in the shader:
@@ -150,8 +150,8 @@ primitives carry their colour as vertex colour and base colour both, so every pr
 was shaded with its colour squared (a 0.5 wall at 0.25).
 
 :::key
-The diffuse sentinel is the whole rule: a valid albedo index multiplies the base colour,
-`0xFFFFFFFF` leaves it alone. Any material that should look different in the path
+The texture sentinel is the whole rule: a valid albedo index multiplies the base colour,
+`0xFFFFFFFF` (or any index past the array) leaves it alone. Any material that should look different in the path
 tracer than in the raster path has to say so in its own fields, not through a texture
 the loader adds.
 :::
@@ -163,7 +163,7 @@ and format, so there is no common extent to resample to. What the hit shaders ca
 is choose a mip: ray-tracing stages have no implicit derivatives, so the shaders sample
 the base level.
 
-{{cite shaders/rt/pt_closesthit.rchit "Hit shaders have no derivatives: sample the base level (native resolution)."}}
+{{cite shaders/rt/path_tracer.slang "float4 sampleTex(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0); }"}}
 
 The images carry mip chains for the raster passes' benefit and the path tracer never
 reads them, so minification aliasing is a real source of noise on high-frequency
@@ -171,11 +171,11 @@ textures; it is not something sampler state can recover.
 
 The alpha test is opt-in. The any-hit shader multiplies the material's alpha by the albedo
 texture's alpha and ignores intersections below the material's cutoff, but every BLAS
-geometry is built opaque and the raygens add `gl_RayFlagsOpaqueEXT` to every
-`traceRayEXT` unless the scene has an instance with an alpha material. Such an instance
-is given `FORCE_NO_OPAQUE` in the TLAS, so only its triangles invoke the shader.
+geometry is built opaque and the raygen forces opacity on every `TraceRay` unless the
+scene has an instance with an alpha material. Such an instance is given
+`FORCE_NO_OPAQUE` in the TLAS, so only its triangles invoke the shader.
 
-{{cite shaders/rt/pt_anyhit.rahit "if (alpha < alphaRow.y) ignoreIntersectionEXT;"}}
+{{cite shaders/rt/path_tracer.slang "if (alpha < row3.y) IgnoreHit();"}}
 
 ## What an edit costs
 
@@ -206,7 +206,7 @@ radiance, the reference path tracer the index.
 ## Contracts
 
 - Every TLAS instance's custom index is its render-world slot; the hit shaders index the instance table with it. Slots above 2^24 − 1 alias.
-- The triangle-slot stream is read with `gl_PrimitiveID`, so a mesh's BLAS must be a single geometry over exactly the mesh's index range. Splitting a mesh into several geometries makes `gl_PrimitiveID` restart per geometry and breaks the slot lookup.
+- The triangle-slot stream is read with the primitive index, so a mesh's BLAS must be a single geometry over exactly the mesh's index range. Splitting a mesh into several geometries makes the primitive index restart per geometry and breaks the slot lookup.
 - A change to an instance's mask (visibility), mesh or existence must reach the TLAS as a structural change; only a transform-only change may refit.
 - The path tracer must be handed the scene buffers after `recordUpdates` each frame, never before: table growth and TLAS storage replacement change the handles.
 - Replaced TLAS storage, like replaced tables, is destroyed by the retire queue after `MAX_FRAMES_IN_FLIGHT` frames. Destroying it eagerly can free a structure an earlier frame is still tracing.

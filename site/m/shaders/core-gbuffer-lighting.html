@@ -82,7 +82,7 @@ $$</div>
 <div class="prose reveal">
 <p>Emission is an `RGBA16F` attachment of its own (`kEmissive`, output 4): `emission_color × emission_luminance`, times the emissive texture&#x27;s colour when there is one (sRGB-decoded by the bindless sampler), the same radiance the path tracer&#x27;s closest hit resolves:</p>
 <div class="citation-chip"><code class="citation-code">vec3 emissive = row6.rgb * row2.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L212" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:212</a></div>
-<div class="citation-chip"><code class="citation-code">float3 emission = row6.rgb * row2.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L781" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:781</a></div>
+<div class="citation-chip"><code class="citation-code">float3 emission = row6.rgb * row2.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L779" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:779</a></div>
 <p>Lighting adds it unlit, in its own colour. The normal target&#x27;s alpha keeps only its luminance, to keep an emissive surface out of the SSS blur. Because the colour is a material factor (row 6) and the texture only multiplies it, a material with an emission colour and no emissive map still emits.</p>
 </div>
 <div class="section-rule"><h2 id="velocity-right-about-vulkan-and-about-objects">Velocity: right about Vulkan, and about objects</h2></div>

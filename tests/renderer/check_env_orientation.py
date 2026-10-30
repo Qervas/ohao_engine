@@ -4,7 +4,7 @@ An equirectangular HDRI's first row is the zenith: stb_image loads row 0 first, 
 v = 0 and -Y to v = 1. This writes a 64x32 HDRI whose upper half (the sky) is blue and whose lower
 half (the ground) is orange, and a white floor under it, and captures it through `ohao serve` three
 ways: deferred with RT GI (gi_trace's escaped rays), deferred with RT GI off (the prefiltered
-environment and its irradiance), and the path tracer (pt_miss, the CDF's importance sampling). The
+environment and its irradiance), and the path tracer (its miss, the CDF's importance sampling). The
 floor, lit by the upper hemisphere, and the sky above the horizon behind it must come out blue in all
 three: mean blue over mean red at least 1.5. Upside down they come out orange.
 

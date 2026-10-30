@@ -67,23 +67,20 @@ the rest.
 Vulkan guarantees only 128 bytes of push-constant space; anything above that is a
 device capability, not a promise. Exactly one contract sits above the floor — the
 path tracer's 256 — and no code queries `maxPushConstantsSize`; across `ohao/`,
-`shaders/` and `examples/` the identifier occurs once, inside a comment. On a
-minimum-spec device the failure surfaces at pipeline-layout creation, not at compile
-time. The raster blocks are far below the line: the G-buffer pushes 16 bytes and the
+`shaders/` and `examples/` the identifier occurs only in comments, each noting that
+128 is the floor. On a minimum-spec device the failure surfaces at pipeline-layout
+creation, not at compile time. The raster blocks are far below the line: the G-buffer pushes 16 bytes and the
 shadow pass 64.
 
-The path-tracer block is also the one with no headroom. When a per-frame sample
-count had to reach the raygen shaders there was no room for another field:
+The path-tracer block is also the one with no headroom: three matrices and four
+`uvec4`/`vec4` lanes fill the 256 bytes exactly.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "256-byte device maxPushConstantsSize, so we cannot append a field"}}
+{{cite ohao/render/rt/path_tracer.hpp "};  // total = 256 bytes"}}
 
-so it was folded into the top half of a lane that already held the bounce limit:
-
-{{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);"}}
-
-The base and offline raygens mask the high bits off; the realtime raygen loops on
-them. A size contract that is exactly satisfied has stopped being a check and
-become a design constraint.
+The bounce limit, the sample index, the running mean's length and the motion-vector
+flag all share lanes with other values. A size contract that is exactly satisfied has
+stopped being a check and become a design constraint: a new per-frame value has to
+find a spare word, not a new field.
 
 ## The per-draw block that became a record
 
@@ -141,12 +138,11 @@ its own decode — in `gbuffer.frag`:
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "vec4 row1 = matRows[m * kMaterialRows + 1u];   // roughness, metallic, normalTex, emissiveTex"}}
 
-and in the realtime path tracer's closest-hit shader:
+and in the path tracer's closest-hit shader:
 
-{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams  = matColorBuf.matColors[matID * kMaterialRows + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)"}}
+{{cite shaders/rt/path_tracer.slang "float roughness = row1.x, metalness = row1.y;"}}
 
-The reference path tracer's closest hit (`rt/path_tracer.slang`) and the transparent pass
-decode the same lanes again by hand. They agree today. Because there is a single packer the
+The transparent pass decodes the same lanes again by hand. They agree today. Because there is a single packer the
 pipelines cannot disagree about lane order, but the agreement is hand-written copies of one
 diagram in several shaders, with the size assert as the only mechanical witness. A reordered
 row needs coordinated edits in every reader and fails only as wrong pixels.
@@ -170,11 +166,10 @@ it is a hazard in two directions. `< 4096u` rejects a garbage lane and
 albedo and normal lookups pass the sentinel test and index `textures[]` with it,
 while the other two reject it. And the bound is a literal, so raising `maxTextures`
 past 4096 hides the high descriptors from two of the four lookups and leaves them
-visible to the other two. The path tracer's closest-hit does not share the hazard:
-it clamps every index against a specialisation constant that tracks the capacity
-actually bound.
+visible to the other two. The path tracer's closest hit shares the literal: it tests
+every index against 4096, the size its bindless array is declared at.
 
-{{cite shaders/rt/pt_closesthit.rchit "uint boundTexture(uint idx) { return idx < OHAO_BINDLESS_COUNT ? idx : 0xFFFFFFFFu; }"}}
+{{cite shaders/rt/path_tracer.slang "if (normalTex < 4096u)"}}
 
 ## What reaches the GPU from a material
 
@@ -198,7 +193,7 @@ Sizes are pinned from a constants header rather than derived from the shaders. T
 alternative — one declaration shared by both sides, either a header the GLSL
 `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable,
 not just totals. The toolchain already supports the include half, and the render
-world uses it: `scene_data.glsl` is included by five shader sources. A third route goes
+world uses it: `scene_data.glsl` is included by three shader sources. A third route goes
 further: `shaders/shared/layout.json` describes a struct once and `tools/gen_layout.py`
 generates its GLSL, Slang and C++ copies, the C++ one with an assert on every
 field's offset. The deferred light record, `LightGpu`, is declared there, and both
@@ -220,10 +215,10 @@ changed meaning, a shader block written against an older struct — passes it.
 
 ## Contracts
 
-- `PTPushConstants` sits exactly at the 256-byte limit the code assumes, so no field can be appended. `params.w` carries `samplesPerFrame` in its high 16 bits and `maxBounces` in its low 16; the realtime raygen unpacks the high half, base and offline mask it off.
+- `PTPushConstants` sits exactly at the 256-byte limit the code assumes, so no field can be appended; a new per-frame value must reuse a spare word.
 - Nothing queries `maxPushConstantsSize`, and the path tracer's block exceeds Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
 - Three structs carry `OHAO_ASSERT_GPU_LAYOUT` (`LightData`, `GPULight`, `PTPushConstants`); `InstanceGpu`, `MeshGpu`, `Vertex`, `CameraUBO` and `DrawPushConstant` are size-checked with a bare `static_assert`. A layout edit must update the C++ struct, its GLSL twin and the assert together.
-- `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; five shader sources read the GLSL copy. Only the C++ side is size-checked.
-- `MaterialTable::pack` is the only writer of the seven-`vec4` material row; `gbuffer_body.glsl`, `pt_closesthit.rchit`, `rt/path_tracer.slang` and the transparent pass each decode it by hand. The row size is asserted, the lane order is not.
-- `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track the texture manager's `maxTextures` by hand; the path tracer's equivalent is a specialisation constant.
+- `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; three shader sources read the GLSL copy, and the path tracer reads the buffer as raw `float4` rows. Only the C++ side is size-checked.
+- `MaterialTable::pack` is the only writer of the seven-`vec4` material row; `gbuffer_body.glsl`, `rt/path_tracer.slang` and the transparent pass each decode it by hand. The row size is asserted, the lane order is not.
+- `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track the texture manager's `maxTextures` by hand, and so must the path tracer's, which declares its array at 4096.
 - A new material input reaches a shader only through `MaterialDesc`, `MaterialTable::pack` and `kMaterialRows`; every hand decoder of the rows must change with it.

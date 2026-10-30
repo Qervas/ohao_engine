@@ -38,10 +38,10 @@
 
 <div class="section-rule"><h2 id="one-id-resolves-a-material-and-nothing-is-walked">One id resolves a material, and nothing is walked</h2></div>
 <div class="prose reveal">
-<p>A path-traced hit resolves its material through four lookups and no per-scene walk. The TLAS instance carries the render-world instance slot as its custom index. The closest-hit shader uses that slot to find the instance, the instance to find the mesh, and `gl_PrimitiveID` to find the triangle&#x27;s submesh slot in the mesh&#x27;s per-triangle stream. The slot is then resolved through the instance&#x27;s material-reference list to a row of the material table:</p>
-<div class="citation-chip"><code class="citation-code">uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L122" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:122</a></div>
-<div class="citation-chip"><code class="citation-code">uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L123" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:123</a></div>
-<p>The resolution is a macro shared by the raster and RT shaders, and it is total: a slot past the instance&#x27;s reference list falls back to material 0, the default.</p>
+<p>A path-traced hit resolves its material through four lookups and no per-scene walk. The TLAS instance carries the render-world instance slot as its custom index. The path tracer&#x27;s hit shaders use that slot to find the instance, the instance to find the mesh, and the primitive index to find the triangle&#x27;s submesh slot in the mesh&#x27;s per-triangle stream. The slot is then resolved through the instance&#x27;s material-reference list to a row of the material table:</p>
+<div class="citation-chip"><code class="citation-code">const uint triSlot = triangleSlots[mesh.w + primitive];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L688" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:688</a></div>
+<div class="citation-chip"><code class="citation-code">c.material = triSlot &lt; info.z ? materialRefs[info.y + triSlot] : 0u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L689" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:689</a></div>
+<p>The resolution is total: a slot past the instance&#x27;s reference list falls back to material 0, the default. The raster shaders spell the same rule as a GLSL macro:</p>
 <div class="citation-chip"><code class="citation-code">((slot) &lt; (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/scene_data.glsl#L18" target="_blank" rel="noopener">shaders/includes/scene/scene_data.glsl:18</a></div>
 <p>Nothing here depends on iteration order. Every table is keyed by an identity the instance carries — slot, mesh index, material index — instead of by position in a list that several loops must walk identically, so there is no visibility predicate to keep in step across files. The cost is moved to the edges, where the identities are assigned. A reference that names a material the table does not hold is clamped to 0 on the host when the instance is written, so the shader never indexes past the table:</p>
 <div class="citation-chip"><code class="citation-code">refs[i] = (h.valid() &amp;&amp; h.index &lt; materialCount) ? h.index : 0u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/instance_table.cpp#L102" target="_blank" rel="noopener">ohao/render/scene/instance_table.cpp:102</a></div>
@@ -80,23 +80,23 @@
 </div>
 <div class="section-rule"><h2 id="base-color-applied-once">Base color, applied once</h2></div>
 <div class="prose reveal">
-<p>The closest-hit shader seeds `albedo` with the material&#x27;s base colour and multiplies in the albedo texture when there is one — the glTF convention:</p>
-<div class="citation-chip"><code class="citation-code">vec3 albedo = matColor.rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L137" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:137</a></div>
-<div class="citation-chip"><code class="citation-code">if (diffuseTexIdx != 0xFFFFFFFFu) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L138" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:138</a></div>
+<p>The closest-hit shader seeds the base colour with the material&#x27;s and multiplies in the albedo texture when there is one — the glTF convention:</p>
+<div class="citation-chip"><code class="citation-code">float3 baseColor = row0.rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L761" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:761</a></div>
+<div class="citation-chip"><code class="citation-code">if (albedoTex &lt; 4096u) baseColor *= sampleTex(albedoTex, uv).rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L763" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:763</a></div>
 <p>Albedo textures are uploaded as `R8G8B8A8_SRGB`, so the sampler returns linear values and no decode appears in the shader:</p>
 <div class="citation-chip"><code class="citation-code">upload(model.materialTextureIndex, model.albedoTextures, VK_FORMAT_R8G8B8A8_SRGB,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L81" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:81</a></div>
 <p>An untextured material is therefore its base colour, once, in the path tracer as in the G-buffer, which computes the same product and ignores the vertex colour:</p>
 <div class="citation-chip"><code class="citation-code">albedo *= texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord).rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L161" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:161</a></div>
 <p>No per-material fallback texture is created for it: `modelMaterials` uploads only the textures the model carries, and row 2 of the material table has no texture slot beyond the roughness/metal index. The G-buffer used to multiply in the vertex colour as well; primitives carry their colour as vertex colour and base colour both, so every primitive was shaded with its colour squared (a 0.5 wall at 0.25).</p>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The diffuse sentinel is the whole rule: a valid albedo index multiplies the base colour, `0xFFFFFFFF` leaves it alone. Any material that should look different in the path tracer than in the raster path has to say so in its own fields, not through a texture the loader adds.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The texture sentinel is the whole rule: a valid albedo index multiplies the base colour, `0xFFFFFFFF` (or any index past the array) leaves it alone. Any material that should look different in the path tracer than in the raster path has to say so in its own fields, not through a texture the loader adds.</p></div>
 </div>
 <div class="section-rule"><h2 id="textures-at-their-native-size-base-level-only">Textures at their native size, base level only</h2></div>
 <div class="prose reveal">
 <p>Textures reach the hit shaders as separate bindless images, each at its own resolution and format, so there is no common extent to resample to. What the hit shaders cannot do is choose a mip: ray-tracing stages have no implicit derivatives, so the shaders sample the base level.</p>
-<div class="citation-chip"><code class="citation-code">// count). Hit shaders have no derivatives: sample the base level (native resolution).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L45" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:45</a></div>
+<div class="citation-chip"><code class="citation-code">float4 sampleTex(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0); }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L695" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:695</a></div>
 <p>The images carry mip chains for the raster passes&#x27; benefit and the path tracer never reads them, so minification aliasing is a real source of noise on high-frequency textures; it is not something sampler state can recover.</p>
-<p>The alpha test is opt-in. The any-hit shader multiplies the material&#x27;s alpha by the albedo texture&#x27;s alpha and ignores intersections below the material&#x27;s cutoff, but every BLAS geometry is built opaque and the raygens add `gl_RayFlagsOpaqueEXT` to every `traceRayEXT` unless the scene has an instance with an alpha material. Such an instance is given `FORCE_NO_OPAQUE` in the TLAS, so only its triangles invoke the shader.</p>
-<div class="citation-chip"><code class="citation-code">if (alpha &lt; alphaRow.y) ignoreIntersectionEXT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_anyhit.rahit#L67" target="_blank" rel="noopener">shaders/rt/pt_anyhit.rahit:67</a></div>
+<p>The alpha test is opt-in. The any-hit shader multiplies the material&#x27;s alpha by the albedo texture&#x27;s alpha and ignores intersections below the material&#x27;s cutoff, but every BLAS geometry is built opaque and the raygen forces opacity on every `TraceRay` unless the scene has an instance with an alpha material. Such an instance is given `FORCE_NO_OPAQUE` in the TLAS, so only its triangles invoke the shader.</p>
+<div class="citation-chip"><code class="citation-code">if (alpha &lt; row3.y) IgnoreHit();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L815" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:815</a></div>
 </div>
 <div class="section-rule"><h2 id="what-an-edit-costs">What an edit costs</h2></div>
 <div class="prose reveal">
@@ -117,7 +117,7 @@
 <div class="prose reveal">
 <ul>
 <li>Every TLAS instance&#x27;s custom index is its render-world slot; the hit shaders index the instance table with it. Slots above 2^24 − 1 alias.</li>
-<li>The triangle-slot stream is read with `gl_PrimitiveID`, so a mesh&#x27;s BLAS must be a single geometry over exactly the mesh&#x27;s index range. Splitting a mesh into several geometries makes `gl_PrimitiveID` restart per geometry and breaks the slot lookup.</li>
+<li>The triangle-slot stream is read with the primitive index, so a mesh&#x27;s BLAS must be a single geometry over exactly the mesh&#x27;s index range. Splitting a mesh into several geometries makes the primitive index restart per geometry and breaks the slot lookup.</li>
 <li>A change to an instance&#x27;s mask (visibility), mesh or existence must reach the TLAS as a structural change; only a transform-only change may refit.</li>
 <li>The path tracer must be handed the scene buffers after `recordUpdates` each frame, never before: table growth and TLAS storage replacement change the handles.</li>
 <li>Replaced TLAS storage, like replaced tables, is destroyed by the retire queue after `MAX_FRAMES_IN_FLIGHT` frames. Destroying it eagerly can free a structure an earlier frame is still tracing.</li>
@@ -127,7 +127,7 @@
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/scene/scene_data.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/instance_table.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
@@ -136,7 +136,6 @@
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/model_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/scene/gbuffer_body.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/gi_trace.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/render_scene_types.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc">path note</span></div>

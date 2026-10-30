@@ -382,46 +382,33 @@ static void runAssetTests() {
 void runMetaTests() {
     std::cout << "\n--- C++20 Meta / Traits ---\n";
 
-    TEST_BEGIN("RT profile traits (compile-time settings)");
+    TEST_BEGIN("RT profiles: one tracer, the realtime one denoised by NRD");
     {
-        constexpr auto rt = makeProfileSettings<RTRenderProfile::Realtime>();
-        constexpr auto off = makeProfileSettings<RTRenderProfile::Offline>();
-        EXPECT(rt.maxBounces == 2, "realtime max bounces");
-        EXPECT(off.maxBounces == 32, "offline max bounces");
-        EXPECT(off.denoiseMode == DenoiseMode::OIDN, "offline default denoise OIDN");
-        EXPECT(RTProfileTraits<RTRenderProfile::Realtime>::is_realtime, "realtime flag");
-        EXPECT(RTProfileTraits<RTRenderProfile::Offline>::is_offline, "offline flag");
+        EXPECT(kRealtimeRTSettings.maxBounces == 2 && kOfflineRTSettings.maxBounces == 32, "bounces");
+        EXPECT(kRealtimeRTSettings.denoiseMode == DenoiseMode::NRD, "realtime: NRD keeps the history");
+        EXPECT(kOfflineRTSettings.denoiseMode == DenoiseMode::OIDN, "offline default denoise OIDN");
+        EXPECT(isRealtimeProfile(kRealtimeRTSettings.profile) && isOfflineProfile(kOfflineRTSettings.profile), "profiles");
         TEST_PASS();
     }
 
-    TEST_BEGIN("DenoiseModeTraits + runtime mirrors");
+    TEST_BEGIN("Denoise policy: what each denoiser asks of the trace");
     {
-        static_assert(DenoiseModeTraits<DenoiseMode::NRD>::needs_motion_vectors);
-        static_assert(DenoiseModeTraits<DenoiseMode::NRD>::needs_diff_spec_split);
-        static_assert(DenoiseModeTraits<DenoiseMode::OIDN>::needs_cpu_readback);
-        static_assert(!DenoiseModeTraits<DenoiseMode::OIDN>::is_realtime_capable);
-        static_assert(DenoiseModeTraits<DenoiseMode::DLSSRR>::is_gpu_backend);
-
         EXPECT(denoiseNeedsMotionVectors(DenoiseMode::NRD), "NRD needs MV");
         EXPECT(denoiseNeedsMotionVectors(DenoiseMode::DLSSRR), "DLSSRR needs MV");
         EXPECT(!denoiseNeedsMotionVectors(DenoiseMode::OIDN), "OIDN no MV");
         EXPECT(denoiseNeedsCpuReadback(DenoiseMode::OIDN), "OIDN cpu readback");
         EXPECT(denoiseNeedsDiffSpecSplit(DenoiseMode::NRD), "NRD diff/spec");
         EXPECT(!denoiseIsRealtimeCapable(DenoiseMode::OIDN), "OIDN not realtime");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("RTFeatureFlags + makeFeatureSettings if constexpr path");
-    {
-        using F = RTFeatureFlags<RTRenderProfile::Realtime, DenoiseMode::DLSSRR>;
-        static_assert(F::want_motion_vectors);
-        static_assert(F::interactive);
-        static_assert(F::max_bounces == 2);
-
-        constexpr auto s = makeFeatureSettings<RTRenderProfile::Offline, DenoiseMode::NRD>();
-        EXPECT(s.enableAuxiliaryAOVs, "NRD forces auxiliary AOVs");
-        EXPECT(s.denoiseMode == DenoiseMode::NRD, "feature settings denoise mode");
-        EXPECT(s.profile == RTRenderProfile::Offline, "feature settings profile");
+        // The trace's running mean: kept unless a temporal denoiser carries the history.
+        RTRenderSettings rt = kRealtimeRTSettings, off = kOfflineRTSettings;
+        EXPECT(!tracerAccumulates(rt) && !tracerAccumulatesAOVs(rt), "realtime NRD: this frame's sample alone");
+        off.denoiseMode = DenoiseMode::NRD;
+        EXPECT(tracerAccumulates(off) && tracerAccumulatesAOVs(off), "offline NRD: the mean of a still view");
+        rt.denoiseMode = DenoiseMode::DLSSRR;
+        off.denoiseMode = DenoiseMode::DLSSRR;
+        EXPECT(!tracerAccumulates(rt) && !tracerAccumulates(off), "DLSS RR: fresh samples in both profiles");
+        rt.denoiseMode = DenoiseMode::None;
+        EXPECT(tracerAccumulates(rt) && !tracerAccumulatesAOVs(rt), "no denoiser: a running mean");
         TEST_PASS();
     }
 
@@ -520,7 +507,7 @@ void runMetaTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("RT applyDenoisePolicy + fresh-sample / jitter traits");
+    TEST_BEGIN("RT applyDenoisePolicy + jitter");
     {
         RTRenderSettings s{
             .profile = RTRenderProfile::Realtime,
@@ -532,12 +519,6 @@ void runMetaTests() {
         EXPECT(denoiseNeedsPixelJitter(DenoiseMode::NRD), "NRD jitter");
         EXPECT(denoiseNeedsPixelJitter(DenoiseMode::DLSSRR), "DLSS jitter");
         EXPECT(!denoiseNeedsPixelJitter(DenoiseMode::OIDN), "OIDN no jitter");
-        EXPECT(denoiseWantsFreshSample(DenoiseMode::Atrous), "SVGF fresh");
-        EXPECT(denoiseWantsFreshSample(DenoiseMode::DLSSRR), "DLSS fresh");
-        EXPECT(!denoiseWantsFreshSample(DenoiseMode::NRD), "NRD not fresh-only");
-        EXPECT(denoiseNeedsAovAccumulation(DenoiseMode::NRD), "NRD AOV mean");
-        EXPECT(clampSamplesPerFrame(0) == 1u && clampSamplesPerFrame(100) == 64u, "spf clamp");
-        EXPECT(isQmcSampler(SamplerType::Sobol) && !isQmcSampler(SamplerType::PCG), "QMC");
         TEST_PASS();
     }
 

@@ -104,18 +104,16 @@
 <li><a href="path-tracer/host.html">Host lifecycle</a> — ensureRTRenderer, images, pipeline, SBT, descriptors.</li>
 <li><a href="path-tracer/profiles.html">Profiles &amp; meta</a> — RTRenderSettings, Realtime vs Offline traits.</li>
 <li><a href="path-tracer/as.html">Acceleration structures</a> — BLAS/TLAS API, rebuild vs update.</li>
-<li><a href="path-tracer/raygen.html">Raygen integrator</a> — The OpenPBR reference: NEE + BSDF sampling under MIS, AOV writes.</li>
+<li><a href="path-tracer/raygen.html">Raygen integrator</a> — The OpenPBR path tracer: NEE + BSDF sampling under MIS, AOV writes.</li>
 <li><a href="path-tracer/hit-miss.html">Hit &amp; miss shaders</a> — closesthit materials, anyhit alpha, miss env.</li>
-<li><a href="path-tracer/bindings.html">Descriptor map 0–38</a> — Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</li>
-<li><a href="path-tracer/restir.html">ReSTIR GI reservoirs</a> — Ping-pong reservoir planes on bindings 29–34.</li>
+<li><a href="path-tracer/bindings.html">Descriptor map 0–38</a> — Set-0 layout: TLAS, images, AOVs and guides, scene tables, OpenPBR tables.</li>
 </ul>
 <h2 class="gloss-group">07 · Sampling</h2><ul class="prose">
 <li><a href="sampling.html"><strong>Hub</strong> — sampling.html</a></li>
-<li><a href="sampling/sampler-api.html">Sampler API</a> — sampler_api.glsl dispatch, specialization constant.</li>
-<li><a href="sampling/sobol.html">Sobol + Owen</a> — Low-discrepancy stream behind sampler_api.</li>
-<li><a href="sampling/pcg.html">PCG realtime</a> — Hash-based sampler for interactive path.</li>
-<li><a href="sampling/mis.html">MIS heuristics</a> — Balance and power in mis.glsl.</li>
-<li><a href="sampling/env-cdf.html">Environment CDF</a> — CPU build + GPU sampleEnvMap/pdfEnvMap.</li>
+<li><a href="sampling/sobol.html">Sobol + Owen</a> — Host-side Sobol generator and Owen scramble, tested by sobol_test.</li>
+<li><a href="sampling/pcg.html">PCG stream</a> — The path tracer&#x27;s hash-based random stream.</li>
+<li><a href="sampling/mis.html">MIS heuristics</a> — The power heuristic in path_tracer.slang.</li>
+<li><a href="sampling/env-cdf.html">Environment CDF</a> — CPU build + the path tracer&#x27;s sampleEnv/envPdf.</li>
 </ul>
 <h2 class="gloss-group">08 · Hybrid RT</h2><ul class="prose">
 <li><a href="hybrid.html"><strong>Hub</strong> — hybrid.html</a></li>
@@ -125,7 +123,7 @@
 </ul>
 <h2 class="gloss-group">09 · Denoise</h2><ul class="prose">
 <li><a href="denoise.html"><strong>Hub</strong> — denoise.html</a></li>
-<li><a href="denoise/types.html">Denoise modes &amp; traits</a> — DenoiseMode enum + DenoiseModeTraits resource needs.</li>
+<li><a href="denoise/types.html">Denoise modes &amp; traits</a> — DenoiseMode enum + rt_meta&#x27;s denoise policy functions.</li>
 <li><a href="denoise/oidn.html">OIDN</a> — Offline guided denoise path.</li>
 <li><a href="denoise/nrd.html">NRD REBLUR + compose</a> — Pack YCoCg, dispatch, unpack compose, cinematic post.</li>
 <li><a href="denoise/dlss.html">DLSS Ray Reconstruction</a> — NGX dlssd init, guides, binding 35 hit-dist.</li>
@@ -138,7 +136,7 @@
 <li><a href="shaders/includes-lighting.html">Lighting includes</a> — clustered_lights.slang: the falloff, the light loop and the light record.</li>
 <li><a href="shaders/includes-shadow.html">Shadow sampling in lighting</a> — RT visibility channels, the CSM fallback, the cascade depth write.</li>
 <li><a href="shaders/postprocess-chain.html">Postprocess shader chain</a> — Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</li>
-<li><a href="shaders/rt-includes.html">RT shader includes</a> — pbr_unpack and the NRD frontend used by raygen.</li>
+<li><a href="shaders/rt-includes.html">RT shader includes</a> — The NRD frontend and the scene includes.</li>
 <li><a href="shaders/compute.html">Compute shaders</a> — SSAO, light clustering, capture preview, DLSS display pass, GPU culling and Hi-Z.</li>
 <li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.slang, the eight-target MRT contract.</li>
 <li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
@@ -181,7 +179,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">102 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">100 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

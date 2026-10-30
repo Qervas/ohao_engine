@@ -225,7 +225,7 @@ VkDeviceSize LightTable::pendingBytes() const noexcept {
 std::size_t LightTable::recordUploads(detail::StagingBatch& batch) {
     if (!m_dirty) return 0;
     // Header: count, envMapTexIdx, env intensity scale, alpha rays (1: an instance has an alpha
-    // material, so the path tracer's rays let pt_anyhit decide; 0: they force opacity).
+    // material, so the path tracer's rays let the any-hit shader decide; 0: they force opacity).
     std::vector<std::byte> bytes(static_cast<std::size_t>(pendingBytes()));
     const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,
                                 std::bit_cast<uint32_t>(m_envIntensity), m_alphaRays ? 1u : 0u};

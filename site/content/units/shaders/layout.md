@@ -20,7 +20,7 @@ The glob runs at configure time and, since sub-project 4, carries `CONFIGURE_DEP
 the build re-checks it and re-runs the configure step when a stage source is added or
 removed, so a new `.rgen` is compiled by the next build. It also recurses without exclusions:
 every stage source anywhere under `shaders/` is globbed and compiled, whether or
-not any C++ loads it — 26 GLSL sources, 26 SPIR-V modules. Headers are the opposite
+not any C++ loads it — 21 GLSL sources, 21 SPIR-V modules. Headers are the opposite
 case: a `.glsl` file is compiled only as text spliced into a stage, so a header no
 stage includes is never parsed at all.
 
@@ -30,46 +30,30 @@ The compile line is where the architecture actually shows:
 
 Two include roots — `shaders/` and `shaders/includes/` — and **zero `-D` flags**.
 That omission decides how variation is expressed everywhere in the engine. A
-shader cannot be compiled twice with different defines, so the two path-tracer
-profiles are two separate program families rather than one file with a
-`#define PROFILE`: the realtime profile's GLSL raygen, `pt_raygen_realtime.rgen`
-(1883 lines), with the GLSL hit and miss shaders, and the offline profile's
-reference, one Slang file, `rt/path_tracer.slang`, with four entry points. They
-share the descriptor set layout and the push-constant block, and no code.
+shader cannot be compiled twice with different defines, so there are no variants of
+a file: the path tracer is one Slang file, `rt/path_tracer.slang`, with four entry
+points, and both RT profiles load the same four modules. What differs between them —
+the bounce count, whether the trace keeps a running mean, the AOVs, the firefly clamp —
+arrives at run time, in the push-constant block:
 
-What stays configurable is pushed into SPIR-V specialization constants patched at
-pipeline creation. The GLSL tree has two `constant_id`s: the bindless table's
-size in the realtime hit and miss shaders, and the path tracer's sampler choice, in a
-header the realtime raygen includes:
+{{cite shaders/rt/path_tracer.slang "uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment CDF's width"}}
 
-{{cite shaders/includes/rt/sampler_api.glsl "layout(constant_id = 0) const uint SAMPLER_TYPE"}}
+There are no SPIR-V specialization constants either: no shader in the tree declares
+one, and the pipeline builder hands each stage only its module and its entry point's
+name:
 
-It is supplied to the raygen stage alone, so changing samplers rebuilds the
-pipeline object and not the SPIR-V. The reference's raygen declares no such
-constant (it draws from one PCG stream a pixel and sample), so the same entry is
-ignored there:
-
-{{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pSpecializationInfo = &samplerSpecInfo;"}}
-
-The cost is visible in `pt_raygen_realtime.rgen`, which keeps its original glossy
-sampler, and the pdf that matches it, behind `#ifdef OHAO_CRUDE_GLOSSY` — a switch
-nothing in the build ever supplies:
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "// A/B baseline: original crude cosine-scatter sampler (flicker source)."}}
-
-Both `OHAO_CRUDE_GLOSSY` branches are therefore never compiled. They are
-not dead by deletion, they are dead by there being no `-D` in the build — and
-because they are never compiled, nothing checks that they still would.
+{{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pName = m_shaderSet.raygenEntry;"}}
 
 :::why
 The obvious alternative — a define-based permutation system, which is where every
-large engine ends up — is rejected here in favour of file-level duplication plus
-specialization constants. The trade is real: separate raygen files drift, so a
-fix landed in one profile does not reach the other. What is bought is that
-there is no permutation explosion and no cache key to invalidate — each compile is
-one source file in, one `.spv` out, with no defines to reconstruct. The converse
-does not hold, because nothing prunes: a shader that is moved or deleted leaves
-its old module in `build/shaders/` until someone removes it by hand.
+large engine ends up — is rejected here in favour of runtime flags. The trade is
+real: every branch a flag selects is compiled into the one module and costs a
+uniform branch at run time, and a feature that only one profile uses still has to
+compile in both. What is bought is that there is no permutation explosion and no
+cache key to invalidate — each compile is one source file in, one `.spv` out per
+entry point, with no defines to reconstruct — and that a fix lands in every profile at
+once. The converse does not hold, because nothing prunes: a shader that is moved or
+deleted leaves its old module in `build/shaders/` until someone removes it by hand.
 :::
 
 ## The flattening that became an ABI
@@ -219,33 +203,23 @@ header rebuilds the world:
 
 {{cite shaders/CMakeLists.txt "DEPENDS ${SHADER} ${SHADER_INCLUDES}"}}
 
-Touching `includes/scene/scene_data.glsl` therefore recompiles all 26 GLSL modules,
+Touching `includes/scene/scene_data.glsl` therefore recompiles all 21 GLSL modules,
 including those whose include closure never reaches it — a deliberate over-approximation that avoids depfile plumbing. The
 under-approximation next to it is the dangerous half. `SHADER_INCLUDES` is built
 from a pattern with a directory component in the middle:
 
 {{cite shaders/CMakeLists.txt ""${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl""}}
 
-That pattern matches only headers at least one directory below `includes/`. The one
-header directly in it, `includes/pbr_unpack.glsl`, is outside the list.
-
-## pbr_unpack.glsl and the include roots
-
-The realtime raygen asks for it by a path relative to the include root:
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "includes/pbr_unpack.glsl"}}
-
-A quoted include is resolved relative to the *including file's* directory before any
-`-I` root is consulted. `shaders/rt/` has no `includes/` directory, so the lookup falls
-through to the `-I` root `shaders/` and finds `shaders/includes/pbr_unpack.glsl`. A
-directory named `includes/` added under `shaders/rt/` with a file of that name would
-silently take its place for every raygen there.
+That pattern matches only headers at least one directory below `includes/`. Every
+GLSL header in the tree sits there today — `includes/rt/nrd_frontend.glsl` and
+`includes/scene/`'s two — so the list is complete, but a header placed directly in
+`includes/` would be outside it.
 
 :::key
-Edit `includes/pbr_unpack.glsl` and nothing recompiles: it is not in the dependency
-glob, so the build reports success and the SPIR-V is unchanged until a shader that
-includes it is rebuilt for another reason. Force the `shaders` target, or touch the
-realtime raygen, after changing it.
+A header outside the dependency glob changes nothing when edited: the build reports
+success and the SPIR-V is unchanged until a shader that includes it is rebuilt for
+another reason. Keep GLSL headers one directory down, or force the `shaders` target
+after changing one.
 :::
 
 ## Contracts

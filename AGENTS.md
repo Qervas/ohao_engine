@@ -35,7 +35,7 @@ $ C:/Users/djmax/scoop/shims/cmake --build build --config Release --target shade
   it (the `ohao` CLI, the examples, the rendering tests), so building any of them builds
   the shaders. `python tools/check.py` builds it first regardless.
 - Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`, named by
-  flattening the path (`rt/pt_raygen.rgen` → `rt_pt_raygen.rgen.spv`).
+  flattening the path (`core/gbuffer.vert` → `core_gbuffer.vert.spv`).
 - **New shaders are Slang** (`slangc` from the Vulkan SDK, pinned in
   `shaders/slangc.version`); a `.slang` with one `[shader(...)]` entry point gives
   `<flattened>.spv`, with several `<flattened>.<entry>.spv`, without one it is a module.
@@ -416,7 +416,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   discard, so no forced early depth test). A `Blend` draw (`kDrawTransparent`) is in no list at all,
   cascades included: the `transparent` pass draws it. In the TLAS an instance with an alpha material is
   `FORCE_NO_OPAQUE`; inline ray queries test each candidate in `rt/alpha_test.slang` (mask: the cutoff;
-  blend: never a hit, so it casts no shadow and bounces no GI), the path tracer in `pt_anyhit` (blend:
+  blend: never a hit, so it casts no shadow and bounces no GI), the path tracer in its `anyHit` (blend:
   stochastic opacity). A new trace must not force opacity on those instances or it shadows through
   every hole. Windows' `OPAQUE` macro is gone from this path (the enum is `Opaque`).
 - GLSL `flat` is a reserved qualifier; rename locals called `flat`.
@@ -507,8 +507,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **An equirectangular environment's row 0 is the zenith**, as the file stores it and `stbi_loadf`
   loads it: every lookup is `u = atan2(z, x) / 2pi + 0.5`, `v = 0.5 - asin(y) / pi` (deferred
   lighting, `equirectUV` in `clustered_lights.slang`, the prefilter's both ways, `gi_trace`,
-  `pt_miss`, the cinematic composite, `env_sun.cpp`), the same number as the path tracer's CDF
-  (`env_sampling.glsl`, `acos(y) / pi`). A new lookup writes that expression; `asin(y) / pi + 0.5`
+  the path tracer's miss, the cinematic composite, `env_sun.cpp`), the same number as the path tracer's
+  CDF (`envPdf` in `path_tracer.slang`, `acos(y) / pi`). A new lookup writes that expression; `asin(y) / pi + 0.5`
   turns the sky upside down (it did, everywhere, until 2026-10-29) and the unit tests cannot see
   it. `check_env_orientation.py` can: a sky blue above the horizon and orange below must light a
   floor blue in deferred (RT GI and IBL) and the path tracer.
@@ -559,16 +559,23 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   bounce) and `check_material.py`: a white furnace (white OpenPBR materials under a uniform sky
   of radiance 1 render as 1, within 1%) and a closed box of emitting Lambertian walls
   (`Le / (1 - rho)` with every bounce, `Le (1 - rho^(N+2)) / (1 - rho)` with `--bounces N`).
-- **The reference path tracer** is `shaders/rt/path_tracer.slang` (the offline profile,
-  `PathTracerShaderSet`'s default), a correct estimator of OpenPBR's base
+- **The path tracer** is `shaders/rt/path_tracer.slang` (`PathTracerShaderSet`'s default, both
+  profiles), a correct estimator of OpenPBR's base
   (`shaders/material/openpbr.slang`): one path a sample, light and environment sampling weighed
   against BSDF sampling by the power heuristic, Russian roulette from the third vertex, 32
   bounces. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
   weighs it by the light's index in `InstanceGpu.emitterLight.w`; a light without a mesh (a
   point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
   full weight. Emissive proxies are not path tracer lights (the surfaces are). `--bounces N`
-  (`render.capture {bounces}`) for the referee: 0 direct light only. The realtime profile keeps
-  the GLSL tracer (`pt_raygen_realtime.rgen`) until the many-lights spec (ruling O5). Its floor
+  (`render.capture {bounces}`) for the referee: 0 direct light only. The realtime profile is the
+  same tracer at 2 bounces with NRD by default, and `check_material.py` holds it to the same closed
+  forms. **Two clocks:** the trace's running mean (`pc.control.y` frames) restarts when the view
+  moves (`notifyViewChanged`), but a temporal denoiser's history (`m_historyFrameCount`) restarts
+  only at `resetAccumulation`, reprojecting through the motion vectors, which are written whenever
+  last frame's view exists (`pc.control.z`). Under NRD (realtime) or DLSS RR the trace hands the
+  denoiser this frame's sample alone (`tracerAccumulates`), and only then does the firefly clamp
+  apply; offline NRD denoises the mean of a still view (`tracerAccumulatesAOVs`). A `--denoise`
+  override reaches the tracer whatever it is. Its floor
   across hosts: a ray exactly on a shared triangle edge may take either triangle (the driver
   builds BVHs per process), and the reference tests paths against the hit triangle's geometric
   normal, so a few pixels may differ by any amount between a window and a headless host (one
@@ -584,7 +591,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   light of intensity `I` lights a surface `d` away with `I/d²`, windowed to exactly 0 at
   its `range` (default 10 m) by `(1-(d/range)⁴)²`; a directional light of intensity `I` gives a
   surface facing it irradiance `I`. The path tracer's sphere emitter has
-  radiance `I/(πr²)` (`includes/rt/pt_lights.glsl`); albedo is base colour × albedo texture
+  radiance `I/(πr²)` (`path_tracer.slang`'s light sampling); albedo is base colour × albedo texture
   in both, never the vertex colour (primitives carry their colour as both). An area light
   is the same rectangle in both (Frank's ruling): uniform radiance `I/(4πr²)`, one-sided
   toward `edge1 × edge2`, no range and no `1/d²`; deferred lights it as light type 3
@@ -599,8 +606,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   light's radiance, `kInstanceEmitter`). It is pure emission and changes no other pixel: its
   TLAS mask (`kTlasMaskEmitter`) is in the path tracer's camera and bounce rays' masks only (a
   bounce ray that meets it is weighed against the light's sampling, so it counts once), so no
-  shadow or GI ray hits it (else the light would shadow itself or be counted twice); the
-  realtime GLSL tracer's camera ray and near-mirror ray see it too; no CSM cascade draws it
+  shadow or GI ray hits it (else the light would shadow itself or be counted twice); no CSM cascade draws it
   (`kDrawEmitter`); the
   G-buffer marks it with emissive alpha 1 and metallic −1, so lighting outputs its radiance
   alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes

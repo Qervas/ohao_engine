@@ -97,10 +97,10 @@ ufbx takes `pbr.roughness` when the material has it, inverting it in place if uf
 {{cite ohao/scene/asset/model_fbx.cpp "if (mat->pbr.roughness.has_value) {"}}
 {{cite ohao/scene/asset/model_fbx.cpp "roughness = std::max(roughness, 0.04f);"}}
 
-The only rationale the tree gives for that floor is physical and dielectric-scoped — no firefly or sampling argument is recorded anywhere, and the bound does not generalise past dielectrics. The closest-hit shader re-applies the identical clamp after texture modulation, so on the RT path the loader-side floor is redundant; it matters only to code that reads `materialColors` without going through that shader.
+The only rationale the tree gives for that floor is physical and dielectric-scoped — no firefly or sampling argument is recorded anywhere, and the bound does not generalise past dielectrics. No shader re-applies it: the path tracer's closest hit and the G-buffer pass roughness through as authored, and OpenPBR's base floors it at 0.01 when shading. So an FBX material's scalar roughness bottoms out at 0.04, set here, while a glTF's can reach the module's 0.01.
 
 {{cite ohao/scene/asset/model_fbx.cpp "// Physical minimum: no real dielectric surface has roughness < 0.04"}}
-{{cite shaders/rt/pt_closesthit.rchit "roughness = max(roughness, 0.04);"}}
+{{cite shaders/material/openpbr.slang "static const float kMinSpecularRoughness = 0.01;"}}
 
 The Assimp route reads `AI_MATKEY_ROUGHNESS_FACTOR` first and remaps shininess only if that left the variable at its 0.5 initialiser — an exact float equality against a sentinel, so a material that genuinely authors roughness 0.5 has it silently overwritten by the shininess conversion. The remap itself is not derived from anything: the standard Phong-to-GGX correspondence is $\alpha=\sqrt{2/(N_s+2)}$, and dividing by 1000 instead means an $N_s$ of 100 — a fairly tight highlight — imports as roughness 0.9.
 
@@ -114,7 +114,7 @@ OBJ is the third road and reads nothing. Its MTL parser does store `Ns` in `Mate
 Per-texel roughness only appears if a `{material}_gloss_*` image is sitting beside the model, which the loader inverts and repacks into the green channel of a rough-metal texture. That lands where the closest-hit sampler looks — but the sampler *multiplies*, against that 0.7 scalar. A gloss-mapped OBJ therefore cannot exceed roughness 0.7 at any texel, and every texel is scaled to 70% of its authored value rather than used as authored.
 
 {{cite ohao/scene/asset/model.cpp "packed[i * 4 + 1] = 255 - gloss;"}}
-{{cite shaders/rt/pt_closesthit.rchit "roughness *= rm.g;"}}
+{{cite shaders/rt/path_tracer.slang "roughness *= rm.g;"}}
 
 ## Procedural primitives
 

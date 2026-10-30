@@ -1,6 +1,6 @@
 # The frontier renderer: retiring the legacy
 
-**Status:** proposed (2026-10-30), for Frank's rulings F-R1–F-R8. Step F0, dead code only, is built with this spec.
+**Status:** accepted (Frank, 2026-10-30: every ruling as recommended; F-R3 yes, add the DLSS SDK; F-R6 keep the fallback). Step F0 is built (`docs/changes/2026-10-30-frontier-f0.md`); F1 is next.
 Frank, 2026-10-30: "any old code prohibits our frontier pacing that we need to remove it or retire it".
 
 ## 1. Why
@@ -99,6 +99,24 @@ old path alive.
 - **F-R8, order:** F1 to F6 as listed. F1 first, because the second path tracer is the largest piece of old code and
   the referee must not have two answers. F4 before F5, because direct light is the larger and costlier term (Cornell's
   `lighting` at 0.682 ms).
+
+## 4a. Corrections after the rulings (2026-10-30)
+
+- **SHaRC's code cannot be vendored.** RTXGI, which contains SHaRC, is under the "NVIDIA RTX SDKs License": section 4(e)
+  bars making the SDK subject to an open source license, for example by distributing it in source form. The repo is
+  MIT. So F-R2 is built as OHAO's own Slang hash-grid radiance cache with SHaRC's design:
+  - a camera-relative, logarithmically levelled hash grid of radiance;
+  - updates from a sparse set of short paths, accumulated in integers;
+  - a resolve pass that blends across frames and evicts stale entries;
+  - paths terminated into the cache past their first bounce.
+
+  The published sources are Binder et al., "Fast Path Space Filtering by Jittered Spatial Hashing" (SIGGRAPH 2019
+  talks), and Gautron, "Real-Time Ray-Traced Ambient Occlusion of Complex Scenes using Spatial Hashing" (SIGGRAPH 2020
+  talks), with NVIDIA's SharcGuide as the reference design. Integer accumulation keeps the shader-float-atomics lint
+  and captures deterministic.
+- **The DLSS SDK is never committed.** It is under the same license: binaries and headers in a git-ignored
+  `external/DLSS`, fetched by a script, behind `OHAO_DLSS`. The supplement asks for attribution (the DLSS mark in
+  credits) and a notice to NVIDIA before a commercial release. NRD is already fetched at configure time, never vendored.
 
 ## 5. What stays out
 

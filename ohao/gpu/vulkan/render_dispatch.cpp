@@ -293,7 +293,7 @@ bool VulkanRenderer::blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t
     return copied;
 }
 
-void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
+void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer || !isRTSupported()) return;
     log::setFrame(++m_framesStarted);
@@ -329,7 +329,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();
 
-    prepareRTSceneForFrame(pipeline);
+    prepareRTSceneForFrame(defaults);
 
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);

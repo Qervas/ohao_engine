@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 356" class="unit-diagram" role="img"
-     aria-label="Data flow of DenoiseMode: the CLI string is parsed once, then stored in two independent copies. VulkanRenderer::m_denoiseMode drives the readback tap. PathTracer's RTRenderSettings::denoiseMode drives the per-frame trait queries, but is reset to the pipeline default every frame and only re-seeded for Atrous and DLSSRR.">
+     aria-label="Data flow of DenoiseMode: the CLI string is parsed once, then stored in two independent copies. VulkanRenderer::m_denoiseMode drives the readback tap. PathTracer's RTRenderSettings::denoiseMode drives the per-frame policy queries; it is reset to the profile default every frame and re-injected for any overridden mode.">
   <defs>
     <marker id="dtmf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d4a58"/>
@@ -41,13 +41,13 @@
   <!-- ── the narrow bridge between the two copies ────────────────── -->
   <path d="M 434 92 L 434 148 L 470 148 L 470 228" fill="none" stroke="#c4784a" stroke-width="1.5"
         stroke-dasharray="5 3" marker-end="url(#dtmf-arrow-a)"/>
-  <text x="482" y="146" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">re-seeded only for Atrous and DLSSRR</text>
-  <text x="482" y="161" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">None / OIDN / NRD never cross this arrow</text>
+  <text x="482" y="146" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">re-injected for any mode when --denoise is given</text>
+  <text x="482" y="161" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">None and OIDN included</text>
 
   <!-- ── row 2: tracer-side copy ─────────────────────────────────── -->
   <rect x="16" y="228" width="184" height="48" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="108" y="246" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">pipeline default</text>
-  <text x="108" y="262" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">Realtime → None, Offline → OIDN</text>
+  <text x="108" y="262" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">Realtime → NRD, Offline → OIDN</text>
 
   <line x1="200" y1="252" x2="226" y2="252" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
   <text x="213" y="296" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">overwritten every frame</text>
@@ -60,9 +60,9 @@
   <line x1="456" y1="252" x2="482" y2="252" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
 
   <rect x="484" y="220" width="220" height="64" rx="4" fill="#1a222c" stroke="#3d4a58"/>
-  <text x="594" y="238" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#7dba8a">the three live trait queries</text>
-  <text x="594" y="253" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">needsPixelJitter · needsAov-</text>
-  <text x="594" y="266" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">Accumulation · wantsFreshSample</text>
+  <text x="594" y="238" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#7dba8a">the live policy queries</text>
+  <text x="594" y="253" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">needsPixelJitter ·</text>
+  <text x="594" y="266" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">tracerAccumulates(AOVs)</text>
   <text x="594" y="279" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">→ raygen push constants</text>
 
   <text x="16" y="330" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">

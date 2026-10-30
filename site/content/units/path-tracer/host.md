@@ -7,7 +7,7 @@ standard: v2
 
 ## Five steps that do not commute
 
-`PathTracer` is the largest single owner of GPU state in the engine: roughly thirty
+`PathTracer` is the largest single owner of GPU state in the engine: some two dozen
 images, a descriptor set per frame in flight, an RT pipeline, a shader
 binding table, and five optional denoise/post backends held by pointer. `init()` runs five build
 steps whose order is forced by data dependencies, not taste: `createRTPipeline`
@@ -37,10 +37,9 @@ and its term in the `&&` chain is dead.
 
 One number in the pipeline create-info is worth pausing on. It declares a maximum
 ray recursion depth of two, with a comment that path tracing "needs bounce
-recursion" — but the bounce loop in both raygens is iterative, and no
-closest-hit, any-hit or miss shader in `shaders/rt/` traces a ray (`traceRayEXT` in
-GLSL, `TraceRay` in Slang). Every ray is launched from the raygen, so the pipeline
-never recurses past depth one.
+recursion" — but the bounce loop in the raygen is iterative, and no closest-hit,
+any-hit or miss entry point of `rt/path_tracer.slang` calls `TraceRay`. Every ray is
+launched from the raygen, so the pipeline never recurses past depth one.
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "pipelineInfo.maxPipelineRayRecursionDepth = 2;"}}
 
@@ -106,10 +105,9 @@ backend's real header.
 ## One descriptor set per frame slot, rewritten every frame
 
 There is no descriptor caching: the pool holds one set per frame in flight, and
-`render()` rebuilds up to thirty-eight writes from scratch into the set of the frame
-slot it is given before every trace. The array is sized with three entries of slack
-above the worst case, so adding more than three unconditional bindings without
-growing it overruns a stack buffer.
+`render()` rebuilds up to twenty-six writes from scratch into the set of the frame
+slot it is given before every trace. The array has fifteen entries of slack above
+the worst case, and nothing checks `writeCount` against its size.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[41] = {};"}}
 
@@ -130,36 +128,33 @@ they read their own sets. The write lands on a set whose last user has completed
 
 {{cite ohao/render/frame/frame_resources.hpp "waitForFrame(currentFrame) - blocks until frame N-3 completes"}}
 
-Of the 39 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
+Of the 26 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
 that per-slot ordering. The one place the ordering does not reach is a buffer the
 set *points at*: a handle that `RenderScene` replaces mid-flight stays alive in its
 retire queue for `MAX_FRAMES_IN_FLIGHT` frames, so a set still bound by an earlier
 frame never dangles.
 
-## 256 bytes, and the word that had to hold two numbers
+## 256 bytes of push constants
 
 The push-constant block is asserted at 256 bytes — the device maximum on most RT
-GPUs — so when a genuine per-frame sample count was needed there was no room to
-append a field. It went into the high half of the word that already held the bounce
-limit.
+GPUs — and it carries everything per frame that is not a descriptor: three matrices
+(inverse view, inverse projection, last frame's view-projection) and four words of
+control.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);"}}
+{{cite shaders/rt/path_tracer.slang "uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment CDF's width"}}
 
-Only the realtime raygen unpacks the high half and loops on it; the reference
-raygen (`rt/path_tracer.slang`) masks it off and traces one path per dispatch. The
-same push constant means two different things depending on which SPIR-V the profile
-loaded.
+`params` is the resolution, the sample index that seeds the raygen's PCG stream, and
+the bounce limit. `control.y` and `control.z` are the two answers the host's clocks
+give (below): how many frames the running mean already holds, and whether last frame's
+view-projection is a rendered frame's, so motion vectors can be computed.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "uint samplesPerFrame = max(pc.params.w >> 16, 1u);"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces);"}}
 
 ## The jitter is computed on the host
 
-No mode samples at pixel centre. Each raygen draws its own stochastic sub-pixel
-offset per sample — the realtime one `getSample2D(dimIdx) - 0.5` about the centre,
-the reference a uniform point of the pixel from its PCG stream — and adds it to the
-primary-ray UV in all denoise modes.
+No mode samples at pixel centre. The raygen draws a uniform point of the pixel from
+its PCG stream per sample and adds it to the primary-ray UV in all denoise modes.
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);"}}
 {{cite shaders/rt/path_tracer.slang "const float2 uv = (float2(pixel) + jit + pc.jitter.xy) / float2(size);"}}
 
 What the host contributes, and only when the mode is NRD or DLSS-RR, is the second
@@ -177,7 +172,7 @@ $b$ is the base, $d_k$ the digits of index $i$ in that base, and $\mathbf{j}_n$ 
 pixel offset for frame $n$. The loop in `render()` is that sum written out, with `f`
 accumulating $b^{-(k+1)}$. The index is taken modulo 16 and then incremented, because
 $\Phi_b(0) = 0$ would spend one of the sixteen slots on "no jitter at all". Every
-other denoise mode gets `pc.jitter.xy = 0` and keeps only the sampler's own random
+other denoise mode gets `pc.jitter.xy = 0` and keeps only the raygen's own random
 offset.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "const uint32_t idx = (m_haltonIndex % 16u) + 1u;"}}
@@ -186,13 +181,30 @@ offset.
 
 {{cite ohao/render/rt/denoise/dlss_rr.cpp "evalParams.InJitterOffsetX = -in.jitterX;"}}
 
-## Two counters, and the clear that never happens
+## Three counters, and the clear that never happens
 
-`m_sampleIndex` and `m_historyFrameCount` both advance once per frame and are not
-interchangeable: the first seeds the sampler, the second drives temporal logic. A
-reset sends the history counter to zero but restores the sample index to a
-caller-settable seed rather than zero, so a caller can replay an identical sample
-sequence across runs that change something else.
+`render()` advances three counters once per frame, and they answer different questions:
+
+{{cite ohao/render/rt/path_tracer.hpp "uint32_t m_historyFrameCount = 0;   // frames since resetAccumulation: the denoisers' history"}}
+
+{{cite ohao/render/rt/path_tracer.hpp "uint32_t m_accumFrames = 0;         // frames in the trace's running mean (restarts on a moved view)"}}
+
+`m_sampleIndex` seeds the raygen's random numbers. `m_historyFrameCount` is the
+denoisers' clock: NRD's frame index, the à-trous and DLSS-RR reset tests; only
+`resetAccumulation()` sends it to zero. `m_accumFrames` is the trace's own running
+mean: a moved view (`notifyViewChanged`) restarts it at the top of the next frame
+while the denoisers' history carries on and reprojects.
+
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_viewChangedThisFrame) m_accumFrames = 0;"}}
+
+The raygen sees the mean's length as `control.y`, and sees 0 when a temporal denoiser
+takes this frame's sample alone (`tracerAccumulates`, `rt_meta.hpp`):
+
+{{cite ohao/render/rt/path_tracer_render.cpp "pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;"}}
+
+A reset restores the sample index to a caller-settable seed rather than zero, so a
+caller can replay an identical sample sequence across runs that change something
+else.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
 
@@ -206,8 +218,8 @@ The accumulation is never cleared. It is a ping-pong pair: each frame writes one
 image whole, so its barrier declares the old layout `UNDEFINED` every frame,
 licensing the driver to discard the contents, and reads the other — the previous
 frame's — through a `GENERAL → GENERAL` acquire of that write. Before the pair is
-written once, the history image is `UNDEFINED` too, and both raygens read history
-only once a frame has accumulated.
+written once, the history image is `UNDEFINED` too, and the raygen reads history
+only when `control.y` is above zero.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "accumBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;"}}
 
@@ -218,28 +230,14 @@ a stale "already transitioned".
 
 {{cite ohao/render/rt/path_tracer_images.cpp "m_nrdComposeFirstFrame = true;"}}
 
-## Seven images only one raygen reads
+## An image nothing reads
 
-The descriptor set layout declares 39 bindings, 0–38, none unused. Bindings 29–34 are the ReSTIR GI
-reservoir ping-pong and 35 is the DLSS specular hit-distance guide; all seven images
-are created and destroyed with the rest, and only the realtime raygen declares them.
-It cannot store to all of them: 29–31 are the *prev* half of the ping-pong, declared
-`readonly` and only ever `imageLoad`ed. Stores go to 32–34, the *curr* half declared
-`writeonly`, and to 35.
+`createImages()` still allocates an R32F specular hit-distance image beside the AOVs,
+and `destroy()` frees it, but it is in no descriptor binding and the DLSS-RR
+evaluation inputs `render()` fills leave the optional specular hit-distance unset, so
+nothing writes or reads it.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "for (uint32_t b = 29; b <= 34; ++b) add(b, IMAGE, RGEN);"}}
-
-{{cite shaders/rt/pt_raygen_realtime.rgen "layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D prevGIReservoir0;"}}
-
-The per-frame rewrite fills all seven in every set, whichever profile owns the
-`PathTracer`, swapping prev and curr each frame. It has to: the realtime raygen
-touches them every frame, only binding 12 carries `PARTIALLY_BOUND`, and with these
-bindings left unwritten `rt_realtime` lost the device. A barrier takes all seven to
-`GENERAL` before the trace — the reservoirs from `UNDEFINED` until their half of the
-ping-pong has been written once, the hit-distance guide from `UNDEFINED` every frame,
-since the raygen rewrites it whole.
-
-{{cite ohao/render/rt/path_tracer_render.cpp "addImage(35, &specHitDistInfo);"}}
+{{cite ohao/render/rt/path_tracer_images.cpp "if (vkCreateImage(m_device, &imageInfo, nullptr, &m_specHitDistImage) != VK_SUCCESS) return false;"}}
 
 :::key
 `PathTracer` holds only *borrowed* handles for scene data. The environment CDF
@@ -253,9 +251,10 @@ because freeing them here would double-free.
 ## Contracts
 
 - `init()` must not be reordered: function pointers first, descriptor layout before pipeline layout, pipeline before SBT.
-- The two profile renderers each own a full `PathTracer`, and each `PathTracer` allocates its own set of roughly thirty images, so an eager pair doubles the render-target footprint. They are created lazily on the first `setRenderMode()` into that mode instead.
-- Each frame slot's descriptor set is rewritten from the host at the top of `render()`, and bindings 13–16 flip between ping-pong views each frame, so the rewrite is not idempotent. It is safe because the slot's fence was waited first; calling `render()` with a slot whose fence was not waited rewrites a set an earlier submission still reads.
+- The two profile renderers each own a full `PathTracer`, and each `PathTracer` allocates its own set of some two dozen images, so an eager pair doubles the render-target footprint. They are created lazily on the first `setRenderMode()` into that mode instead.
+- Each frame slot's descriptor set is rewritten from the host at the top of `render()`, and bindings 1 and 3 swap between the accumulation pair each frame, so the rewrite is not idempotent. It is safe because the slot's fence was waited first; calling `render()` with a slot whose fence was not waited rewrites a set an earlier submission still reads.
 - `setSceneBuffers` must run every frame after `RenderScene::recordUpdates`. A handle cached from an earlier frame may belong to a buffer or TLAS that has since been replaced and retired.
 - `destroy()` waits for device idle, tears down the denoisers, nulls the borrowed CDF handles, and only then destroys the SBT, pipeline, descriptors and images. The destructor calls it, so an object outliving its `VkDevice` is a use-after-free.
 - Switching to or from a DLSS upscaling preset reallocates every render target, so `setRenderSettings()` is safe only between frames — never inside a command buffer.
-- The `PathTracerShaderSet` default is the Slang reference (`rt_path_tracer.slang.<entry>.spv`, entries `raygen`, `closestHit`, `anyHit`, `miss`), which `RTOfflineRenderer` uses; `RTRealtimeRenderer` passes the GLSL set with `main` entries. The pipeline takes each stage's entry name from the set, so a set whose names do not match its SPIR-V fails at pipeline creation.
+- Both profiles use the `PathTracerShaderSet` default (`rt_path_tracer.slang.<entry>.spv`, entries `raygen`, `closestHit`, `anyHit`, `miss`). The pipeline takes each stage's entry name from the set, so a set whose names do not match its SPIR-V fails at pipeline creation.
+- `resetAccumulation()` zeroes both clocks; `notifyViewChanged()` restarts only the running mean. A host that resets on every camera move throws away the temporal denoisers' history.

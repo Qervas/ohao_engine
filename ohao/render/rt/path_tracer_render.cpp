@@ -24,11 +24,9 @@ namespace ohao {
 
 namespace {
 constexpr uint32_t kPTFlagEnableAOVs = 1u << 0;
-constexpr uint32_t kPTFlagEnableInternalDenoise = 1u << 1;
 constexpr uint32_t kPTFlagEnableFireflyClamp = 1u << 2;
-// Sub-plan 4.F T3: in NRD mode, raygen uses a running mean over N samples for the
-// five NRD AOV bindings (22/23/24/25/26) so offline --spp=N feeds NRD an N-spp
-// averaged input. Must stay in sync with PT_FLAG_ACCUMULATE_AOVS in the raygen shaders.
+// Offline NRD: the five NRD inputs (22-26) are the running mean of the frames accumulated, so
+// --spp N feeds NRD an N-sample mean (tracerAccumulatesAOVs). rt/path_tracer.slang's kFlag*.
 constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 // Phase 5: DLSSRR mode — raygen repurposes normalAOV (binding 7) as the packed
 // (worldN, roughness) guide DLSS Ray Reconstruction consumes.
@@ -128,23 +126,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     normalAOVInfo.imageView = m_normalAOVView;
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    const uint32_t prevSurfaceHistoryIndex = 1u - m_surfaceHistoryWriteIndex;
-    VkDescriptorImageInfo prevSurfaceHistoryInfo{};
-    prevSurfaceHistoryInfo.imageView = m_surfaceHistoryViews[prevSurfaceHistoryIndex];
-    prevSurfaceHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkDescriptorImageInfo currSurfaceHistoryInfo{};
-    currSurfaceHistoryInfo.imageView = m_surfaceHistoryViews[m_surfaceHistoryWriteIndex];
-    currSurfaceHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    const uint32_t prevShadingHistoryIndex = 1u - m_shadingHistoryWriteIndex;
-    VkDescriptorImageInfo prevShadingHistoryInfo{};
-    prevShadingHistoryInfo.imageView = m_shadingHistoryViews[prevShadingHistoryIndex];
-    prevShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkDescriptorImageInfo currShadingHistoryInfo{};
-    currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
-    currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     VkWriteDescriptorSet writes[41] = {};
     uint32_t writeCount = 0;
@@ -212,38 +193,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         writes[writeCount].pImageInfo = texInfos.data();
         writeCount++;
     }
-
-    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 13;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo = &prevSurfaceHistoryInfo;
-    writeCount++;
-
-    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 14;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo = &currSurfaceHistoryInfo;
-    writeCount++;
-
-    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 15;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo = &prevShadingHistoryInfo;
-    writeCount++;
-
-    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 16;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo = &currShadingHistoryInfo;
-    writeCount++;
 
     // Binding 17: env marginal CDF (only if set — dummy buffers from env_upload.cpp guarantee this)
     VkDescriptorBufferInfo envMargInfo{};
@@ -370,44 +319,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &normalRoughnessInfo;
     writeCount++;
-
-    // Binding 27: NRD denoised diffuse — Sub-plan 4.C
-    VkDescriptorImageInfo outDiffInfo{};
-    outDiffInfo.imageView   = m_outDiffRadianceView;
-    outDiffInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 27;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo      = &outDiffInfo;
-    writeCount++;
-
-    // Binding 28: NRD denoised specular — Sub-plan 4.C
-    VkDescriptorImageInfo outSpecInfo{};
-    outSpecInfo.imageView   = m_outSpecRadianceView;
-    outSpecInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 28;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo      = &outSpecInfo;
-    writeCount++;
-
-    // Bindings 29-34: ReSTIR GI reservoir ping-pong (realtime raygen), prev planes
-    // read at 29-31, curr planes written at 32-34. Binding 35: specular hit-distance
-    // guide (R32F). The realtime raygen touches all seven every frame, so they must
-    // be valid in every set: an unwritten storage image here loses the device.
-    const uint32_t prevGIReservoirIndex = 1u - m_giReservoirWriteIndex;
-    VkDescriptorImageInfo giReservoirInfo[6]{};
-    for (uint32_t p = 0; p < 3; ++p) {
-        giReservoirInfo[p]     = {VK_NULL_HANDLE, m_giReservoirViews[p][prevGIReservoirIndex], VK_IMAGE_LAYOUT_GENERAL};
-        giReservoirInfo[3 + p] = {VK_NULL_HANDLE, m_giReservoirViews[p][m_giReservoirWriteIndex], VK_IMAGE_LAYOUT_GENERAL};
-    }
-    for (uint32_t i = 0; i < 6; ++i) addImage(29u + i, &giReservoirInfo[i]);
-    const VkDescriptorImageInfo specHitDistInfo{VK_NULL_HANDLE, m_specHitDistView, VK_IMAGE_LAYOUT_GENERAL};
-    addImage(35, &specHitDistInfo);
 
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
@@ -573,95 +484,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             0, 0, nullptr, 0, nullptr, 12, aovBarriers);
     }
 
-    // --- Transition surface history images to GENERAL ---
-    {
-        const uint32_t prevSurfaceHistoryIndex = 1u - m_surfaceHistoryWriteIndex;
-        VkImageMemoryBarrier historyBarriers[2] = {};
-
-        historyBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        historyBarriers[0].srcAccessMask = m_surfaceHistoryInitialized[prevSurfaceHistoryIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-        historyBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        historyBarriers[0].oldLayout = m_surfaceHistoryInitialized[prevSurfaceHistoryIndex] ? VK_IMAGE_LAYOUT_GENERAL
-                                                                                            : VK_IMAGE_LAYOUT_UNDEFINED;
-        historyBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        historyBarriers[0].image = m_surfaceHistoryImages[prevSurfaceHistoryIndex];
-        historyBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        historyBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        historyBarriers[1].srcAccessMask = m_surfaceHistoryInitialized[m_surfaceHistoryWriteIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-        historyBarriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        historyBarriers[1].oldLayout = m_surfaceHistoryInitialized[m_surfaceHistoryWriteIndex] ? VK_IMAGE_LAYOUT_GENERAL
-                                                                                                : VK_IMAGE_LAYOUT_UNDEFINED;
-        historyBarriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        historyBarriers[1].image = m_surfaceHistoryImages[m_surfaceHistoryWriteIndex];
-        historyBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 2, historyBarriers);
-    }
-
-    {
-        const uint32_t prevShadingHistoryIndex = 1u - m_shadingHistoryWriteIndex;
-        VkImageMemoryBarrier historyBarriers[2] = {};
-
-        historyBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        historyBarriers[0].srcAccessMask = m_shadingHistoryInitialized[prevShadingHistoryIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-        historyBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        historyBarriers[0].oldLayout = m_shadingHistoryInitialized[prevShadingHistoryIndex] ? VK_IMAGE_LAYOUT_GENERAL
-                                                                                            : VK_IMAGE_LAYOUT_UNDEFINED;
-        historyBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        historyBarriers[0].image = m_shadingHistoryImages[prevShadingHistoryIndex];
-        historyBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        historyBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        historyBarriers[1].srcAccessMask = m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-        historyBarriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        historyBarriers[1].oldLayout = m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] ? VK_IMAGE_LAYOUT_GENERAL
-                                                                                                : VK_IMAGE_LAYOUT_UNDEFINED;
-        historyBarriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        historyBarriers[1].image = m_shadingHistoryImages[m_shadingHistoryWriteIndex];
-        historyBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 2, historyBarriers);
-    }
-
-    // --- ReSTIR GI reservoirs (3 prev read + 3 curr write) and the spec hit-distance
-    //     guide to GENERAL. The guide is fully rewritten each frame: UNDEFINED is fine.
-    {
-        VkImageMemoryBarrier giBarriers[7] = {};
-        const auto reservoirBarrier = [&](VkImageMemoryBarrier& b, uint32_t plane, uint32_t index,
-                                          VkAccessFlags dstAccess) {
-            const bool initialized = m_giReservoirInitialized[index];
-            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcAccessMask = initialized ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b.image = m_giReservoirImages[plane][index];
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        };
-        for (uint32_t p = 0; p < 3; ++p) {
-            reservoirBarrier(giBarriers[p], p, prevGIReservoirIndex, VK_ACCESS_SHADER_READ_BIT);
-            reservoirBarrier(giBarriers[3 + p], p, m_giReservoirWriteIndex, VK_ACCESS_SHADER_WRITE_BIT);
-        }
-        giBarriers[6].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        giBarriers[6].srcAccessMask = 0;
-        giBarriers[6].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        giBarriers[6].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        giBarriers[6].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        giBarriers[6].image = m_specHitDistImage;
-        giBarriers[6].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        // Source is the previous frame's ray tracing writes (same queue).
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 7, giBarriers);
-    }
-
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -672,38 +494,24 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     pc.invView = glm::inverse(view);
     pc.invProj = glm::inverse(proj);
     pc.prevViewProj = m_prevViewProj;
-    // params.w packs BOTH maxBounces (low 16 bits) and the genuine per-frame
-    // sample count (high 16 bits). The push-constant block is already at the
-    // 256-byte device maxPushConstantsSize, so we cannot append a field — the
-    // realtime raygen unpacks samplesPerFrame from the high bits and loops on it;
-    // base/offline raygen mask it off (they trace one path per dispatch).
-    const uint32_t spf = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
-    const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);
-    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, packedBouncesAndSpf);
+    // A moved view restarts the trace's running mean (not the denoisers' history).
+    if (m_viewChangedThisFrame) m_accumFrames = 0;
+    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces);
     pc.control = glm::uvec4(0u);
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
-    if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;
-    if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
-    // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings.
-    // Policy: denoiseNeedsAovAccumulation (rt_meta).
-    if (denoiseNeedsAovAccumulation(m_renderSettings.denoiseMode)) {
-        pc.control.x |= kPTFlagAccumulateAOVs;
-    }
-    // Atrous (SVGF) / DLSS-RR: denoiseWantsFreshSample → historyFrameCount=0 so
-    // raygen writes 1-spp beauty; denoisers own temporal accumulation.
-    const bool freshSample = denoiseWantsFreshSample(m_renderSettings.denoiseMode);
-    const bool dlssMode = (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR);
-    if (dlssMode) pc.control.x |= kPTFlagDLSSRR;
-    pc.control.y = freshSample ? 0u : m_historyFrameCount;
-    pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
+    // The firefly clamp (biased) only protects a temporal denoiser fed one sample a frame; a running
+    // mean converges without it.
+    if (m_renderSettings.enableFireflyClamp && !tracerAccumulates(m_renderSettings))
+        pc.control.x |= kPTFlagEnableFireflyClamp;
+    if (tracerAccumulatesAOVs(m_renderSettings)) pc.control.x |= kPTFlagAccumulateAOVs;
+    if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) pc.control.x |= kPTFlagDLSSRR;
+    // The frames already in the running mean (0: this frame's sample alone, which a temporal
+    // denoiser takes), and whether last frame's view gives motion vectors.
+    pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;
+    pc.control.z = m_hasPreviousView ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
-    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,
-                          m_renderSettings.subsurfaceStrength);  // 4.L: SSS strength in tuning.w
-    // Sub-plan 4.F T4: propagate pixel jitter to raygen. zw repurposed by 4.K
-    // for global anisotropic override (z=strength, w=rotation in radians).
-    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y,
-                          m_renderSettings.anisotropyStrength,
-                          m_renderSettings.anisotropyRotation);
+    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral, 0.0f);
+    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, 0.0f, 0.0f);
 
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;
@@ -715,25 +523,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // --- Trace rays! ---
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
-
-    // --- Internal spatial denoise: reads the finished accumulation + normals, writes the
-    //     beauty (the raygen leaves the beauty to it when the flag is set). ---
-    bool spatialRan = false;
-    if (m_renderSettings.enableInternalDenoise && m_renderSettings.enableAuxiliaryAOVs) {
-        VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        toCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &toCompute, 0, nullptr, 0, nullptr);
-        m_spatialDenoise.dispatch(cmd, frameSlot, m_accumView, m_normalAOVView, m_outputView, m_width, m_height);
-        // The beauty's write before any later compute pass (à-trous, DLSS-RR) touches it.
-        VkMemoryBarrier fromCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        fromCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        fromCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &fromCompute, 0, nullptr, 0, nullptr);
-        spatialRan = true;
-    }
 
     // --- À-trous beauty denoise (DenoiseMode::Atrous) ---
     // Runs edge-aware spatial filtering on the final beauty (binding 2) in
@@ -900,18 +689,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         // which matches the frameIndex=0 bootstrap branch.
         camera.jitter     = {m_jitterCurrent.x, m_jitterCurrent.y};
         camera.jitterPrev = {m_jitterPrev.x,    m_jitterPrev.y};
-        camera.frameIndex = m_viewChangedThisFrame ? 0u : m_historyFrameCount;  // 4.F T2: bootstrap on view change
+        camera.frameIndex = m_historyFrameCount;   // 0 only after resetAccumulation: a moved view reprojects
         camera.isMotionVectorInWorldSpace = false;
 
-        // 4.F T2: when view changed this frame, force NRD to treat it as a
-        // fresh frame (no history). Override prev V/P with CURRENT values so
-        // NRD doesn't reproject from a stale camera pose → prevents ghosting
-        // trail while the user moves the camera. Paired with frameIndex=0
-        // above, NRD falls back to spatial-only denoise for this frame.
-        if (m_viewChangedThisFrame) {
-            std::memcpy(camera.viewMatrixPrev.data(), glm::value_ptr(viewM), sizeof(float) * 16);
-            std::memcpy(camera.projMatrixPrev.data(), glm::value_ptr(projM), sizeof(float) * 16);
-        }
         m_nrdDenoiser->setCommonSettings(camera);
 
         // 4.E T2: capture current frame's V/P for NEXT frame's NRD input.
@@ -1241,7 +1021,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         // COMPUTE to the wait is harmless for other modes (nothing wrote the
         // output via compute there).
         const VkPipelineStageFlags outSrcStage =
-            (atrousRan || dlssRan || spatialRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+            (atrousRan || dlssRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                                                  : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -1284,13 +1064,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // Advance sample sequence and track accumulation history separately.
     m_sampleIndex++;
     m_historyFrameCount++;
+    m_accumFrames++;
     m_viewChangedThisFrame = false;
-    m_surfaceHistoryInitialized[m_surfaceHistoryWriteIndex] = true;
-    m_surfaceHistoryWriteIndex = 1u - m_surfaceHistoryWriteIndex;
-    m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] = true;
-    m_shadingHistoryWriteIndex = 1u - m_shadingHistoryWriteIndex;
-    m_giReservoirInitialized[m_giReservoirWriteIndex] = true;
-    m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;
+    m_hasPreviousView = true;
     m_accumInitialized[accumWrite] = true;   // m_accumBuffer stays the image just written
     m_accumWriteIndex = accumPrev;
 }

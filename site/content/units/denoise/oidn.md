@@ -16,9 +16,8 @@ back through a staging buffer along with the albedo and normal AOVs.
 
 Which shader wrote that image is the profile's choice. The only code that
 constructs a `PathTracer` is `RTProfileRendererBase`, and its `init()` hands the
-tracer the profile's shader set: the realtime profile names the GLSL raygen, the
-offline profile takes `PathTracerShaderSet`'s default, the Slang reference path
-tracer.
+tracer the profile's shader set, and both profiles take `PathTracerShaderSet`'s
+default, the Slang path tracer.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "m_pathTracer.setShaderSet(m_shaderSet);"}}
 {{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};"}}
@@ -32,10 +31,11 @@ pixel's own history.
 {{cite shaders/rt/path_tracer.slang "accumBuffer[pixel] = float4(acc, count);"}}
 
 The history is this pixel's alone, read from the previous frame's image of a
-ping-pong pair: the offline camera is still, and any view change resets the
-accumulation.
+ping-pong pair, and runs since the view last moved: a moved view restarts the
+mean. Under OIDN the trace always keeps it — OIDN is not one of the temporal
+denoisers `tracerAccumulates` refuses.
 
-{{cite shaders/rt/path_tracer.slang "// The running mean of every sample since the last reset (the offline camera is still)."}}
+{{cite shaders/rt/path_tracer.slang "// The running mean of every sample since the view last moved (0 frames: this one alone)."}}
 
 So OIDN receives the Monte-Carlo mean at whatever spp has accrued, in linear HDR,
 pre-tonemap — which is precisely the input its `RT` filter is trained on. The
@@ -94,8 +94,7 @@ image the frame copied (the last two filter on the GPU), and hands only `OIDN` a
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && (m_denoiseMode == DenoiseMode::OIDN || m_denoiseMode == DenoiseMode::NRD) &&"}}
 
-`--denoise=optix`, from the era when OptiX was tried first and OIDN was the
-fallback, now parses straight to OIDN with a warning.
+`--denoise=optix` parses to OIDN with a warning.
 
 {{cite ohao/render/rt/denoise/denoise_types.cpp "--denoise=optix is no longer supported"}}
 
@@ -172,23 +171,16 @@ and the exposure the denoised path passes is the same 0.5 the shader hard-codes.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);"}}
 
-The mirror only holds where the GPU does nothing but tonemap, which is a property
-of the profile rather than of the tonemap. `kRealtimeRTSettings` turns the internal
-spatial denoise on — an edge-aware filter and luminance rescale, a compute pass
-after the trace — so the realtime GPU frame is tonemapped *after* filtering while
-the OIDN path tonemaps the raw accumulation — same ACES fit, different input.
-
-{{cite ohao/render/rt/rt_settings.hpp ".enableInternalDenoise = true,"}}
-{{cite shaders/rt/pt_spatial_denoise.comp "const vec3 ldr = pow(ACES(denoised * 0.5), vec3(1.0 / 2.2));"}}
-
-That pairing is reachable: the shared example parser takes `rt_realtime` and
-`--denoise=` as independent tokens, the override is applied on top of the preset,
-and nothing rejects it — `allowExternalDenoiser`, `false` for realtime, is only
-ever printed in a startup log. `rt_realtime --denoise=oidn` moves the grade, not
-just the noise.
+The mirror holds in both profiles, because the GPU does nothing between the
+running mean and the tonemap: under OIDN the trace accumulates, so the firefly
+clamp — applied only when it does not — is off as well. The shared example parser
+takes `rt_realtime` and `--denoise=` as independent tokens and the override is
+applied on top of the preset, so `rt_realtime --denoise=oidn` denoises the same
+kind of input as the offline profile, a running mean that restarts on every moved
+view.
 
 {{cite examples/example_cli.hpp "opts.denoiseOverride = parseDenoiseMode(arg.substr(10));"}}
-{{cite ohao/gpu/vulkan/renderer.cpp "externalDenoiser="}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
 The two tonemaps are not bit-identical either. The GPU store into an `rgba8`
 UNORM image rounds to nearest; the CPU path truncates.
@@ -204,6 +196,6 @@ using such diffs as a regression signal.
 - `oidnDenoise` reads the accumulation image, whose `.rgb` is already a running mean. Anything that changes that to a raw sum breaks the denoise path silently: OIDN's HDR filter would see radiance scaled by the sample count.
 - The frame to denoise is requested (`requestReadback()` before its `render()`) and read with `readback()` before the next `render()`, which clears the denoise cache. The readback re-submits on the graphics queue with a device-wide wait.
 - The normal guide is `N * 0.5 + 0.5`, not the `[-1,1]` OIDN specifies. Adding a decode is a quality fix that no test will notice: the only committed regression corpus, `tests/golden/manifest.json`, names OIDN for none of its scenes, so no golden image in the tree has ever passed through OIDN.
-- Three tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++, plus the one in each raygen, `path_tracer.slang`'s `aces` and `pt_raygen_realtime.rgen`'s `ACES`.
+- Two tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++ and `path_tracer.slang`'s `aces`.
 - The build takes whatever OIDN the host provides — `find_package(OpenImageDenoise REQUIRED)` pins no version — so a host-side OIDN upgrade changes the filter under unchanged source.
 - The LDR path (`hdr = false`) has no in-engine caller; every call site passes `hdr = true`.
