@@ -170,6 +170,7 @@ $ build/Release/light_cluster_gpu_test.exe > /dev/null   # gpu
 $ build/Release/light_emitter_gpu_test.exe > /dev/null   # gpu
 $ build/Release/skinning_gpu_test.exe > /dev/null   # gpu
 $ build/Release/vfx_gpu_test.exe > /dev/null   # gpu
+$ build/Release/exposure_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/renderer/check_fireflies.py > /dev/null   # gpu
@@ -581,6 +582,17 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   CPU frames use the C++ twin `render/display/display.hpp`, which `display_test` holds to the
   module (its slangc C++ build, `tools/display`) to the 8-bit code. A new path that shows a frame
   imports the module; never write a curve or `pow(1/2.2)` again.
+- **Auto exposure** (frontier F2 T2, `render/deferred/auto_exposure.*`, `postprocess/exposure.slang`, the
+  `exposure` pass before `post.tonemap`): a window's deferred frames are metered
+  (`render.settings autoExposure`, on in windows, `LiveConfig::autoExposure`; `exposureCompensation`
+  in EV). A 128-bin histogram of log2 luminance over [-10, 20] holds each bin's exact sum in
+  integers (1/16 EV: order-free, so repeatable), and one thread meters the mean between the 50th and
+  95th percentiles to middle grey 0.18 (`EV100 = mean + log2(1 / (0.18 x 1.2)) - compensation`),
+  easing toward it at 3/s brighter, 1/s darker. The EV100 never leaves the GPU (the display pass
+  reads it); `render.stats` reports the newest finished frame's as `ev100`. **Captures never meter**
+  (`captureFrame` turns it off; a window restores it), so goldens stay at their EV100.
+  `exposure_gpu_test`: every light doubled meters one EV more within 0.01. A realtime path-traced
+  window is not metered yet (its display runs in the tracer's own passes).
 - **Realtime denoising and display** (frontier F1 T4). A realtime window's denoiser is DLSS Ray
   Reconstruction where the build has the SDK (`python tools/fetch_dlss.py` into the git-ignored
   `external/DLSS`; never commit it: NVIDIA's licence) and the GPU is NVIDIA's, else NRD

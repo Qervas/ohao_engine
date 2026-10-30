@@ -48,6 +48,7 @@ struct PostState {
     bool bloom{false}, taa{false}, ssao{false};
     float ev100{render::kDefaultEv100};
     render::DisplayCurve curve{render::DisplayCurve::AgX};
+    bool autoExposure{false};
 };
 
 } // namespace
@@ -68,6 +69,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
         if (auto* pp = deferred->getPostProcessing()) {
             m_defaultEv100 = pp->ev100();
             m_defaultCurve = pp->displayCurve();
+            pp->setAutoExposure(cfg.autoExposure);
         }
     if (cfg.mode != RenderMode::Deferred) {
         m_renderer->setRenderMode(cfg.mode);
@@ -214,6 +216,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         m_world->setRenderAlpha(m_time.running() ? tick.alpha : 1.0f);
         // The gun's sway, bob and kick move at render rate in realtime; lockstep draws them at rest.
         m_world->setPresentationDt(m_time.running() ? std::clamp(frameDt, 0.0f, 0.1f) : 0.0f);
+        m_renderer->setFrameDeltaTime(std::clamp(frameDt, 1.0f / 1000.0f, 0.1f));   // auto exposure's adaptation
         if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
 
         const VkExtent2D ext = m_window.framebufferExtent();
@@ -483,7 +486,8 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         }
         PostState live;
         auto* pp = m_renderer->getDeferredRenderer() ? m_renderer->getDeferredRenderer()->getPostProcessing() : nullptr;
-        if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->ev100(), pp->displayCurve()};
+        if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->ev100(), pp->displayCurve(),
+                        pp->autoExposure()};
         const RenderQuality liveQuality = m_renderer->renderQuality();
         const DenoiseMode liveDenoise = m_renderer->getDenoiseMode();
         CaptureSettings settings;
@@ -500,6 +504,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
             pp->setSSAOEnabled(live.ssao);
             pp->setEv100(live.ev100);
             pp->setDisplayCurve(live.curve);
+            pp->setAutoExposure(live.autoExposure);
         }
         m_renderer->setRenderQuality(liveQuality);
         if (m_renderer->getDenoiseMode() != liveDenoise) m_renderer->setDenoiseMode(liveDenoise);

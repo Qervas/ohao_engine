@@ -212,6 +212,8 @@ struct RenderSettings {
     CsmSettings csm;
     float ev100{0.5f};      // the camera's exposure (render::kDefaultEv100, VulkanRenderer::RenderSettings)
     Tonemap tonemap{Tonemap::agx};
+    bool autoExposure{false};          // a window meters its frames; captures always use ev100
+    float exposureCompensation{0.0f};  // EV added to what auto exposure meters
     VfxSettings vfx;
 };
 

@@ -44,6 +44,7 @@ inline constexpr PassInfo kPasses[] = {
     {"transparent", PassKind::Raster, "blended surfaces and effects back to front over the lit image, soft against depth, coverage into TAA's mask"},
     {"post.bloom", PassKind::Raster, "bloom (the bloom post effect)"},
     {"post.taa", PassKind::Raster, "temporal anti-aliasing (the taa post effect)"},
+    {"exposure", PassKind::Compute, "a window's auto exposure: the frame's luminance histogram and the camera's adaptation"},
     {"post.tonemap", PassKind::Raster, "HDR to the RGBA8 final image"},
     {"gizmo", PassKind::Raster, "transform handles"},
     {"hud", PassKind::Raster, "the HUD over the final image (a window always; a capture with hud: true)"},

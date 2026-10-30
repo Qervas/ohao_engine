@@ -145,6 +145,8 @@ struct RenderStats {
     // Clustered lighting: lights the newest frame covered left out of full froxels (a froxel
     // keeps its first 256); absent when none was.
     std::optional<uint32_t> lightsOverflow;
+    // Auto exposure (a window's): the newest finished frame's metered EV100; absent when it does not meter.
+    std::optional<float> ev100;
     // Sub-project 10: the skinned instances (absent when there are none): the newest frame's skinned
     // instances and vertices (those whose pose changed), and the BLAS refits and rebuilds so far.
     struct Skinning {

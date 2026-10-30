@@ -383,6 +383,8 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
         pp->setSSAOEnabled(s.ssao);
         pp->setEv100(s.ev100);
         pp->setDisplayCurve(s.tonemap);
+        pp->setAutoExposure(s.autoExposure);
+        pp->setExposureCompensation(s.exposureCompensation);
     }
 }
 
@@ -415,6 +417,8 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
         s.ssao = pp->getSSAOEnabled();
         s.ev100 = pp->ev100();
         s.tonemap = pp->displayCurve();
+        s.autoExposure = pp->autoExposure();
+        s.exposureCompensation = pp->exposureCompensation();
     }
     return s;
 }
@@ -695,6 +699,20 @@ std::optional<VulkanRenderer::ShadowLightsDropped> VulkanRenderer::shadowLightsD
     const auto d = shadows->latestDropped();
     if (!d) return std::nullopt;
     return ShadowLightsDropped{d->frame, d->pixels};
+}
+
+std::optional<float> VulkanRenderer::meteredEv100() {
+    if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
+    PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing();
+    if (!pp || !pp->autoExposure()) return std::nullopt;
+    return pp->meteredEv100([&](uint32_t slot) {
+        return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
+    });
+}
+
+void VulkanRenderer::setFrameDeltaTime(float dt) {
+    if (m_deferredRenderer)
+        if (PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing()) pp->setFrameDeltaTime(dt);
 }
 
 std::optional<LightClusters::Overflow> VulkanRenderer::lightsOverflow() {

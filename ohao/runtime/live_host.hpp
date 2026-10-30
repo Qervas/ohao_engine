@@ -85,6 +85,9 @@ struct LiveConfig {
     bool sound{false};
     // Draws the measured latency and frame time top left (ohao_game --latency; sub-project 9).
     bool latencyReadout{false};
+    // The window's camera meters its deferred frames (render.settings autoExposure; frontier F2 T2).
+    // Captures stay at a fixed EV100 either way.
+    bool autoExposure{true};
     // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
     std::size_t frameLogCapacity{FrameLog::kCapacity};
     // Late input sampling: at most this many submitted frames not yet presented when a realtime

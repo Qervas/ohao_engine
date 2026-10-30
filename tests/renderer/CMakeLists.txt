@@ -140,6 +140,16 @@ if(MSVC)
 endif()
 add_dependencies(light_emitter_gpu_test shaders)
 
+# Auto exposure (frontier F2 T2): Cornell metered, every light doubled one EV more, captures at a fixed EV.
+add_executable(exposure_gpu_test exposure_gpu_test.cpp)
+target_compile_features(exposure_gpu_test PRIVATE cxx_std_20)
+target_compile_definitions(exposure_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(exposure_gpu_test PRIVATE ohao_host ohao_test_harness)
+if(MSVC)
+    target_link_options(exposure_gpu_test PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(exposure_gpu_test shaders)
+
 # GPU skinning (sub-project 10, test 24): the deformed range against a CPU skin, two poses of one
 # mesh, the motion vectors' previous positions, RT and the path tracer seeing the pose, refits.
 add_executable(skinning_gpu_test skinning_gpu_test.cpp)
@@ -195,6 +205,7 @@ endforeach()
 # The GPU suites above: one device each, never two at once.
 ohao_add_test(renderer_test LABEL gpu GPU COMMAND renderer_test)
 foreach(t instantiate_gpu_test scene_view_gpu_test restore_render_gpu_test deferred_determinism_gpu_test
-          cull_parity_gpu_test light_cluster_gpu_test light_emitter_gpu_test skinning_gpu_test vfx_gpu_test)
+          cull_parity_gpu_test light_cluster_gpu_test light_emitter_gpu_test skinning_gpu_test vfx_gpu_test
+          exposure_gpu_test)
     ohao_add_test(${t} LABEL gpu GPU COMMAND ${t})
 endforeach()

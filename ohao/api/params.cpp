@@ -224,6 +224,10 @@ void registerParams(reflect::TypeRegistry& r) {
             .doc("The camera's exposure, EV at ISO 100 (radiance L displays as L / (1.2 x 2^EV100))").unit("EV")
             .min(-20.0).max(30.0)
         .field("tonemap", &RenderSettings::tonemap).doc("The display curve (every renderer and denoiser)")
+        .field("autoExposure", &RenderSettings::autoExposure)
+            .doc("A window's camera meters its frames (the log-average luminance to middle grey); captures use ev100")
+        .field("exposureCompensation", &RenderSettings::exposureCompensation)
+            .doc("EV added to what auto exposure meters (positive brightens)").unit("EV").min(-10.0).max(10.0)
         .field("vfx", &RenderSettings::vfx).doc("Effects' switches");
     r.type<RenderSettingsParams>("RenderSettingsParams").doc("render.settings params")
         .field("set", &RenderSettingsParams::set)

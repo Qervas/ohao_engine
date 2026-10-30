@@ -222,6 +222,7 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     // Every mode displays through the post stack's EV100 and curve (the path tracer reads them).
     if (renderer.getDeferredRenderer())
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {
+            pp->setAutoExposure(false);   // a capture is at a fixed EV100: repeatable
             pp->setEv100(r.ev100.value_or(settings.defaultEv100));
             pp->setDisplayCurve(r.tonemap == "neutral" ? render::DisplayCurve::Neutral
                                 : r.tonemap == "agx"   ? render::DisplayCurve::AgX
@@ -336,6 +337,8 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
     s.csm = {static_cast<int32_t>(r.csmCascades), static_cast<int32_t>(r.csmSize)};
     s.ev100 = r.ev100;
     s.tonemap = r.tonemap == render::DisplayCurve::Neutral ? api::Tonemap::neutral : api::Tonemap::agx;
+    s.autoExposure = r.autoExposure;
+    s.exposureCompensation = r.exposureCompensation;
     s.vfx = {r.vfxParticles, r.vfxSoft, r.vfxTracers, r.vfxDecals, r.vfxSmokeInGi};
     return s;
 }
@@ -359,6 +362,8 @@ void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s)
     r.csmSize = static_cast<uint32_t>(std::clamp(s.csm.size, 512, 4096));
     r.ev100 = s.ev100;
     r.tonemap = s.tonemap == api::Tonemap::neutral ? render::DisplayCurve::Neutral : render::DisplayCurve::AgX;
+    r.autoExposure = s.autoExposure;
+    r.exposureCompensation = s.exposureCompensation;
     r.vfxParticles = s.vfx.particles;
     r.vfxSoft = s.vfx.soft;
     r.vfxTracers = s.vfx.tracers;
@@ -394,6 +399,7 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
         if (overflow && overflow->lights > 0 && overflow->frame >= frames.front().frame &&
             overflow->frame <= frames.back().frame)
             st->lightsOverflow = overflow->lights;
+        st->ev100 = renderer.meteredEv100();
     }
     if (const auto& k = renderer.renderScene().stats().skinning; k.instances > 0)
         st->skinning = api::RenderStats::Skinning{k.instances, k.skinned, k.vertices, k.blasRefits, k.blasRebuilds};

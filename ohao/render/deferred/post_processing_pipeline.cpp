@@ -32,6 +32,10 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
+    // The display pass binds the metered EV100 whether or not a window meters.
+    m_autoExposure = std::make_unique<AutoExposure>();
+    if (!m_autoExposure->initialize(device, physicalDevice)) return false;
+
     // Create tonemapping pass
     if (!createFinalOutput()) return false;
     if (!createTonemappingPass()) return false;
@@ -51,6 +55,7 @@ void PostProcessingPipeline::cleanup() {
     resetPass(m_bloomPass);
     resetPass(m_taaPass);
     resetPass(m_ssaoPass);
+    resetPass(m_autoExposure);
 
     // Cleanup tonemapping
     safeDestroy(m_tonemapPipeline);
@@ -103,7 +108,16 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_passTimer) m_passTimer->end(cmd);
     }
 
-    // ── 3. Tonemapping: HDR → LDR ─────────────────────────────────────
+    // ── 3. Auto exposure (a window's): the frame it shows, metered ─────
+    const bool metered = m_autoExposureEnabled && m_autoExposure && frameIndex < MAX_FRAMES_IN_FLIGHT;
+    if (metered) {
+        if (m_passTimer) m_passTimer->begin(cmd, "exposure");
+        m_autoExposure->record(cmd, frameIndex, currentInput, m_sampler, m_width, m_height, m_frameDt,
+                               m_autoExposureSettings);
+        if (m_passTimer) m_passTimer->end(cmd);
+    }
+
+    // ── 4. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
         m_tonemapFramebuffer != VK_NULL_HANDLE && frameIndex < MAX_FRAMES_IN_FLIGHT &&
         m_tonemapDescSets[frameIndex] != VK_NULL_HANDLE) {
@@ -148,6 +162,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         params.exposure      = render::displayExposure(m_ev100);
         params.bloomStrength = bloomStrength;
         params.curve         = static_cast<uint32_t>(m_displayCurve);
+        params.autoExposure  = metered ? 1u : 0u;
 
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(params), &params);
@@ -236,6 +251,7 @@ void PostProcessingPipeline::setTAABlendFactor(float factor) {
 
 void PostProcessingPipeline::resetHistory() noexcept {
     if (m_taaPass) m_taaPass->resetHistory();
+    if (m_autoExposure) m_autoExposure->reset();
 }
 
 glm::vec2 PostProcessingPipeline::getJitterOffset(uint32_t frameIndex) const {
@@ -281,9 +297,9 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
     if (set == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
     if (input == VK_NULL_HANDLE || bloom == VK_NULL_HANDLE) return;
 
-    // Write both bindings: HDR input, bloom
+    // Write the bindings: HDR input, bloom, the metered EV100
     std::array<VkDescriptorImageInfo, 2> imageInfos{};
-    std::array<VkWriteDescriptorSet, 2> writes{};
+    std::array<VkWriteDescriptorSet, 3> writes{};
 
     // Binding 0: HDR input
     imageInfos[0].sampler = m_sampler;
@@ -308,6 +324,15 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[1].descriptorCount = 1;
     writes[1].pImageInfo = &imageInfos[1];
+
+    // Binding 2: auto exposure's state (x EV100)
+    const VkDescriptorBufferInfo exposureInfo{m_autoExposure->stateBuffer(), 0, VK_WHOLE_SIZE};
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[2].descriptorCount = 1;
+    writes[2].pBufferInfo = &exposureInfo;
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -431,11 +456,11 @@ bool PostProcessingPipeline::createTonemappingPass() {
         return false;
     }
 
-    // Descriptor layout: HDR input + bloom
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
-    for (uint32_t b = 0; b < 2; ++b) {
+    // Descriptor layout: HDR input + bloom, auto exposure's state
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    for (uint32_t b = 0; b < 3; ++b) {
         bindings[b].binding = b;
-        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorType = b < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
@@ -450,14 +475,15 @@ bool PostProcessingPipeline::createTonemappingPass() {
     }
 
     // Descriptor pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;  // HDR + bloom, per frame slot
+    const VkDescriptorPoolSize poolSizes[] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * MAX_FRAMES_IN_FLIGHT},  // HDR + bloom, per frame slot
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT},           // the metered EV100
+    };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_tonemapDescPool) != VK_SUCCESS) {

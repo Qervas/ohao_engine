@@ -276,6 +276,8 @@ public:
         uint32_t csmSize{2048};          // 512-4096
         float ev100{render::kDefaultEv100};   // the display transform's camera (EV100, ISO 100)
         render::DisplayCurve tonemap{render::DisplayCurve::AgX};
+        bool autoExposure{false};          // a window's camera meters its frames (captures never do)
+        float exposureCompensation{0.0f};  // EV added to what auto exposure meters
         // render.settings vfx (sub-project 12): presentation switches for A/B captures, all on.
         bool vfxParticles{true};         // the lit particles
         bool vfxSoft{true};              // their soft fade against the scene's depth
@@ -300,6 +302,10 @@ public:
     // froxels past 256, the froxels that left any out, the largest froxel count).
     // Collects finished frames first.
     [[nodiscard]] std::optional<LightClusters::Overflow> lightsOverflow();
+    // Auto exposure: the newest finished frame's metered EV100, if it metered.
+    [[nodiscard]] std::optional<float> meteredEv100();
+    // Seconds since the last frame (a window's), for auto exposure's adaptation speed.
+    void setFrameDeltaTime(float dt);
 
     // Read back HDR buffers for OIDN denoising
     [[nodiscard]] bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,

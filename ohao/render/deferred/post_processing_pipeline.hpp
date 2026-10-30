@@ -4,6 +4,7 @@
 #include "bloom_pass.hpp"
 #include "taa_pass.hpp"
 #include "ssao_pass.hpp"
+#include "auto_exposure.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "render/display/display.hpp"
 #include <array>
@@ -63,6 +64,22 @@ public:
     [[nodiscard]] float ev100() const { return m_ev100; }
     void setDisplayCurve(render::DisplayCurve curve) { m_displayCurve = curve; }
     [[nodiscard]] render::DisplayCurve displayCurve() const { return m_displayCurve; }
+    // Auto exposure (a window's): the frame metered (AutoExposure) in place of the fixed EV100.
+    void setAutoExposure(bool on) {
+        if (on && !m_autoExposureEnabled && m_autoExposure) m_autoExposure->reset();
+        m_autoExposureEnabled = on;
+    }
+    [[nodiscard]] bool autoExposure() const { return m_autoExposureEnabled; }
+    void setExposureCompensation(float ev) { m_autoExposureSettings.compensation = ev; }
+    [[nodiscard]] float exposureCompensation() const { return m_autoExposureSettings.compensation; }
+    // Seconds since the last frame, for the adaptation's speed (a window's frame time).
+    void setFrameDeltaTime(float dt) { m_frameDt = dt > 0.0f ? dt : m_frameDt; }
+    // The newest finished frame's metered EV100 (`fenceSignalled(slot)`), if auto exposure ran.
+    template <class FenceSignalled>
+    [[nodiscard]] std::optional<float> meteredEv100(FenceSignalled&& fenceSignalled) {
+        if (!m_autoExposure) return std::nullopt;
+        return m_autoExposure->latestEv100(fenceSignalled);
+    }
 
     // Bloom configuration
     void setBloomThreshold(float threshold);
@@ -108,6 +125,7 @@ private:
     std::unique_ptr<BloomPass> m_bloomPass;
     std::unique_ptr<TAAPass> m_taaPass;
     std::unique_ptr<SSAOPass> m_ssaoPass;
+    std::unique_ptr<AutoExposure> m_autoExposure;
     uint32_t m_noiseSeed{0};
 
     // Tonemapping (final pass)
@@ -147,13 +165,16 @@ private:
     // The display transform's settings.
     float m_ev100{render::kDefaultEv100};
     render::DisplayCurve m_displayCurve{render::DisplayCurve::AgX};
+    bool m_autoExposureEnabled{false};
+    AutoExposure::Settings m_autoExposureSettings;
+    float m_frameDt{1.0f / 60.0f};
 
     // Push constants for the display pass (postprocess/tonemap.slang's DisplayParams).
     struct TonemapParams {
         float exposure;        // linear: displayExposure(EV100)
         float bloomStrength;   // 0.0 = no bloom composite
         uint32_t curve;        // render::DisplayCurve
-        uint32_t pad;
+        uint32_t autoExposure; // 1: the metered EV100
     };
 
 };
