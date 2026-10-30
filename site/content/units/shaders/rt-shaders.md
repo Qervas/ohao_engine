@@ -150,9 +150,13 @@ beauty stays one estimate and the denoiser still gets two signals:
 
 {{cite shaders/rt/path_tracer.slang "if (depth == 0u) firstLobe = s.lobe;"}}
 
-Direct light at the primary hit goes to the diffuse channel whatever the surface. Hit
-distances are one segment: the second vertex's, recorded on the channel the first
-bounce's lobe chose.
+Direct light at the primary hit is split by lobe: light and environment sampling
+evaluate the BSDF's specular and diffuse parts separately (`evalLobes`) and send each to
+its own channel. What the camera ray itself meets emits goes to neither: it has its own
+guide, binding 13, which the compositor adds back. Hit distances are one segment: the
+second vertex's, recorded on the channel the first bounce's lobe chose.
+
+{{cite shaders/rt/path_tracer.slang "if (depth == 0u) { diffuseOut += throughput * fd * ls.radiance * w; specularOut += throughput * fs * ls.radiance * w; }"}}
 
 ## The packing that keeps a sign bit alive
 
@@ -173,20 +177,25 @@ The remaining two bits carry NRD's material ID, left at slot 0.
 
 ## Where the demodulation round trip closes
 
-`nrd_compose.comp` is thirty-five lines and one line of arithmetic, applied after
-unpacking REBLUR's YCoCg output back to linear:
+`nrd_compose.comp` is one line of arithmetic, applied after unpacking REBLUR's YCoCg
+output back to linear: the denoised diffuse times the first hit's diffuse albedo, the
+denoised specular as it is, and the camera ray's emission (binding 5, the tracer's
+binding 13). It writes the result as HDR and, through the tracer's curve (ACES at 0.5,
+gamma 2.2), into the frame's output (binding 6), so a window presents the denoised
+frame:
 
-{{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad * specColor;"}}
+{{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad + emission;"}}
+{{cite shaders/rt/nrd_compose.comp "imageStore(outLdr, p, vec4(pow(aces(composed * 0.5), vec3(1.0 / 2.2)), 1.0));"}}
 
-That multiply is the second half of a round trip whose first half — dividing radiance
-by the diffuse albedo AOV before packing — lives in the raygen:
+The diffuse multiply is the second half of a round trip whose first half — dividing
+radiance by the diffuse albedo AOV before packing — lives in the raygen:
 
 {{cite shaders/rt/path_tracer.slang "const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));"}}
 
-Only the diffuse channel is divided. Specular is packed raw, and its factor is the
-base's directional albedo toward the viewer less the diffuse part, while the specular
-radiance already carries the BSDF's Fresnel; the composite therefore applies the
-specular albedo twice (see the NRD unit).
+Only the diffuse channel is divided. Specular is packed raw, already carrying the
+BSDF's Fresnel, so the composite takes it as it is. The specular-colour AOV (binding
+25: the base's directional albedo toward the viewer less the diffuse part) is a guide
+for DLSS-RR; the compositor declares it and does not read it.
 
 {{cite shaders/rt/path_tracer.slang "specColor = max(a - diffAlbedo, float3(0.0));"}}
 
@@ -255,12 +264,10 @@ which carries no surface material (its `emitterLight` holds its radiance and lig
 
 ## The rest of shaders/rt
 
-Fourteen files sit in `shaders/rt/`: the path tracer, the hybrid pairs above, two Slang
-modules they import (`alpha_test.slang`, `smoke_proxy.slang`), NRD's compose pass, and
-two denoising families run after the trace. Four `cinematic_*.comp` passes run after
-NRD compose — bright-pass extract, a 13-tap downsampling blur that builds the bloom
-mip chain, a gather-based DoF, and the composite that applies Khronos PBR Neutral and
-writes the final LDR image — each built and dispatched through `nrd_cinematic.cpp`.
+Twelve files sit in `shaders/rt/`: the path tracer, its radiance cache module and
+resolve pass, the hybrid pairs above, two Slang modules they import
+(`alpha_test.slang`, `smoke_proxy.slang`), NRD's compose pass, and the à-trous
+denoiser's two passes.
 
 `DenoiseMode::Atrous` is the variance-guided pair `rt_svgf_temporal.comp` and
 `rt_svgf_atrous.comp`, the two pipelines `AtrousDenoiser` builds. Its 5×5 B3-spline
@@ -279,4 +286,5 @@ crossing geometric edges.
 - `instanceCustomIndex` is the `RenderScene` slot, masked to 24 bits; past 2²⁴ slots a hit reads another instance.
 - Alpha-tested and blended geometry reaches a ray only while the scene has an instance with such a material: `traceFlags()` drops the opaque flag only then, and the TLAS instance carries `FORCE_NO_OPAQUE` over the BLAS's `VK_GEOMETRY_OPAQUE_BIT_KHR`. The hybrid ray queries decide through `rt/alpha_test.slang`.
 - A profile's shader set names files *and* entry points: a Slang stage is entered by its function name. A set that names a Slang file with `main` fails pipeline creation.
-- Bindings 24/25 are demodulation factors matched to what the raygen already did — diffuse pre-divided, specular not. Change one side without the other and the NRD composite's colours move.
+- Binding 24 is the demodulation factor matched to what the raygen already did — diffuse pre-divided, specular not. Change one side without the other and the NRD composite's colours move.
+- The camera ray's emission reaches the NRD frame only through binding 13 and `nrd_compose`'s binding 5; neither NRD image carries it.

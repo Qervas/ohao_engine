@@ -569,6 +569,15 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   next bounce's dimensions. A new draw goes into a group (`Sampler.group`), never after another
   bounce's. `sobol_test` runs the module through slangc's C++ (`tools/sampling`) against the CPU
   generator, bit for bit, and holds its stratification.
+- **Realtime denoising and display** (frontier F1 T4). A realtime window's denoiser is DLSS Ray
+  Reconstruction where the build has the SDK (`python tools/fetch_dlss.py` into the git-ignored
+  `external/DLSS`; never commit it: NVIDIA's licence) and the GPU is NVIDIA's, else NRD
+  (`VulkanRenderer::rtDefaults`); captures default to `denoise: none`. Every denoiser writes the
+  frame's output (`m_outputImage`) with the tracer's own curve (ACES at 0.5, gamma 2.2: one display
+  transform until F2), so a window presents what a capture reads. Under NRD the camera ray's
+  emission (lights, emissive surfaces, the sky) goes to its own guide (binding 13) and never
+  through NRD: `nrd_compose` adds it to diffuse x albedo + specular. The first hit's direct light
+  is split by lobe (`evalLobes`). NGX logs through the engine's logger (stdout is the protocol's).
 - **The radiance cache** (frontier F1 T3, `shaders/rt/radiance_cache.slang`, `render/rt/radiance_cache.*`;
   SHaRC's design, our code: RTXGI's licence bars shipping its source in this MIT repo). The realtime
   profile ends a path at a vertex past the first in a world-space hash grid of reflected radiance

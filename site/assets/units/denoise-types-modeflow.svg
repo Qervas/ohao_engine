@@ -36,7 +36,7 @@
 
   <rect x="568" y="50" width="136" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="636" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">readback()</text>
-  <text x="636" y="82" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">picks the output tap</text>
+  <text x="636" y="82" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">runs OIDN on the CPU</text>
 
   <!-- ── the narrow bridge between the two copies ────────────────── -->
   <path d="M 434 92 L 434 148 L 470 148 L 470 228" fill="none" stroke="#c4784a" stroke-width="1.5"
@@ -46,8 +46,8 @@
 
   <!-- ── row 2: tracer-side copy ─────────────────────────────────── -->
   <rect x="16" y="228" width="184" height="48" rx="4" fill="#1a222c" stroke="#3d4a58"/>
-  <text x="108" y="246" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">pipeline default</text>
-  <text x="108" y="262" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">Realtime → NRD, Offline → OIDN</text>
+  <text x="108" y="246" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">rtDefaults(mode)</text>
+  <text x="108" y="262" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">Realtime → DLSSRR (NVIDIA + SDK) else NRD; Offline → OIDN</text>
 
   <line x1="200" y1="252" x2="226" y2="252" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
   <text x="213" y="296" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">overwritten every frame</text>

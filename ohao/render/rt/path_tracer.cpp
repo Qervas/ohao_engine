@@ -13,7 +13,6 @@
 // by OHAO_NRD_ENABLED because definitions only exist in that mode.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
-#include "render/rt/denoise/nrd_cinematic.hpp"
 // Unconditional: PathTracer holds a std::unique_ptr<AtrousDenoiser>, so this
 // TU (which defines the out-of-line dtor) needs the complete type. Not
 // OHAO_NRD-guarded — the à-trous path is independent of NRD.
@@ -158,11 +157,6 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     if (!m_nrdCompositor->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
         OHAO_LOG(Error, render, "NRD compose: init failed — compose pass will be skipped");
         m_nrdCompositor.reset();
-    }
-    m_cinematicPost = std::make_unique<NrdCinematicPost>();
-    if (!m_cinematicPost->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-        OHAO_LOG(Error, render, "NRD cinematic: init failed — cinematic pass will be skipped");
-        m_cinematicPost.reset();
     }
 #else
     (void)instance; (void)graphicsQueueFamilyIndex;
@@ -363,10 +357,6 @@ void PathTracer::destroy() {
     if (m_nrdCompositor) {
         m_nrdCompositor->shutdown();
         m_nrdCompositor.reset();
-    }
-    if (m_cinematicPost) {
-        m_cinematicPost->shutdown();
-        m_cinematicPost.reset();
     }
 #endif
 

@@ -77,8 +77,9 @@ OHAO's object before NRI's regardless of library order:
 ## Optional SDKs, and the one that changes a class layout
 
 Two heavy NVIDIA dependencies are `option()`-gated. NRD defaults ON; DLSS defaults
-to whether the vendored NGX static wrapper is present on disk, so a fresh clone
-without `external/DLSS/` configures cleanly with the feature off.
+to whether the NGX static library is present on disk. `tools/fetch_dlss.py` downloads
+the pinned SDK files (SHA-256 per file) into the git-ignored `external/DLSS/`; a clone
+that has not run it configures cleanly with the feature off.
 
 {{cite CMakeLists.txt "set(OHAO_DLSS_DEFAULT ON)"}}
 

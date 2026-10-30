@@ -13,9 +13,12 @@ was bound before it. OHAO takes that literally. The RT pipeline layout declares
 one descriptor set and one push-constant range, so every buffer, image and
 acceleration structure any RT stage can reach must occupy a numbered slot in
 set 0. The set's numbers run from 0 to 41 with gaps: the path tracer's own images
-and buffers at 0–12 and 17–26, the two `RenderScene` tables the hit shaders add
-at 36 and 37, OpenPBR's energy tables at 38, and the radiance cache's three buffers
-at 39–41. Bindings 13–16 and 27–35 are not in the layout.
+and buffers at 0–13 and 17–26 (13 the camera ray's emission, which NRD's compositor
+adds back), the two `RenderScene` tables the hit shaders add at 36 and 37, OpenPBR's
+energy tables at 38, and the radiance cache's three buffers at 39–41. Bindings 14–16
+and 27–35 are not in the layout.
+
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(13, IMAGE, RGEN);   // the camera ray's emission (RGBA16F): nrd_compose adds it back"}}
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "layoutInfo.setLayoutCount = 1;"}}
 
@@ -105,7 +108,7 @@ The path tracer then clamps that against what the device allows for an
 update-after-bind combined-image-sampler array in one set and one stage, leaving
 room for the set's other resources:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "constexpr uint32_t kOtherResources = 64;   // the set's 28 other bindings, with margin"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "constexpr uint32_t kOtherResources = 64;   // the set's 29 other bindings, with margin"}}
 
 The shader does not learn the clamped size. It declares the array at a fixed 4096
 (Slang decorates an unsized resource array with a stride spirv-val rejects) and
@@ -177,13 +180,13 @@ with no light entities and leans on the HDR environment alone.
 The writes are packed rather than sparse: a running `writeCount` skips the
 optional bindings (12 when the table is empty, 17 and 18 without CDF buffers), so
 the write index and the binding number diverge. The function emits at most
-twenty-nine writes — six unconditional ones for bindings 0, 1, 2, 3, 6 and 7, twelve
+thirty writes — seven unconditional ones for bindings 0, 1, 2, 3, 6, 7 and 13, twelve
 buffers (4, 5, 8, 9, 10, 11, 36, 37, the energy tables at 38 and the cache's 39–41)
 in a loop, the three optional ones, and eight for 19–26 — into a 41-entry array:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[41] = {};"}}
 
-Nothing checks `writeCount` against the array size; the twelve spare entries are
+Nothing checks `writeCount` against the array size; the eleven spare entries are
 the margin.
 
 ## Format qualifiers are load-bearing
@@ -214,14 +217,14 @@ unsafe is adding binding 42 and trusting a qualifier copied from a neighbour.
 
 ## The pool has no slack either
 
-The pool reserves, per frame-slot set, 13 storage images and 14 storage buffers,
-which is exactly what the layout consumes: the accumulation pair, the output and
-ten AOV images; and the seven scene tables, the light buffer, the two CDFs, the
+The pool reserves, per frame-slot set, 14 storage images and 14 storage buffers,
+which is exactly what the layout consumes: the accumulation pair, the output, the
+emission guide and ten AOV images; and the seven scene tables, the light buffer, the two CDFs, the
 energy tables and the radiance cache's three buffers.
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 * kSets},"}}
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 13 * kSets},  // 1-3, 6, 7, 19-26"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26"}}
 
 Adding a storage-image or storage-buffer binding without bumping that count makes
 `vkAllocateDescriptorSets` return `VK_ERROR_OUT_OF_POOL_MEMORY` and

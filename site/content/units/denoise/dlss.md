@@ -16,13 +16,32 @@ a CPU readback — it is the only mode `denoiseNeedsCpuReadback` names.
 
 DLSS Ray Reconstruction is a different contract — a trained reconstruction network
 that owns the temporal history, so it dictates what the path tracer must emit
-before it produces anything at all. Passing `--denoise=dlssrr` stops the raygen
-accumulating, adds a deterministic Halton sub-pixel offset to the primary ray,
-repurposes one AOV binding into a different encoding, and moves tonemapping into a
-compute pass. This page is about that blast radius, and about the two pieces of it
-that are built but not wired.
+before it produces anything at all. DLSSRR stops the raygen accumulating, adds a
+deterministic Halton sub-pixel offset to the primary ray, repurposes one AOV binding
+into a different encoding, and moves the display transform into a compute pass. It is
+the realtime profile's default wherever it can run: `rtDefaults` picks it when the
+build has the SDK and the device is NVIDIA's (vendor 0x10DE), and NRD otherwise.
+
+{{cite ohao/gpu/vulkan/renderer.cpp "if (props.vendorID == 0x10DE) s.denoiseMode = DenoiseMode::DLSSRR;   // NVIDIA"}}
+
+Captures are the exception: a capture names its own denoiser and defaults to none.
+This page is about that blast radius, and about the two pieces of it that are built
+but not wired.
 
 ## Two gates before a single ray is denoised
+
+The SDK is NVIDIA's, under the RTX SDKs licence rather than MIT, so the repository
+never holds it. `tools/fetch_dlss.py` downloads what the build needs — every header,
+the NGX loader built for the static CRT the engine uses (`nvsdk_ngx_s.lib`), the Ray
+Reconstruction model (`nvngx_dlssd.dll`) and the licence — from one pinned release
+into the git-ignored `external/DLSS`, and checks each file against a pinned SHA-256:
+
+{{cite tools/fetch_dlss.py "v310.9.16"}}
+
+CMake turns `OHAO_DLSS` on only when that loader is present, and copies the model
+next to the binaries:
+
+{{cite external/cmake/dlss.cmake "set(OHAO_DLSS_STATIC_LIB  ${OHAO_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib)"}}
 
 The wrapper keeps NGX out of every header — the feature handle and parameter block
 are plain `void*` members only `dlss_rr.cpp` casts back — and the whole
@@ -37,6 +56,12 @@ parameters explain why, including a minimum driver version the code prints
 verbatim rather than guessing.
 
 {{cite ohao/render/rt/denoise/dlss_rr.cpp "params->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &ssdAvailable);"}}
+
+NGX's own log goes through the engine's logger at Debug, with NGX's other sinks
+switched off: `ohao serve` speaks its protocol on stdout, and a line from NGX there
+would corrupt it.
+
+{{cite ohao/render/rt/denoise/dlss_rr.cpp "commonInfo.LoggingInfo.DisableOtherLoggingSinks = true;"}}
 
 Feature creation is deferred to the first frame that actually runs in DLSSRR mode,
 because NGX records real GPU setup work and the wrapper borrows the caller's
@@ -180,26 +205,20 @@ that blink is exactly what the clamp exists to remove.
 
 ## Display space, and why the beauty image still works
 
-DLSS writes HDR-linear RGBA16F, so something has to tonemap it.
-`dlss_tonemap.comp` runs in 8×8 groups and applies the same `ACES(hdr * 0.5)` curve
-plus 2.2 gamma the raygen uses in `None` mode, which is what keeps a DLSS frame
-comparable to an undenoised one:
+DLSS writes HDR-linear RGBA16F, so something has to bring it to display.
+`dlss_tonemap.comp` runs in 8×8 groups and applies exactly the tracer's own curve —
+ACES at an exposure of 0.5, then 2.2 gamma — the same transform the raygen applies
+without a denoiser and `nrd_compose` applies under NRD, so every denoiser's frame is
+displayed alike:
 
-{{cite shaders/compute/dlss_tonemap.comp "vec3 ldr = ACES(hdr * 0.5);"}}
+{{cite shaders/compute/dlss_tonemap.comp "imageStore(ldrOut, pix, vec4(pow(ACES(hdr * 0.5), vec3(1.0 / 2.2)), 1.0));"}}
 
-Everything else sits behind one `OHAO_GRADE` master in an 8-byte push constant; set
-it to 0 and pure ACES remains. Most of it — contrast pivot, split tone, saturation,
-vignette, animated grain — runs after the curve, in display space. The chromatic
-aberration does not: it is a *source-fetch* offset on the HDR loads, before the
-curve, splitting the R and B taps radially. That offset is truncated to whole texels,
-so although at full strength the float peaks at
-$|d| \cdot r^2 \cdot 6 = 0.5 \cdot 0.5 \cdot 6 = 1.5$ per axis in the corner, the
-largest shift it can realise is one texel per axis:
+The pass is downstream of the estimator, so it biases nothing; the firefly clamp
+above does, and the two should not be confused. Its descriptor set is written at
+record time, so it keeps one set per frame in flight and the caller names the slot:
+a single set would be rewritten while the previous frame still read it (VUID 03047).
 
-{{cite shaders/compute/dlss_tonemap.comp "ivec2 off = ivec2(d * s * r2 * 6.0);"}}
-
-The whole pass is downstream of the estimator, so none of it biases the render; the
-firefly clamp above does, and the two should not be confused.
+{{cite ohao/render/rt/denoise/dlss_rr.cpp "const VkDescriptorSet set = m_tmDescriptorSets[frameSlot];"}}
 
 The pass writes back into `m_outputImage`, the same RGBA8 image the raygen would
 have written, which is why the DLSS result reaches the screen through the ordinary
@@ -242,11 +261,19 @@ configuration that produces a full frame. An upscaling preset reduces the traced
 pixel count as advertised but leaves DLSS reconstructing to the reduced size inside
 output-sized images.
 
+The validation gate renders the path through NGX: `check_validation.py` runs Cornell
+and the play scene in the realtime profile under DLSS-RR, under the layers, beside the
+NRD and undenoised runs.
+
+{{cite tests/validation/check_validation.py "cornell_box rt_realtime dlss"}}
+
 ## Contracts
 
 - Binding 7 carries two encodings, chosen by the DLSSRR flag in the raygen's one store to it. Any second store to binding 7 must respect the same flag.
 - DLSSRR must stay in `tracerAccumulates`' refusing arms in both profiles; fed a running mean, the network would see a history that restarts on every moved view.
 - `createFeature` records GPU work into the command buffer it is given; the caller must submit that buffer or the feature is never really created.
 - Any render- or output-resolution change must release the feature and clear the init latch — an NGX feature is bound to the dimensions it was created with.
+- The tonemap writes its descriptor set at record time: one set per frame in flight, chosen by the caller's `frameSlot`.
+- The SDK is fetched by `tools/fetch_dlss.py` into the git-ignored `external/DLSS` and never committed; without it `OHAO_DLSS` is off and the realtime default is NRD.
 - The tonemap's SPIR-V is found by a relative search list (`build/shaders/…`, `bin/shaders/…`), so the binary must launch from a directory where one of those resolves.
 - Only DLAA is presently a correct end-to-end configuration; `OHAO_DLSS_QUALITY` shrinks the trace without completing the upscale.

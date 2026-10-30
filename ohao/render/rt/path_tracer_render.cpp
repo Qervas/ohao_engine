@@ -14,7 +14,6 @@
 // dispatch methods are OHAO_NRD_ENABLED-guarded inside this TU.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
-#include "render/rt/denoise/nrd_cinematic.hpp"
 #include "render/rt/denoise/atrous_denoise.hpp"
 #ifdef OHAO_DLSS_ENABLED
 #include "render/rt/denoise/dlss_rr.hpp"
@@ -154,6 +153,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     addImage(3, &accumHistoryInfo);
     addImage(6, &albedoAOVInfo);
     addImage(7, &normalAOVInfo);
+    const VkDescriptorImageInfo emissionInfo{VK_NULL_HANDLE, m_emissionAOVView, VK_IMAGE_LAYOUT_GENERAL};
+    addImage(13, &emissionInfo);
 
     // RenderScene buffers: 4 vertex arena, 5 index arena, 8 mesh table, 9 triangle
     // material slots, 10 material table, 11 RT lights, 36 instances, 37 material refs.
@@ -487,6 +488,22 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             0, 0, nullptr, 0, nullptr, 12, aovBarriers);
     }
 
+    // --- The emission guide to GENERAL: rewritten whole each frame (or blended into the
+    //     last frames' under offline NRD, whose values the previous frame left). ---
+    {
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask = m_emissionInitialized ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT : 0;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        b.oldLayout = m_emissionInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_emissionAOVImage;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 0, nullptr, 0, nullptr, 1, &b);
+        m_emissionInitialized = true;
+    }
+
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -551,6 +568,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // of NRD, so this lives outside the OHAO_NRD_ENABLED block.
     bool atrousRan = false;
     bool dlssRan   = false;  // Phase 5: set when DLSS-RR tonemap wrote m_outputImage via COMPUTE
+    bool nrdRan    = false;  // nrd_compose wrote m_outputImage via COMPUTE
     if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {
         // Publish raygen stores (beauty/normal/depth, RAY_TRACING) to the
         // COMPUTE reads of the first à-trous pass. All three stay in GENERAL.
@@ -662,7 +680,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 0, 0, nullptr, 0, nullptr, 2, post);
 
             // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (ACES+gamma, matches None).
-            m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_width, m_height);
+            m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);
             dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
         }
     }
@@ -677,11 +695,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // raygen writes before compute reads. We also need `restoreInitialState=true`
     // in the snapshot so after denoise, inputs come back to GENERAL for
     // downstream readback.
-    // Only in NRD mode: the chain (NRD, compose, cinematic post) writes binding 30, which
-    // only an NRD readback reads. Under any other mode it was whole frames of unread work.
+    // Only in NRD mode: NRD, then nrd_compose, which writes the frame's output (and its HDR).
     if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {
         if (m_nrdCompositor) m_nrdCompositor->setFrameSlot(frameSlot);
-        if (m_cinematicPost) m_cinematicPost->setFrameSlot(frameSlot);        // Publish raygen stores before NRD's compute pipelines read them.
+        // Publish raygen stores before NRD's compute pipelines read them.
         VkMemoryBarrier rayToCompute {};
         rayToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         rayToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -745,14 +762,15 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             //   - 27/28: a COMPUTE→COMPUTE WAR/RAW acquire
             //   - 24/25: a no-op acquire (memory already visible)
             // NRD's restoreInitialState=true left 22/23/26/27/28 in GENERAL.
-            VkImageMemoryBarrier cbIn[4] = {};
-            VkImage cbInImages[4] = {
+            VkImageMemoryBarrier cbIn[5] = {};
+            VkImage cbInImages[5] = {
                 m_diffAlbedoImage,       // binding 24
                 m_specColorImage,        // binding 25
                 m_outDiffRadianceImage,  // binding 27
                 m_outSpecRadianceImage,  // binding 28
+                m_emissionAOVImage,      // binding 13
             };
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < 5; ++i) {
                 cbIn[i].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
                 cbIn[i].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
                 cbIn[i].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
@@ -763,7 +781,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             }
             vkCmdPipelineBarrier(cmd,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 4, cbIn);
+                0, 0, nullptr, 0, nullptr, 5, cbIn);
 
             // Transition binding 29: UNDEFINED→GENERAL on first dispatch, GENERAL→GENERAL after.
             // Using m_nrdComposeFirstFrame (per-instance member, NOT a function-local static) so
@@ -788,247 +806,13 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             ci.specRadiance = m_outSpecRadianceView;
             ci.diffAlbedo   = m_diffAlbedoView;
             ci.specColor    = m_specColorView;
+            ci.emission     = m_emissionAOVView;
             ci.composedOut  = m_nrdComposedView;
+            ci.outputLdr    = m_outputView;   // the frame: a window presents it, a capture reads it
             m_nrdCompositor->dispatch(cmd, ci);
-
-            // After compose, binding 29 is in GENERAL with SHADER_WRITE access.
-            // No further in-frame consumer in 4.D scope — readback transitions
-            // GENERAL→TRANSFER_SRC itself when env_demo dumps it.
+            nrdRan = true;
         }
 
-        if (m_cinematicPost) {
-            // Sub-plan 4.G: cinematic chain replaces 4.F single-pass tonemap.
-            //   1. bloom extract: HDR (binding 29) → bloom mip 0 (half-res)
-            //   2. bloom blur ×2: mip 0 → mip 1; mip 1 → mip 2 (downsample+blur)
-            //   3. composite: HDR + 3 sampled bloom mips + depth + env →
-            //                 binding 30 (RGBA8 final LDR)
-            //
-            // The composite shader reads HDR from binding 29 + depth AOV from
-            // 20 — both are storage-image reads in GENERAL layout. Bloom mips
-            // need a layout flip between extract/blur (GENERAL) and composite
-            // (SHADER_READ_ONLY_OPTIMAL).
-
-            // --- Publish 29 (HDR) and 20 (depth) writes for the extract +
-            //     composite reads. COMPUTE→COMPUTE for 29; RT→COMPUTE for 20
-            //     was already barriered earlier (rayToCompute), but include
-            //     defensively. ---
-            VkImageMemoryBarrier tbIn[2] = {};
-            tbIn[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            tbIn[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            tbIn[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-            tbIn[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbIn[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbIn[0].image            = m_nrdComposedImage;
-            tbIn[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            tbIn[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            tbIn[1].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            tbIn[1].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-            tbIn[1].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbIn[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbIn[1].image            = m_depthAOVImage;
-            tbIn[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, tbIn);
-
-            // --- Transition bloom mip 0 UNDEFINED→GENERAL (first frame) or
-            //     SHADER_READ_ONLY→GENERAL (subsequent frames). ---
-            VkImageMemoryBarrier mip0Pre{};
-            mip0Pre.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            mip0Pre.srcAccessMask    = m_bloomFirstFrame[0] ? 0 : VK_ACCESS_SHADER_READ_BIT;
-            mip0Pre.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            mip0Pre.oldLayout        = m_bloomFirstFrame[0] ? VK_IMAGE_LAYOUT_UNDEFINED
-                                                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            mip0Pre.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            mip0Pre.image            = m_bloomMipImages[0];
-            mip0Pre.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd,
-                m_bloomFirstFrame[0] ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                                     : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &mip0Pre);
-            m_bloomFirstFrame[0] = false;
-
-            // 1) Extract.
-            m_cinematicPost->dispatchBloomExtract(
-                cmd, m_nrdComposedView, m_bloomMipViews[0],
-                m_width, m_height, m_bloomMipWidth[0], m_bloomMipHeight[0]);
-
-            // Loop: blur (downsample) from mip N → mip N+1.
-            for (uint32_t mip = 1; mip < 3; ++mip) {
-                // Producer (mip N-1) write → reader; transition mip N for write.
-                VkImageMemoryBarrier b[2] = {};
-                b[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                b[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-                b[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-                b[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                b[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                b[0].image            = m_bloomMipImages[mip - 1];
-                b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                b[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                b[1].srcAccessMask    = m_bloomFirstFrame[mip] ? 0 : VK_ACCESS_SHADER_READ_BIT;
-                b[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-                b[1].oldLayout        = m_bloomFirstFrame[mip] ? VK_IMAGE_LAYOUT_UNDEFINED
-                                                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                b[1].image            = m_bloomMipImages[mip];
-                b[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdPipelineBarrier(cmd,
-                    (m_bloomFirstFrame[mip] ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                                            : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
-                      | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    0, 0, nullptr, 0, nullptr, 2, b);
-                m_bloomFirstFrame[mip] = false;
-
-                // 2,3) Blur (downsample) mip-1 → mip.
-                m_cinematicPost->dispatchBloomBlur(
-                    cmd, mip - 1, /* slot 0=mip0→mip1, slot 1=mip1→mip2 */
-                    m_bloomMipViews[mip - 1], m_bloomMipViews[mip],
-                    m_bloomMipWidth[mip - 1], m_bloomMipHeight[mip - 1],
-                    m_bloomMipWidth[mip], m_bloomMipHeight[mip]);
-            }
-
-            // --- Flip all 3 bloom mips GENERAL→SHADER_READ_ONLY for the
-            //     composite (sampled binding). ---
-            VkImageMemoryBarrier mipsToRead[3] = {};
-            for (uint32_t mip = 0; mip < 3; ++mip) {
-                mipsToRead[mip].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                mipsToRead[mip].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-                mipsToRead[mip].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-                mipsToRead[mip].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                mipsToRead[mip].newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                mipsToRead[mip].image            = m_bloomMipImages[mip];
-                mipsToRead[mip].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            }
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 3, mipsToRead);
-
-            // --- Transition binding 32 (pre-DoF LDR) for write. ---
-            //
-            // Sub-plan 4.J: the composite now writes the pre-DoF LDR image
-            // (binding 32) instead of the final RGBA8 (binding 30). The DoF
-            // gather pass dispatched right after consumes binding 32 + depth
-            // AOV → writes binding 30. Same UNDEFINED→GENERAL first-frame
-            // latch as the other binding-30 transitions.
-            VkImageMemoryBarrier tbOut{};
-            tbOut.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            tbOut.srcAccessMask    = m_preDofFirstFrame ? 0 : VK_ACCESS_SHADER_READ_BIT;
-            tbOut.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            tbOut.oldLayout        = m_preDofFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
-            tbOut.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbOut.image            = m_preDofLdrImage;
-            tbOut.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd,
-                m_preDofFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &tbOut);
-            m_preDofFirstFrame = false;
-
-            // 4) Composite → binding 32 (pre-DoF LDR).
-            NrdCinematicInputs ci{};
-            ci.composedHDR     = m_nrdComposedView;
-            ci.tonemappedOut   = m_preDofLdrView;   // 4.J: write pre-DoF, not final
-            ci.depthAOV        = m_depthAOVView;
-            ci.envMapView      = m_envMapView;
-            ci.envMapSampler   = m_envMapSampler;
-            ci.bloomMip0View   = m_bloomMipViews[0];
-            ci.bloomMip1View   = m_bloomMipViews[1];
-            ci.bloomMip2View   = m_bloomMipViews[2];
-            ci.bloomSampler    = m_bloomSampler;
-            std::memcpy(ci.invView.data(), glm::value_ptr(pc.invView), sizeof(float) * 16);
-            std::memcpy(ci.invProj.data(), glm::value_ptr(pc.invProj), sizeof(float) * 16);
-            ci.extent[0]       = static_cast<float>(m_width);
-            ci.extent[1]       = static_cast<float>(m_height);
-            // env_intensity 2.0 (was 1.0): the env contributes both to sky pixels in
-            // the cinematic composite AND as IBL via raygen. Doubling the sky-pixel
-            // contribution makes the background read brighter — without affecting
-            // raygen's lighting calculation (which uses m_envCDFIntegral directly).
-            ci.envIntensity    = (m_envCDFIntegral > 0.0f && m_envMapView) ? 2.0f : 0.0f;
-            // 4.G v2: rebalanced for general scenes. Original tuning (exposure
-            // 1.0, bloom 0.8, vignette 0.6) over-crushed normal-luminance
-            // scenes (chess board, BoomBox) into near-black. Lift overall
-            // exposure, soften bloom + vignette so the cinematic curve flatters
-            // material detail instead of swallowing it.
-            // v4: neutral-tint variant. v3's warm tint compounded with AgX's
-            // own warm inset matrix → grey ground reading pink/mauve. Removing
-            // explicit tint lets AgX provide the only warmth and ground stays
-            // neutral grey as authored.
-            // v7 — REPLACED AgX with Khronos PBR Neutral tonemap in shader.
-            // AgX was stylizing greys toward magenta + over-crushing midtones,
-            // harming photorealism. PBR Neutral (industry std for asset viz)
-            // preserves color fidelity. Defaults now physical; vignette/bloom
-            // are subtle camera-lens effects only.
-            ci.exposure         = 1.0f;    // physical 1.0 — PBR Neutral handles HDR natively
-            ci.bloomStrength    = 0.25f;   // subtle highlight glow only
-            ci.vignetteStrength = 0.15f;   // gentle real-lens fall-off
-            ci.saturation       = 1.0f;    // no grade — physical reproduction
-            ci.contrast         = 1.0f;    // no grade — physical reproduction
-            ci.tint             = {1.0f, 1.0f, 1.0f};   // neutral
-            m_cinematicPost->dispatchComposite(cmd, ci);
-
-            // --- 5) Depth-of-field gather pass (Sub-plan 4.J) ---
-            //
-            // Composite just wrote binding 32 (pre-DoF LDR). DoF reads that +
-            // depth AOV (binding 20) and writes binding 30 (final LDR for
-            // readback). Two barriers needed:
-            //   a) binding 32: SHADER_WRITE → SHADER_READ (GENERAL→GENERAL)
-            //   b) binding 30: UNDEFINED/GENERAL → GENERAL, gated by latch
-            // Depth AOV (binding 20) is already SHADER_READ-visible from the
-            // tbIn[1] barrier above — no fresh barrier needed.
-            {
-                VkImageMemoryBarrier dofBarriers[2] = {};
-                dofBarriers[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                dofBarriers[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-                dofBarriers[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-                dofBarriers[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                dofBarriers[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                dofBarriers[0].image            = m_preDofLdrImage;
-                dofBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-                // Binding 30 was last written by the previous frame's DoF (and maybe
-                // copied by a readback): the write needs making available, the copy
-                // only an execution dependency (the TRANSFER stage below).
-                dofBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                dofBarriers[1].srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
-                dofBarriers[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-                dofBarriers[1].oldLayout        = m_nrdTonemapFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
-                dofBarriers[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                dofBarriers[1].image            = m_nrdTonemappedImage;
-                dofBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-                // COMPUTE always: barrier [0] publishes the composite's write.
-                vkCmdPipelineBarrier(cmd,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    0, 0, nullptr, 0, nullptr, 2, dofBarriers);
-                m_nrdTonemapFirstFrame = false;
-            }
-
-            // DoF push-constant defaults (per Sub-plan 4.J): 5m focus distance,
-            // moderate aperture, ≤24 px CoC. env_demo auto-frames the model so
-            // these defaults give a believable defocus on typical 1-3 m showcase
-            // objects without needing per-scene tuning yet.
-            NrdDoFInputs di{};
-            di.preDofLdr     = m_preDofLdrView;
-            di.depthAOV      = m_depthAOVView;
-            di.finalLdrOut   = m_nrdTonemappedView;
-            // v3 — derive focusDistance from camera→origin distance dynamically.
-            // env_demo defaults camera at (0, 0.5, 8); model centered at origin.
-            // Reading current camera pos via push-constant transforms (pc.invView's
-            // last column has camera world-space position). Falls back to 8m if
-            // no view matrix yet.
-            glm::vec3 camPos = glm::vec3(glm::inverse(view) * glm::vec4(0,0,0,1));
-            float focusDist = glm::length(camPos);  // distance to world origin (where model sits)
-            di.focusDistance = focusDist > 0.5f ? focusDist : 8.0f;
-            di.aperture      = 1.5f;
-            di.maxCoCPixels  = 32.0f;
-            m_cinematicPost->dispatchDoF(cmd, di);
-
-            // After DoF, binding 30 is in GENERAL with SHADER_WRITE access.
-            // Downstream readback (readbackNrdTonemapped) transitions GENERAL→TRANSFER_SRC.
-        }
     }
 #endif  // OHAO_NRD_ENABLED
 
@@ -1039,7 +823,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         // COMPUTE to the wait is harmless for other modes (nothing wrote the
         // output via compute there).
         const VkPipelineStageFlags outSrcStage =
-            (atrousRan || dlssRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+            (atrousRan || dlssRan || nrdRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                                                  : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

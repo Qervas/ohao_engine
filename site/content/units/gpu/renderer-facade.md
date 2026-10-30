@@ -26,7 +26,7 @@ The two modes are distinguishable from outside: `isPresenting()` reports whether
 
 `RenderMode` is one raster mode (Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — default settings for the mode, a live renderer profile, and ray-tracing support reported by the render world — and falls through to deferred if any is missing.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (const auto* rtPipeline = rtDefaults(m_renderMode);"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (const auto rtPipeline = rtDefaults(m_renderMode);"}}
 
 `setRenderMode` returns `void` and is allowed to refuse: if the device has no RT support, or the profile for the requested mode fails to initialise, it logs and leaves the previous mode in place. Deferred is never refused, because `initialize()` treats a failed deferred renderer as fatal — a renderer that initialised has one.
 
@@ -40,9 +40,9 @@ Anything that reports "rendering in mode X" from its own local variable rather t
 
 ## Defaults always, a tracer only on demand
 
-The facade answers two questions about an RT mode separately. `rtDefaults(mode)` is a static function returning the profile's `constexpr` settings, or null for a raster mode, so "is this an RT mode, and what are its defaults" is answerable before a single Vulkan object exists. The profiles are `unique_ptr`s, each owning a whole `PathTracer`, and they are the thing that might be null.
+The facade answers two questions about an RT mode separately. `rtDefaults(mode)` returns the profile's settings, or nothing for a raster mode, so "is this an RT mode, and what are its defaults" is answerable before any `PathTracer` exists. It is a member, not a static: the realtime default reads the physical device, and picks DLSS-RR where the build has the SDK and the GPU is NVIDIA's, else NRD. The profiles are `unique_ptr`s, each owning a whole `PathTracer`, and they are the thing that might be null.
 
-{{cite ohao/gpu/vulkan/renderer.hpp "static const RTRenderSettings* rtDefaults(RenderMode mode);"}}
+{{cite ohao/gpu/vulkan/renderer.hpp "[[nodiscard]] std::optional<RTRenderSettings> rtDefaults(RenderMode mode) const;"}}
 
 The two profiles are the same tracer with different settings: both install `PathTracerShaderSet`'s default, the path tracer in `rt/path_tracer.slang` (four named entry points in one file), before `PathTracer::init` runs.
 
@@ -51,7 +51,7 @@ The two profiles are the same tracer with different settings: both install `Path
 ## Why the path tracer is not built during initialize()
 
 :::why
-`initialize()` builds the device, the deferred renderer and the render world (which owns the acceleration structures), but no `PathTracer`. Each profile owns one, and a `PathTracer` owns some two dozen images: the accumulation pair and the beauty; the albedo and normal guide pair; nine denoiser guide AOVs (motion, depth, roughness, diffuse and specular radiance, diffuse albedo, specular colour, packed normal-roughness, specular hit distance); NRD's denoised diffuse and specular and its composed HDR; the cinematic chain's pre-DoF and final tonemapped LDR and three bloom mips; and the DLSS-RR HDR colour output. Only the DLSS output is `#ifdef`-guarded.
+`initialize()` builds the device, the deferred renderer and the render world (which owns the acceleration structures), but no `PathTracer`. Each profile owns one, and a `PathTracer` owns some two dozen images: the accumulation pair and the beauty; the albedo and normal guide pair; nine denoiser guide AOVs (motion, depth, roughness, diffuse and specular radiance, diffuse albedo, specular colour, packed normal-roughness, specular hit distance); NRD's denoised diffuse and specular and its composed HDR; the camera ray's emission guide; and the DLSS-RR HDR colour output. Only the DLSS output is `#ifdef`-guarded.
 
 {{cite ohao/render/rt/path_tracer.hpp "VkImage        m_dlssColorOutImage"}}
 
@@ -92,9 +92,10 @@ The injection is not only for the denoisers the tracer dispatches itself (à-tro
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {"}}
 
-With no `--denoise` flag at all, each profile's constant decides: RTOffline denoises with OIDN, RTRealtime with NRD.
+With no `--denoise` flag at all, the defaults decide: RTOffline denoises with OIDN; RTRealtime with DLSS-RR on an NVIDIA GPU in a build with the SDK, else NRD. A capture names its own denoiser and defaults to none.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (props.vendorID == 0x10DE) s.denoiseMode = DenoiseMode::DLSSRR;   // NVIDIA"}}
 
 ## The frame you asked for, and no other
 
@@ -116,24 +117,24 @@ Three counters let a caller reason about the frames ahead of the one it reads. `
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_slotSubmitted[s] == n) m_frameResources.waitForFrame(s);"}}
 
-## readback() and the CPU denoisers
+## readback() and the CPU denoiser
 
-Most denoise modes need nothing from `readback()`. None, Atrous and DLSS-RR all end with the RGBA8 beauty in `m_outputImage`, which is the image the requested frame copies. Atrous filters that image in place. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then tonemaps that target into the same beauty image, so the standard copy picks it up unchanged. The tonemap runs only when NGX feature creation succeeded; where that fails, the copy is raw beauty.
+Most denoise modes need nothing from `readback()`. None, Atrous, DLSS-RR and NRD all end with the RGBA8 frame in `m_outputImage`, which is the image the requested frame copies and the one a window presents. Atrous filters that image in place. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then writes it into the same image with the tracer's curve; NRD's compose writes it there too, so the standard copy picks either up unchanged. The DLSS write runs only when NGX feature creation succeeded; where that fails, the copy is the raw trace.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
 
-Two modes do their work after the frame. On a path-traced frame under NRD or OIDN, `readback()` hands off to `denoiseRequestedFrame()` once the frame's fence has signalled. Nothing has been recorded since, so the images it reads belong to the requested frame.
+One mode does its work after the frame. On a path-traced frame under OIDN, `readback()` hands off to `denoiseRequestedFrame()` once the frame's fence has signalled. Nothing has been recorded since, so the images it reads belong to the requested frame.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "denoiseRequestedFrame() && m_denoisedPixelBuffer.size() == bytes)"}}
 
-NRD reads back its own tonemapped RGBA8 image. OIDN waits for the device to go idle, copies the RGBA32F accumulation image plus the albedo and normal AOVs, filters them on the host and caches the result until the next `render()`. The filter is created on `oidn::DeviceType::Default`: OIDN picks the device, and nothing here pins it to the CPU, but the round trip through host memory and `vkDeviceWaitIdle` is unconditional. If either fails, the log says so and `readback()` returns the noisy frame from the staging buffer.
+OIDN waits for the device to go idle, copies the RGBA32F accumulation image plus the albedo and normal AOVs, filters them on the host and caches the result until the next `render()`. The filter is created on `oidn::DeviceType::Default`: OIDN picks the device, and nothing here pins it to the CPU, but the round trip through host memory and `vkDeviceWaitIdle` is unconditional. If either fails, the log says so and `readback()` returns the noisy frame from the staging buffer.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);"}}
 {{cite ohao/render/rt/denoise/oidn_denoise.cpp "oidn::newDevice(oidn::DeviceType::Default)"}}
 
-Below that sits the bulk of the translation unit, more than half of `renderer.cpp`: eleven near-identical readback helpers, seven pulling debug AOVs and four pulling NRD outputs. Each open-codes a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. Ten are instrumentation, reachable only from env_demo's dump flags. The eleventh is not: `readbackNrdTonemapped` is how `--denoise=nrd` gets its picture, a full queue stall per read frame.
+Below that sits the bulk of the translation unit, about half of `renderer.cpp`: ten near-identical readback helpers pulling debug AOVs and NRD's intermediate images. Each open-codes a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. All ten are instrumentation, reachable only from env_demo's dump flags.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (!readbackNrdTonemapped(rgba, rw, rh)) {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "bool VulkanRenderer::readbackNrdComposed(std::vector<float>& data,"}}
 
 ## Contracts
 
@@ -143,7 +144,7 @@ Below that sits the bulk of the translation unit, more than half of `renderer.cp
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
 - `resize()` destroys and recreates every RT image. The tracer rewrites its image bindings at the top of every `render()`, so nothing needs rebinding afterwards; a descriptor cached anywhere else would be stale.
 - Any new `RTRenderSettings` field a caller can set must be re-applied in `applyRTRenderSettings`, or the per-frame reload will discard it.
-- `readback()` is not reentrant with GPU work in flight: under NRD or OIDN it allocates a command buffer, submits and waits on the graphics queue. It skips that while `m_denoiseCacheValid` holds, so only the first call after each `render()` costs the stall.
+- `readback()` is not reentrant with GPU work in flight: under OIDN it allocates a command buffer, submits and waits on the graphics queue. It skips that while `m_denoiseCacheValid` holds, so only the first call after each `render()` costs the stall.
 - `getDevice()`, `getPhysicalDevice()`, `graphicsQueue()` and `graphicsQueueFamily()` are wiring for consumers outside the renderer; `render_bench`'s GPU calibration kernel is the one in the tree. Work submitted on the queue must finish before the next `render()`.
 
 {{cite ohao/gpu/vulkan/renderer.hpp "VkDevice getDevice() const noexcept { return m_device; }"}}

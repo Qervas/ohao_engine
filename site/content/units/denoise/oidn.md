@@ -88,11 +88,11 @@ its job.
 :::
 
 The dispatch reflects that. `readback()` returns the requested frame's staging
-copy for `None`, `Atrous` and `DLSSRR`, whose result is already in the output
-image the frame copied (the last two filter on the GPU), and hands only `OIDN` and
-`NRD` to the denoising path, by name.
+copy for every GPU mode — `None`, `Atrous`, `DLSSRR` and `NRD` all leave their
+result in the output image the frame copied — and hands only `OIDN` to the CPU
+denoising path, by name.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && (m_denoiseMode == DenoiseMode::OIDN || m_denoiseMode == DenoiseMode::NRD) &&"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && m_denoiseMode == DenoiseMode::OIDN &&"}}
 
 `--denoise=optix` parses to OIDN with a warning.
 
@@ -167,7 +167,7 @@ The coefficients live once in C++ and once in the Slang tracer:
 {{cite ohao/render/rt/denoise/oidn_denoise.cpp "float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;"}}
 {{cite shaders/rt/path_tracer.slang "outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);"}}
 
-and the exposure the denoised path passes is the same 0.5 the shader hard-codes.
+and the exposure the denoised path passes is the same 0.5 the shader hard-codes. NRD's compose and DLSS's tonemap apply the same curve on the GPU, so every denoiser's frame is displayed alike.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);"}}
 
@@ -196,6 +196,6 @@ using such diffs as a regression signal.
 - `oidnDenoise` reads the accumulation image, whose `.rgb` is already a running mean. Anything that changes that to a raw sum breaks the denoise path silently: OIDN's HDR filter would see radiance scaled by the sample count.
 - The frame to denoise is requested (`requestReadback()` before its `render()`) and read with `readback()` before the next `render()`, which clears the denoise cache. The readback re-submits on the graphics queue with a device-wide wait.
 - The normal guide is `N * 0.5 + 0.5`, not the `[-1,1]` OIDN specifies. Adding a decode is a quality fix that no test will notice: the only committed regression corpus, `tests/golden/manifest.json`, names OIDN for none of its scenes, so no golden image in the tree has ever passed through OIDN.
-- Two tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++ and `path_tracer.slang`'s `aces`.
+- The display curve exists four times and they must move together, or the denoisers stop being comparable: `float3ToRGBA8` in C++, `path_tracer.slang`'s `aces`, `nrd_compose.comp` and `dlss_tonemap.comp`.
 - The build takes whatever OIDN the host provides — `find_package(OpenImageDenoise REQUIRED)` pins no version — so a host-side OIDN upgrade changes the filter under unchanged source.
 - The LDR path (`hdr = false`) has no in-engine caller; every call site passes `hdr = true`.

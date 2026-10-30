@@ -99,10 +99,10 @@ occlusion test — is the GPU culling unit's subject.
 
 ## dlss_tonemap: display space, behind a build gate
 
-The last is the DLSS Ray Reconstruction display pass, dispatched after
-RR writes its denoised HDR image:
+The last is the DLSS Ray Reconstruction display pass, dispatched after RR writes its
+denoised HDR image, with one descriptor set per frame in flight:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
 
 That call site is inside `#ifdef OHAO_DLSS_ENABLED`, and so is the whole of
 `dlss_rr.cpp`, the only translation unit that names the `.spv`.
@@ -110,31 +110,20 @@ That call site is inside `#ifdef OHAO_DLSS_ENABLED`, and so is the whole of
 {{cite ohao/render/rt/path_tracer_render.cpp "#endif  // OHAO_DLSS_ENABLED"}}
 {{cite ohao/render/rt/denoise/dlss_rr.cpp "#ifdef OHAO_DLSS_ENABLED"}}
 
-The option defaults ON only when a vendored NGX static library is already on disk,
-and `.gitignore` excludes the directory that would hold it — so a clean clone
-compiles the file empty. The `.spv` is still produced by the glob; nothing loads
-it.
+The option is on only when the NGX static library is on disk, and `.gitignore`
+excludes the directory that holds it: `tools/fetch_dlss.py` downloads the pinned SDK
+files into `external/DLSS`. A clone without them compiles the file empty; the `.spv`
+is still produced by the glob, and nothing loads it.
 
-{{cite CMakeLists.txt "set(OHAO_DLSS_STATIC_LIB"}}
+{{cite CMakeLists.txt "external/DLSS/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib"}}
 {{cite .gitignore "external/DLSS/"}}
 
-Where it does run, it takes `RGBA16F` linear to `RGBA8` with the same ACES curve
-and the same 0.5 exposure prescale as the path tracers' raygens, so switching denoisers
-does not shift the tone curve underneath a comparison.
+Where it does run, it takes `RGBA16F` linear to `RGBA8` with the path tracer's curve:
+ACES at 0.5 exposure, then gamma 2.2, the transform the tracer's own output and
+`nrd_compose` apply, so every denoiser's frame is displayed alike. Nothing else
+happens to the frame, and nothing feeds back into the trace.
 
-{{cite shaders/compute/dlss_tonemap.comp "vec3 ldr = ACES(hdr * 0.5);"}}
-
-Everything after the curve — contrast, split-tone, saturation, vignette, grain —
-is scaled by one push-constant master read from `OHAO_GRADE`, where 0.0 reproduces
-the pre-cinematic output exactly. Chromatic aberration is the exception: it runs
-*before* ACES, offsetting the R and B `imageLoad`s, so it resamples HDR radiance
-rather than the graded image. Its offset is also truncated to whole texels, so it
-snaps where the expression crosses one pixel rather than ramping.
-
-{{cite shaders/compute/dlss_tonemap.comp "ivec2 off = ivec2(d * s * r2 * 6.0);"}}
-
-None of it feeds back into the trace — the pass reads DLSS's `COLOR_OUT` and
-writes the RGBA8 beauty — so the tracer stays unbiased.
+{{cite shaders/compute/dlss_tonemap.comp "imageStore(ldrOut, pix, vec4(pow(ACES(hdr * 0.5), vec3(1.0 / 2.2)), 1.0));"}}
 
 ## Contracts
 

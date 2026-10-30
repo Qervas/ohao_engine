@@ -512,7 +512,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "path-tracer/bindings": {
         "what": [
-            "Descriptor set 0 map: TLAS, accum, materials, lights, env CDF, AOVs and guides, RenderScene tables 36–37, OpenPBR tables 38, radiance cache 39–41; 13–16 and 27–35 unused.",
+            "Descriptor set 0 map: TLAS, accum, materials, lights, env CDF, AOVs and guides, RenderScene tables 36–37, OpenPBR tables 38, emission guide 13, radiance cache 39–41; 14–16 and 27–35 unused.",
         ],
         "how": [
             "path_tracer_descriptors.cpp writes all slots; the shaders' binding numbers (Slang [[vk::binding]], GLSL layout) must match exactly.",
@@ -565,9 +565,9 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Uniform lifecycle keeps DeferredRenderer orchestration simple.",
     },
     "denoise/types": {
-        "what": ["DenoiseMode enum + traits declaring which AOV guides each backend needs."],
+        "what": ["DenoiseMode enum + rt_meta's constexpr policy saying which AOV guides each backend needs; realtime defaults to DLSS-RR on NVIDIA with the SDK, else NRD."],
         "how": ["denoise_types.hpp; CLI --denoise=dlssrr|nrd|oidn|atrous|none."],
-        "why": "Traits prevent calling DLSS without hit-dist or NRD without packing.",
+        "why": "The policy keeps each backend's guides and accumulation consistent with the mode actually running.",
     },
     "denoise/oidn": {
         "what": ["Intel Open Image Denoise for offline/reference quality."],
@@ -576,23 +576,23 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "denoise/nrd": {
         "what": [
-            "NRD REBLUR realtime denoise: pack radiance as YCoCg + normalized hit-distance, dispatch, compose unpack, optional cinematic post.",
+            "NRD REBLUR realtime denoise: pack radiance as YCoCg + normalized hit-distance, dispatch, compose with the emission guide into the presented frame.",
         ],
         "how": [
-            "nrd_frontend.glsl pack in raygen; NrdDenoiser dispatch; nrd_compose.comp unpack; NrdCinematicPost optional.",
+            "path_tracer.slang packs in raygen; NrdDenoiser dispatch; nrd_compose.comp (7 bindings) unpacks, adds emission and writes the RGBA8 output.",
         ],
         "why": "Temporal denoise reuses AOVs already required for hybrid/PT. Wrong pack = magenta classic bug.",
         "contracts": [
             "IN_DIFF/SPEC are YCoCg+hitDist not linear RGB",
             "Compose must unpack before display",
         ],
-        "workflow": ["pack AOVs", "NRD dispatch", "compose unpack", "optional cinematic"],
+        "workflow": ["pack AOVs", "NRD dispatch", "compose unpack + emission", "present"],
     },
     "denoise/dlss": {
-        "what": ["NVIDIA DLSS Ray Reconstruction via NGX — guides include color, depth, motion, normal-roughness, specular hit-distance (binding 35)."],
+        "what": ["NVIDIA DLSS Ray Reconstruction via NGX — the realtime default on NVIDIA when built with the SDK."],
         "how": [
-            "dlss_rr.hpp/cpp; needs LD_LIBRARY_PATH to DLSS .so; rt_realtime --denoise=dlss.",
-            "dlss_tonemap.comp prepares display path.",
+            "dlss_rr.hpp/cpp; tools/fetch_dlss.py fetches the pinned SDK into external/DLSS; nvngx_dlssd.dll beside the binaries.",
+            "dlss_tonemap.comp: ACES(x * 0.5)^(1/2.2) into the output, a set per frame in flight.",
         ],
         "why": "Highest interactive quality on supported NVIDIA hardware.",
     },
@@ -600,11 +600,6 @@ KNOWLEDGE: dict[str, dict] = {
         "what": ["In-engine edge-aware à-trous / SVGF-style denoise with zero external dependency."],
         "how": ["atrous_denoise + denoise_atrous.comp / rt_svgf_*.comp."],
         "why": "Fallback when NRD/DLSS unavailable.",
-    },
-    "denoise/cinematic": {
-        "what": ["Cinematic RT post: bloom extract/blur, DoF, composite after denoise."],
-        "how": ["cinematic_*.comp chain after NRD stability."],
-        "why": "Bloom/DoF after denoise so temporal filters are not fighting post effects.",
     },
     "shaders/layout": {
         "what": ["Shader tree layout: core, rt, postprocess, compute, includes, shadow, vfx. SPIR-V via CMake/compile script."],
@@ -649,10 +644,10 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "shaders/rt-shaders": {
         "what": [
-            "Full RT program family: path tracer stages, hybrid shadow/GI, NRD compose, SVGF/à-trous, cinematic post.",
+            "Full RT program family: path tracer stages, hybrid shadow/GI, NRD compose, SVGF/à-trous.",
         ],
         "how": [
-            "pt_* for full PT; shadow_* / gi_* (Slang compute, inline ray queries) for hybrid; compute post for denoise/cinematic.",
+            "path_tracer.slang for full PT; shadow_* / gi_* (Slang compute, inline ray queries) for hybrid; compute post for denoising.",
         ],
         "why": "One SPIR-V family documented together so binding/SBT changes stay coordinated.",
     },

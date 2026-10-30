@@ -186,46 +186,42 @@ histories, and the PNG is the last of them, as `ohao run --frames` writes it.
 
 {{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : samples;"}}
 
-## Three different exits from the GPU
+## Two exits from the GPU
 
-`readback()` has three exits behind one signature, and which one runs depends on
-the denoiser. `None`, `Atrous` and `DLSSRR` share the first: return the requested
-frame's staging buffer. `None` does nothing to it; `Atrous` denoises the beauty
-image (`m_outputImage`) in place on the GPU, and the DLSSRR path, when it runs at
-all, tonemaps into that same image, so neither needs a readback of its own.
+`readback()` has two exits behind one signature, and which one runs depends on
+the denoiser. Every GPU mode — `None`, `Atrous`, `DLSSRR` and `NRD` — takes the
+first: return the requested frame's staging buffer. Each leaves its frame in the
+tracer's RGBA8 output image (`m_outputImage`) with the tracer's own curve: `None`
+as traced, `Atrous` filtered in place, `DLSSRR` through its tonemap pass, `NRD`
+through its compose pass. So none of them needs a readback of its own, and a
+window presents the same image a capture reads.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && (m_denoiseMode == DenoiseMode::OIDN || m_denoiseMode == DenoiseMode::NRD) &&"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && m_denoiseMode == DenoiseMode::OIDN &&"}}
 
-NRD takes the second, and it touches neither the staging buffer nor the accumulator: it
-copies the tracer's RGBA8 tonemapped image — already denoised and tonemapped on
-the GPU — straight into host memory behind a
-`vkQueueWaitIdle` on the graphics queue.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "VkImage srcImage = getNrdTonemappedAOVImage();"}}
-
-OIDN takes the third: a full `vkDeviceWaitIdle`, then three float readbacks — the
+OIDN takes the second: a full `vkDeviceWaitIdle`, then three float readbacks — the
 accumulation image plus the albedo and normal AOVs — into host memory, where the
 CPU denoiser runs over them.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);"}}
 
-That third path matters because the offline profile denoises by default:
+That second path matters because the offline profile denoises by default:
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 
 so a plain `cornell_box out.png 1024` writes a PNG denoised from the accumulator
 of its last frame, holding 1024 samples: the same budget `--denoise=none` lands
-on. The result of either denoising path is cached and invalidated by every
-`render()`, so calling `readback()` twice for one frame costs one denoise, not
-two. Both allocate a command buffer, submit it and block, which is safe only
-after `render()` returns, on the thread that called it.
+on. The denoised result is cached and invalidated by every `render()`, so calling
+`readback()` twice for one frame costs one denoise, not two. It allocates a command
+buffer, submits it and blocks, which is safe only after `render()` returns, on the
+thread that called it.
 
 ## The settings reset that eats your overrides
 
 Once the loop starts, the renderer re-derives its RT settings from the active mode's
 profile defaults on every single frame. `rtDefaults` maps the mode to
-`kRealtimeRTSettings` or `kOfflineRTSettings`, and `prepareRTSceneForFrame` starts the
-frame from them:
+`kRealtimeRTSettings` (its denoiser set to `DLSSRR` on an NVIDIA GPU in a build with
+the SDK) or `kOfflineRTSettings`, and `prepareRTSceneForFrame` starts the frame from
+them:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = defaults;"}}
 
@@ -252,15 +248,16 @@ and firefly clamp follow the mode (`tracerAccumulates`):
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
 `Atrous` is dispatched by the tracer itself, in place on the beauty image. `DLSSRR`
-is too: `path_tracer_render.cpp` holds
-a real NGX evaluate-and-tonemap block, compiled out unless the vendored NGX static
-library is present.
+is too: `path_tracer_render.cpp` holds an NGX evaluate-and-tonemap block, compiled
+out unless the DLSS SDK (`tools/fetch_dlss.py`, into the git-ignored
+`external/DLSS`) was present at configure time.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
 
 OIDN is the one genuinely consumer-side mode — it runs on the CPU after readback.
 NRD is dispatched inside the tracer like `Atrous`, and it is the realtime profile's
-default; the tracer runs REBLUR, compose and the cinematic chain only in NRD mode.
+default where DLSS-RR cannot run; the tracer runs REBLUR and compose only in NRD
+mode.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 

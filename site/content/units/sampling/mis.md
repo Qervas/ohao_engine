@@ -99,7 +99,7 @@ light taken at full weight while its mesh is also found adds its light twice.
 The environment is the same pair. A direction drawn from the map's CDF is weighed
 against the BSDF:
 
-{{cite shaders/rt/path_tracer.slang "const float3 c = throughput * f * envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;"}}
+{{cite shaders/rt/path_tracer.slang "const float3 le = envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;"}}
 
 and a bounce ray that leaves the scene against the CDF — except the camera ray,
 which no light strategy could have produced:

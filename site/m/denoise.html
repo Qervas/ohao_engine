@@ -88,14 +88,14 @@
         <thead><tr><th>Mode</th><th>Typical use</th><th>Trait needs</th></tr></thead>
         <tbody>
           <tr><td>OIDN</td><td>Offline stills</td><td>CPU readback; albedo+normal guides</td></tr>
-          <tr><td>NRD</td><td>Realtime PT (default)</td><td>motion, diff/spec split, Halton jitter</td></tr>
-          <tr><td>DLSS-RR</td><td>Realtime + NGX</td><td>motion, extended guides</td></tr>
+          <tr><td>NRD</td><td>Realtime PT (default without DLSS-RR)</td><td>motion, diff/spec split, emission, Halton jitter</td></tr>
+          <tr><td>DLSS-RR</td><td>Realtime default on NVIDIA with the SDK</td><td>motion, extended guides</td></tr>
           <tr><td>Atrous</td><td>À-trous compute</td><td>optional motion</td></tr>
           <tr><td>None</td><td>Debug noise</td><td>—</td></tr>
         </tbody>
       </table>
       <div class="prose reveal">
-        <p><code>rt_meta.hpp</code>’s constexpr policy (<code>denoiseNeeds*</code>, <code>denoiseIsRealtimeCapable</code>, <code>tracerAccumulates</code>, <code>applyDenoisePolicy</code>) decides what each mode needs: the offline profile accumulates for OIDN; the realtime profile hands each frame’s sample to NRD by default. Any CLI <code>--denoise=</code> override (None and OIDN included) is injected by <code>applyRTRenderSettings</code>.</p>
+        <p><code>rt_meta.hpp</code>’s constexpr policy (<code>denoiseNeeds*</code>, <code>denoiseIsRealtimeCapable</code>, <code>tracerAccumulates</code>, <code>applyDenoisePolicy</code>) decides what each mode needs: the offline profile accumulates for OIDN; the realtime profile hands each frame’s sample to a temporal denoiser: <code>rtDefaults</code> picks DLSS-RR when the build has the SDK and the device is NVIDIA, else NRD. Captures default to no denoiser. Any CLI <code>--denoise=</code> override (None and OIDN included) is injected by <code>applyRTRenderSettings</code>.</p>
       </div>
 
       <div class="section-rule"><h2 id="oidn">OIDN full path</h2></div>
@@ -119,9 +119,9 @@
           <li>Raygen writes demod diffuse/specular radiance + hit-dist (packed), normal-rough, motion, ViewZ, demod albedo/F0</li>
           <li>Optional <code>PT_FLAG_ACCUMULATE_AOVS</code> running mean for multi-spp</li>
           <li>NRD REBLUR (or related) compute dispatches consume packed inputs</li>
-          <li>Write denoised diff/spec (bindings 27–28 on set 0)</li>
-          <li><code>nrd_compose</code>: unpack YCoCg → linear, recombine, env miss fill as configured</li>
-          <li>Cinematic / tonemap modules → presentable beauty</li>
+          <li>Write denoised diff/spec images</li>
+          <li><code>nrd_compose</code>: unpack YCoCg → linear, composed = diff × diffAlbedo + spec + emission (the camera ray’s emission guide, binding 5)</li>
+          <li>The same pass writes the frame’s RGBA8 output with the tracer’s curve (binding 6): a window presents the denoised frame</li>
         </ol>
       </div>
 
@@ -144,8 +144,9 @@
         <ol>
           <li>Device must have advertised NVX/push-descriptor exts at createLogicalDevice</li>
           <li>PT flag DLSSRR may repack normalAOV as (N, roughness)</li>
-          <li>Binding 35: specular hit-distance guide</li>
-          <li>NGX eval; on failure fall back to raw / other denoise</li>
+          <li>The SDK comes from <code>tools/fetch_dlss.py</code> (pinned v310.9.16, SHA-256 per file) into git-ignored <code>external/DLSS</code>; <code>nvngx_dlssd.dll</code> is copied next to the binaries</li>
+          <li>NGX eval; NGX's logs go through <code>OHAO_LOG</code> (Debug)</li>
+          <li><code>dlss_tonemap.comp</code>: ACES(x × 0.5)^(1/2.2) into the RGBA8 output, one descriptor set per frame in flight</li>
         </ol>
       </div>
 
@@ -155,7 +156,7 @@
       </div>
       <div class="file-map reveal">
         <div class="row"><code>oidn_denoise.*</code><span class="desc">OIDN</span></div>
-        <div class="row"><code>nrd_denoise.* / nrd_compose.* / nrd_cinematic.*</code><span class="desc">Realtime chain</span></div>
+        <div class="row"><code>nrd_denoise.* / nrd_compose.*</code><span class="desc">Realtime chain</span></div>
         <div class="row"><code>nrd_frontend.glsl</code><span class="desc">Pack/unpack</span></div>
         <div class="row"><code>dlss_rr.*</code><span class="desc">NGX</span></div>
         <div class="row"><code>rt_meta.hpp / denoise_types.*</code><span class="desc">Traits · modes</span></div>
@@ -177,22 +178,17 @@
         <a class="tree-card" href="denoise/nrd.html">
           <div class="num">nrd</div>
           <h3>NRD REBLUR + compose</h3>
-          <p>Pack YCoCg, dispatch, unpack compose, cinematic post.</p>
+          <p>Pack YCoCg, dispatch, compose with the emission guide into the presented frame.</p>
         </a>
         <a class="tree-card" href="denoise/dlss.html">
           <div class="num">dlss</div>
           <h3>DLSS Ray Reconstruction</h3>
-          <p>NGX dlssd init, guides, binding 35 hit-dist.</p>
+          <p>NGX dlssd init, guides, the display tonemap; the realtime default on NVIDIA.</p>
         </a>
         <a class="tree-card" href="denoise/atrous.html">
           <div class="num">atrous</div>
           <h3>À-trous / SVGF-style</h3>
           <p>Internal spatial/temporal denoise compute.</p>
-        </a>
-        <a class="tree-card" href="denoise/cinematic.html">
-          <div class="num">cinematic</div>
-          <h3>Cinematic RT post</h3>
-          <p>Bloom extract/blur, DoF, composite after NRD.</p>
         </a>
       </div>
 

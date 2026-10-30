@@ -20,7 +20,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <sys/stat.h>
+#include <filesystem>
 
 #include "core/log.hpp"
 
@@ -97,12 +97,23 @@ DlssRR::~DlssRR() {
     shutdown();
 }
 
+namespace {
+void NVSDK_CONV ngxLog(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
+    std::string line = message ? message : "";
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    OHAO_LOG(Debug, render, "NGX: {}", line);
+}
+} // namespace
+
 bool DlssRR::initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
                         VkDevice device, const char* snippetDir, const char* appDataDir) {
     if (m_initialized) return true;
     m_device = device;
 
-    if (appDataDir && *appDataDir) mkdir(appDataDir, 0755);  // NGX needs a writable dir
+    if (appDataDir && *appDataDir) {   // NGX needs a writable dir
+        std::error_code ec;
+        std::filesystem::create_directories(appDataDir, ec);
+    }
 
     const std::wstring snippetDirW = widen(snippetDir);
     const std::wstring appDataDirW = widen(appDataDir);
@@ -113,9 +124,11 @@ bool DlssRR::initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
     NVSDK_NGX_FeatureCommonInfo commonInfo = {};
     commonInfo.PathListInfo.Path               = pathList;
     commonInfo.PathListInfo.Length             = 1;
-    commonInfo.LoggingInfo.LoggingCallback     = nullptr;
+    // NGX's own sinks write to stdout, which `ohao serve` reserves for the protocol: its lines go
+    // through the engine's logger instead (the `render` channel, Debug), and its files.
+    commonInfo.LoggingInfo.LoggingCallback     = &ngxLog;
     commonInfo.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_ON;
-    commonInfo.LoggingInfo.DisableOtherLoggingSinks = false;
+    commonInfo.LoggingInfo.DisableOtherLoggingSinks = true;
 
     NVSDK_NGX_Result initRes = NVSDK_NGX_VULKAN_Init_with_ProjectID(
         kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVer,
@@ -338,18 +351,11 @@ bool DlssRR::createTonemapPipeline() {
         return false;
     }
 
-    // Push constant: { uint frame; float strength; } for the cinematic grade.
-    VkPushConstantRange pcRange{};
-    pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pcRange.offset     = 0;
-    pcRange.size       = 8;  // uint + float
-
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plInfo.setLayoutCount         = 1;
     plInfo.pSetLayouts            = &m_tmSetLayout;
-    plInfo.pushConstantRangeCount = 1;
-    plInfo.pPushConstantRanges    = &pcRange;
+    plInfo.pushConstantRangeCount = 0;
     if (vkCreatePipelineLayout(m_device, &plInfo, nullptr, &m_tmPipelineLayout) != VK_SUCCESS) {
         OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreatePipelineLayout failed");
         return false;
@@ -388,12 +394,12 @@ bool DlssRR::createTonemapPipeline() {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSize.descriptorCount = 2;
+    poolSize.descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes    = &poolSize;
-    poolInfo.maxSets       = 1;
+    poolInfo.maxSets       = MAX_FRAMES_IN_FLIGHT;
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_tmDescriptorPool) != VK_SUCCESS) {
         OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreateDescriptorPool failed");
         return false;
@@ -401,9 +407,11 @@ bool DlssRR::createTonemapPipeline() {
     VkDescriptorSetAllocateInfo dsai{};
     dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     dsai.descriptorPool     = m_tmDescriptorPool;
-    dsai.descriptorSetCount = 1;
-    dsai.pSetLayouts        = &m_tmSetLayout;
-    if (vkAllocateDescriptorSets(m_device, &dsai, &m_tmDescriptorSet) != VK_SUCCESS) {
+    VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+    for (VkDescriptorSetLayout& l : layouts) l = m_tmSetLayout;
+    dsai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    dsai.pSetLayouts        = layouts;
+    if (vkAllocateDescriptorSets(m_device, &dsai, m_tmDescriptorSets) != VK_SUCCESS) {
         OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkAllocateDescriptorSets failed");
         return false;
     }
@@ -411,9 +419,10 @@ bool DlssRR::createTonemapPipeline() {
     return true;
 }
 
-void DlssRR::tonemap(VkCommandBuffer cmd, VkImageView hdrInView, VkImageView ldrOutView,
+void DlssRR::tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInView, VkImageView ldrOutView,
                      uint32_t width, uint32_t height) {
-    if (!m_tmPipeline) return;
+    if (!m_tmPipeline || frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
+    const VkDescriptorSet set = m_tmDescriptorSets[frameSlot];
 
     VkDescriptorImageInfo infos[2] = {};
     infos[0].imageView   = hdrInView;
@@ -423,7 +432,7 @@ void DlssRR::tonemap(VkCommandBuffer cmd, VkImageView hdrInView, VkImageView ldr
     VkWriteDescriptorSet writes[2] = {};
     for (uint32_t i = 0; i < 2; ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = m_tmDescriptorSet;
+        writes[i].dstSet          = set;
         writes[i].dstBinding      = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -433,16 +442,8 @@ void DlssRR::tonemap(VkCommandBuffer cmd, VkImageView hdrInView, VkImageView ldr
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipelineLayout, 0, 1,
-                            &m_tmDescriptorSet, 0, nullptr);
+                            &set, 0, nullptr);
 
-    // Cinematic grade strength (OHAO_GRADE, default 1.0; 0 = pure ACES). Cached once.
-    if (m_gradeStrength < 0.0f) {
-        const char* g = std::getenv("OHAO_GRADE");
-        float v = g ? (float)std::atof(g) : 1.0f;
-        m_gradeStrength = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-    }
-    struct { uint32_t frame; float strength; } pcData{ m_tmFrame++, m_gradeStrength };
-    vkCmdPushConstants(cmd, m_tmPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pcData), &pcData);
 
     vkCmdDispatch(cmd, (width + 7u) / 8u, (height + 7u) / 8u, 1);
 }
@@ -460,7 +461,7 @@ void DlssRR::shutdown() {
     if (m_tmPipeline)       { vkDestroyPipeline(m_device, m_tmPipeline, nullptr);             m_tmPipeline = VK_NULL_HANDLE; }
     if (m_tmPipelineLayout) { vkDestroyPipelineLayout(m_device, m_tmPipelineLayout, nullptr); m_tmPipelineLayout = VK_NULL_HANDLE; }
     if (m_tmSetLayout)      { vkDestroyDescriptorSetLayout(m_device, m_tmSetLayout, nullptr); m_tmSetLayout = VK_NULL_HANDLE; }
-    m_tmDescriptorSet = VK_NULL_HANDLE;
+    for (VkDescriptorSet& set : m_tmDescriptorSets) set = VK_NULL_HANDLE;
     if (m_ngxParams) {
         NVSDK_NGX_VULKAN_DestroyParameters(static_cast<NVSDK_NGX_Parameter*>(m_ngxParams));
         m_ngxParams = nullptr;
@@ -483,7 +484,7 @@ bool DlssRR::initialize(VkInstance, VkPhysicalDevice, VkDevice, const char*, con
 bool DlssRR::createFeature(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t, DlssQuality) { return false; }
 bool DlssRR::evaluate(VkCommandBuffer, const EvalInputs&) { return false; }
 bool DlssRR::createTonemapPipeline() { return false; }
-void DlssRR::tonemap(VkCommandBuffer, VkImageView, VkImageView, uint32_t, uint32_t) {}
+void DlssRR::tonemap(VkCommandBuffer, uint32_t, VkImageView, VkImageView, uint32_t, uint32_t) {}
 void DlssRR::releaseFeature() {}
 void DlssRR::shutdown() {}
 }  // namespace ohao

@@ -82,7 +82,7 @@ std::span<const uint8_t> VulkanRenderer::readback() {
     const std::size_t bytes = static_cast<std::size_t>(m_width) * m_height * 4;
     // A path-traced frame under a CPU-side denoiser: its images are final now that its
     // fence signalled, and nothing has been recorded since (the span would be empty).
-    if (isRTRenderMode(m_renderMode) && (m_denoiseMode == DenoiseMode::OIDN || m_denoiseMode == DenoiseMode::NRD) &&
+    if (isRTRenderMode(m_renderMode) && m_denoiseMode == DenoiseMode::OIDN &&
         denoiseRequestedFrame() && m_denoisedPixelBuffer.size() == bytes)
         return {m_denoisedPixelBuffer.data(), bytes};
     return {static_cast<const uint8_t*>(f.stagingBufferMapped), bytes};

@@ -118,8 +118,9 @@ Cornell box and `--frames 30` for the helmet.
 ## What each denoiser makes of it
 
 `DenoiseMode` has five values: `None`, `OIDN`, `NRD`, `Atrous` and `DLSSRR`.
-`readback()` returns the requested frame's staging copy for `None`, `Atrous` and
-`DLSSRR`. For `OIDN` and `NRD` it does its own readback of that frame's images,
+`readback()` returns the requested frame's staging copy for every GPU mode — `None`,
+`Atrous`, `DLSSRR` and `NRD` each leave their frame in the tracer's RGBA8 output with
+the tracer's own curve. For `OIDN` it does its own readback of that frame's images,
 a command buffer submitted and waited on once the frame's fence has signalled.
 OIDN's readback takes the accumulation image itself, whose RGB is the running
 mean of every sample so far.
@@ -143,7 +144,8 @@ a still view's samples.
 So under `None` and under `OIDN`, the shipped offline default, the saved frame
 holds exactly `samples` samples. Under `Atrous` or `DLSSRR` the saved PNG is
 1 spp no matter what number you typed: those denoisers carry the history
-themselves, as realtime NRD does. `NRD` returns its own GPU-tonemapped composite of the last frame.
+themselves, as realtime NRD does: the PNG is that last frame, denoised and
+composed on the GPU.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 

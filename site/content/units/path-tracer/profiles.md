@@ -15,8 +15,10 @@ the two is a pair of `constexpr` aggregates in `rt_settings.hpp`.
 {{cite ohao/render/rt/rt_settings.hpp "inline constexpr RTRenderSettings kRealtimeRTSettings{"}}
 
 Both profiles run the same shaders, `rt/path_tracer.slang`. The realtime profile takes
-two bounces, a firefly clamp at luminance 10, and NRD as its denoiser: a moving view is
-one sample a frame, and the denoiser keeps the history.
+two bounces, a firefly clamp at luminance 10, and a temporal denoiser: a moving view is
+one sample a frame, and the denoiser keeps the history. The constant names NRD; the
+renderer's defaults swap in DLSS Ray Reconstruction when the build has the DLSS SDK and
+the device is NVIDIA's (below).
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 
@@ -165,10 +167,19 @@ instance and a still scene keeps accumulating:
 
 ## What the per-frame reset keeps
 
-`VulkanRenderer` maps a render mode to its profile's constant with one static
-function, and a null answer means the mode is not path traced:
+`VulkanRenderer` maps a render mode to its profile's settings with one `const` member
+returning `std::optional`; an empty answer means the mode is not path traced. The
+offline answer is the constant itself. The realtime answer is the constant with its
+denoiser switched to DLSS-RR when the build defines `OHAO_DLSS_ENABLED` and the
+device's vendor ID is NVIDIA's (0x10DE), else NRD as the constant has it:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "const RTRenderSettings* VulkanRenderer::rtDefaults(RenderMode mode) {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "std::optional<RTRenderSettings> VulkanRenderer::rtDefaults(RenderMode mode) const {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (props.vendorID == 0x10DE) s.denoiseMode = DenoiseMode::DLSSRR;   // NVIDIA"}}
+
+A capture through the API names its own denoiser and asks for none unless it says
+otherwise, so a path-traced capture is the raw estimate by default:
+
+{{cite ohao/api/params.hpp "Denoiser denoise{Denoiser::none};"}}
 
 Per frame, `prepareRTSceneForFrame` overwrites the renderer's settings with those
 defaults before doing anything else, and `renderRTPipeline` calls it before it records

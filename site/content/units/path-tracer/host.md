@@ -107,7 +107,7 @@ device-idle, destroy-all-images, recreate-all-images pass.
 ## Why dead members are compiled into every build
 
 :::why
-The NRD members — `unique_ptr<NrdDenoiser>`, `NrdCompositor`, `NrdCinematicPost` —
+The NRD members — `unique_ptr<NrdDenoiser>` and `unique_ptr<NrdCompositor>` —
 are declared unconditionally in the header even when NRD is off; only the method
 bodies that touch them are `#ifdef`-guarded. The rejected alternative, wrapping the
 members in `#ifdef OHAO_NRD_ENABLED` like the DLSS block below them, is an ODR
@@ -155,7 +155,7 @@ they read their own sets. The write lands on a set whose last user has completed
 
 {{cite ohao/render/frame/frame_resources.hpp "waitForFrame(currentFrame) - blocks until frame N-3 completes"}}
 
-Of the 29 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
+Of the 30 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
 that per-slot ordering. The one place the ordering does not reach is a buffer the
 set *points at*: a handle that `RenderScene` replaces mid-flight stays alive in its
 retire queue for `MAX_FRAMES_IN_FLIGHT` frames, so a set still bound by an earlier
@@ -290,5 +290,7 @@ because freeing them here would double-free.
 - Switching to or from a DLSS upscaling preset reallocates every render target, so `setRenderSettings()` is safe only between frames — never inside a command buffer.
 - Both profiles use the `PathTracerShaderSet` default (`rt_path_tracer.slang.<entry>.spv`, entries `raygen`, `closestHit`, `anyHit`, `miss`, and the cache's `cacheUpdate`). The pipeline takes each stage's entry name from the set, so a set whose names do not match its SPIR-V fails at pipeline creation.
 - The accumulation images carry `TRANSFER_SRC` usage: the HDR readback (`--hdr`) copies them.
+- Under NRD, `nrd_compose` writes the RGBA8 output image (its binding 6) after composing, so a window presents and a capture reads the denoised frame; the output image is created with `TRANSFER_DST` usage beside `STORAGE`, `TRANSFER_SRC` and `SAMPLED`.
+- The emission guide (`m_emissionAOV*`, binding 13, RGBA16F at render resolution) is created, resized and destroyed with the other AOVs; the pool holds 14 storage images a set for it.
 - With the radiance cache on, the update trace and the resolve are recorded before the frame's trace and the push constants are pushed again after the resolve; a new compute dispatch between them must do the same.
 - `resetAccumulation()` zeroes both clocks and clears the radiance cache; `notifyViewChanged()` restarts only the running mean. A host that resets on every camera move throws away the temporal denoisers' history.

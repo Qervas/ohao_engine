@@ -26,8 +26,9 @@ raygen and the matching multiply is in `nrd_compose.comp`.
 
 {{figure denoise-nrd-aov-flow "Conceptual data flow with the real binding numbers and formats from path_tracer_render.cpp — not a captured render. The dashed band marks the region in which radiance is YCoCg; crossing that boundary in the wrong direction is what turns a denoiser bug into a hue shift."}}
 
-NRD is the realtime profile's default denoiser, and the offline profile runs it
-when asked:
+NRD is the realtime profile's denoiser wherever DLSS Ray Reconstruction cannot run
+(a build without the SDK, or a GPU not NVIDIA's), and the offline profile runs it when
+asked:
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::NRD,   // a moving view is one sample a frame: the denoiser keeps the history"}}
 
@@ -41,37 +42,42 @@ to survive metals, where diffuse albedo is zero:
 {{cite shaders/rt/path_tracer.slang "const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));"}}
 {{cite shaders/rt/path_tracer.slang "diffAlbedo = base.rho * (1.0 - base.metalness);"}}
 
-The specular channel is divided by nothing; compose multiplies it by binding 25
-regardless. Binding 25 holds the OpenPBR base's directional albedo toward the
-viewer minus its diffuse part — the share of the reflectance the specular lobes
-carry at this view, Fresnel included:
+The specular channel is divided by nothing, and compose multiplies it by nothing:
+its radiance comes from sampling the whole BSDF, Fresnel included, so it already is
+the reflected light. Binding 25 still carries the specular albedo toward the viewer
+— the OpenPBR base's directional albedo minus its diffuse part — as a guide for DLSS
+Ray Reconstruction; compose binds it and does not read it.
 
 {{cite shaders/rt/path_tracer.slang "specColor = max(a - diffAlbedo, float3(0.0));"}}
 
-Its specular radiance comes from sampling the whole BSDF, Fresnel included, so the
-NRD composite applies the specular albedo twice: once in the path and once in
-compose. The tracer's own image (the running mean, and the OIDN input) is
-unaffected; only the NRD composite is.
+What the camera ray itself meets and that emits — a light's emitter mesh, an
+emissive surface, the sky — is in neither channel. It has no albedo to divide out
+and nothing to filter, so the raygen writes it to its own guide at binding 13, and
+compose adds it after REBLUR:
+
+{{cite shaders/rt/path_tracer.slang "emissionAOV[pixel] = lerp(emissionAOV[pixel], float4(add, 1.0), blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0);"}}
 
 ## How the lobes are split
 
-The split is by vertex, not by lobe evaluation. Everything the primary hit gathers
-— the light and environment samples at depth 0, whichever lobe reflects them —
-goes to the diffuse channel and is divided by diffuse albedo. Every later vertex
-goes to the channel of the lobe the first BSDF sample drew:
+At the primary hit the split is by lobe evaluation. The light sample and the
+environment sample each evaluate the BSDF as its two parts, specular and diffuse,
+and each part goes to its own channel:
+
+{{cite shaders/rt/path_tracer.slang "if (depth == 0u) { diffuseOut += throughput * fd * ls.radiance * w; specularOut += throughput * fs * ls.radiance * w; }"}}
+
+Every later vertex goes to the channel of the lobe the first BSDF sample drew:
 
 {{cite shaders/rt/path_tracer.slang "if (firstLobe == 1u) diffuseOut += add;"}}
 
-So direct specular highlights travel in the diffuse channel, demodulated by a
-diffuse albedo that is near zero on metals and floored at 0.03, and remodulated by
-the same albedo in compose.
+So a direct highlight travels in the specular channel, filtered by REBLUR's
+specular path at the surface's roughness, and indirect light follows the lobe that
+carried the path off the surface.
 
 :::why
-One path a sample keeps the beauty a single unbiased estimate: the two channels
-partition what the path adds, they do not trace twice. The cost is that the
-partition is coarse — a channel is chosen once per path, by its first bounce — and
-the demodulation of direct specular by diffuse albedo is the part of it a metal
-pays for.
+One path a sample keeps the beauty a single unbiased estimate: the channels
+partition what the path adds, they do not trace twice. Past the first vertex the
+partition is coarse — a channel is chosen once per path, by its first bounce — but
+direct light, most of most images, is split exactly.
 :::
 
 ## YCoCg, and the two ways to get magenta
@@ -94,13 +100,13 @@ the original gamut and can land slightly negative:
 
 Two distinct mistakes produce the same magenta symptom. Skip the pack, and REBLUR
 reads red as luma and green/blue as chroma; compose then rotates an already-linear
-triple through the inverse basis, which its header warns about:
+triple through the inverse basis, which its unpack names:
 
-{{cite shaders/rt/nrd_compose.comp "REBLUR OUT is YCoCg (NRD.hlsli Pack/Unpack)"}}
+{{cite shaders/rt/nrd_compose.comp "Back-end unpack: REBLUR writes YCoCg in .rgb"}}
 
 Pack correctly but skip demodulation, and the input is in the right basis but the
 wrong space — the filter's cross-channel behaviour drifts on albedo-coloured
-radiance, and compose applies surface colour a second time: a hue shift plus a
+radiance, and compose applies the diffuse albedo a second time: a hue shift plus a
 visible darkening.
 
 :::key
@@ -153,14 +159,13 @@ no build-time check that they agree.
 
 ## When the chain runs
 
-REBLUR, compose and the cinematic chain run only in NRD mode, on top of the
-denoiser existing and auxiliary AOVs being on:
+REBLUR and compose run only in NRD mode, on top of the denoiser existing and
+auxiliary AOVs being on:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
-Each piece of the chain writes its descriptor sets at record time,
-so each keeps one set per frame in flight, selected by the frame slot the tracer
-passes in.
+Both write their descriptor sets at record time, so each keeps one set per frame
+in flight, selected by the frame slot the tracer passes in.
 
 ## Lending NRD a device it did not create
 
@@ -196,12 +201,20 @@ host readbacks find what they expect:
 ## Compose is deliberately trivial
 
 `NrdCompositor` owns a standalone compute pipeline whose descriptor set layout is
-independent of the path tracer's RT layout: five storage images, no push
-constants, an 8×8 workgroup. The whole shader is an unpack and a remodulate:
+independent of the path tracer's RT layout: seven storage images, no push
+constants, an 8×8 workgroup. The shader unpacks, remodulates the diffuse, adds the
+specular and the camera ray's emission:
 
-{{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad * specColor;"}}
+{{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad + emission;"}}
 
-Alpha is dropped here. NRD's own input contract defines the normalized hit distance
+It writes that sum twice: as HDR, and as the frame's output (binding 6, the tracer's
+RGBA8 image) with the tracer's own curve, ACES at 0.5 and 2.2 gamma. A window
+therefore presents the denoised frame, and a capture under NRD reads the same image
+any other mode leaves there:
+
+{{cite shaders/rt/nrd_compose.comp "imageStore(outLdr, p, vec4(pow(aces(composed * 0.5), vec3(1.0 / 2.2)), 1.0));"}}
+
+Alpha is dropped. NRD's own input contract defines the normalized hit distance
 as ambient occlusion on the diffuse channel and specular occlusion on the specular
 one, and says the `.w` of REBLUR's output carries the filtered version — a signal an
 application can spend on second-bounce diffuse or on damping IBL. OHAO spends it on
@@ -245,29 +258,13 @@ the host captures every frame:
 The offline profile resets accumulation on a view change, so offline NRD starts
 from frame 0 after every move.
 
-## The cinematic tail
-
-`NrdCinematicPost` consumes the composed HDR at binding 29 and runs bloom extract,
-two downsample-blur passes, a tonemap composite, then a depth-of-field gather.
-Two things in here read as one thing and are another. First, the tonemap:
-`cinematic_composite.comp` still carries a complete AgX implementation — inset and
-outset matrices, the 6th-order contrast fit — but `main()` calls none of it and
-applies Khronos PBR Neutral instead:
-
-{{cite shaders/rt/cinematic_composite.comp "Tonemap — Khronos PBR Neutral"}}
-
-Second, a naming hazard: the input struct's `tonemappedOut` field does not carry
-the final image. The composite writes the *pre*-DoF image at binding 32, and only
-the gather writes binding 30 — which is what the host reads back.
-
-{{cite ohao/render/rt/denoise/nrd_cinematic.hpp "is wired to the pre-DoF LDR image"}}
-
 ## Contracts
 
 - Bindings 22/23 are YCoCg + normalized hit distance, and 27/28 come back the same way. A consumer that reads them as linear RGB — a debug visualizer, say — shows scrambled hue, not an obvious error.
 - The 3.0 literal in `path_tracer.slang`'s pack, `NRD_HIT_DIST_PARAMS.x` in `nrd_frontend.glsl` and `NrdReblurProfile::hitDistanceParamA` must agree. Changing one desynchronizes the normalization silently; nothing checks.
 - `setCommonSettings()` must run before every `denoise()` — it carries the frame index and the previous view/projection NRD reprojects from. `setInputResources()` only stashes handles into the impl and they persist across frames, so the per-frame call is redundant; what breaks is failing to re-stash after any AOV image is recreated, since `denoise()` forwards whatever is there with no validation.
-- Binding 25 is the specular albedo toward the viewer, and the specular radiance already carries Fresnel: the NRD composite applies specular twice. Direct light at the primary hit travels in the diffuse channel.
+- The specular channel already carries Fresnel and is never multiplied by binding 25; binding 25 is a guide for DLSS only. The camera ray's emission (binding 13) bypasses REBLUR and is added in compose: any new emissive term at the primary hit belongs there, not in a channel.
+- Compose writes the frame's output with the tracer's curve; a change to that curve must change the raygen, `nrd_compose.comp` and `dlss_tonemap.comp` together.
 - Offline NRD's AOV mean assumes the previous dispatch's image contents survive an `UNDEFINED`→`GENERAL` transition. Nothing in the API promises that; a driver that discards turns the mean into the last sample.
 - NRD's frame index must stay the denoisers' clock, not the trace's running-mean count: a moved view restarts the mean but must not restart REBLUR's history.
-- The REBLUR + compose + cinematic chain runs only when the denoiser exists, auxiliary AOVs are on and the denoise mode is NRD. The raygen still writes the AOVs whenever they are on.
+- REBLUR and compose run only when the denoiser exists, auxiliary AOVs are on and the denoise mode is NRD. The raygen still writes the AOVs whenever they are on.

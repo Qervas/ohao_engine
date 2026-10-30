@@ -28,27 +28,23 @@ canonical constant.
 {{cite ohao/core/concepts.hpp "must be trivially copyable standard-layout for GPU"}}
 
 Three call sites carry the macro, covering `LightData` (128 bytes),
-`PTPushConstants` (256) and `GPULight` (80). The same contract is asserted twelve
-more times without it: each of the four push-constant structs of
-`NrdCinematicPost`, which compiles only with NRD enabled, gets a bare
-`static_assert` on its byte size,
+`PTPushConstants` (256) and `GPULight` (80). The same contract is asserted many
+more times without it, as bare `static_assert`s on byte size: every struct
+`gpu/shared_layout.hpp` generates from `shaders/shared/layout.json` gets one,
 
-{{cite ohao/render/rt/denoise/nrd_cinematic.cpp "sizeof(CompositePC) == 176"}}
+{{cite ohao/gpu/shared_layout.hpp "static_assert(sizeof(LightGpu) == 64);"}}
 
 the deferred pass structs (`ShadowPushConstant`, `CameraUBO`, `DrawPushConstant`)
-get one each, the `RenderScene` table rows (`InstanceGpu` 160, `MeshGpu` 16, the
-material `Pack` against `MaterialGpuPack::kBytes`) and `Vertex` (100) get one each,
-and `PBRMaterialParams` gets a `% 16 == 0` alignment assert beside its `GpuPod`
-check. Fifteen host-side size or alignment assertions, then — and all fifteen are
-assertions about C++ types, evaluated by the C++ compiler. No build step reflects
-the compiled SPIR-V. Set against the surface they guard — the path tracer alone
-declares a thirty-seven-entry descriptor set layout whose binding numbers run to
-37, and the buffers behind those entries are re-declared independently in the
-raygen, closest-hit, any-hit and miss stages —
+get one each, and so do the `RenderScene` table rows (`InstanceGpu` 160, `MeshGpu` 16,
+the material `Pack` against `MaterialGpuPack::kBytes`) and `Vertex` (100). All of
+them are assertions about C++ types, evaluated by the C++ compiler. No build step
+reflects the compiled SPIR-V. Set against the surface they guard — the path tracer
+alone declares a thirty-entry descriptor set layout whose binding numbers run to 41,
+matched by hand against `[[vk::binding]]` attributes in its Slang source —
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(37, BUFFER, HIT);"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(41, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)"}}
 
-fifteen host-side checks are still a thin instrument. They catch *someone added
+these host-side checks are still a thin instrument. They catch *someone added
 a float to the struct*. They are blind to *someone reordered the shader's struct*, and
 blind by construction rather than by omission.
 

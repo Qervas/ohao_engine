@@ -132,7 +132,8 @@ frame shades with.
 {{cite shaders/rt/path_tracer.slang "import material.openpbr;"}}
 
 The realtime scenes hold to the same 1-LSB floor as the offline ones. What has no
-golden is every denoised path, the realtime default (NRD) included.
+golden is every denoised path, the realtime defaults (DLSS-RR on NVIDIA with the SDK,
+else NRD) included: a capture defaults to no denoiser.
 
 {{cite tests/golden/manifest.json "As cli_cornell_box, against cornell_box_rt_realtime's golden. Re-captured 2026-10-30 (frontier F1 T1)"}}
 

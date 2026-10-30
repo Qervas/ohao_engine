@@ -104,11 +104,10 @@ The sampler and the density measure latitude from the zenith, so row 0 is
 straight up, as `stbi_loadf` hands the file's first row over (θ = acos y in
 `envPdf`). The radiance lookup, and every other lookup of the environment
 (deferred lighting, the prefiltered and irradiance images, RT GI's escaped rays,
-the forward and particle passes, the cinematic composite), writes
+the forward and particle passes), writes
 v = ½ − asin(y)/π, which is the same number, since acos(y)/π = ½ − asin(y)/π:
 
 {{cite shaders/rt/path_tracer.slang "const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith"}}
-{{cite shaders/rt/cinematic_composite.comp "vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);"}}
 
 The unit tests cannot see a mismatch here: the sinθ weight is mirror-invariant
 (sin θ = sin(π − θ)), and they assert only that the CDFs are monotone, normalised,

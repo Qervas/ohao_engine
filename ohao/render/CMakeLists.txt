@@ -61,9 +61,12 @@ endif()
 # wrapper can locate the dlssd snippet + a writable NGX appdata dir at runtime.
 # ${CMAKE_DL_LIBS} satisfies the static NGX wrapper's dlopen() of the driver.
 if(OHAO_DLSS AND TARGET ngx_dlss)
+    # PUBLIC: PathTracer's layout has OHAO_DLSS_ENABLED-guarded members, so every target that
+    # includes path_tracer.hpp must see the same definition (a test that built one on its stack
+    # without it corrupted the stack: an ODR violation).
+    target_compile_definitions(ohao_renderer PUBLIC OHAO_DLSS_ENABLED)
     target_compile_definitions(ohao_renderer PRIVATE
-        OHAO_DLSS_ENABLED
-        OHAO_DLSS_SNIPPET_DIR="${CMAKE_SOURCE_DIR}/external/DLSS/lib/Linux_x86_64/rel"
+        OHAO_DLSS_SNIPPET_DIR="${OHAO_DLSS_SNIPPET_DIR}"
         OHAO_DLSS_APPDATA_DIR="${CMAKE_BINARY_DIR}/ngx_appdata")
     target_link_libraries(ohao_renderer PRIVATE ngx_dlss ${CMAKE_DL_LIBS})
 endif()

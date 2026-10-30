@@ -44,6 +44,7 @@ import rt.radiance_cache;
 [[vk::binding(10, 0)]] StructuredBuffer<float4> materials;    // kMaterialRows a material
 [[vk::binding(11, 0)]] StructuredBuffer<float4> lightData;    // header, then 5 rows a light
 [[vk::binding(12, 0)]] Sampler2D textures[4096];
+[[vk::binding(13, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> emissionAOV;   // the camera ray's emission
 [[vk::binding(17, 0)]] StructuredBuffer<float> envMarginal;
 [[vk::binding(18, 0)]] StructuredBuffer<float> envConditional;
 [[vk::binding(19, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> motionVector;
@@ -520,9 +521,10 @@ void raygen()
             if (firstLobe == 1u) diffuseOut += add;
             else specularOut += add;
         }
-        else if ((hit.flags & kHit) != 0u)
+        else
         {
-            diffuseOut += add;
+            // What the camera ray meets emits: never demodulated, never denoised (nrd_compose adds it).
+            emissionAOV[pixel] = lerp(emissionAOV[pixel], float4(add, 1.0), blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0);
         }
 
         if (depth == 0u)
@@ -620,7 +622,9 @@ void raygen()
         if (ls.valid)
         {
             const float3 wi = toLocal(ls.L, t, b, n);
-            const float3 f = base.eval(wo, wi, tables);
+            float3 fs, fd;
+            base.evalLobes(wo, wi, tables, fs, fd);
+            const float3 f = fs + fd;
             if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist))
             {
                 // A sun is a delta (its radiance already over its choice); a light without an
@@ -628,7 +632,8 @@ void raygen()
                 const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
                 const float3 c = throughput * f * ls.radiance * w;
                 radiance += c;
-                if (depth == 0u) { diffuseOut += c; }
+                // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
+                if (depth == 0u) { diffuseOut += throughput * fd * ls.radiance * w; specularOut += throughput * fs * ls.radiance * w; }
                 else if (firstLobe == 1u) diffuseOut += c;
                 else specularOut += c;
             }
@@ -639,12 +644,15 @@ void raygen()
             const float3 L = sampleEnv(rng);
             const float pdfL = envPdf(L);
             const float3 wi = toLocal(L, t, b, n);
-            const float3 f = base.eval(wo, wi, tables);
+            float3 fs, fd;
+            base.evalLobes(wo, wi, tables, fs, fd);
+            const float3 f = fs + fd;
             if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))
             {
-                const float3 c = throughput * f * envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;
+                const float3 le = envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;
+                const float3 c = throughput * f * le;
                 radiance += c;
-                if (depth == 0u) { diffuseOut += c; }
+                if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
                 else if (firstLobe == 1u) diffuseOut += c;
                 else specularOut += c;
             }

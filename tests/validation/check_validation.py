@@ -43,13 +43,18 @@ SCENES = [
     ("damaged_helmet deferred",
      ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
       "deferred", "--denoise=none"]),
-    # The path tracer: offline, realtime, and realtime through NRD (its push-descriptor path).
+    # The path tracer: offline, realtime, and realtime through NRD (its push-descriptor path) and DLSS RR.
     ("cornell_box rt_offline",
      ["build/Release/cornell_box.exe", "{out}", "4", "rt_offline", "--denoise=none"]),
     ("cornell_box rt_realtime",
      ["build/Release/cornell_box.exe", "{out}", "4", "rt_realtime", "--denoise=none"]),
     ("cornell_box rt_realtime nrd",
      ["build/Release/cornell_box.exe", "{out}", "4", "rt_realtime", "--denoise=nrd"]),
+    # DLSS Ray Reconstruction (NGX): its guides, the feature's evaluation and its tonemap. Where the SDK
+    # is absent (tools/fetch_dlss.py) --denoise dlss falls back to none and the case still runs.
+    ("cornell_box rt_realtime dlss",
+     ["build/Release/ohao.exe", "run", "assets/scenes/cornell_box.scene.json", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
     ("damaged_helmet rt_offline",
      ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
       "rt_offline", "--denoise=none"]),
@@ -81,6 +86,9 @@ SCENES = [
     ("play rt_realtime nrd",
      ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
+    ("play rt_realtime dlss",
+     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
     # sub-project 12: the doorway's smoke (a VfxEmitter's spheres in the shadow and GI traces, its particles
     # and the forward pass), through the raster and both path-traced modes.
     ("smoke doorway deferred",

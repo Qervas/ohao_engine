@@ -126,10 +126,9 @@
 <li><a href="denoise.html"><strong>Hub</strong> — denoise.html</a></li>
 <li><a href="denoise/types.html">Denoise modes &amp; traits</a> — DenoiseMode enum + rt_meta&#x27;s denoise policy functions.</li>
 <li><a href="denoise/oidn.html">OIDN</a> — Offline guided denoise path.</li>
-<li><a href="denoise/nrd.html">NRD REBLUR + compose</a> — Pack YCoCg, dispatch, unpack compose, cinematic post.</li>
-<li><a href="denoise/dlss.html">DLSS Ray Reconstruction</a> — NGX dlssd init, guides, binding 35 hit-dist.</li>
+<li><a href="denoise/nrd.html">NRD REBLUR + compose</a> — Pack YCoCg, dispatch, compose with the emission guide into the presented frame.</li>
+<li><a href="denoise/dlss.html">DLSS Ray Reconstruction</a> — NGX dlssd init, guides, the display tonemap; the realtime default on NVIDIA.</li>
 <li><a href="denoise/atrous.html">À-trous / SVGF-style</a> — Internal spatial/temporal denoise compute.</li>
-<li><a href="denoise/cinematic.html">Cinematic RT post</a> — Bloom extract/blur, DoF, composite after NRD.</li>
 </ul>
 <h2 class="gloss-group">Shaders</h2><ul class="prose">
 <li><a href="shaders/index.html"><strong>Hub</strong></a></li>
@@ -141,7 +140,7 @@
 <li><a href="shaders/compute.html">Compute shaders</a> — SSAO, light clustering, capture preview, DLSS display pass, GPU culling and Hi-Z.</li>
 <li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.slang, the eight-target MRT contract.</li>
 <li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
-<li><a href="shaders/rt-shaders.html">RT program family</a> — path_tracer.slang, pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.</li>
+<li><a href="shaders/rt-shaders.html">RT program family</a> — path_tracer.slang, shadow_*/gi_* (Slang), NRD compose, SVGF.</li>
 </ul>
 <h2 class="gloss-group">Camera</h2><ul class="prose">
 <li><a href="camera/index.html"><strong>Hub</strong></a></li>
@@ -180,7 +179,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">101 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">100 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

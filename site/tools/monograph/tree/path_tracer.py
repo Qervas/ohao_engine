@@ -60,7 +60,7 @@ MODULE = {
             'Descriptor map 0–41',
             'Set-0 layout: TLAS, images, AOVs and guides, scene tables, OpenPBR tables, the radiance cache.',
             files=['ohao/render/rt/path_tracer_descriptors.cpp', 'site/assets/plates/pt_bindings.svg'],
-            design=['Binding 0: TLAS. 1–2: accum + output. 3: materials. 11: GPULight SSBO.', '17–18: env CDF. 19–26: motion, depth, roughness, split radiance/albedo AOVs.', '36–37: RenderScene instances and material refs. 38: OpenPBR energy tables (raygen). 39–41: the radiance cache\'s keys, sums and resolved values.', 'Bindings 13–16 and 27–35 are unused; 13 storage images in all.', 'Descriptor writes must match the Slang [[vk::binding]] numbers exactly — silent black if wrong.'],
+            design=['Binding 0: TLAS. 1–2: accum + output. 3: materials. 11: GPULight SSBO.', '17–18: env CDF. 19–26: motion, depth, roughness, split radiance/albedo AOVs.', '36–37: RenderScene instances and material refs. 38: OpenPBR energy tables (raygen). 39–41: the radiance cache\'s keys, sums and resolved values.', 'Binding 13 is the emission guide (RGBA16F); 14–16 and 27–35 are unused; 14 storage images in all.', 'Descriptor writes must match the Slang [[vk::binding]] numbers exactly — silent black if wrong.'],
         ),
     ],
 }

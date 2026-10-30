@@ -58,10 +58,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(OHAO_NRD "Enable NRD (NVIDIA RayTracingDenoiser) integration" ON)
 
 # ---- DLSS Ray Reconstruction (NGX "dlssd") for realtime RT denoise (Phase 5) ----
-# Defaults ON only when the vendored NGX static wrapper is present. -DOHAO_DLSS=OFF
-# opts out cleanly: no include, no link, dlss_rr.cpp compiles empty via the
-# OHAO_DLSS_ENABLED guard, and denoise parsing falls back to None for "dlssrr".
-set(OHAO_DLSS_STATIC_LIB "${CMAKE_SOURCE_DIR}/external/DLSS/lib/Linux_x86_64/libnvsdk_ngx.a")
+# Defaults ON only when the SDK's NGX loader is present in the git-ignored external/DLSS
+# (python tools/fetch_dlss.py fetches it). -DOHAO_DLSS=OFF opts out cleanly: no include, no
+# link, dlss_rr.cpp compiles empty via the OHAO_DLSS_ENABLED guard, and denoise parsing falls
+# back to None for "dlssrr".
+if(WIN32)
+    set(OHAO_DLSS_STATIC_LIB "${CMAKE_SOURCE_DIR}/external/DLSS/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")
+else()
+    set(OHAO_DLSS_STATIC_LIB "${CMAKE_SOURCE_DIR}/external/DLSS/lib/Linux_x86_64/libnvsdk_ngx.a")
+endif()
 if(EXISTS "${OHAO_DLSS_STATIC_LIB}")
     set(OHAO_DLSS_DEFAULT ON)
 else()

@@ -366,8 +366,6 @@ public:
     [[nodiscard]] VkImage     getOutSpecRadianceAOVImage() const;
     // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
     [[nodiscard]] VkImage     getNrdComposedAOVImage() const;
-    // Sub-plan 4.E: NRD tonemapped output (RGBA8 UNORM)
-    [[nodiscard]] VkImage     getNrdTonemappedAOVImage() const;
 
     // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
     // One 2-half pair per pixel; total = 2 * width * height values.
@@ -391,8 +389,6 @@ public:
     [[nodiscard]] bool readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height);
     // Sub-plan 4.D: NRD composed HDR output readback (RGBA32F)
     [[nodiscard]] bool readbackNrdComposed(std::vector<float>& data, uint32_t& width, uint32_t& height);
-    // Sub-plan 4.E T1: NRD tonemapped output readback (RGBA8 UNORM, 4 bytes/pixel)
-    [[nodiscard]] bool readbackNrdTonemapped(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
 
     // Debug: readback RGBA8 diffuse albedo AOV (4 bytes per pixel).
     [[nodiscard]] bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
@@ -436,8 +432,10 @@ private:
     void renderRTPipeline(const RTRenderSettings& defaults);
 public:
 private:
-    // The profile defaults of an RT mode (kRealtimeRTSettings, kOfflineRTSettings), null for deferred.
-    static const RTRenderSettings* rtDefaults(RenderMode mode);
+    // The profile defaults of an RT mode (kRealtimeRTSettings, kOfflineRTSettings), none for
+    // deferred. The realtime profile's denoiser is DLSS Ray Reconstruction where the build has the
+    // SDK and the device is NVIDIA's, NRD (vendor neutral) elsewhere.
+    [[nodiscard]] std::optional<RTRenderSettings> rtDefaults(RenderMode mode) const;
     IRTRendererProfile* getRTRenderer(RenderMode mode);
     const IRTRendererProfile* getRTRenderer(RenderMode mode) const;
     void forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn);

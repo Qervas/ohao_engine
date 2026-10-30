@@ -47,7 +47,6 @@
 // different layout than ohao_renderer).
 namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }      // NEW 4.D
-namespace ohao { class NrdCinematicPost; }   // NEW 4.G (replaces 4.E NrdTonemap)
 namespace ohao { class AtrousDenoiser; }     // à-trous beauty denoiser (DenoiseMode::Atrous)
 namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5)
 namespace ohao::render { class RenderScene; }
@@ -132,8 +131,6 @@ public:
     [[nodiscard]] VkImageView getNrdComposedAOV()      const { return m_nrdComposedView; }
     [[nodiscard]] VkImage     getNrdComposedAOVImage() const { return m_nrdComposedImage; }
     // Sub-plan 4.E T1: tonemapped NRD output (RGBA8 UNORM, binding 30).
-    [[nodiscard]] VkImageView getNrdTonemappedAOV()      const { return m_nrdTonemappedView; }
-    [[nodiscard]] VkImage     getNrdTonemappedAOVImage() const { return m_nrdTonemappedImage; }
 
     // Scene inputs from the RenderScene: bindings 4 (vertex arena), 5 (index arena),
     // 8 (mesh table), 9 (triangle material slots), 10 (material table), 11 (RT
@@ -239,7 +236,6 @@ private:
     // no-op on a null held pointer (no need for complete type).
     std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
     std::unique_ptr<NrdCompositor> m_nrdCompositor;   // NEW 4.D
-    std::unique_ptr<NrdCinematicPost> m_cinematicPost; // NEW 4.G (replaces 4.E NrdTonemap)
     // À-trous beauty denoiser (DenoiseMode::Atrous). Unconditional member (not
     // OHAO_NRD-guarded) so the class layout is identical across ohao_renderer
     // and ohao_gpu_vulkan; dtor is out-of-line in path_tracer.cpp which sees
@@ -398,42 +394,11 @@ private:
     VkImageView    m_nrdComposedView      = VK_NULL_HANDLE;
     bool           m_nrdComposeFirstFrame = true;  // gates UNDEFINED→GENERAL transition on binding 29
 
-    // Feature 4.E/4.G: NRD final LDR output (RGBA8 UNORM) at binding 30.
-    // Written by NrdCinematicPost::dispatchComposite (4.G chain replaced 4.E's
-    // single-pass tonemap). NOT in PT's RT descriptor layout — only in the
-    // cinematic compute set.
-    //
-    // Sub-plan 4.J: binding 30 now holds the FINAL LDR after DoF gather.
-    // The composite shader writes to the new intermediate (binding 32,
-    // m_preDofLdrImage) and the DoF compute pass reads that + depth AOV
-    // (binding 20) → produces binding 30.
-    VkImage        m_nrdTonemappedImage     = VK_NULL_HANDLE;
-    VkDeviceMemory m_nrdTonemappedMemory    = VK_NULL_HANDLE;
-    VkImageView    m_nrdTonemappedView      = VK_NULL_HANDLE;
-    bool           m_nrdTonemapFirstFrame   = true;  // gates UNDEFINED→GENERAL on binding 30
-
-    // Feature 4.J: pre-DoF LDR (RGBA8 UNORM) at binding 32.
-    // Composite shader's outLDR is now wired to this view; DoF compute reads
-    // it + depth and writes the final m_nrdTonemappedImage (binding 30).
-    // Not in PT's RT descriptor layout — only used inside the cinematic chain.
-    VkImage        m_preDofLdrImage     = VK_NULL_HANDLE;
-    VkDeviceMemory m_preDofLdrMemory    = VK_NULL_HANDLE;
-    VkImageView    m_preDofLdrView      = VK_NULL_HANDLE;
-    bool           m_preDofFirstFrame   = true;  // gates UNDEFINED→GENERAL on binding 32
-
-    // Feature 4.G: bloom mip chain (RGBA16F) — fed by cinematic_bloom_extract +
-    // cinematic_bloom_blur, consumed by cinematic_composite. Mip 0 = half-res,
-    // mip 1 = quarter-res, mip 2 = eighth-res. Each carries a usage of
-    // STORAGE (for extract/blur writes) + SAMPLED (for composite reads), so we
-    // toggle their layouts UNDEFINED→GENERAL on first dispatch, then
-    // GENERAL→SHADER_READ_ONLY before the composite pass each frame.
-    VkImage        m_bloomMipImages[3]      = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkDeviceMemory m_bloomMipMemory[3]      = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkImageView    m_bloomMipViews[3]       = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkSampler      m_bloomSampler           = VK_NULL_HANDLE;  // shared bilinear sampler
-    uint32_t       m_bloomMipWidth[3]       = {0, 0, 0};
-    uint32_t       m_bloomMipHeight[3]      = {0, 0, 0};
-    bool           m_bloomFirstFrame[3]     = {true, true, true};
+    // The camera ray's emission (RGBA16F, binding 13): NRD's channels leave it out; nrd_compose adds it.
+    VkImage        m_emissionAOVImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_emissionAOVMemory = VK_NULL_HANDLE;
+    VkImageView    m_emissionAOVView   = VK_NULL_HANDLE;
+    bool           m_emissionInitialized = false;
 
     // RT Pipeline
     VkPipeline m_rtPipeline = VK_NULL_HANDLE;

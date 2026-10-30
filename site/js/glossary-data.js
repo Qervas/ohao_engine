@@ -307,7 +307,7 @@ window.OHAO_GLOSSARY = {
   },
   DoF: {
     expand: "Depth of Field",
-    def: "Optical blur for out-of-focus regions. Available as an experimental post effect.",
+    def: "Optical blur for out-of-focus regions. OHAO has no depth-of-field pass.",
     group: "Post",
   },
   SSS: {

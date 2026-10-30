@@ -13,11 +13,13 @@ struct NrdComposeInputs {
     VkImageView specRadiance = VK_NULL_HANDLE;  // from PT binding 28 (NRD denoised specular)
     VkImageView diffAlbedo   = VK_NULL_HANDLE;  // from PT binding 24 (3.C.6 demod albedo)
     VkImageView specColor    = VK_NULL_HANDLE;  // from PT binding 25 (3.C.6 demod F0)
-    VkImageView composedOut  = VK_NULL_HANDLE;  // PT binding 29 (4.D output)
+    VkImageView emission     = VK_NULL_HANDLE;  // PT binding 13: the camera ray's emission (RGBA16F)
+    VkImageView composedOut  = VK_NULL_HANDLE;  // the composed HDR (RGBA32F)
+    VkImageView outputLdr    = VK_NULL_HANDLE;  // the frame's output (RGBA8, the tracer's curve)
 };
 
-/// Sub-plan 4.D: compute pipeline that remodulates NRD's denoised radiance
-/// with demod albedo+F0 to produce HDR beauty.
+/// The NRD frame: remodulates NRD's denoised diffuse by its albedo, adds the denoised specular and
+/// the camera ray's emission, and writes the HDR and the frame's output (the tracer's curve).
 ///
 /// Standalone compute pipeline — its descriptor set layout is independent
 /// of PathTracer's RT descriptor layout. The bindings 24/25/27/28/29 that
@@ -48,7 +50,7 @@ public:
 
     /// Record a compose dispatch onto `cmd`. Preconditions:
     ///   - initialize() succeeded
-    ///   - All 5 image views in `inputs` are valid
+    ///   - All 7 image views in `inputs` are valid
     ///   - Input images (diff/spec radiance, albedo, F0) in SHADER_READ_ONLY_OPTIMAL
     ///     (or GENERAL — layout param below defaults to GENERAL)
     ///   - Output image in GENERAL

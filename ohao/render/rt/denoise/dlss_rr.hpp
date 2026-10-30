@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include "render/frame/frame_resources.hpp"
 #include <cstdint>
 #include <cstdlib>
 
@@ -153,8 +154,9 @@ public:
     bool createTonemapPipeline();
 
     /// Record the tonemap: reads the DLSS HDR COLOR_OUT (storage image) and
-    /// writes the RGBA8 LDR output. Both views must already be in GENERAL layout.
-    void tonemap(VkCommandBuffer cmd, VkImageView hdrInView, VkImageView ldrOutView,
+    /// writes the RGBA8 LDR output. Both views must already be in GENERAL layout. One descriptor
+    /// set per frame in flight: `frameSlot` picks this frame's (VUID 03047).
+    void tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInView, VkImageView ldrOutView,
                  uint32_t width, uint32_t height);
 
     /// Release the DLSS-RR feature handle (safe to call if never created).
@@ -179,9 +181,7 @@ private:
     VkPipelineLayout      m_tmPipelineLayout = VK_NULL_HANDLE;
     VkPipeline            m_tmPipeline = VK_NULL_HANDLE;
     VkDescriptorPool      m_tmDescriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet       m_tmDescriptorSet = VK_NULL_HANDLE;
-    uint32_t              m_tmFrame = 0;          // animated-grain counter
-    float                 m_gradeStrength = -1.0f; // cinematic grade master (-1 = uncached; OHAO_GRADE)
+    VkDescriptorSet       m_tmDescriptorSets[MAX_FRAMES_IN_FLIGHT] = {};
 };
 
 }  // namespace ohao

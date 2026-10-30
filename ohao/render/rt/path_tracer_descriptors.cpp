@@ -19,7 +19,7 @@ bool PathTracer::createDescriptorResources() {
         props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         props.pNext = &indexing;
         vkGetPhysicalDeviceProperties2(m_physicalDevice, &props);
-        constexpr uint32_t kOtherResources = 64;   // the set's 28 other bindings, with margin
+        constexpr uint32_t kOtherResources = 64;   // the set's 29 other bindings, with margin
         const uint32_t perStageResources = indexing.maxPerStageUpdateAfterBindResources > kOtherResources
                                                ? indexing.maxPerStageUpdateAfterBindResources - kOtherResources
                                                : 1u;
@@ -67,6 +67,7 @@ bool PathTracer::createDescriptorResources() {
     // (VUID 03004), and every set is allocated at the full capacity anyway.
     add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
+    add(13, IMAGE, RGEN);   // the camera ray's emission (RGBA16F): nrd_compose adds it back
     add(17, BUFFER, RGEN | MISS);   // env marginal CDF
     add(18, BUFFER, RGEN | MISS);   // env conditional CDF
     add(19, IMAGE, RGEN);   // motion vector AOV (RG16F) — Sub-plan 3.A
@@ -103,7 +104,7 @@ bool PathTracer::createDescriptorResources() {
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 13 * kSets},  // 1-3, 6, 7, 19-26
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18 + OpenPBR tables 38 + the cache 39-41
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };

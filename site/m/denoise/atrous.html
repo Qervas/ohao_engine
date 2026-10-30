@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="filtering-the-wrong-image-on-purpose">Filtering the wrong image on purpose</h2></div>
 <div class="prose reveal">
 <p>Every other denoiser here wants linear radiance: NRD demodulated by albedo and split diffuse/specular, OIDN as HDR colour with albedo and normal AOVs. OHAO&#x27;s own SVGF takes the opposite input — the RGBA8 beauty, already run through ACES at exposure 0.5 and a 1/2.2 gamma curve by the path tracer&#x27;s raygen:</p>
-<div class="citation-chip"><code class="citation-code">outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L696" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:696</a></div>
+<div class="citation-chip"><code class="citation-code">outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L704" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:704</a></div>
 <p>It is also the last pass&#x27;s destination — overwritten in place, so nothing downstream changes.</p>
 <div class="citation-chip"><code class="citation-code">VkImage     beautyImage  = VK_NULL_HANDLE; // m_outputImage (RGBA8) — in AND final out</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/atrous_denoise.hpp#L20" target="_blank" rel="noopener">ohao/render/rt/denoise/atrous_denoise.hpp:20</a></div>
 <p>That input is this frame&#x27;s sample alone. À-trous is one of the temporal denoisers `tracerAccumulates` names, so the trace keeps no running mean of its own under it, and the firefly clamp, which applies only when the trace does not accumulate, is on by the realtime profile&#x27;s defaults (the offline profile&#x27;s is off):</p>
@@ -100,10 +100,10 @@ $$</div>
 <div class="section-rule"><h2 id="the-motion-vectors-svgf-actually-receives">The motion vectors SVGF actually receives</h2></div>
 <div class="prose reveal">
 <p>Under à-trous the push constants carry no running-mean frames, so the trace&#x27;s beauty is this frame&#x27;s sample and the denoiser owns temporal integration. The raygen writes motion vectors whenever last frame&#x27;s view is known — the push constant&#x27;s `control.z`, set once the tracer has rendered a frame since its last reset — independent of accumulation:</p>
-<div class="citation-chip"><code class="citation-code">if (pc.control.z != 0u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L536" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:536</a></div>
-<div class="citation-chip"><code class="citation-code">pc.control.z = m_hasPreviousView ? 1u : 0u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L516" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:516</a></div>
+<div class="citation-chip"><code class="citation-code">if (pc.control.z != 0u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L538" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:538</a></div>
+<div class="citation-chip"><code class="citation-code">pc.control.z = m_hasPreviousView ? 1u : 0u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L533" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:533</a></div>
 <p>What differs between the profiles is what a moved view does. The realtime profile only tells the tracer the view moved: the trace&#x27;s running mean restarts, the history clock does not, and SVGF reprojects through the vectors. The offline profile resets accumulation on a view change, which zeroes the history clock and clears the previous view, so `pc.reset` is raised and Pass 1 discards all history unconditionally — not per pixel, not by geometry test — for every frame the camera moves, with zero motion vectors:</p>
-<div class="citation-chip"><code class="citation-code">bool resetsAccumulationOnViewChange() const override { return true; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L199" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:199</a></div>
+<div class="citation-chip"><code class="citation-code">bool resetsAccumulationOnViewChange() const override { return true; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L194" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:194</a></div>
 <p>So an `rt_realtime --denoise=atrous` run filters a moving view temporally; an offline one filters each moved frame alone.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
@@ -136,7 +136,7 @@ $$</div>
         <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
       </div>
 
-<nav class="pager"><a href="dlss.html"><div class="label">← Prev</div><div class="title">DLSS Ray Reconstruction</div></a><a class="next" href="cinematic.html"><div class="label">Next →</div><div class="title">Cinematic RT post</div></a></nav>
+<nav class="pager"><a href="dlss.html"><div class="label">← Prev</div><div class="title">DLSS Ray Reconstruction</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

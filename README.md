@@ -237,6 +237,14 @@ These bit me, listed so they don't bite you:
 - stbi duplicate symbols: `--allow-multiple-definition` on Linux, `/FORCE:MULTIPLE` on MSVC
 - Shutdown order matters: the ECS world and RenderScene before VulkanRenderer, PathTracer before VkDevice
 
+## Third-party SDKs
+
+- **NVIDIA DLSS** (Ray Reconstruction) is used under the NVIDIA RTX SDKs licence. It is not part
+  of this repository: `python tools/fetch_dlss.py` downloads the pinned SDK files into the
+  git-ignored `external/DLSS`, and the build turns DLSS on when they are present. The realtime
+  path tracer uses it on NVIDIA GPUs; elsewhere it uses NRD. NVIDIA, DLSS and the DLSS logo are
+  trademarks of NVIDIA Corporation.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Built by Frank Yin ([@Qervas](https://github.com/Qervas)).

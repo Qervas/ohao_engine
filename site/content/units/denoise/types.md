@@ -34,21 +34,17 @@ resolves to `None` rather than to a mode whose implementation is absent.
 {{cite ohao/render/rt/denoise/denoise_types.cpp "requested but OHAO_DLSS=OFF at build time"}}
 
 :::why
-What the fallback buys is mechanical, and only the mechanism is recorded — no
-comment or commit message weighs an alternative. The frame-final `readback()`
-dispatches on the mode, and the NRD arm reads back the binding-30 tonemapped
-image:
-
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseMode == DenoiseMode::NRD) {"}}
-
-That image's allocation carries no build guard, but everything that *writes* it
-lives inside one:
+What the fallback buys is mechanical. The mode decides how the trace accumulates,
+not only which pass runs after it: realtime NRD turns the running mean off and
+leaves the history to REBLUR. In a build without NRD the whole REBLUR-and-compose
+block is compiled out:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "#ifdef OHAO_NRD_ENABLED"}}
 
-So an `NRD` mode reaching a non-NRD build would not error: the readback finds a
-live `VkImage`, returns success, and hands back contents nothing ever wrote.
-Degrading at parse time keeps that mode out of the switch entirely.
+So an `NRD` mode reaching such a build would not error: the trace would stop
+accumulating and the frame's output would be one noisy sample every frame, with
+nothing filtering it. Degrading at parse time keeps a mode out of the tracer
+unless its backend exists.
 :::
 
 ## What each denoiser asks of the trace
@@ -141,9 +137,14 @@ follow the mode:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
-Without an override, the profile default stands: NRD for the realtime profile,
-OIDN for the offline one. OIDN runs on the CPU inside `readback()` and dispatches
-nothing in the tracer. NRD's realtime input is one frame's sample of paths that end in
+Without an override, the profile default stands. `rtDefaults` returns it, and
+for the realtime profile it is DLSS RR where the build has the SDK and the device is
+NVIDIA's, else NRD; the offline profile's is OIDN:
+
+{{cite ohao/gpu/vulkan/renderer.cpp "if (props.vendorID == 0x10DE) s.denoiseMode = DenoiseMode::DLSSRR;   // NVIDIA"}}
+
+A capture is the exception: it names its own denoiser, and its default is none. OIDN runs on the CPU inside `readback()` and dispatches
+nothing in the tracer. The realtime denoiser's input is one frame's sample of paths that end in
 the radiance cache past their first vertex (the profile's `radianceCache`), so the
 denoiser sees the cache's light at two bounces' cost; an override of the denoiser does
 not change that, since the cache is a profile setting, not a denoise one.
@@ -160,8 +161,9 @@ The NRD chain is gated on the mode, so it runs only when NRD was chosen:
 :::key
 `DenoiseMode` decides three things: which GPU denoiser the tracer dispatches
 (à-trous, DLSS RR, NRD — none of them run unasked), whether the trace keeps its
-own running mean (and with it the firefly clamp), and which image `readback()`
-hands back. The profile default fills it when the user names no mode.
+own running mean (and with it the firefly clamp), and whether `readback()` runs
+OIDN on the CPU. Every GPU denoiser writes the frame's output image with the
+tracer's own curve, so a window and a capture read the same image in every mode. The profile default fills it when the user names no mode.
 :::
 
 ## applyDenoisePolicy widens; it never refuses
@@ -193,4 +195,5 @@ callers, and guard a boundary that does not exist: no integer is ever cast into 
 - Adding a `DenoiseMode` means touching `denoiseModeName`, `isValidDenoiseMode` and every predicate in `rt_meta.hpp` that should name it. Nothing in the build will tell you if you miss one.
 - A temporal denoiser must be named in `tracerAccumulates`' non-accumulating arms, or the trace hands it a running mean that a moved view restarts.
 - The tracer's mode is reset to the profile default every RT frame; a user's choice reaches it only through `applyRTRenderSettings`. Setting it once through `setRTRenderSettings` does not stick unless `setDenoiseMode` latched the override.
-- `parseDenoiseMode` must never return a mode whose backend was compiled out; the denoise switch in `readback()` assumes the mode implies its resources were written.
+- `parseDenoiseMode` must never return a mode whose backend was compiled out; the tracer's accumulation follows the mode, so a mode without its denoiser leaves the frame unfiltered.
+- `rtDefaults` reads the device, so it is a member: a realtime default depends on the GPU (DLSS RR on NVIDIA with the SDK, else NRD).

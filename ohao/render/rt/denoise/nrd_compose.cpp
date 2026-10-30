@@ -65,8 +65,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     m_impl->width          = width;
     m_impl->height         = height;
 
-    // 1. Descriptor set layout: 5 storage-image bindings, all COMPUTE stage.
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    // 1. Descriptor set layout: 7 storage-image bindings, all COMPUTE stage.
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -133,7 +133,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     // 5. Descriptor pool (one set of 5 storage images per frame in flight).
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSize.descriptorCount = 5 * MAX_FRAMES_IN_FLIGHT;
+    poolSize.descriptorCount = 7 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -179,16 +179,18 @@ void NrdCompositor::setFrameSlot(uint32_t slot) {
 void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs) {
     if (!m_impl->pipeline) return;
 
-    // Bind 5 image views into the descriptor set.
-    std::array<VkDescriptorImageInfo, 5> imageInfos{};
+    // Bind 7 image views into the descriptor set.
+    std::array<VkDescriptorImageInfo, 7> imageInfos{};
     imageInfos[0].imageView   = inputs.diffRadiance;
     imageInfos[1].imageView   = inputs.specRadiance;
     imageInfos[2].imageView   = inputs.diffAlbedo;
     imageInfos[3].imageView   = inputs.specColor;
     imageInfos[4].imageView   = inputs.composedOut;
+    imageInfos[5].imageView   = inputs.emission;
+    imageInfos[6].imageView   = inputs.outputLdr;
     for (auto& ii : imageInfos) ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 5> writes{};
+    std::array<VkWriteDescriptorSet, 7> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet          = m_impl->descriptorSets[m_impl->slot];

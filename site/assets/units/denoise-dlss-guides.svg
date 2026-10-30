@@ -53,9 +53,9 @@
   <path d="M604,252 L604,282" stroke="#c4784a" stroke-width="1.5" fill="none" marker-end="url(#dlssArrow)"/>
   <rect x="16" y="286" width="688" height="60" rx="4" fill="#1a222c" stroke="#3d4a58"/>
   <text x="30" y="308" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">dlss_tonemap.comp</text>
-  <text x="30" y="326" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">8x8 groups &#183; ACES(hdr &#215; 0.5) &#183; gamma 2.2 &#183; grade/vignette/grain/CA gated on OHAO_GRADE</text>
+  <text x="30" y="326" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">8x8 groups &#183; ACES(hdr &#215; 0.5) &#183; gamma 2.2</text>
   <text x="470" y="308" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">&#8594; m_outputImage RGBA8</text>
   <text x="470" y="326" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">the standard beauty readback</text>
 
-  <text x="16" y="372" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">Muted row: image allocated, binding declared, but never written into the descriptor set and never assigned into EvalInputs.</text>
+  <text x="16" y="372" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">Muted row: image allocated, in no descriptor set, written by nothing, never assigned into EvalInputs.</text>
 </svg>

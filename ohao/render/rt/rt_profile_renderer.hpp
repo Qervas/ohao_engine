@@ -53,9 +53,6 @@ public:
     // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
     virtual VkImage     getNrdComposedAOVImage() const = 0;
     virtual VkImageView getNrdComposedAOV()      const = 0;
-    // Sub-plan 4.E: NRD tonemapped output (RGBA8 UNORM)
-    virtual VkImage     getNrdTonemappedAOVImage() const = 0;
-    virtual VkImageView getNrdTonemappedAOV()      const = 0;
 
     // See PathTracer::setSceneBuffers / setBindlessTextures.
     virtual void setSceneBuffers(const render::RenderScene& scene) = 0;
@@ -133,8 +130,6 @@ public:
     VkImage     getOutSpecRadianceAOVImage() const override { return m_pathTracer.getOutSpecRadianceAOVImage(); }
     VkImage     getNrdComposedAOVImage() const override { return m_pathTracer.getNrdComposedAOVImage(); }
     VkImageView getNrdComposedAOV()      const override { return m_pathTracer.getNrdComposedAOV(); }
-    VkImage     getNrdTonemappedAOVImage() const override { return m_pathTracer.getNrdTonemappedAOVImage(); }
-    VkImageView getNrdTonemappedAOV()      const override { return m_pathTracer.getNrdTonemappedAOV(); }
 
     void setSceneBuffers(const render::RenderScene& scene) override { m_pathTracer.setSceneBuffers(scene); }
     void setBindlessCapacity(uint32_t capacity) override { m_pathTracer.setBindlessCapacity(capacity); }

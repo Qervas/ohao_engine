@@ -225,18 +225,27 @@ reproject across a moved view:
 
 {{cite shaders/rt/path_tracer.slang "if (pc.control.z != 0u)"}}
 
-The NRD split is by the lobe the first vertex sampled: everything after a diffuse
-first bounce goes to the diffuse image, after a specular one to the specular image.
-Direct light at the first vertex goes to the diffuse image whole. The diffuse
-radiance is demodulated by the first hit's diffuse albedo (floored at 0.03) and the
-specular is not:
+What the camera ray itself meets emits (a light's emitter mesh, an emissive surface,
+the sky) goes to its own guide, binding 13 (RGBA16F), and into neither NRD image: it
+is never demodulated and never denoised, and the compositor adds it back.
+
+{{cite shaders/rt/path_tracer.slang "RWTexture2D<float4> emissionAOV;   // the camera ray's emission"}}
+{{cite shaders/rt/path_tracer.slang "// What the camera ray meets emits: never demodulated, never denoised (nrd_compose adds it)."}}
+
+The NRD split follows the lobes. At the first vertex, light sampling and environment
+sampling evaluate the BSDF lobe by lobe (`evalLobes`) and send the diffuse part to the
+diffuse image and the specular part to the specular image. Everything after the first
+bounce goes whole to the image of the lobe that bounce sampled (`firstLobe`):
+
+{{cite shaders/rt/path_tracer.slang "if (depth == 0u) { diffuseOut += throughput * fd * ls.radiance * w; specularOut += throughput * fs * ls.radiance * w; }"}}
+{{cite shaders/rt/path_tracer.slang "if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }"}}
+
+The diffuse radiance is demodulated by the first hit's diffuse albedo (floored at
+0.03) and the specular is not, so the compositor multiplies the diffuse back by that
+albedo, takes the specular as it is, and adds the emission:
 
 {{cite shaders/rt/path_tracer.slang "const float3 diffDemod = diffuseOut / max(diffAlbedo, float3(0.03));"}}
-{{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad * specColor;"}}
-
-Read from the code: a metal's diffuse albedo is 0, so its direct specular, which sits
-in the diffuse image, is multiplied by 0 when the compositor remodulates. The OIDN
-path and the plain accumulation are not affected.
+{{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad + emission;"}}
 
 ## 256 bytes of push constants
 
@@ -266,3 +275,5 @@ the first vertex, its frames denoised instead of averaged.
 - A path ends in the radiance cache only past its first vertex, only with `kFlagCache` set, and only where the cell's voxel fits the segment and the lobe; the first hit is always shaded, so primary visibility and the denoisers' guides never come from the cache.
 - `cacheUpdate` is a second raygen in the same pipeline and file; a change to the path's sampling or MIS in `raygen` must be made in `cacheUpdate` too, or the cache holds a different estimator's light.
 - `control.y` is the number of frames already in the running mean; the raygen reads the history image only when it is above zero.
+- What the camera ray meets emits goes to the emission guide (binding 13) and to neither NRD image; a compositor that skips binding 13 loses lights, emissive surfaces and the sky.
+- NRD's diffuse image is demodulated by the first hit's diffuse albedo and its specular image is not; `nrd_compose` must multiply back exactly what the tracer divided out.
