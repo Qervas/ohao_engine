@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
             pp->setSSAOEnabled(true);
-            pp->setExposure(1.0f);
+            pp->setEv100(0.0f);
         }
     }
 

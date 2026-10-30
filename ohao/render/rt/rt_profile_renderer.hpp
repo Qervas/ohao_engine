@@ -69,6 +69,8 @@ public:
 
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
     virtual void setPassTimer(render::GpuPassTimer* timer) = 0;
+    // The display transform its output and denoisers' frames use (the post stack's).
+    virtual void setDisplay(float exposure, render::DisplayCurve curve) = 0;
     virtual void notifyViewChanged() = 0;
     virtual void resetAccumulation() = 0;
     virtual void setRenderSeed(uint32_t seed) = 0;
@@ -103,6 +105,7 @@ public:
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
 
     void setPassTimer(render::GpuPassTimer* timer) override { m_pathTracer.setPassTimer(timer); }
+    void setDisplay(float exposure, render::DisplayCurve curve) override { m_pathTracer.setDisplay(exposure, curve); }
     void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) override {
         m_pathTracer.render(cmd, frameSlot, view, proj);
     }

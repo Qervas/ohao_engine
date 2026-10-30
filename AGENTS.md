@@ -109,6 +109,7 @@ $ build/Release/env_cdf_test.exe > /dev/null
 $ build/Release/env_sun_test.exe > /dev/null
 $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
+$ build/Release/display_test.exe > /dev/null
 $ build/Release/level_physics_tests.exe > /dev/null
 $ build/Release/combat_tests.exe > /dev/null
 $ build/Release/anim_tests.exe > /dev/null
@@ -478,8 +479,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - Render settings (`VulkanRenderer::RenderSettings`, `render.settings`) are read back from
   the subsystems that own them, never cached, and both structs' defaults (the api one in
   `ohao/api/params.hpp` too) must equal what a fresh renderer starts with: a headless host
-  reports them before its renderer exists and captures pass them explicitly (exposure 0.6:
-  a 1.0 there once made headless captures brighter than the window's). A GI resolution or
+  reports them before its renderer exists and captures pass them explicitly (EV100 0.5: an
+  exposure of 1.0 there once made headless captures brighter than the window's). A GI resolution or
   CSM size change rebuilds images after `vkDeviceWaitIdle`; nothing else idles. The GI
   shift (`flags.w`, 1 at half resolution) keeps the half-resolution expressions literally
   behind a branch: folding it into a multiply changed FMA contraction and moved goldens.
@@ -554,8 +555,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   so no bounce) in both renderers through `ohao run --hdr` and holds each within 5% of
   `albedo/π × irradiance`; `check_parity.py` (slow, a report) renders the reference scenes both
   ways and gives deferred's distance from the path tracer in stops, per scene and on a 4x4 grid,
-  with `build/parity/<scene>.error.png`. Compare renderers in linear radiance (`--hdr`), never by
-  PNG: the two tonemap differently (deferred at the capture's exposure, the path tracer at 0.5).
+  with `build/parity/<scene>.error.png`. Compare renderers in linear radiance (`--hdr`): their PNGs
+  share one display transform, but deferred's carries post (bloom, TAA) the path tracer's does not.
   The path tracer is ground truth where closed forms hold it: `check_analytic` (one light, no
   bounce) and `check_material.py`: a white furnace (white OpenPBR materials under a uniform sky
   of radiance 1 render as 1, within 1%) and a closed box of emitting Lambertian walls
@@ -570,6 +571,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   next bounce's dimensions. A new draw goes into a group (`Sampler.group`), never after another
   bounce's. `sobol_test` runs the module through slangc's C++ (`tools/sampling`) against the CPU
   generator, bit for bit, and holds its stratification.
+- **The display transform** (frontier F2 T1, `shaders/display/display.slang`) is the only way a
+  frame becomes pixels: exposure from EV100 (`render.settings`/`render.capture` `ev100`, default
+  0.5; radiance `L` shows as `L / (1.2 x 2^EV100)`, Lagarde and de Rousiers 2014), the curve
+  (`tonemap`: `agx`, the default, or `neutral`, Khronos PBR Neutral), then the sRGB transfer
+  function. The deferred post (`postprocess/tonemap.slang`), the path tracer's output,
+  `nrd_compose` and DLSS's display pass import it; the post stack owns EV100 and the curve and the
+  path tracer reads them each frame (`setDisplay`), so a capture in any mode displays alike. OIDN's
+  CPU frames use the C++ twin `render/display/display.hpp`, which `display_test` holds to the
+  module (its slangc C++ build, `tools/display`) to the 8-bit code. A new path that shows a frame
+  imports the module; never write a curve or `pow(1/2.2)` again.
 - **Realtime denoising and display** (frontier F1 T4). A realtime window's denoiser is DLSS Ray
   Reconstruction where the build has the SDK (`python tools/fetch_dlss.py` into the git-ignored
   `external/DLSS`; never commit it: NVIDIA's licence) and the GPU is NVIDIA's, else NRD
@@ -577,8 +588,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   at its preset's size and writes the output's (`OHAO_DLSS_QUALITY`: `quality`, the default, 2/3 a
   side; `dlaa` native, `balanced`, `performance`, `ultraperf`), so the tracer's images are at the
   render size and only DLSS's output and the frame's are at the output's. Every denoiser writes the
-  frame's output (`m_outputImage`) with the tracer's own curve (ACES at 0.5, gamma 2.2: one display
-  transform until F2), so a window presents what a capture reads. Under NRD the camera ray's
+  frame's output (`m_outputImage`) through the display transform, so a window presents what a capture
+  reads. Under NRD the camera ray's
   emission (lights, emissive surfaces, the sky) goes to its own guide (binding 13) and never
   through NRD: `nrd_compose` adds it to diffuse x albedo + specular. The first hit's direct light
   is split by lobe (`evalLobes`). NGX logs through the engine's logger (stdout is the protocol's).

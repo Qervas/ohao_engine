@@ -217,9 +217,16 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
             pp->setBloomEnabled(on("bloom"));
             pp->setTAAEnabled(on("taa"));
             pp->setSSAOEnabled(on("ssao"));
-            pp->setExposure(r.exposure.value_or(settings.defaultExposure));
         }
     }
+    // Every mode displays through the post stack's EV100 and curve (the path tracer reads them).
+    if (renderer.getDeferredRenderer())
+        if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {
+            pp->setEv100(r.ev100.value_or(settings.defaultEv100));
+            pp->setDisplayCurve(r.tonemap == "neutral" ? render::DisplayCurve::Neutral
+                                : r.tonemap == "agx"   ? render::DisplayCurve::AgX
+                                                       : settings.defaultCurve);
+        }
     // The combat HUD only when asked (hud: true), so captures and goldens stay the scene's.
     renderer.setHud(r.hud && mode == RenderMode::Deferred ? ecs::combatHud(world, renderer.getWidth(), renderer.getHeight())
                                                           : render::HudList{});
@@ -327,7 +334,8 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
                                                                  : api::GeometryPath::automatic;
     s.occlusionCulling = r.occlusionCulling;
     s.csm = {static_cast<int32_t>(r.csmCascades), static_cast<int32_t>(r.csmSize)};
-    s.exposure = r.exposure;
+    s.ev100 = r.ev100;
+    s.tonemap = r.tonemap == render::DisplayCurve::Neutral ? api::Tonemap::neutral : api::Tonemap::agx;
     s.vfx = {r.vfxParticles, r.vfxSoft, r.vfxTracers, r.vfxDecals, r.vfxSmokeInGi};
     return s;
 }
@@ -349,7 +357,8 @@ void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s)
     r.occlusionCulling = s.occlusionCulling;
     r.csmCascades = static_cast<uint32_t>(std::clamp(s.csm.cascades, 1, 4));
     r.csmSize = static_cast<uint32_t>(std::clamp(s.csm.size, 512, 4096));
-    r.exposure = s.exposure;
+    r.ev100 = s.ev100;
+    r.tonemap = s.tonemap == api::Tonemap::neutral ? render::DisplayCurve::Neutral : render::DisplayCurve::AgX;
     r.vfxParticles = s.vfx.particles;
     r.vfxSoft = s.vfx.soft;
     r.vfxTracers = s.vfx.tracers;

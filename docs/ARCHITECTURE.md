@@ -244,7 +244,7 @@ sss                 subsurface blur on classified tiles   [sss]
 ssr                 half-res trace; resolve replaces env specular in place   [ssr]
 transparent         blended meshes and effects back to front over the lit image, soft against
                     depth, each with its blend state; coverage into the mask TAA reads
-post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]  (bloom's input clamped at luminance 4)
+post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; ev100, tonemap]  (bloom's input clamped at luminance 4)
 gizmo               transform handles
 hud                 the HudList over the final image (only when the list has items:      [capture hud]
                     a window always; a capture with hud: true)
@@ -675,7 +675,7 @@ Followed for `cli_helmet_game_deferred` (sub-project 4, step 11).
 1. **The scene** is a checked-in `.scene.json` (`assets/scenes/`); a golden renders it
    through `ohao run`, so everything about the render is on the command line: `--mode`,
    `--frames` (deferred: from a reset, the last kept; with TAA give enough frames to
-   converge), `--post`, `--exposure`, `--quality` (deferred: `realtime` or `reference`),
+   converge), `--post`, `--ev100`, `--tonemap`, `--quality` (deferred: `realtime` or `reference`),
    `--spp`/`--denoise` for the path tracer.
 2. **The entry** in `tests/golden/manifest.json`: `name`, `command` (`{out}` is the
    image the harness compares), `golden` (`tests/golden/<name>.png`), the tolerance and a

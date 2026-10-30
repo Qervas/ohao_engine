@@ -83,7 +83,7 @@ struct SceneSpec {
     const char* path;
     uint32_t width, height;
     std::vector<std::string> post;
-    std::optional<float> exposure;
+    std::optional<float> ev100;   // the camera's exposure (EV100); absent: the renderer's
     bool hud{false};   // the combat HUD over the frame (sub-project 7: the hud pass)
     // Sub-project 12: the scripted moment of play_vfx_1080p before the frames: a grenade thrown and
     // the rifle held down, stepped until the boom; the frames then step with the trigger held.
@@ -118,25 +118,25 @@ constexpr int kVfxScriptSteps = 840;
 const std::vector<SceneSpec>& sceneSpecs() {
     static const std::vector<SceneSpec> s = {
         {"cornell_720p", "assets/scenes/cornell_box.scene.json", 1280, 720, {}, std::nullopt},
-        {"helmet_game_720p", "assets/scenes/helmet_game.scene.json", 1280, 720, {"taa", "ssao", "bloom"}, 1.0f},
-        {"helmet_game_1080p", "assets/scenes/helmet_game.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
-        {"bench10k_1080p", "build/render_bench/bench10k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
-        {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
+        {"helmet_game_720p", "assets/scenes/helmet_game.scene.json", 1280, 720, {"taa", "ssao", "bloom"}, 0.0f},
+        {"helmet_game_1080p", "assets/scenes/helmet_game.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f},
+        {"bench10k_1080p", "build/render_bench/bench10k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f},
+        {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f},
         // The play scene through the player's eyes with its HUD (health, ammo, crosshair).
-        {"play_hud_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, true},
+        {"play_hud_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, true},
         // 16 skinned rigs in the blockout, every pose changing every frame: skin, skin.bounds and
         // rt.blas.refit at full load (sub-project 10).
-        {"anim16_1080p", "build/render_bench/anim16.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
+        {"anim16_1080p", "build/render_bench/anim16.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, false, false, true},
         // The play scene stepped before every frame: its two skinned enemies (sub-project 10 step 2)
         // posed every frame, as in a window: the play scene's skin, skin.bounds and rt.blas.refit.
-        {"play_anim_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
+        {"play_anim_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, false, false, true},
         // The play scene's effects (sub-project 12): a grenade's boom and smoke, the rifle's muzzles
         // and impacts, stepped before every frame: vfx.expand, vfx.sort and transparent. After the
         // deferred scenes: it installs the combat systems (physics, combat, vfx) on the bench's world.
-        {"play_vfx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true},
+        {"play_vfx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, false, true, true},
         // The same moment with the smoke proxies out of RT shadows and GI (step 4's proxy cost: the budget
         // is play_vfx_1080p's rt.shadows + rt.gi less this scene's).
-        {"play_vfx_nosmoke_gi_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true, true},
+        {"play_vfx_nosmoke_gi_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 0.0f, false, true, true, true},
         // The realtime path tracer at 1080p (frontier F1 T6): the trace alone (no denoiser) in the helmet
         // room and the play scene, and the play scene's whole realtime frame under DLSS Ray Reconstruction
         // at its default preset (Quality: traced at 1280x720), which falls back to the raw trace without
@@ -804,7 +804,7 @@ struct Gpu {
         r.width = spec.width;
         r.height = spec.height;
         r.post = spec.post;
-        r.exposure = spec.exposure;
+        r.ev100 = spec.ev100;
         r.hud = spec.hud;
         const api::RenderOutcome o = host->capture(r);
         if (!o.errors.empty()) return o.errors.front().code + ": " + o.errors.front().message;

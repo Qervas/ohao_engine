@@ -83,22 +83,24 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
-    // 2. Pipeline layout — no push constants.
+    // 2. Pipeline layout: the display transform's exposure and curve as push constants.
+    const VkPushConstantRange displayRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plInfo.setLayoutCount = 1;
     plInfo.pSetLayouts    = &m_impl->setLayout;
+    plInfo.pushConstantRangeCount = 1;
+    plInfo.pPushConstantRanges    = &displayRange;
     if (VkResult r = vkCreatePipelineLayout(device, &plInfo, nullptr, &m_impl->pipelineLayout); r != VK_SUCCESS) {
         OHAO_LOG(Error, render, "NRD compose: vkCreatePipelineLayout failed: {}", static_cast<int>(r));
         return false;
     }
 
     // 3. Load SPV and create shader module.
-    // OHAO's shader CMake flattens directory paths with underscores:
-    // shaders/rt/nrd_compose.comp → build/shaders/rt_nrd_compose.comp.spv.
-    auto spv = readShaderSpv("rt_nrd_compose.comp.spv");
+    // shaders/rt/nrd_compose.slang (one entry point) → rt_nrd_compose.slang.spv.
+    auto spv = readShaderSpv("rt_nrd_compose.slang.spv");
     if (spv.empty()) {
-        OHAO_LOG(Error, render, "NRD compose: failed to load rt_nrd_compose.comp.spv");
+        OHAO_LOG(Error, render, "NRD compose: failed to load rt_nrd_compose.slang.spv");
         return false;
     }
     VkShaderModuleCreateInfo smInfo{};
@@ -205,6 +207,9 @@ void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_impl->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_impl->pipelineLayout, 0, 1,
                              &m_impl->descriptorSets[m_impl->slot], 0, nullptr);
+
+    const struct { float exposure; uint32_t curve; } display{inputs.exposure, inputs.curve};
+    vkCmdPushConstants(cmd, m_impl->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(display), &display);
 
     const uint32_t gx = (m_impl->width  + 7u) / 8u;
     const uint32_t gy = (m_impl->height + 7u) / 8u;

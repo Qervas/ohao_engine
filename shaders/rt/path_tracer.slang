@@ -24,12 +24,13 @@
 // The realtime profile ends a path in the radiance cache (rt/radiance_cache.slang, kFlagCache) at
 // its second or later vertex; cacheUpdate fills the cache. The offline profile never reads it.
 //
-// Outputs as before: the running mean (bindings 1 and 3), the tonemapped image (2, ACES at 0.5),
+// Outputs as before: the running mean (bindings 1 and 3), the displayed image (2, display/display.slang),
 // OIDN's albedo and normal (6, 7), NRD's and DLSS's guides (19-26).
 import shared.layout;
 import material.openpbr;
 import sampling.sobol;
 import rt.radiance_cache;
+import display.display;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> accumBuffer;
@@ -69,7 +70,7 @@ struct PushConstants
     float4 prevViewProj[4];
     uint4 params;    // x width, y height, z sample index, w bounces (low 16)
     uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment map's width
-    float4 tuning;   // x firefly clamp, y the environment map's height
+    float4 tuning;   // x firefly clamp, y the environment map's height, z the display exposure, w the display curve (bits)
     float4 jitter;   // xy NRD's sub-pixel offset
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> pc;
@@ -446,11 +447,6 @@ float4 nrdPackRadianceHitDist(float3 radiance, float hitDist, float viewZ, float
     return float4(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25)), normHd);
 }
 
-float3 aces(float3 x)
-{
-    return saturate((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
-}
-
 // ---- ray generation -------------------------------------------------------------------------
 
 [shader("raygeneration")]
@@ -711,7 +707,7 @@ void raygen()
     diffuseRadiance[pixel] = lerp(diffuseRadiance[pixel], nrdPackRadianceHitDist(diffDemod, firstLobe == 1u ? secondHitT : 0.0, viewZ, firstRough), k);
     specularRadiance[pixel] = lerp(specularRadiance[pixel], nrdPackRadianceHitDist(specularOut, firstLobe == 0u ? secondHitT : 0.0, viewZ, firstRough), k);
 
-    outputImage[pixel] = float4(pow(aces(acc * 0.5), float3(1.0 / 2.2)), 1.0);
+    outputImage[pixel] = float4(displayPixel(acc, pc.tuning.z, asuint(pc.tuning.w)), 1.0);
 }
 
 // ---- the radiance cache's update ------------------------------------------------------------

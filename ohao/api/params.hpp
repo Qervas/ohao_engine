@@ -32,6 +32,8 @@ enum class CaptureMode : uint8_t { deferred, rt_realtime, rt_offline };
 enum class Denoiser : uint8_t { none, oidn, nrd, dlss };
 enum class PostEffect : uint8_t { bloom, taa, ssao };
 enum class Quality : uint8_t { realtime, reference };
+// The display curve (frontier F2, ruling F-R4): AgX by default, Khronos PBR Neutral for material review.
+enum class Tonemap : uint8_t { agx, neutral };
 enum class LogLevelName : uint8_t { trace, debug, info, warn, error };
 enum class LogChannelName : uint8_t { render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime, vfx };
 
@@ -165,7 +167,8 @@ struct RenderCaptureParams {
     std::optional<int32_t> height;
     Denoiser denoise{Denoiser::none};
     std::optional<std::vector<PostEffect>> post;   // absent: the host's render.settings (ssao)
-    std::optional<float> exposure;                 // absent: render.settings exposure
+    std::optional<float> ev100;                    // absent: render.settings ev100
+    std::optional<Tonemap> tonemap;                // absent: render.settings tonemap
     std::optional<Quality> quality;                // absent: render.settings quality
     bool timings{false};                           // the capture frame's pass list in the result
     bool hud{false};                               // the combat HUD over the frame (a window draws it live)
@@ -207,7 +210,8 @@ struct RenderSettings {
     GeometryPath geometry{GeometryPath::automatic};
     bool occlusionCulling{true};
     CsmSettings csm;
-    float exposure{0.6f};   // the renderer's own (VulkanRenderer::RenderSettings)
+    float ev100{0.5f};      // the camera's exposure (render::kDefaultEv100, VulkanRenderer::RenderSettings)
+    Tonemap tonemap{Tonemap::agx};
     VfxSettings vfx;
 };
 

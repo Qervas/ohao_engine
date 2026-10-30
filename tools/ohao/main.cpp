@@ -12,7 +12,7 @@
 //   ohao summary  <scene> [--depth D] [--max-children N] [--max-nodes N]
 //   ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
-//                  [--denoise X] [--size WxH] [--post bloom,taa,ssao] [--exposure E]
+//                  [--denoise X] [--size WxH] [--post bloom,taa,ssao] [--ev100 EV] [--tonemap agx|neutral]
 //                  [--quality realtime|reference] [--hud] [--hdr out.pfm]]
 //                 [--save out.scene.json]
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
@@ -573,12 +573,12 @@ int cmdRun(const Args& a) {
     if (!intOpt(a, "--steps", 0, 1'000'000, steps, err) || !intOpt(a, "--spp", 1, 65536, spp, err) ||
         !intOpt(a, "--bounces", 0, 256, bounces, err) ||
         !intOpt(a, "--frames", 1, 100000, frames, err) || !numberOpt(a, "--dt", err) ||
-        !numberOpt(a, "--exposure", err))
+        !numberOpt(a, "--ev100", err))
         return usage(err);
     if (has(a, "--dt") && !has(a, "--steps")) return usage("--dt needs --steps");
     const bool render = has(a, "--render");
-    for (const char* o : {"--mode", "--spp", "--bounces", "--frames", "--denoise", "--size", "--post", "--exposure",
-                          "--quality", "--hud", "--hdr"})
+    for (const char* o : {"--mode", "--spp", "--bounces", "--frames", "--denoise", "--size", "--post", "--ev100",
+                          "--tonemap", "--quality", "--hud", "--hdr"})
         if (has(a, o) && !render) return usage(std::string(o) + " needs --render");
     std::string width = "1920", height = "1080";
     if (has(a, "--size")) {
@@ -671,7 +671,8 @@ int cmdRun(const Args& a) {
         if (has(a, "--frames")) p.emplace_back("frames", std::to_string(frames));
         if (has(a, "--denoise")) p.emplace_back("denoise", jsonString(opt(a, "--denoise")));
         if (has(a, "--post")) p.emplace_back("post", jsonStrings(splitList(opt(a, "--post"))));
-        if (has(a, "--exposure")) p.emplace_back("exposure", opt(a, "--exposure"));
+        if (has(a, "--ev100")) p.emplace_back("ev100", opt(a, "--ev100"));
+        if (has(a, "--tonemap")) p.emplace_back("tonemap", jsonString(opt(a, "--tonemap")));
         if (has(a, "--quality")) p.emplace_back("quality", jsonString(opt(a, "--quality")));
         if (has(a, "--hud")) p.emplace_back("hud", "true");
         if (has(a, "--hdr")) p.emplace_back("hdr", jsonString(opt(a, "--hdr")));
@@ -891,7 +892,7 @@ int run(int argc, char** argv) {
     if (cmd == "run") {
         const Args a = parseArgs(argc, argv, 2, {"--hud"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
-                                  "--frames", "--denoise", "--size", "--post", "--exposure", "--quality", "--hdr", "--save",
+                                  "--frames", "--denoise", "--size", "--post", "--ev100", "--tonemap", "--quality", "--hdr", "--save",
                                   "--root"});
         return a.error.empty() ? cmdRun(a) : usage(a.error);
     }

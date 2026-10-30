@@ -69,7 +69,10 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
         }
         m_renderer = std::move(renderer);
         if (auto* deferred = m_renderer->getDeferredRenderer())
-            if (auto* pp = deferred->getPostProcessing()) m_defaultExposure = pp->getExposure();
+            if (auto* pp = deferred->getPostProcessing()) {
+                m_defaultEv100 = pp->ev100();
+                m_defaultCurve = pp->displayCurve();
+            }
         ecs::installRenderExtract(*m_world, m_renderer->renderScene());
         ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
         ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);   // likewise
@@ -79,7 +82,8 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
     }
     runtime::CaptureSettings settings;
     settings.reset = m_captures > 0;   // the first capture renders exactly as a fresh renderer does (the goldens)
-    settings.defaultExposure = m_defaultExposure;
+    settings.defaultEv100 = m_defaultEv100;
+    settings.defaultCurve = m_defaultCurve;
     settings.keepPixels = &m_lastPixels;
     m_lastPixels.clear();
     ++m_captures;

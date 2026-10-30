@@ -230,7 +230,7 @@ struct FakeHost final : api::Host {
 // render.settings (2b test 14): E_STATE on a host without settings (the CLI), reads the
 // host's settings, a set changes only the members given (nested ones too), limits and
 // unknown fields are refused before the host is touched, a set counts as a change and a read
-// does not; captures take quality, post (ssao) and exposure from the settings unless they
+// does not; captures take quality, post (ssao) and ev100 from the settings unless they
 // name their own, and carry gpuMs and (timings) the pass list.
 static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
     World w;
@@ -273,23 +273,23 @@ static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
               Reply(s.call("render.settings", R"({"set":{"csm":{"size":256}}})")).code() == "E_RANGE" &&
               Reply(s.call("render.settings", R"({"set":{"geometry":"triangles"}})")).code() == "E_ENUM" &&
               Reply(s.call("render.settings", R"({"set":{"ssgi":true}})")).code() == "E_UNKNOWN_FIELD" &&
-              Reply(s.call("render.settings", R"({"set":{"exposure":0}})")).code() == "E_RANGE",
+              Reply(s.call("render.settings", R"({"set":{"ev100":-21}})")).code() == "E_RANGE",
           "limits, enum names and unknown settings are refused");
     CHECK(host.settingsSet == 1 && s.changeCount() == changes, "(before the host is touched)");
 
     // Captures default to the settings: quality reference (set above), ssao, exposure.
-    (void)s.call("render.settings", R"({"set":{"ssao":true,"exposure":2.5}})");
+    (void)s.call("render.settings", R"({"set":{"ssao":true,"ev100":2.5}})");
     const Reply cap(s.call("render.capture", R"({"inline":true,"timings":true})"));
     CHECK(cap.ok() && !seen.empty() && seen.back().quality == "reference" &&
-              seen.back().post == std::vector<std::string>{"ssao"} && seen.back().exposure == 2.5f && seen.back().timings,
-          "a capture that names none takes quality, post (ssao) and exposure from the settings");
+              seen.back().post == std::vector<std::string>{"ssao"} && seen.back().ev100 == 2.5f && seen.back().timings,
+          "a capture that names none takes quality, post (ssao) and ev100 from the settings");
     CHECK(cap.json("/result/gpuMs") == "1.235" &&
               cap.json("/result/timings") == R"([["gbuffer.early",0.071],["lighting",0.27]])",
           "gpuMs and the pass list come back, in microseconds");
-    (void)s.call("render.capture", R"({"inline":true,"quality":"realtime","post":[],"exposure":1})");
-    CHECK(seen.back().quality == "realtime" && seen.back().post.empty() && seen.back().exposure == 1.0f &&
+    (void)s.call("render.capture", R"({"inline":true,"quality":"realtime","post":[],"ev100":1})");
+    CHECK(seen.back().quality == "realtime" && seen.back().post.empty() && seen.back().ev100 == 1.0f &&
               !seen.back().timings,
-          "a capture's own quality, post and exposure override the settings");
+          "a capture's own quality, post and ev100 override the settings");
     CHECK(!Reply(s.call("render.capture", R"({"inline":true})")).at("/result/timings"), "no timings unless asked");
 }
 
@@ -359,26 +359,26 @@ static void t09_render_capture_needs_a_host_and_checks_its_params() {
     const Reply ok(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"size":1})"));
     CHECK(ok.code() == "E_UNKNOWN_FIELD" && ok.str("/error/data/0/path") == "/size", "unknown params are refused");
     const Reply good(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"width":640,)"
-                                              R"("height":360,"denoise":"none","post":["taa","ssao"],"exposure":1.5})"));
+                                              R"("height":360,"denoise":"none","post":["taa","ssao"],"ev100":1.5})"));
     CHECK(good.ok() && good.str("/result/path") == "a.png" && good.str("/result/frames") == "7" && seen.size() == 1,
           "a valid capture reaches the host and reports frames and ms");
     const api::RenderRequest& r = seen.back();
     const std::vector<std::string> effects{"taa", "ssao"};
     CHECK(r.mode == "rt_offline" && r.spp == 4 && r.width == 640u && r.height == 360u && r.denoise == "none" &&
-              r.post == effects && r.exposure == 1.5f && r.frames == 0 && !r.inlineImage && !r.region,
+              r.post == effects && r.ev100 == 1.5f && r.frames == 0 && !r.inlineImage && !r.region,
           "with every param as given");
     CHECK(Reply(s.call("render.capture", R"({"path":"a.png","mode":"raster"})")).code() == "E_ENUM" &&
               Reply(s.call("render.capture", R"({"path":"a.png","post":["glow"]})")).code() == "E_ENUM" &&
               Reply(s.call("render.capture", R"({"path":"a.png","width":8})")).code() == "E_RANGE" &&
-              Reply(s.call("render.capture", R"({"path":"a.png","exposure":0})")).code() == "E_RANGE" &&
+              Reply(s.call("render.capture", R"({"path":"a.png","ev100":31})")).code() == "E_RANGE" &&
               Reply(s.call("render.capture", "{}")).code() == "E_COMMAND",
-          "a bad mode, effect, size or exposure, or no path, is refused before the host is called");
+          "a bad mode, effect, size or ev100, or no path, is refused before the host is called");
     CHECK(seen.size() == 1, "(the host saw none of them)");
     CHECK(Reply(s.call("render.capture", R"({"path":"fail.png"})")).code() == "E_RENDER",
           "the host's errors are the reply's");
-    CHECK(seen.size() == 2 && !seen.back().exposure && seen.back().mode == "deferred" && seen.back().post.empty() &&
+    CHECK(seen.size() == 2 && !seen.back().ev100 && seen.back().mode == "deferred" && seen.back().post.empty() &&
               !seen.back().width && !seen.back().height,
-          "without exposure the host keeps the renderer's own; the mode defaults to deferred, effects to none, the "
+          "without ev100 the host keeps the renderer's own; the mode defaults to deferred, effects to none, the "
           "size to the host's");
 }
 

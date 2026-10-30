@@ -381,7 +381,8 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
     }
     if (auto* pp = d.getPostProcessing()) {
         pp->setSSAOEnabled(s.ssao);
-        pp->setExposure(s.exposure);
+        pp->setEv100(s.ev100);
+        pp->setDisplayCurve(s.tonemap);
     }
 }
 
@@ -412,7 +413,8 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     }
     if (auto* pp = d.getPostProcessing()) {
         s.ssao = pp->getSSAOEnabled();
-        s.exposure = pp->getExposure();
+        s.ev100 = pp->ev100();
+        s.tonemap = pp->displayCurve();
     }
     return s;
 }
@@ -723,7 +725,8 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     m_deferredRenderer->setRenderSeed(m_renderSeed);
     m_deferredRenderer->onResize(m_width, m_height);
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
-        pp->setExposure(RenderSettings{}.exposure);
+        pp->setEv100(RenderSettings{}.ev100);
+        pp->setDisplayCurve(RenderSettings{}.tonemap);
         pp->setNoiseSeed(m_renderSeed);
     }
     // capture.preview: without it, inline captures read the full frame and preview on the CPU.
@@ -759,7 +762,10 @@ bool VulkanRenderer::denoiseRequestedFrame() {
         OHAO_LOG(Error, gpu, "Denoise: OIDN failed; returning the noisy frame");
         return false;
     }
-    m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);
+    const auto* pp = m_deferredRenderer ? m_deferredRenderer->getPostProcessing() : nullptr;
+    m_denoisedPixelBuffer =
+        ohao::float3ToRGBA8(beauty3, rw, rh, render::displayExposure(pp ? pp->ev100() : render::kDefaultEv100),
+                            pp ? pp->displayCurve() : render::DisplayCurve::AgX);
     m_denoiseCacheValid = true;
     return true;
 }

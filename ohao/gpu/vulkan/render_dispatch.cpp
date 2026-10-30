@@ -366,6 +366,8 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     // Lit by the scene's lights: the RenderScene light table (setSceneBuffers above).
     // The tracer times its own stages (pt.cache.update ... pt.denoise); the last is ended here.
     rtRenderer->setPassTimer(&m_passTimer);
+    if (const auto* pp = m_deferredRenderer ? m_deferredRenderer->getPostProcessing() : nullptr)
+        rtRenderer->setDisplay(render::displayExposure(pp->ev100()), pp->displayCurve());
     rtRenderer->render(cmd, m_currentFrame, ptView, ptProj);
     m_passTimer.end(cmd);
 

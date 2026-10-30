@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/display/display.hpp"
+
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -38,18 +40,9 @@ namespace ohao {
         width, height);
 }
 
-// Convert RGB float3 to RGBA8 with ACES tonemapping + gamma.
-// rgb must contain at least width*height*3 floats.
-[[nodiscard]] std::vector<uint8_t> float3ToRGBA8(std::span<const float> rgb,
-                                                 uint32_t width, uint32_t height,
-                                                 float exposure = 0.5f);
-
-[[nodiscard]] inline std::vector<uint8_t> float3ToRGBA8(const float* rgb,
-                                                        uint32_t width, uint32_t height,
-                                                        float exposure = 0.5f) {
-    return float3ToRGBA8(
-        std::span<const float>(rgb, static_cast<size_t>(width) * static_cast<size_t>(height) * 3u),
-        width, height, exposure);
-}
+// RGB float3 radiance to RGBA8 through the display transform (render/display/display.hpp) at a
+// linear exposure. rgb must contain at least width*height*3 floats.
+[[nodiscard]] std::vector<uint8_t> float3ToRGBA8(std::span<const float> rgb, uint32_t width, uint32_t height,
+                                                 float exposure, render::DisplayCurve curve);
 
 } // namespace ohao

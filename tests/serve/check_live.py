@@ -230,7 +230,7 @@ def test_live():
     check(result(injected) is not None and jump.get("held") is True, "input.inject reaches the next step (input.state)")
 
     plain = s.call("render.capture", {"path": out + "/live_plain.png", "post": []})
-    post = s.call("render.capture", {"path": out + "/live_post.png", "post": ["taa", "ssao", "bloom"], "exposure": 1})
+    post = s.call("render.capture", {"path": out + "/live_post.png", "post": ["taa", "ssao", "bloom"], "ev100": 0})
     rp = result(plain) or {}
     check(rp.get("deterministic") is True and rp.get("frames") == 1 and rp.get("width") and rp.get("height"),
           "a lockstep capture is deterministic: 1 deferred frame from a reset without TAA (%sx%s, %s ms)" %
@@ -270,7 +270,7 @@ def test_live():
     hout = out_dir("headless")
     hp = h.call("render.capture", {"path": hout + "/plain.png", "width": width, "height": height, "post": []})
     hq = h.call("render.capture", {"path": hout + "/post.png", "width": width, "height": height,
-                                   "post": ["taa", "ssao", "bloom"], "exposure": 1})
+                                   "post": ["taa", "ssao", "bloom"], "ev100": 0})
     check(h.close() == 0 and result(hp) is not None and result(hq) is not None, "the headless captures render")
     for tag, a, b in (("off", out + "/live_plain.png", hout + "/plain.png"),
                       ("on", out + "/live_post.png", hout + "/post.png")):
@@ -445,7 +445,7 @@ def test_game_scene():
     moved = p0 is not None and p1 is not None and abs(p1[0] - p0[0]) < 1e-5 and abs(p1[1] - p0[1]) < 1e-5 and \
         abs((p1[2] - p0[2]) + 3.0) < 1e-4
     check(moved, "60 steps of move_forward = 1 fly the camera 3 m (moveSpeed * dt * 60) along -Z: %s -> %s" % (p0, p1))
-    shot = result(s.call("render.capture", {"inline": True, "post": ["taa", "ssao", "bloom"], "exposure": 1})) or {}
+    shot = result(s.call("render.capture", {"inline": True, "post": ["taa", "ssao", "bloom"], "ev100": 0})) or {}
     check(shot.get("mimeType") == "image/jpeg", "the game scene captures")
     code = s.close()
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")

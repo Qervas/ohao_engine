@@ -96,7 +96,8 @@ struct RenderRequest {
     std::optional<uint32_t> height;
     std::string denoise{"none"};       // none | oidn | nrd | dlss
     std::vector<std::string> post;     // deferred post effects turned on: bloom, taa, ssao
-    std::optional<float> exposure;     // absent: the renderer's own default
+    std::optional<float> ev100;        // the camera's exposure; absent: the renderer's own default
+    std::string tonemap;               // agx | neutral; empty: the renderer's own default
     std::string quality{"realtime"};   // deferred: realtime | reference
     bool inlineImage{false};           // also return a preview image
     std::string format{"jpeg"};        // the preview's format: jpeg (quality 85) | png

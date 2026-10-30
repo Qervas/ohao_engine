@@ -5,6 +5,7 @@
 #include "path_tracer.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -525,7 +526,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;
     pc.control.z = m_hasPreviousView ? 1u : 0u;
     pc.control.w = m_envWidth;
-    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envHeight), 0.0f, 0.0f);
+    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envHeight), m_displayExposure,
+                          std::bit_cast<float>(static_cast<uint32_t>(m_displayCurve)));
     pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, 0.0f, 0.0f);
 
     // Store current viewProj for next frame's reprojection
@@ -641,8 +643,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0, 0, nullptr, 0, nullptr, 2, post);
 
-            // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (ACES+gamma, matches None).
-            m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_outW, m_outH);
+            // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (the display transform).
+            m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_outW, m_outH, m_displayExposure,
+                              static_cast<uint32_t>(m_displayCurve));
             dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
         }
     }
@@ -771,6 +774,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             ci.emission     = m_emissionAOVView;
             ci.composedOut  = m_nrdComposedView;
             ci.outputLdr    = m_outputView;   // the frame: a window presents it, a capture reads it
+            ci.exposure     = m_displayExposure;
+            ci.curve        = static_cast<uint32_t>(m_displayCurve);
             m_nrdCompositor->dispatch(cmd, ci);
             nrdRan = true;
         }

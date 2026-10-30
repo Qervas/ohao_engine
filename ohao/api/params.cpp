@@ -21,6 +21,9 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("oidn", Denoiser::oidn, "Intel Open Image Denoise")
         .value("nrd", Denoiser::nrd, "NVIDIA Real-time Denoisers")
         .value("dlss", Denoiser::dlss, "DLSS Ray Reconstruction");
+    r.enumeration<Tonemap>("Tonemap").doc("The display curve")
+        .value("agx", Tonemap::agx, "AgX (Sobotka): neutral filmic, little hue shift")
+        .value("neutral", Tonemap::neutral, "Khronos PBR Neutral: base colours shown as themselves");
     r.enumeration<PostEffect>("PostEffect").doc("Deferred post effect")
         .value("bloom", PostEffect::bloom, "Bloom")
         .value("taa", PostEffect::taa, "Temporal anti-aliasing")
@@ -176,8 +179,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("denoise", &RenderCaptureParams::denoise).doc("Path tracer denoiser")
         .field("post", &RenderCaptureParams::post)
             .doc("Deferred post effects to turn on; absent: render.settings' ssao alone")
-        .field("exposure", &RenderCaptureParams::exposure).doc("Exposure in (0, 64]; absent: render.settings'")
-            .unitless().min(0.0).max(64.0)
+        .field("ev100", &RenderCaptureParams::ev100)
+            .doc("The camera's exposure, EV at ISO 100 (radiance L displays as L / (1.2 x 2^EV100)); absent: "
+                 "render.settings'").unit("EV").min(-20.0).max(30.0)
+        .field("tonemap", &RenderCaptureParams::tonemap).doc("The display curve; absent: render.settings'")
         .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; absent: render.settings'")
         .field("timings", &RenderCaptureParams::timings).doc("Add the capture frame's per-pass GPU times")
         .field("hud", &RenderCaptureParams::hud).doc("Draw the combat HUD over the frame, as a window shows it (deferred)");
@@ -215,7 +220,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("geometry", &RenderSettings::geometry).doc("G-buffer geometry path")
         .field("occlusionCulling", &RenderSettings::occlusionCulling).doc("The late pass's Hi-Z occlusion test")
         .field("csm", &RenderSettings::csm).doc("Cascaded shadow maps")
-        .field("exposure", &RenderSettings::exposure).doc("Exposure").unitless().min(0.001).max(64.0)
+        .field("ev100", &RenderSettings::ev100)
+            .doc("The camera's exposure, EV at ISO 100 (radiance L displays as L / (1.2 x 2^EV100))").unit("EV")
+            .min(-20.0).max(30.0)
+        .field("tonemap", &RenderSettings::tonemap).doc("The display curve (every renderer and denoiser)")
         .field("vfx", &RenderSettings::vfx).doc("Effects' switches");
     r.type<RenderSettingsParams>("RenderSettingsParams").doc("render.settings params")
         .field("set", &RenderSettingsParams::set)

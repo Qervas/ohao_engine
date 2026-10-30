@@ -1,4 +1,6 @@
 #pragma once
+
+#include "render/display/display.hpp"
 // The window host (sub-project 4 spec, "Live host"): one loop for ohao_game (realtime, no
 // protocol) and `ohao serve --window` (lockstep by default, a protocol server pumped once
 // per frame). It owns the window, the renderer, the World and the Session, and is the
@@ -204,7 +206,8 @@ private:
     uint64_t m_renderedChange{~0ull};   // the session's changeCount at the last render
     uint64_t m_rendered{0};
     uint64_t m_readbackRequests{0};     // readbacks the host asked for (captures)
-    float m_defaultExposure{0.6f};      // the renderer's own, for captures that name none
+    float m_defaultEv100{render::kDefaultEv100};   // the renderer's own, for captures that name none
+    render::DisplayCurve m_defaultCurve{render::DisplayCurve::AgX};
     RenderMode m_liveMode{RenderMode::Deferred};   // what the window presents between captures
     int m_liveSamples{0};               // rt_offline: sample passes presented since the last change
     bool m_quit{false};

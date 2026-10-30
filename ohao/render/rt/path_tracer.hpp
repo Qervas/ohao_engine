@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/display/display.hpp"
+
 // Path Tracer — full Vulkan RT pipeline that replaces rasterization entirely.
 //
 // Traces camera rays through the scene, bouncing off surfaces to compute
@@ -99,6 +101,12 @@ public:
     // Times render()'s stages (pt.cache.update, pt.cache.resolve, pt.trace, pt.denoise); the
     // caller ends the last one. Null: untimed.
     void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
+    // The display transform (shaders/display/display.slang) of the output, NRD's and DLSS's frames:
+    // a linear exposure (render::displayExposure) and the curve.
+    void setDisplay(float exposure, render::DisplayCurve curve) noexcept {
+        m_displayExposure = exposure;
+        m_displayCurve = curve;
+    }
 
     void resize(uint32_t width, uint32_t height);
 
@@ -277,6 +285,8 @@ private:
     // in it, one cell otherwise (the shaders bind it either way). setRadianceCacheCapacity before init.
     render::RadianceCache m_radianceCache;
     render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's
+    float m_displayExposure{render::displayExposure(render::kDefaultEv100)};
+    render::DisplayCurve m_displayCurve{render::DisplayCurve::AgX};
     uint32_t m_radianceCacheCapacity = 1;
 
     // Sub-plan 4.F T1: HDR env map for NRD tonemap's sky composite. Borrowed —

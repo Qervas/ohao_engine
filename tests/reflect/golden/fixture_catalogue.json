@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "d93bef9fc4ea858a",
+  "schemaHash": "03f55c63a2d1e929",
   "units": [
     "m",
     "m/s",
@@ -21,7 +21,8 @@
     "lm",
     "nits",
     "ratio",
-    "Hz"
+    "Hz",
+    "EV"
   ],
   "errors": [
     { "code": "E_IO", "meaning": "The file could not be read or written." },

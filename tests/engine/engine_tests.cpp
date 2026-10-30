@@ -533,7 +533,6 @@ void runMetaTests() {
         Camera cam;
         EXPECT(cam.isPerspective(), "default perspective");
         EXPECT(cam.getFov() > 0.f, "fov");
-        EXPECT(tonemapOperatorIndex(TonemapOperator::ACES) == 0u, "tonemap index");
         TEST_PASS();
     }
 
@@ -2755,13 +2754,13 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     EXPECT(b.quality == ohao::RenderQuality::Realtime && b.rtShadows && b.rtShadowMaxLights == 4 && b.rtGI &&
                !b.rtGIFullResolution && b.rtGIRays == 2 && !b.ssao && b.ssr && b.sss &&
                b.geometry == ohao::GpuCulling::Geometry::Auto && b.occlusionCulling && b.csmCascades == 4 &&
-               b.csmSize == 2048 && b.exposure == defaults.exposure,
+               b.csmSize == 2048 && b.ev100 == defaults.ev100 && b.tonemap == defaults.tonemap,
            "the defaults read back unchanged");
     {
-        // A fresh renderer, before any set, is already at the defaults (exposure included): a
+        // A fresh renderer, before any set, is already at the defaults (ev100 included): a
         // headless host reports them before its renderer starts and captures with them.
         ohao::VulkanRenderer fresh(64, 64);
-        EXPECT(fresh.initialize() && fresh.renderSettings().exposure == defaults.exposure &&
+        EXPECT(fresh.initialize() && fresh.renderSettings().ev100 == defaults.ev100 &&
                    fresh.renderSettings().csmSize == defaults.csmSize && fresh.renderSettings().rtGIRays == defaults.rtGIRays,
                "a fresh renderer starts at the defaults");
     }
@@ -2773,10 +2772,11 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     s.occlusionCulling = false;
     s.csmCascades = 3;
     s.csmSize = 1024;
-    s.exposure = 1.5f;
+    s.ev100 = 1.5f;
+    s.tonemap = render::DisplayCurve::Neutral;
     const auto t = settingsRun(s).readBack;
     EXPECT(t.rtShadowMaxLights == 2 && t.rtGIRays == 5 && t.ssao && t.geometry == ohao::GpuCulling::Geometry::Instances &&
-               !t.occlusionCulling && t.csmCascades == 3 && t.csmSize == 1024 && t.exposure == 1.5f,
+               !t.occlusionCulling && t.csmCascades == 3 && t.csmSize == 1024 && t.ev100 == 1.5f && t.tonemap == render::DisplayCurve::Neutral,
            "every changed knob reads back");
     TEST_PASS();
 }

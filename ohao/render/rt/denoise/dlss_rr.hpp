@@ -151,16 +151,15 @@ public:
     /// (and logs the decoded NVSDK_NGX_Result) on eval failure.
     bool evaluate(VkCommandBuffer cmd, const EvalInputs& in);
 
-    /// Create the HDR→LDR tonemap compute pipeline (ACES + gamma, matching the
-    /// raygen "None" curve). Called once after the feature is created. Returns
-    /// false on shader/pipeline creation failure.
+    /// Create the display pass (rt/dlss_display.slang: the display transform every path uses).
+    /// Called once after the feature is created. Returns false on shader/pipeline creation failure.
     bool createTonemapPipeline();
 
-    /// Record the tonemap: reads the DLSS HDR COLOR_OUT (storage image) and
-    /// writes the RGBA8 LDR output. Both views must already be in GENERAL layout. One descriptor
+    /// Record the display pass at a linear exposure and curve (render::DisplayCurve): reads the DLSS
+    /// HDR COLOR_OUT (storage image) and writes the RGBA8 output. Both views must already be in GENERAL layout. One descriptor
     /// set per frame in flight: `frameSlot` picks this frame's (VUID 03047).
-    void tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInView, VkImageView ldrOutView,
-                 uint32_t width, uint32_t height);
+    void tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInView, VkImageView ldrOutView, float exposure,
+                 uint32_t curve, uint32_t width, uint32_t height);
 
     /// Release the DLSS-RR feature handle (safe to call if never created).
     void releaseFeature();

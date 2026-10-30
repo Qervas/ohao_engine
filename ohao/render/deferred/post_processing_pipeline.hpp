@@ -5,25 +5,13 @@
 #include "taa_pass.hpp"
 #include "ssao_pass.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "render/display/display.hpp"
 #include <array>
 #include <memory>
 
 namespace ohao::render { class GpuPassTimer; }
 
 namespace ohao {
-
-// Tonemapping operator enum
-enum class TonemapOperator : uint32_t {
-    ACES = 0,
-    Reinhard = 1,
-    Uncharted2 = 2,
-    Neutral = 3,
-    Filmic = 4        // Soft highlights, good mid-tone contrast (Hejl filmic curve)
-};
-
-[[nodiscard]] constexpr uint32_t tonemapOperatorIndex(TonemapOperator op) noexcept {
-    return static_cast<uint32_t>(op);
-}
 
 // Post-processing pipeline that orchestrates all post-processing passes
 class PostProcessingPipeline : public RenderPassBase {
@@ -69,13 +57,12 @@ public:
     // Forget TAA's history, as on a fresh pipeline (DeferredRenderer::resetTemporalState).
     void resetHistory() noexcept;
 
-    // Tonemapping configuration
-    void setTonemapOperator(TonemapOperator op) { m_tonemapOp = op; }
-    void setExposure(float exposure) { m_exposure = exposure; }
-    float getExposure() const { return m_exposure; }
-    void setGamma(float gamma) { m_gamma = gamma; }
-    // Lightning flash — set each frame (0=off, 3+=bright strike)
-    void setFlashIntensity(float v) { m_flashIntensity = glm::max(v, 0.0f); }
+    // The display transform (shaders/display/display.slang): the camera's EV100 and the curve. The
+    // path tracer's frames read them from here too (VulkanRenderer), so every path displays alike.
+    void setEv100(float ev100) { m_ev100 = ev100; }
+    [[nodiscard]] float ev100() const { return m_ev100; }
+    void setDisplayCurve(render::DisplayCurve curve) { m_displayCurve = curve; }
+    [[nodiscard]] render::DisplayCurve displayCurve() const { return m_displayCurve; }
 
     // Bloom configuration
     void setBloomThreshold(float threshold);
@@ -157,19 +144,16 @@ private:
 
     float m_totalTime{0.0f};
 
-    // Tonemapping parameters
-    TonemapOperator m_tonemapOp{TonemapOperator::ACES};
-    float m_exposure{1.0f};
-    float m_gamma{2.2f};
-    float m_flashIntensity{0.0f};
+    // The display transform's settings.
+    float m_ev100{render::kDefaultEv100};
+    render::DisplayCurve m_displayCurve{render::DisplayCurve::AgX};
 
-    // Push constants for tonemapping (must match GLSL layout in tonemapping.frag)
+    // Push constants for the display pass (postprocess/tonemap.slang's DisplayParams).
     struct TonemapParams {
-        float exposure;
-        float gamma;
-        float bloomStrength;   // 0.0 = no bloom composite, 1.0+ = bloom intensity
-        uint32_t tonemapOp;    // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
-        float flashIntensity;  // lightning flash (0=none, 3+ = bright strike)
+        float exposure;        // linear: displayExposure(EV100)
+        float bloomStrength;   // 0.0 = no bloom composite
+        uint32_t curve;        // render::DisplayCurve
+        uint32_t pad;
     };
 
 };

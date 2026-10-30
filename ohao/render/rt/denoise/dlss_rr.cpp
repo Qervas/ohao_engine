@@ -355,15 +355,17 @@ bool DlssRR::createTonemapPipeline() {
     plInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plInfo.setLayoutCount         = 1;
     plInfo.pSetLayouts            = &m_tmSetLayout;
-    plInfo.pushConstantRangeCount = 0;
+    const VkPushConstantRange displayRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};   // exposure, curve
+    plInfo.pushConstantRangeCount = 1;
+    plInfo.pPushConstantRanges    = &displayRange;
     if (vkCreatePipelineLayout(m_device, &plInfo, nullptr, &m_tmPipelineLayout) != VK_SUCCESS) {
         OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreatePipelineLayout failed");
         return false;
     }
 
-    auto spv = readShaderSpv("compute_dlss_tonemap.comp.spv");
+    auto spv = readShaderSpv("rt_dlss_display.slang.spv");
     if (spv.empty()) {
-        OHAO_LOG(Error, render, "DLSS-RR: tonemap: failed to load compute_dlss_tonemap.comp.spv");
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: failed to load rt_dlss_display.slang.spv");
         return false;
     }
     VkShaderModuleCreateInfo smInfo{};
@@ -420,7 +422,7 @@ bool DlssRR::createTonemapPipeline() {
 }
 
 void DlssRR::tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInView, VkImageView ldrOutView,
-                     uint32_t width, uint32_t height) {
+                     float exposure, uint32_t curve, uint32_t width, uint32_t height) {
     if (!m_tmPipeline || frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const VkDescriptorSet set = m_tmDescriptorSets[frameSlot];
 
@@ -443,8 +445,8 @@ void DlssRR::tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInV
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipelineLayout, 0, 1,
                             &set, 0, nullptr);
-
-
+    const struct { float exposure; uint32_t curve; } display{exposure, curve};
+    vkCmdPushConstants(cmd, m_tmPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(display), &display);
     vkCmdDispatch(cmd, (width + 7u) / 8u, (height + 7u) / 8u, 1);
 }
 

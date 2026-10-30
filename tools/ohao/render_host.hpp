@@ -1,4 +1,6 @@
 #pragma once
+
+#include "render/display/display.hpp"
 // The headless host behind render.capture (ohao run, ohao serve without a window, the GPU
 // tests). The renderer starts on the first capture (a session that never renders creates
 // no Vulkan device), and the render extract and instantiate are installed into the
@@ -59,7 +61,8 @@ private:
     std::unique_ptr<VulkanRenderer> m_renderer;
     bool m_failed{false};
     int m_captures{0};
-    float m_defaultExposure{1.0f};   // read from the renderer at startup; a capture without one uses it
+    float m_defaultEv100{render::kDefaultEv100};   // read from the renderer at startup; a capture without one uses it
+    render::DisplayCurve m_defaultCurve{render::DisplayCurve::AgX};
     api::RenderSettings m_settings;  // before the renderer starts
     bool m_settingsSet{false};       // render.settings changed them: applied when the renderer starts
 };

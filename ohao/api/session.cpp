@@ -82,7 +82,7 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "deterministic, validation?} (+ the inline image)",
          "Renders through the Camera to a PNG (path) and/or an inline preview (maxSize; region zooms). A window "
          "captures at its own size; realtime: its next presented frame (deterministic false). Left-out quality, "
-         "post, exposure: render.settings'. Cancellable, with progress."},
+         "post, ev100, tonemap: render.settings'. Cancellable, with progress."},
         {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
          "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
          "saved; captures default to them. E_STATE on a host that renders nothing."},
@@ -704,13 +704,6 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
         ctx.pop();
         return badParams(s);
     }
-    if (p.exposure && !(*p.exposure > 0.0f)) {
-        ctx.push("exposure");
-        ctx.error("E_RANGE", *ctx.doc.member(params, "exposure"), "exposure is out of range", "in (0, 64]",
-                  ctx.gotText(*ctx.doc.member(params, "exposure")));
-        ctx.pop();
-        return badParams(s);
-    }
     if (p.region && (p.region->size() != 4 || (*p.region)[2] < 1 || (*p.region)[3] < 1)) {
         ctx.push("region");
         ctx.error("E_COMMAND", *ctx.doc.member(params, "region"), "region is [x, y, w, h] with w and h at least 1",
@@ -746,7 +739,10 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     } else if (settings && settings->ssao) {
         r.post.emplace_back("ssao");
     }
-    r.exposure = p.exposure ? p.exposure : (settings ? std::optional<float>(settings->exposure) : std::nullopt);
+    r.ev100 = p.ev100 ? p.ev100 : (settings ? std::optional<float>(settings->ev100) : std::nullopt);
+    if (const std::optional<Tonemap> t = p.tonemap ? p.tonemap : (settings ? std::optional<Tonemap>(settings->tonemap)
+                                                                             : std::nullopt))
+        r.tonemap = *t == Tonemap::neutral ? "neutral" : "agx";
     const Quality quality = p.quality ? *p.quality : (settings ? settings->quality : Quality::realtime);
     if (quality == Quality::reference) r.quality = "reference";
     r.timings = p.timings;

@@ -218,7 +218,7 @@ Capture capture(const std::string& scenePath, bool clustered, int frames, bool p
         r.frames = frames;
         if (post) {
             r.post = {"taa", "ssao", "bloom"};
-            r.exposure = 1.0f;
+            r.ev100 = 0.0f;
         }
         r.path = png;
         const api::RenderOutcome o = host.capture(r);

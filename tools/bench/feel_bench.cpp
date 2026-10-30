@@ -116,7 +116,7 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
             pp->setSSAOEnabled(true);
-            pp->setExposure(1.0f);
+            pp->setEv100(0.0f);
         }
     }
 

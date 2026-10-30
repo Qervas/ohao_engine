@@ -527,7 +527,7 @@ MovingCapture taaCapture(const std::string& scene, bool moving) {
     r.width = kWidth;
     r.height = kHeight;
     r.post = {"taa"};
-    r.exposure = 0.03f;   // the mesh (radiance ~25) mid-range, not clipped: TAA's blend shows
+    r.ev100 = 4.8f;   // exposure 0.03: the mesh (radiance ~25) mid-range, not clipped: TAA's blend shows
     const std::string png = std::string(OHAO_SOURCE_DIR) + "/" + scratch("taa") + ".png";
     r.path = png;
     const api::RenderOutcome o = host.capture(r);

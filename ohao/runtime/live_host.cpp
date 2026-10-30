@@ -46,7 +46,8 @@ std::string_view modeName(RenderMode m) {
 // its own quality). A realtime capture is the next live frame, with the live settings.
 struct PostState {
     bool bloom{false}, taa{false}, ssao{false};
-    float exposure{1.0f};
+    float ev100{render::kDefaultEv100};
+    render::DisplayCurve curve{render::DisplayCurve::AgX};
 };
 
 } // namespace
@@ -64,7 +65,10 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     }
     m_renderer->setRenderMode(RenderMode::Deferred);
     if (auto* deferred = m_renderer->getDeferredRenderer())
-        if (auto* pp = deferred->getPostProcessing()) m_defaultExposure = pp->getExposure();
+        if (auto* pp = deferred->getPostProcessing()) {
+            m_defaultEv100 = pp->ev100();
+            m_defaultCurve = pp->displayCurve();
+        }
     if (cfg.mode != RenderMode::Deferred) {
         m_renderer->setRenderMode(cfg.mode);
         if (m_renderer->getRenderMode() != cfg.mode)
@@ -479,12 +483,13 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         }
         PostState live;
         auto* pp = m_renderer->getDeferredRenderer() ? m_renderer->getDeferredRenderer()->getPostProcessing() : nullptr;
-        if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->getExposure()};
+        if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->ev100(), pp->displayCurve()};
         const RenderQuality liveQuality = m_renderer->renderQuality();
         const DenoiseMode liveDenoise = m_renderer->getDenoiseMode();
         CaptureSettings settings;
         settings.reset = true;
-        settings.defaultExposure = m_defaultExposure;
+        settings.defaultEv100 = m_defaultEv100;
+        settings.defaultCurve = m_defaultCurve;
         // Every frame is presented: a path-traced capture's sample passes converge on screen.
         out = captureFrame(*m_renderer, *m_world, *m_assets, r, settings);
         if (!out.cancelled) ++m_readbackRequests;   // its last frame was requested (at most one)
@@ -493,7 +498,8 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
             pp->setBloomEnabled(live.bloom);
             pp->setTAAEnabled(live.taa);
             pp->setSSAOEnabled(live.ssao);
-            pp->setExposure(live.exposure);
+            pp->setEv100(live.ev100);
+            pp->setDisplayCurve(live.curve);
         }
         m_renderer->setRenderQuality(liveQuality);
         if (m_renderer->getDenoiseMode() != liveDenoise) m_renderer->setDenoiseMode(liveDenoise);

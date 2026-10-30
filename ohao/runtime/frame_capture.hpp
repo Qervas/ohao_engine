@@ -1,4 +1,6 @@
 #pragma once
+
+#include "render/display/display.hpp"
 // render.capture's one procedure, shared by the headless RenderHost (tools/ohao) and the
 // window's LiveHost, so a lockstep window capture and a headless capture of the same world
 // at the same size are the same pixels by construction:
@@ -23,7 +25,8 @@ namespace ohao::runtime {
 
 struct CaptureSettings {
     bool reset{true};               // false only for a renderer that has rendered nothing yet
-    float defaultExposure{0.6f};    // the exposure when the request names none
+    float defaultEv100{render::kDefaultEv100};   // the exposure when the request names none
+    render::DisplayCurve defaultCurve{render::DisplayCurve::AgX};   // likewise the curve
     std::vector<uint8_t>* keepPixels{nullptr};   // receives the whole frame read back (tests)
 };
 

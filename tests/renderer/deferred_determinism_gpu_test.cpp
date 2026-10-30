@@ -14,7 +14,7 @@
 // relies on it). Configurations: Cornell with post effects off, each effect alone and all
 // three (TAA, SSAO, bloom), Cornell over 8 frames and at reference quality (test 10, RT GI's
 // history and running mean), and the helmet room off and on (as its golden renders it: 30
-// frames, exposure 1). Test 12's RT part (sub-project 2b, step 5): Cornell path traced,
+// frames, EV100 0). Test 12's RT part (sub-project 2b, step 5): Cornell path traced,
 // offline and realtime (16 samples, no denoiser), under the same three comparisons, held to
 // the path tracer's BVH floor (at most 16 bytes, each off by 1) instead of bit identity; the
 // validation layer must report nothing for them either.
@@ -83,7 +83,7 @@ constexpr Config kConfigs[] = {
     {"cornell_reference", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[],"frames":4,"quality":"reference")"},
     {"helmet_plain", "assets/scenes/damaged_helmet.scene.json", "deferred", R"("post":[])"},
     {"helmet_post", "assets/scenes/damaged_helmet.scene.json", "deferred",
-     R"("post":["taa","ssao","bloom"],"frames":30,"exposure":1)"},
+     R"("post":["taa","ssao","bloom"],"frames":30,"ev100":0)"},
     // Test 12, RT part (sub-project 2b, step 5): the path tracer, offline and realtime, as the
     // RT goldens render it. Compared within the BVH floor (see rtWithinFloor), not exactly.
     {"cornell_rt_offline", "assets/scenes/cornell_box.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
@@ -91,16 +91,16 @@ constexpr Config kConfigs[] = {
     // Test 24 (sub-project 10, t24_deferred_determinism_skinned): a skinned instance (the rig
     // mid-wave): the skin pass, its bounds and the refit BLAS (RT shadows, RT GI, the tracer).
     {"anim_rig_plain", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":[])"},
-    {"anim_rig_post", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":["taa","ssao","bloom"],"frames":30,"exposure":1)"},
+    {"anim_rig_post", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":["taa","ssao","bloom"],"frames":30,"ev100":0)"},
     {"anim_rig_rt_offline", "assets/scenes/anim_rig.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
     // Test 32 (sub-project 12, t32_determinism): the transparency scene (blended panes, an
     // alpha-tested card, lit soft smoke and additive sparks at a fixed step), deferred with post and
     // path traced, and the play scene 45 steps into its fight with its effects.
     {"transparency_post", "assets/scenes/transparency.scene.json", "deferred",
-     R"("post":["taa","ssao","bloom"],"frames":10,"exposure":1)", 30},
+     R"("post":["taa","ssao","bloom"],"frames":10,"ev100":0)", 30},
     {"transparency_rt_offline", "assets/scenes/transparency.scene.json", "rt_offline", R"("spp":16,"denoise":"none")", 30},
     {"play_vfx_step45", "assets/scenes/blockout_play.scene.json", "deferred",
-     R"("post":["taa","ssao","bloom"],"frames":10,"exposure":1)", 45},
+     R"("post":["taa","ssao","bloom"],"frames":10,"ev100":0)", 45},
 };
 
 bool isRT(const Config& c) { return std::strcmp(c.mode, "deferred") != 0; }

@@ -406,11 +406,11 @@ in a window, after the first capture headless.
 `render_settings` reads the knobs that decide what a frame runs, and `set` changes them:
 `quality`, `rtShadows {enabled, maxLights 0–4}`, `rtGI {enabled, resolution half | full,
 rays 1–32}`, `ssao`, `ssr`, `sss`, `geometry` (`auto`, `meshlets`, `instances`),
-`occlusionCulling`, `csm {cascades 1–4, size 512–4096}`, `exposure`. A `set` merges (what
+`occlusionCulling`, `csm {cascades 1–4, size 512–4096}`, `ev100`, `tonemap`. A `set` merges (what
 it leaves out keeps its value), is checked against the limits before anything applies
 (`E_RANGE` with the member's path), and counts as a change. The defaults are the frame the
 budgets were set for. A pass turned off is not run, so it leaves the timings; captures take
-`post` (`ssao`), `exposure` and `quality` from the settings unless they name their own.
+`post` (`ssao`), `ev100`, `tonemap` and `quality` from the settings unless they name their own.
 Changing the GI resolution or the CSM size rebuilds those images (the device idles once);
 everything else applies on the next frame. `ohao run` scripts have no settings
 (`E_STATE`): its host renders nothing between captures.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/display/display.hpp"
+
 #include <optional>
 #include <array>
 #include "gpu/vulkan/swapchain.hpp"
@@ -272,7 +274,8 @@ public:
         bool occlusionCulling{true};
         uint32_t csmCascades{4};         // the CSM fallback (without RT shadows): 1-4
         uint32_t csmSize{2048};          // 512-4096
-        float exposure{0.6f};            // the post stack's; a fresh renderer starts here
+        float ev100{render::kDefaultEv100};   // the display transform's camera (EV100, ISO 100)
+        render::DisplayCurve tonemap{render::DisplayCurve::AgX};
         // render.settings vfx (sub-project 12): presentation switches for A/B captures, all on.
         bool vfxParticles{true};         // the lit particles
         bool vfxSoft{true};              // their soft fade against the scene's depth

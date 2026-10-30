@@ -64,27 +64,16 @@ std::vector<float> rgba32fToFloat3(std::span<const float> rgba, uint32_t width, 
     return rgb;
 }
 
-// ACES tonemapping
-static float aces(float x) {
-    float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
-    return std::clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0f, 1.0f);
-}
-
 std::vector<uint8_t> float3ToRGBA8(std::span<const float> rgb, uint32_t width, uint32_t height,
-                                   float exposure) {
+                                   float exposure, render::DisplayCurve curve) {
     const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
     std::vector<uint8_t> rgba8(pixelCount * 4u);
     for (size_t i = 0; i < pixelCount; i++) {
-        float r = aces(rgb[i * 3 + 0] * exposure);
-        float g = aces(rgb[i * 3 + 1] * exposure);
-        float b = aces(rgb[i * 3 + 2] * exposure);
-        // Gamma
-        r = std::pow(r, 1.0f / 2.2f);
-        g = std::pow(g, 1.0f / 2.2f);
-        b = std::pow(b, 1.0f / 2.2f);
-        rgba8[i * 4 + 0] = static_cast<uint8_t>(std::clamp(r * 255.0f, 0.0f, 255.0f));
-        rgba8[i * 4 + 1] = static_cast<uint8_t>(std::clamp(g * 255.0f, 0.0f, 255.0f));
-        rgba8[i * 4 + 2] = static_cast<uint8_t>(std::clamp(b * 255.0f, 0.0f, 255.0f));
+        float out[3];
+        render::displayPixel(&rgb[i * 3], exposure, curve, out);
+        rgba8[i * 4 + 0] = render::displayByte(out[0]);
+        rgba8[i * 4 + 1] = render::displayByte(out[1]);
+        rgba8[i * 4 + 2] = render::displayByte(out[2]);
         rgba8[i * 4 + 3] = 255;
     }
     return rgba8;
