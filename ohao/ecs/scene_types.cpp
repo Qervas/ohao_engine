@@ -519,12 +519,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<RenderSlot>("RenderSlot").component().runtime().host(makeComponentOps<RenderSlot>())
         .doc("The entity's instance slot in the GPU render scene. Owned by the render extract.")
         .field("slot", &RenderSlot::slot).doc("Instance slot index").unitless();
-    r.type<EmissiveProxyLight>("EmissiveProxyLight").component().runtime().host(makeComponentOps<EmissiveProxyLight>())
-        .doc("A point light approximating a mesh's emissive texture. Derived from the model.")
-        .field("localCenter", &EmissiveProxyLight::localCenter).doc("Center in the entity's model space").unit("m")
-        .field("radius", &EmissiveProxyLight::radius).doc("Emitter radius").unit("m")
-        .field("color", &EmissiveProxyLight::color).doc("Emitted color").unit("linear-rgb").color()
-        .field("intensity", &EmissiveProxyLight::intensity).doc("Brightness multiplier").unitless();
     r.type<CreationOrder>("CreationOrder").component().runtime().host(makeComponentOps<CreationOrder>())
         .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
         .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");

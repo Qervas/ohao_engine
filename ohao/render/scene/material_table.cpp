@@ -19,6 +19,7 @@ bool MaterialTable::initialize(GpuAllocator& allocator) {
     m_packs.reserve(kCapacity);
     m_doubleSided.reserve(kCapacity);
     m_alphaMode.reserve(kCapacity);
+    m_emissive.reserve(kCapacity);
     add(MaterialDesc{});   // index 0: the default material
     return true;
 }
@@ -29,6 +30,7 @@ void MaterialTable::shutdown() {
     m_packs.clear();
     m_doubleSided.clear();
     m_alphaMode.clear();
+    m_emissive.clear();
     m_dirty.clear();
     m_allocator = nullptr;
 }
@@ -60,6 +62,8 @@ MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
     m_packs.push_back(pack(desc));
     m_doubleSided.push_back(desc.doubleSided ? 1u : 0u);
     m_alphaMode.push_back(static_cast<uint8_t>(desc.alphaMode));
+    m_emissive.push_back(desc.emissiveStrength > 0.0f && glm::any(glm::greaterThan(desc.emissionColor, glm::vec3(0.0f))) ? 1u
+                                                                                                                       : 0u);
     m_dirty.insert(index);
     return MaterialHandle{index, 0};
 }

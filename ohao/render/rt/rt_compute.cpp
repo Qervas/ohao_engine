@@ -123,8 +123,8 @@ bool createComputePipeline(VkDevice device, const char* spirv, const char* entry
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     layoutInfo.pSetLayouts = setLayouts.data();
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushRange;
+    layoutInfo.pushConstantRangeCount = pushBytes > 0 ? 1u : 0u;   // a zero-size range is invalid
+    layoutInfo.pPushConstantRanges = pushBytes > 0 ? &pushRange : nullptr;
     VkResult result = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &layout);
     if (result == VK_SUCCESS) {
         VkComputePipelineCreateInfo ci{};

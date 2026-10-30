@@ -65,6 +65,8 @@ struct RenderScene::Impl {
     std::vector<VkAccelerationStructureInstanceKHR> tlasHost;
     std::set<uint32_t> tlasDirty;
     std::set<uint32_t> alphaSlots;   // live, visible instances with an alpha material (FORCE_NO_OPAQUE)
+    std::set<uint32_t> emissiveSlots;   // live, visible instances with an emissive material (emissiveInstances)
+    uint64_t emissiveVersion{0};
     bool tlasStructural{false};
 
     RenderSceneStats stats;
@@ -159,12 +161,14 @@ struct RenderScene::Impl {
         // non-opaque to every ray (the BLAS is per mesh and opaque), so ray queries see its
         // triangles as candidates and test them by their own material (rt/alpha_test.slang,
         // the path tracer's any-hit); one whose every material is blended is seen by camera rays only.
-        bool anyAlpha = false, allBlend = g.materialRefCount > 0;
+        bool anyAlpha = false, allBlend = g.materialRefCount > 0, anyEmissive = false;
         if ((g.flags & (kInstanceEmitter | kInstanceViewModel)) == 0)
             for (uint32_t k = 0; k < g.materialRefCount; ++k) {
-                const AlphaMode a = materials.alphaMode(instances.materialIndexFor(slot, k));
+                const uint32_t material = instances.materialIndexFor(slot, k);
+                const AlphaMode a = materials.alphaMode(material);
                 anyAlpha = anyAlpha || a != AlphaMode::Opaque;
                 allBlend = allBlend && a == AlphaMode::Blend;
+                anyEmissive = anyEmissive || materials.emissive(material);
             }
         else
             allBlend = false;
@@ -182,6 +186,10 @@ struct RenderScene::Impl {
         // The path tracer forces opacity on its rays while no instance has an alpha material.
         if (anyAlpha && visible) alphaSlots.insert(slot);
         else alphaSlots.erase(slot);
+        // The path tracer samples an emissive instance's triangles as lights.
+        const bool emits = anyEmissive && visible && mesh != nullptr && !allBlend;
+        if (emits ? emissiveSlots.insert(slot).second : emissiveSlots.erase(slot) > 0) ++emissiveVersion;
+        else if (emits && structural) ++emissiveVersion;   // a reused slot: another mesh
         lights.setAlphaRays(!alphaSlots.empty());
 
         VkAccelerationStructureInstanceKHR& cur = tlasHost[slot];
@@ -413,10 +421,10 @@ struct RenderScene::Impl {
         std::vector<glm::mat4> motion;   // each emitter's light's lastFrameMotion
         std::vector<uint32_t> rtIndex;   // its light's index in the path tracer's light buffer
         spotEmitters = false;
-        uint32_t rt = 0;   // the RT light buffer holds every light but emissive proxies, in this order
+        uint32_t rt = 0;   // the RT light buffer holds every light but flashes, in this order
         if (emittersEnabled)
             for (const LightDesc& d : lights.descs()) {
-                if (d.kind == LightKind::EmissiveProxy) continue;
+                if (d.kind == LightKind::Flash) continue;
                 if (const auto e = lightEmitter(d, viewer)) {
                     want.push_back(*e);
                     motion.push_back(d.lastFrameMotion);
@@ -762,6 +770,59 @@ void RenderScene::setTransientLights(std::span<const LightDesc> lights) {
     m->setLightTable();
     m->syncEmitters();
 }
+
+std::vector<RenderScene::EmissiveInstance> RenderScene::emissiveInstances() const {
+    std::vector<EmissiveInstance> out;
+    if (!m->initialized) return out;
+    out.reserve(m->emissiveSlots.size());
+    for (const uint32_t slot : m->emissiveSlots) {
+        const MeshInfo* mesh = m->meshes.info(MeshHandle{m->instances.gpu(slot).mesh, 0});
+        if (mesh && mesh->indexCount >= 3) out.push_back({slot, mesh->indexCount / 3});
+    }
+    return out;
+}
+
+float RenderScene::analyticLightPower() const {
+    if (!m->initialized) return 0.0f;
+    constexpr double kPi = 3.14159265358979323846;
+    double radius = -1.0;   // the scene's, computed on the first sun
+    double power = 0.0;
+    for (const LightDesc& d : m->lights.descs()) {
+        const double i = std::max(0.0, double(d.intensity)) *
+                         (0.2126 * d.color.r + 0.7152 * d.color.g + 0.0722 * d.color.b);
+        switch (d.kind) {
+            case LightKind::Point: power += 4.0 * kPi * i; break;
+            case LightKind::Spot:
+                power += 2.0 * kPi * (1.0 - std::cos(glm::radians(double(d.outerConeDeg)))) * i;
+                break;
+            case LightKind::AreaRect: {
+                const double area = glm::length(glm::cross(glm::dvec3(d.areaEdge1), glm::dvec3(d.areaEdge2)));
+                const double r = std::max(double(d.radius), 0.01);
+                power += kPi * (i / (4.0 * kPi * r * r)) * area;   // radiance I / (4 pi r^2), one-sided
+                break;
+            }
+            case LightKind::Directional: {
+                if (radius < 0.0) {
+                    glm::dvec3 lo(1e30), hi(-1e30);
+                    for (const Draw& dr : draws()) {
+                        if (dr.emitter || dr.viewModel) continue;
+                        lo = glm::min(lo, glm::dvec3(dr.aabbMin));
+                        hi = glm::max(hi, glm::dvec3(dr.aabbMax));
+                    }
+                    radius = hi.x >= lo.x ? 0.5 * glm::length(hi - lo) : 1.0;
+                }
+                power += kPi * radius * radius * i;
+                break;
+            }
+            case LightKind::Flash: break;   // not the path tracer's
+        }
+    }
+    return static_cast<float>(power);
+}
+
+uint64_t RenderScene::emissiveVersion() const { return m->initialized ? m->emissiveVersion : 0; }
+
+uint32_t RenderScene::instanceSlotEnd() const { return m->initialized ? m->instances.highWater() : 0; }
 
 bool RenderScene::hasDirectionalLight() const {
     if (!m->initialized) return false;

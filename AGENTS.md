@@ -429,7 +429,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `BodyInterface`. `PhysicsWorld(cfg)`, `stepOnce()` not `step(dt)`; bodies need a shape.
 - `ohao::physics::math::AABB` is (center, halfExtents); render bounds (`MeshInfo`,
   `DrawRecord`) are (min, max). A box passed between them needs converting.
-- ECS writes: `Transform`, `MeshRenderer`, `Light` and `EmissiveProxyLight` reach the
+- ECS writes: `Transform`, `MeshRenderer` and `Light` reach the
   renderer only through `registry.patch<T>()` /
   `replace<T>()` (or emplace/remove). A write through `get<T>()` is never seen.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
@@ -629,6 +629,25 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   a staging buffer with the map. Keep the draw a continuous warp: an alias table was 1.1 ms faster
   but scattered neighbouring Sobol points across the map, 14% more error at 16 samples. A view of a 1080p render through an image tool may be palette-reduced and look
   posterized; judge renders from crops or pixel statistics.
+- **Emission is light** (frontier F3, ruling F-R7; `render/rt/emissive_lights.*`). Every triangle of an
+  emissive material (`MaterialTable::emissive`: emission colour and luminance above 0) is a light of the
+  path tracer: the `emissive.lights` pass (before `pt.cache.update`) writes each one's world corners, uvs
+  and material (`rt/emissive_collect.slang`, bindings 42 and 45) and its power, pi x luminance x area
+  with the emissive texture's mean over it (one sample at the uv centroid at the mip matching its uv
+  area, RTXDI's estimate), into an R32F image whose mips sum 2x2 (`rt/emissive_reduce.slang`, binding
+  43). A light sample picks the analytic lights or the triangles by power (`analyticShare`: the analytic
+  lights' power, `RenderScene::analyticLightPower`, over the whole), a triangle by descending the mips,
+  then a point uniformly on it; a BSDF ray that hits an emissive triangle (`kHitEmissive`, its light
+  index `emissiveFirst[InstanceID()] + PrimitiveIndex()`) is weighed against that by the power
+  heuristic. A triangle whose estimate is 0 is never drawn, and its BSDF hits count in full, so an
+  estimate only moves noise, never the mean. Light samples are drawn from the shadow ray's origin:
+  drawn from the shading point, a triangle in the surface's own plane was taken as facing it. The
+  deferred frame has no emissive lights of its own: its emissive surfaces light the room through RT
+  GI's bounce (which brings back what a hit emits); there is no proxy light. `check_analytic`'s
+  `emissive_quad` holds both renderers to a rectangle's form factor (deferred at reference quality;
+  realtime GI's denoiser gives x0.85, a gap for F5). Selection by power ignores distance: the
+  helmet's emissive panels draw samples from its point lights (F4's ReSTIR DI chooses by what each
+  light gives the point).
 - **The radiance cache** (frontier F1 T3, `shaders/rt/radiance_cache.slang`, `render/rt/radiance_cache.*`;
   SHaRC's design, our code: RTXGI's licence bars shipping its source in this MIT repo). The realtime
   profile ends a path at a vertex past the first in a world-space hash grid of reflected radiance
@@ -636,15 +655,17 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   surface faces) when the segment is a voxel long and the last lobe spreads over the voxel; a
   sparse update trace (`cacheUpdate`, 1 pixel in 5x5) fills it every frame and a resolve pass blends
   and evicts. **Integers only**: radiance is summed x1024 by `InterlockedAdd` (no float atomics; the
-  sum is order-free, so two runs give the same bits) and `resetAccumulation` empties it, so a
-  capture repeats in any host. The offline profile never reads it (its slot holds one entry: the
+  sum is order-free, so two captures in one process give the same bits) and `resetAccumulation`
+  empties it, so a capture repeats in any host up to the BVH floor (below): across processes an
+  ulp moved at a shared edge can flip one sum's rounding, and the cache spreads it over the frame
+  (about 1 run in 10 on the closed box, 0.25% mean; `check_material` repeats in one process). The offline profile never reads it (its slot holds one entry: the
   shaders bind it either way). The realtime closed box reaches its closed form within 3%
   (`check_material`); realtime Cornell is within 0.3% of the reference. Push constants are shared by
   the bind points: anything recorded between pushing the trace's constants and tracing that pushes
   its own (the resolve) must push the trace's again. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
   weighs it by the light's index in `InstanceGpu.emitterLight.w`; a light without a mesh (a
   point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
-  full weight. Emissive proxies are not path tracer lights (the surfaces are). `--bounces N`
+  full weight. `--bounces N`
   (`render.capture {bounces}`) for the referee: 0 direct light only. The realtime profile is the
   same tracer at 2 bounces with NRD by default, and `check_material.py` holds it to the same closed
   forms. **Two clocks:** the trace's running mean (`pc.control.y` frames) restarts when the view

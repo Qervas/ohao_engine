@@ -176,7 +176,6 @@ private:
     struct MeshEntry {
         render::MeshHandle mesh;
         std::vector<render::MaterialHandle> modelMaterials;   // non-empty: the model has materials
-        std::optional<EmissiveProxyLight> emissive;
         uint32_t users{0};
     };
 
@@ -199,8 +198,6 @@ private:
             if (!entry.mesh.valid())
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' could not be uploaded to the render scene");
             if (!model->materialColors.empty()) entry.modelMaterials = m_backend->modelMaterials(*model);
-            if (const auto proxy = render::emissiveProxy(*model))
-                entry.emissive = EmissiveProxyLight{proxy->localCenter, proxy->radius, proxy->color, proxy->intensity};
             it = m_meshes.emplace(std::move(key), std::move(entry)).first;
         }
         MeshEntry& entry = it->second;
@@ -219,8 +216,6 @@ private:
         const auto* previous = m_reg.try_get<MeshRenderer>(e);
         const bool visible = previous ? previous->visible : true;
         m_reg.emplace_or_replace<MeshRenderer>(e, MeshRenderer{entry.mesh, std::move(materials), visible});
-        if (entry.emissive) m_reg.emplace_or_replace<EmissiveProxyLight>(e, *entry.emissive);
-        else m_reg.remove<EmissiveProxyLight>(e);
         m_reg.remove<InstantiateError>(e);
     }
 
@@ -252,7 +247,6 @@ private:
     // What instantiate put on the entity.
     void clearDerived(entt::entity e) {
         m_reg.remove<MeshRenderer>(e);
-        m_reg.remove<EmissiveProxyLight>(e);
         m_reg.remove<InstantiateError>(e);
     }
 

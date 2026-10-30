@@ -1,6 +1,5 @@
 #pragma once
-// Instantiate: builds each entity's MeshRenderer (plus the derived
-// EmissiveProxyLight) from its MeshSource and Material, so scene files and
+// Instantiate: builds each entity's MeshRenderer from its MeshSource and Material, so scene files and
 // commands describe meshes as data. The same data path as spawnModel.
 //
 //   - Trigger: constructing or replacing MeshSource or Material tags the entity

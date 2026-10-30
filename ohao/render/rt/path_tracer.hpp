@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/display/display.hpp"
+#include "render/rt/emissive_lights.hpp"
 
 // Path Tracer — full Vulkan RT pipeline that replaces rasterization entirely.
 //
@@ -284,6 +285,12 @@ private:
     // The radiance cache (bindings 39-41): full size for the realtime profile, which ends its paths
     // in it, one cell otherwise (the shaders bind it either way). setRadianceCacheCapacity before init.
     render::RadianceCache m_radianceCache;
+    // The emissive triangle lights (bindings 42-45), from the scene's emissive instances.
+    render::EmissiveLights m_emissive;
+    std::vector<render::RenderScene::EmissiveInstance> m_emissiveInstances;
+    uint64_t m_emissiveVersion = 0;
+    uint32_t m_instanceSlotEnd = 0;
+    float m_analyticLightPower = 0.0f;
     render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's
     float m_displayExposure{render::displayExposure(render::kDefaultEv100)};
     render::DisplayCurve m_displayCurve{render::DisplayCurve::AgX};

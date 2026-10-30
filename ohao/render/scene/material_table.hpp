@@ -32,6 +32,11 @@ public:
     [[nodiscard]] AlphaMode alphaMode(uint32_t index) const noexcept {
         return index < m_alphaMode.size() ? static_cast<AlphaMode>(m_alphaMode[index]) : AlphaMode::Opaque;
     }
+    // Host copy of whether a material emits (emission colour x luminance above 0): its triangles
+    // are the path tracer's emissive lights (render/rt/emissive_lights.hpp).
+    [[nodiscard]] bool emissive(uint32_t index) const noexcept {
+        return index < m_emissive.size() && m_emissive[index] != 0;
+    }
     [[nodiscard]] static Pack pack(const MaterialDesc& desc);
 
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept { return m_dirty.size() * sizeof(Pack); }
@@ -45,6 +50,7 @@ private:
     std::vector<Pack> m_packs;
     std::vector<uint8_t> m_doubleSided;   // host only: the draw table's face-culling flag
     std::vector<uint8_t> m_alphaMode;     // host only: AlphaMode
+    std::vector<uint8_t> m_emissive;      // host only: emits
     std::set<uint32_t> m_dirty;
 };
 

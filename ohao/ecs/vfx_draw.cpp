@@ -26,14 +26,14 @@ glm::mat4 drawnWorld(const entt::registry& reg, entt::entity e) {
     return glm::mat4(1.0f);
 }
 
-// A flash as a light of the raster table: an EmissiveProxy (a light with no mesh, which is what a
+// A flash as a light of the raster table: LightKind::Flash (a light with no mesh, which is what a
 // flash is), whose range the table takes as its radius times 10 (light_table.cpp). Shadowless.
 std::vector<render::LightDesc> flashLights(const render::VfxFrame& frame) {
     std::vector<render::LightDesc> out;
     out.reserve(frame.lights.size());
     for (const render::VfxFrameLight& l : frame.lights) {
         render::LightDesc d{};
-        d.kind = render::LightKind::EmissiveProxy;
+        d.kind = render::LightKind::Flash;
         d.position = l.position;
         d.color = l.color;
         d.intensity = l.intensity;

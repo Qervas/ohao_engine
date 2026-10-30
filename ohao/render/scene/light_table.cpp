@@ -80,7 +80,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
     m_shadowLights.clear();
     m_shadowCastersWithoutChannel = 0;
     for (const LightDesc& d : sorted) {
-        if (d.kind == LightKind::EmissiveProxy) continue;
+        if (d.kind == LightKind::Flash) continue;
         if (raster.size() >= MAX_LIGHTS) break;
 
         LightData light{};
@@ -124,15 +124,15 @@ void LightTable::set(std::span<const LightDesc> lights) {
         light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }
-    // Emissive mesh lights after the regular ones (was m_cachedEmissiveLights).
+    // Flashes after the scene's lights.
     for (const LightDesc& d : sorted) {
-        if (d.kind != LightKind::EmissiveProxy) continue;
+        if (d.kind != LightKind::Flash) continue;
         if (raster.size() >= MAX_LIGHTS) break;
         LightData light{};
         light.position = glm::vec4(d.position, 1.0f);  // type 1 = point light
         light.direction = glm::vec4(0, -1, 0, d.radius * 10.0f);
         light.color = glm::vec4(d.color, d.intensity);
-        light.params = glm::vec4(0.0f, 0.0f, 0.0f, kShadowNever);   // inside its own mesh: never shadowed; a point
+        light.params = glm::vec4(0.0f, 0.0f, 0.0f, kShadowNever);   // a flash: never shadowed; a point
         light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }
@@ -148,7 +148,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
     // ---- RT (ported from VulkanRenderer::uploadLightBuffer) --------------------
     std::vector<GPULight> gpuLights;
     for (const LightDesc& d : sorted) {
-        if (d.kind == LightKind::EmissiveProxy) continue;
+        if (d.kind == LightKind::Flash) continue;
         // LightKind Point/Directional/Spot/AreaRect = GPULight type 0/1/2/3
         GPULight gl{};
         gl.positionAndType = glm::vec4(d.position, static_cast<float>(static_cast<uint32_t>(d.kind)));
@@ -173,8 +173,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
         }
         gpuLights.push_back(gl);
     }
-    // Emissive proxies stand for emissive surfaces in the raster frame only: the path tracer
-    // meets the surfaces themselves, and a proxy light beside them would count their light twice.
+    // Flashes are the raster frame's only (LightKind::Flash): the path tracer never sees them.
     if (gpuLights.size() > MAX_GPU_LIGHTS) {
         static bool logged = false;
         if (!logged) {

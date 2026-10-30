@@ -194,7 +194,7 @@
        {"name": "extent", "type": "uint4", "doc": "x width, y height, z lights, w history frames (0: none)"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset: the output's dither"}
      ]},
-    {"name": "GILight", "doc": "one light as RT GI's bounce sees it (a storage buffer of every raster light but emissive proxies), attenuated as the lighting pass attenuates it",
+    {"name": "GILight", "doc": "one light as RT GI's bounce sees it (a storage buffer of every raster light but flashes), attenuated as the lighting pass attenuates it",
      "fields": [
        {"name": "positionAndType", "type": "float4", "doc": "xyz position (a rect: its centre); w type: 0 directional, 1 point, 2 spot"},
        {"name": "directionAndRange", "type": "float4", "doc": "xyz the unit direction the light travels (directional, spot); w the range"},

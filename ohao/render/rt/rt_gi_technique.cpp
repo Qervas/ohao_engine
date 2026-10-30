@@ -306,13 +306,13 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     m_cameraPos = input.cameraPos;
     if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
 
-    // The bounce's lights: every light that gives any, emissive proxies out (the emissive surface
-    // they stand for is not in the bounce), in scene order, each with its share of power (the
-    // luminance of colour times intensity) and the alias table the trace draws candidates by.
+    // The bounce's lights: every light that gives any, flashes out (an effect's light, raster only),
+    // in scene order, each with its share of power (the luminance of colour times intensity) and the
+    // alias table the trace draws candidates by.
     std::vector<shared::GILight> bounce;
     std::vector<double> power;
     for (const render::LightDesc& d : input.lights) {
-        if (d.kind == render::LightKind::EmissiveProxy) continue;
+        if (d.kind == render::LightKind::Flash) continue;
         const shared::GILight g = toGpu(d);
         const double p = 0.2126 * g.radiance[0] + 0.7152 * g.radiance[1] + 0.0722 * g.radiance[2];
         if (!(p > 0.0)) continue;

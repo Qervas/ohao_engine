@@ -16,7 +16,7 @@
 // A ray that hits a surface brings back that surface's emission and its OpenPBR albedo (its
 // material resolved at the hit's uv, rt/alpha_test.slang's hitMaterial) over pi, times the direct
 // light the hit receives from the frame's
-// lights (every raster light but emissive proxies), attenuated as the lighting pass attenuates
+// lights (every raster light but flashes), attenuated as the lighting pass attenuates
 // them, the hit's normal taken as facing the ray, and shadowed: one light, chosen in proportion to
 // what it would give, gets a shadow ray (directAt). Without it a hit in shadow bounced full light, and
 // every surface facing a shadowed floor (an underside, a rim) glowed. A ray that leaves the scene

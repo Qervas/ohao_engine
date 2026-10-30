@@ -60,7 +60,7 @@ bool PathTracer::createDescriptorResources() {
     add(7, IMAGE, RGEN);    // normal AOV (RGBA32F)
     add(8, BUFFER, HIT);    // mesh table (MeshGpu)
     add(9, BUFFER, HIT);    // triangle material slots
-    add(10, BUFFER, HIT);   // material table (3 vec4s per material)
+    add(10, BUFFER, RGEN | HIT);   // material table (kMaterialRows float4s a material; the raygen reads emissive lights')
     add(11, BUFFER, RGEN | MISS);   // RT lights: header {count, envTexIdx, envIntensity} + GPULight[]
     // Bindless textures (closest-hit, any-hit, miss for the env map), the table's whole
     // capacity. Not a variable count: that flag is only legal on a layout's highest binding
@@ -83,6 +83,10 @@ bool PathTracer::createDescriptorResources() {
     add(39, BUFFER, RGEN);  // the radiance cache: keys,
     add(40, BUFFER, RGEN);  // this frame's sums,
     add(41, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)
+    add(42, BUFFER, RGEN);  // the emissive triangle lights (render/rt/emissive_lights.hpp),
+    add(43, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RGEN);   // their power image (every level),
+    add(44, BUFFER, RGEN);  // their header and instance ranges,
+    add(45, BUFFER, HIT);   // each instance slot's first light (a bounce that meets one)
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -104,7 +108,8 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 * kSets},   // the emissive lights' power 43
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
 
@@ -112,7 +117,7 @@ bool PathTracer::createDescriptorResources() {
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = kSets;
-    poolInfo.poolSizeCount = 4;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
     poolInfo.pPoolSizes = poolSizes;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)

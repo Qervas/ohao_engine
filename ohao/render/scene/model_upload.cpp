@@ -97,55 +97,6 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
 } // namespace
 
 
-std::optional<EmissiveProxy> emissiveProxy(const Model& model) {
-    for (std::size_t mi = 0; mi < model.materialEmissiveTexIndex.size(); ++mi) {
-        if (model.materialEmissiveTexIndex[mi] < 0) continue;
-
-        glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
-        for (const auto& v : model.vertices) {
-            bmin = glm::min(bmin, v.position);
-            bmax = glm::max(bmax, v.position);
-        }
-        const glm::vec3 center = (bmin + bmax) * 0.5f;
-        const float radius = glm::length(bmax - bmin) * 0.3f;
-
-        glm::vec3 emColor(1.0f);
-        float totalPower = 0.0f;
-        const int eTexIdx = model.materialEmissiveTexIndex[mi];
-        if (eTexIdx < static_cast<int>(model.emissiveTextures.size())) {
-            const auto& etd = model.emissiveTextures[static_cast<std::size_t>(eTexIdx)];
-            if (texelsPresent(etd)) {
-                double r = 0, g = 0, b = 0;
-                int brightPixels = 0;
-                for (int p = 0; p < etd.width * etd.height; p++) {
-                    const float pr = etd.pixels[p * 4 + 0] / 255.0f;
-                    const float pg = etd.pixels[p * 4 + 1] / 255.0f;
-                    const float pb = etd.pixels[p * 4 + 2] / 255.0f;
-                    const float lum = pr * 0.2126f + pg * 0.7152f + pb * 0.0722f;
-                    if (lum > 0.05f) {
-                        r += pr; g += pg; b += pb;
-                        brightPixels++;
-                        totalPower += lum;
-                    }
-                }
-                if (brightPixels > 0)
-                    emColor = glm::vec3(r / brightPixels, g / brightPixels, b / brightPixels);
-            }
-        }
-
-        if (totalPower > 0.1f) {
-            EmissiveProxy light;
-            light.localCenter = center;
-            light.radius = radius;   // range = radius * 10 is applied by the light table
-            light.color = emColor;
-            light.intensity = std::min(totalPower * 0.1f, 20.0f);
-            return light;
-        }
-        return std::nullopt;   // one light per model: only the first emissive material counts
-    }
-    return std::nullopt;
-}
-
 MeshHandle uploadModelMesh(RenderScene& scene, const Model& model, std::string_view debugName) {
     const uint32_t triangleCount = static_cast<uint32_t>(model.indices.size() / 3);
 
@@ -203,7 +154,6 @@ UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, 
     const std::vector<MaterialDesc> mats = modelMaterials(textures, model, overrideMaterial);
     out.materials.reserve(mats.size());
     for (const auto& m : mats) out.materials.push_back(scene.registerMaterial(m));
-    out.emissive = emissiveProxy(model);
     return out;
 }
 

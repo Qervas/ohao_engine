@@ -273,7 +273,6 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<WorldTransform>(r, checked);
     ok &= complete<MeshRenderer>(r, checked);
     ok &= complete<RenderSlot>(r, checked);
-    ok &= complete<EmissiveProxyLight>(r, checked);
     ok &= complete<CreationOrder>(r, checked);
     ok &= complete<PreservedComponent>(r, checked);
     ok &= complete<PreservedComponents>(r, checked);
@@ -356,7 +355,7 @@ static void t01_authoring_and_runtime_split() {
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
     for (const char* derived : {"Children", "WorldTransform", "MeshRenderer", "RenderSlot",
-                                "EmissiveProxyLight", "CreationOrder", "LevelNode",
+                                "CreationOrder", "LevelNode",
                                 "ColliderPart", "CollisionMesh", "PhysicsBody", "PlayerState", "BodyMotion"}) {
         const auto* t = r.find(derived);
         CHECK(t && !t->serialized, "runtime components are never saved");

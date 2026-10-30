@@ -403,7 +403,9 @@ static void model_materials_become_submeshes_and_materials() {
     CHECK(r.renderScene().draws().size() == 2, "one draw per submesh");
 }
 
-static void emissive_texture_yields_a_proxy_light() {
+// An emissive model is light through its triangles (the path tracer's emissive lights, RT GI's
+// bounce): it adds nothing to the raster light table (frontier F3 retired the proxy point light).
+static void emissive_texture_adds_no_raster_light() {
     ohao::VulkanRenderer r(64, 64);
     if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
     World w;
@@ -418,19 +420,10 @@ static void emissive_texture_yields_a_proxy_light() {
     m.materialTextureIndex = {0};
     m.materialEmissiveTexIndex = {0};
     SpawnedModel up = ohao::ecs::uploadModel(r.renderScene(), r.getTextureManager(), m, "em");
-    CHECK(up.emissive.has_value(), "a bright emissive texture makes a proxy light");
-    // 16 white pixels: lum 1 each -> totalPower 16 -> intensity 1.6 (cacheEmissiveLights).
-    CHECK(std::fabs(up.emissive->intensity - 1.6f) < 1e-5f, "intensity = min(power * 0.1, 20)");
-    CHECK(glm::length(up.emissive->localCenter - glm::vec3(1, 0, 1)) < 1e-6f, "center = model AABB center");
-    CHECK(std::fabs(up.emissive->radius - glm::length(glm::vec3(2, 0, 2)) * 0.3f) < 1e-6f, "radius = 0.3 * diagonal");
     auto e = w.create("em", Transform{{0, 5, 0}});
     w.registry().emplace<MeshRenderer>(e, MeshRenderer{up.mesh, up.materials, true});
-    w.registry().emplace<EmissiveProxyLight>(e, *up.emissive);
     w.update(0.0f);
-    auto lights = r.renderScene().rasterLights();
-    CHECK(lights.size() == 1 && std::fabs(lights[0].position.y - 5.0f) < 1e-5f &&
-              std::fabs(lights[0].direction.w - up.emissive->radius * 10.0f) < 1e-5f,
-          "the proxy is placed by the entity's world matrix, range = radius * 10");
+    CHECK(r.renderScene().rasterLights().empty(), "an emissive model adds no light to the raster table");
 }
 
 // The renderer's shutdown() keeps the RenderScene object alive (inert) until the
@@ -887,7 +880,7 @@ int main(int argc, char** argv) {
     RUN(lights_follow_transforms_in_creation_order);
     RUN(rendering_keeps_ecs_lights);
     RUN(model_materials_become_submeshes_and_materials);
-    RUN(emissive_texture_yields_a_proxy_light);
+    RUN(emissive_texture_adds_no_raster_light);
     RUN(unknown_mesh_handles_are_skipped_not_fatal);
     RUN(world_outlives_an_explicit_renderer_shutdown);
     return ohao::test::finish("ecs_tests");

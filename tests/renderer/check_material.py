@@ -12,7 +12,9 @@ emitting Le, the camera inside, no lights. Every point's radiance is Le / (1 - r
 bounce. With N bounces (0: direct light only, which here is the walls' light reflected once) it is
 Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the reference's bounces),
 1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces, then the
-radiance cache) 2 within 3%, the same bits run twice. Deferred: RT GI's one bounce (its rays bring back what the
+radiance cache) 2 within 3%, the same bits captured twice in one process (across processes the driver
+may build the BVH differently: a ray on a shared edge takes either triangle, its hit moves by an ulp,
+and since emissive triangles are lights (F3) that can change the cache's integer sums). Deferred: RT GI's one bounce (its rays bring back what the
 walls emit, rt/gi_trace.slang) gives 1.5, the path tracer's --bounces 0, within 2% (32 frames)
 
   python tests/renderer/check_material.py   # exit 0 pass, 1 fail; last line the JSON summary
@@ -63,6 +65,24 @@ def capture(name, scene, mode, args):
     if r.returncode != 0:
         return None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:])
     return read_pfm(os.path.join(ROOT, "%s.%s.pfm" % (rel, mode))), None
+
+
+def capture_twice(name, scene, mode, spp):
+    # Two captures of one world in one process, through a script.
+    rel = "%s/%s" % (OUT, name)
+    with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
+        json.dump(scene, f, indent=1)
+    with open(os.path.join(ROOT, rel + ".jsonl"), "w", newline="\n") as f:
+        for tag in "ab":
+            f.write(json.dumps({"method": "render.capture",
+                                "params": {"path": "%s_%s.png" % (rel, tag), "hdr": "%s_%s.pfm" % (rel, tag),
+                                           "mode": mode, "spp": spp, "denoise": "none", "width": W,
+                                           "height": H}}) + "\n")
+    r = subprocess.run([OHAO, "run", rel + ".scene.json", "--script", rel + ".jsonl"], cwd=ROOT,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:])
+    return (read_pfm(os.path.join(ROOT, rel + "_a.pfm")), read_pfm(os.path.join(ROOT, rel + "_b.pfm")), None)
 
 
 def furnace_scene(material):
@@ -161,14 +181,14 @@ def closed_box(failures, results):
                                                                           "ok" if ok else "FAIL"))
         if not ok:
             failures.append("closed box, bounces %s: x%.4f of %.4f" % (tag, ratio, expected))
-    # The cache sums integers and is emptied by the capture's reset: two runs are the same bits.
+    # The cache sums integers and is emptied by the capture's reset: two captures in one process (one
+    # BVH) are the same bits.
     checks += 1
-    a, err_a = capture("box_repeat_a", box_scene(rho, le), "rt_realtime", ["--spp", "16", "--denoise", "none"])
-    b, err_b = capture("box_repeat_b", box_scene(rho, le), "rt_realtime", ["--spp", "16", "--denoise", "none"])
+    a, b, err = capture_twice("box_repeat", box_scene(rho, le), "rt_realtime", 16)
     same = a is not None and b is not None and np.array_equal(a, b)
     print("closed box  realtime twice: %s" % ("the same bits" if same else "DIFFERENT"))
     if not same:
-        failures.append("closed box, realtime run twice: %s" % (err_a or err_b or "different images"))
+        failures.append("closed box, realtime captured twice: %s" % (err or "different images"))
     checks += 1
     expected = le * (1 + rho)
     img, err = capture("box_deferred", box_scene(rho, le), "deferred", ["--frames", "32"])

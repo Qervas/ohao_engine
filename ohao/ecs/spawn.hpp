@@ -19,18 +19,16 @@ struct SpawnedModel {
     render::MeshHandle mesh;
     // Indexed by the model's material index (= SubmeshDesc::materialSlot).
     std::vector<render::MaterialHandle> materials;
-    std::optional<EmissiveProxyLight> emissive;
 };
 
-// render::uploadModel (render/scene/model_upload.hpp) with the emissive proxy as an
-// ECS component. See there for the material/texture/submesh derivation rules.
+// render::uploadModel (render/scene/model_upload.hpp). See there for the material/texture/submesh
+// derivation rules.
 SpawnedModel uploadModel(render::RenderScene& scene, BindlessTextureManager* textures,
                          const Model& model, std::string_view debugName,
                          const render::MaterialDesc* overrideMaterial = nullptr);
 
-// uploadModel, then MeshRenderer and (when the model has a bright
-// emissive texture) EmissiveProxyLight on `e`. An in-memory model: the entity has no
-// MeshSource, so it saves without a mesh (W_UNSAVEABLE_MESH).
+// uploadModel, then MeshRenderer on `e`. An in-memory model: the entity has no MeshSource, so it
+// saves without a mesh (W_UNSAVEABLE_MESH).
 void attachModel(World& world, entt::entity e, render::RenderScene& scene, BindlessTextureManager* textures,
                  const Model& model, std::string_view debugName,
                  const render::MaterialDesc* overrideMaterial = nullptr);

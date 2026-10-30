@@ -61,6 +61,11 @@ import display.display;
 [[vk::binding(39, 0)]] RWStructuredBuffer<uint> cacheKeys;      // the radiance cache (rt/radiance_cache.slang)
 [[vk::binding(40, 0)]] RWStructuredBuffer<uint4> cacheAccum;
 [[vk::binding(41, 0)]] RWStructuredBuffer<uint4> cacheResolved;
+// The emissive triangle lights (render/rt/emissive_lights.hpp, built by emissive.lights each frame).
+[[vk::binding(42, 0)]] StructuredBuffer<uint4> emissiveLights;    // 4 rows a light (bits: the material an index)
+[[vk::binding(43, 0)]] Texture2D<float> emissivePower;            // power by light, every level summed 2x2
+[[vk::binding(44, 0)]] StructuredBuffer<uint4> emissiveRanges;    // [0] (N, S, levels, R), [1].x the analytic lights' power (bits)
+[[vk::binding(45, 0)]] StructuredBuffer<uint> emissiveFirst;      // per instance slot: its first light, ~0 none
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -89,6 +94,7 @@ static const uint kNoTex = 0xFFFFFFFFu;
 
 static const uint kHit = 1u;
 static const uint kHitEmitter = 2u;
+static const uint kHitEmissive = 4u;   // an emissive triangle light (payload.light its index)
 
 // What a ray brings back: a surface's place and its OpenPBR inputs (resolved from its material
 // and textures by the closest hit), a light's emitter (its light), or nothing (a miss).
@@ -99,7 +105,7 @@ struct PathPayload
     float3 geoNormal;      // facing the ray
     uint flags;
     float3 normal;         // shading, facing the ray's side
-    uint light;            // an emitter's light index
+    uint light;            // an emitter's light index, or an emissive triangle's (kHitEmissive)
     float3 baseColor;
     float baseWeight;
     float3 specularColor;
@@ -231,7 +237,133 @@ struct LightSample
     bool valid;
 };
 
-LightSample sampleLight(float3 p, inout Sampler rng)
+// ---- the emissive triangle lights ------------------------------------------------------------
+// Light selection by power (PBRT's power light sampler): the analytic lights (uniformly among them)
+// with probability q = their power over all the power, the emissive triangles (by power) with 1 - q.
+
+uint emissiveCount() { return emissiveRanges[0].x; }
+float analyticShare()
+{
+    if (lightCount() == 0u) return 0.0;
+    if (emissiveCount() == 0u) return 1.0;
+    const float analytic = asfloat(emissiveRanges[1].x);
+    const float emissive = emissivePower.Load(int3(0, 0, int(emissiveRanges[0].z) - 1));
+    return analytic + emissive > 0.0 ? clamp(analytic / (analytic + emissive), 0.0, 1.0) : 0.5;
+}
+
+struct TriangleLight
+{
+    float3 p0, p1, p2;
+    float2 uv0, uv1, uv2;
+    uint material;
+};
+
+TriangleLight triangleLight(uint i)
+{
+    const uint4 a = emissiveLights[i * 4u];
+    const float4 b = asfloat(emissiveLights[i * 4u + 1u]), c = asfloat(emissiveLights[i * 4u + 2u]);
+    const float4 d = asfloat(emissiveLights[i * 4u + 3u]);
+    TriangleLight t;
+    t.p0 = asfloat(a.xyz);
+    t.p1 = b.xyz;
+    t.p2 = c.xyz;
+    t.material = a.w;
+    t.uv0 = float2(b.w, c.w);
+    t.uv1 = d.xy;
+    t.uv2 = d.zw;
+    return t;
+}
+
+// The probability the selection draws emissive light i: (1 - q) x its power over the total.
+float emissiveSelect(uint i)
+{
+    const uint S = emissiveRanges[0].y, levels = emissiveRanges[0].z;
+    const float total = emissivePower.Load(int3(0, 0, int(levels) - 1));
+    if (!(total > 0.0)) return 0.0;
+    return (1.0 - analyticShare()) * emissivePower.Load(int3(int(i % S), int(i / S), 0)) / total;
+}
+
+// The density (solid angle) light sampling had for the direction from `origin` to `x` on light i.
+float emissivePdf(uint i, float3 origin, float3 x)
+{
+    const TriangleLight t = triangleLight(i);
+    const float3 c = cross(t.p1 - t.p0, t.p2 - t.p0);
+    const float area = 0.5 * length(c);
+    const float3 toX = x - origin;
+    const float d2 = dot(toX, toX);
+    const float cosL = abs(dot(normalize(c), toX)) / sqrt(max(d2, 1e-12));
+    if (!(area > 0.0) || cosL < 1e-6) return 0.0;
+    return emissiveSelect(i) * d2 / (area * cosL);
+}
+
+// A triangle drawn by power (`u` descending the power image's levels, choosing among four children
+// in proportion: RTXDI's hierarchical draw), then a point uniformly on it; its emission with its
+// texture there, two-sided as the closest hit's.
+LightSample sampleEmissive(float3 p, float u, float u1, float u2)
+{
+    LightSample s;
+    s.valid = false;
+    s.mis = true;
+    s.pdf = 0.0;
+    s.dist = 0.0;
+    s.L = float3(0.0, 1.0, 0.0);
+    s.radiance = float3(0.0);
+    const uint N = emissiveCount(), S = emissiveRanges[0].y, levels = emissiveRanges[0].z;
+    uint2 at = uint2(0u, 0u);
+    for (int l = int(levels) - 1; l > 0; --l)
+    {
+        const uint2 b = at * 2u;
+        const float w0 = emissivePower.Load(int3(int2(b), l - 1));
+        const float w1 = emissivePower.Load(int3(int2(b + uint2(1u, 0u)), l - 1));
+        const float w2 = emissivePower.Load(int3(int2(b + uint2(0u, 1u)), l - 1));
+        const float w3 = emissivePower.Load(int3(int2(b + uint2(1u, 1u)), l - 1));
+        const float sum = w0 + w1 + w2 + w3;
+        if (!(sum > 0.0)) return s;
+        float t = min(u, 0.99999994) * sum;
+        if (t < w0) { at = b; u = t / w0; }
+        else if ((t -= w0) < w1) { at = b + uint2(1u, 0u); u = t / w1; }
+        else if ((t -= w1) < w2) { at = b + uint2(0u, 1u); u = t / w2; }
+        else { at = b + uint2(1u, 1u); u = min((t - w2) / max(w3, 1e-30), 0.99999994); }
+    }
+    const uint i = at.y * S + at.x;
+    if (i >= N) return s;
+    const TriangleLight tl = triangleLight(i);
+    const float su = sqrt(u1);
+    const float b0 = 1.0 - su, b1 = u2 * su, b2 = 1.0 - b0 - b1;
+    const float3 x = tl.p0 * b0 + tl.p1 * b1 + tl.p2 * b2;
+    const float2 uv = tl.uv0 * b0 + tl.uv1 * b1 + tl.uv2 * b2;
+    const float3 c = cross(tl.p1 - tl.p0, tl.p2 - tl.p0);
+    const float area = 0.5 * length(c);
+    const float3 toX = x - p;
+    const float d2 = dot(toX, toX);
+    const float d = sqrt(d2);
+    if (!(area > 0.0) || !(d > 0.0)) return s;
+    s.L = toX / d;
+    const float cosL = abs(dot(normalize(c), s.L));
+    if (cosL < 1e-6) return s;
+    const uint m = tl.material * kMaterialRows;
+    float3 le = materials[m + 6u].rgb * materials[m + 2u].y;
+    const uint emissiveTex = asuint(materials[m + 1u].w);
+    if (emissiveTex < 4096u) le *= textures[NonUniformResourceIndex(emissiveTex)].SampleLevel(uv, 0.0).rgb;
+    s.radiance = le;
+    s.pdf = emissiveSelect(i) * d2 / (area * cosL);
+    s.dist = d * (1.0 - 1e-4) - 1e-3;   // short of the triangle itself
+    s.valid = s.pdf > 0.0 && any(le > 0.0);
+    return s;
+}
+
+// A bounce ray that met an emissive triangle: its weight against the light sampling that could have
+// drawn the same point (the camera ray's hit, depth 0, is not weighed).
+float emissiveHitWeight(PathPayload hit, float3 origin, float lastPdf, uint depth)
+{
+    if (depth == 0u || (hit.flags & kHitEmissive) == 0u) return 1.0;
+    return powerHeuristic(lastPdf, emissivePdf(hit.light, origin, hit.position));
+}
+
+// `p` the shaded point; `origin` where its shadow ray starts (p off the surface): an emissive
+// triangle is sampled from there, so the shadow ray ends short of the very point it aims at (a plane
+// seen at a grazing angle is millimetres nearer from the offset origin than from p).
+LightSample sampleLight(float3 p, float3 origin, inout Sampler rng)
 {
     LightSample s;
     s.valid = false;
@@ -241,12 +373,13 @@ LightSample sampleLight(float3 p, inout Sampler rng)
     s.L = float3(0.0, 1.0, 0.0);
     s.radiance = float3(0.0);
     const uint n = lightCount();
-    if (n == 0u) return s;
-    const uint i = min(uint(rng.next() * float(n)), n - 1u);
-    const float choose = 1.0 / float(n);
+    const float q = analyticShare();
+    const float u0 = rng.next(), u1 = rng.next(), u2 = rng.next();
+    if (!(u0 < q)) return emissiveCount() > 0u ? sampleEmissive(origin, (u0 - q) / (1.0 - q), u1, u2) : s;
+    const uint i = min(uint(u0 / q * float(n)), n - 1u);
+    const float choose = q / float(n);
     const Light l = loadLight(i);
     s.mis = l.emitter;
-    const float u1 = rng.next(), u2 = rng.next();
     if (l.type == 1u)
     {
         s.L = -l.direction;
@@ -303,7 +436,7 @@ float3 emitterRadiance(uint i, float3 origin, float3 hit, float3 n, float3 dir, 
     if (i >= lightCount()) return float3(0.0);
     const Light l = loadLight(i);
     if (!l.emitter) return float3(0.0);
-    const float choose = 1.0 / float(lightCount());
+    const float choose = analyticShare() / float(lightCount());
     if (l.type == 3u)
     {
         const float3 nl = normalize(cross(l.edge1, l.edge2));
@@ -518,7 +651,7 @@ void raygen()
         }
         else
         {
-            add = throughput * hit.emission;   // emissive surfaces: found by BSDF sampling only
+            add = throughput * hit.emission * emissiveHitWeight(hit, origin, lastPdf, depth);   // weighed against light sampling
         }
         if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;
         radiance += add;
@@ -624,7 +757,7 @@ void raygen()
 
         // Next-event estimation: a light, then the environment, each weighed against the BSDF.
         rng.group(1u + 3u * depth);
-        const LightSample ls = sampleLight(hit.position, rng);
+        const LightSample ls = sampleLight(hit.position, p, rng);
         if (ls.valid)
         {
             const float3 wi = toLocal(ls.L, t, b, n);
@@ -781,7 +914,7 @@ void cacheUpdate()
             if (depth > 0u) cacheContribute(verts, count, throughput * le * powerHeuristic(lastPdf, lightPdf));
             break;
         }
-        cacheContribute(verts, count, throughput * hit.emission);
+        cacheContribute(verts, count, throughput * hit.emission * emissiveHitWeight(hit, origin, lastPdf, depth));
         if (depth >= kCacheUpdateBounces)
         {
             // Past the path's bounces: the light this surface reflects, as the cache holds it.
@@ -810,7 +943,7 @@ void cacheUpdate()
         const float3 p = hit.position + hit.geoNormal * 1e-3;
 
         rng.group(1u + 3u * depth);
-        const LightSample ls = sampleLight(hit.position, rng);
+        const LightSample ls = sampleLight(hit.position, p, rng);
         if (ls.valid)
         {
             const float3 wi = toLocal(ls.L, t, b, n);
@@ -962,6 +1095,16 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
     const uint emissiveTex = asuint(row1.w);
     if (emissiveTex < 4096u) emission *= sampleTex(emissiveTex, uv).rgb;
 
+    // An emissive triangle is a light (render/rt/emissive_lights.hpp): its index, for the bounce's weight.
+    if (any(emission > 0.0))
+    {
+        const uint first = emissiveFirst[InstanceID()];
+        if (first != ~0u)
+        {
+            payload.flags |= kHitEmissive;
+            payload.light = first + PrimitiveIndex();
+        }
+    }
     payload.baseColor = baseColor;
     payload.baseWeight = row5.z;
     payload.metalness = saturate(metalness);

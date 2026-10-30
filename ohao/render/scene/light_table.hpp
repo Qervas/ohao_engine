@@ -22,7 +22,7 @@ struct LightEmitter {
 // profile: linear from the outer cone, 0, to the inner, 1); without a viewer, on-axis. An area light is its
 // rectangle (position + u edge1 + v edge2, emitting towards edge1 x edge2) at the path tracer's
 // radiance for it, I / (4 pi r^2). Radii below the path tracer's 0.01 m are raised to it.
-// Directional lights and emissive proxies (whose mesh already emits) have none, nor a point or
+// Directional lights and flashes (an effect's light, no mesh) have none, nor a point or
 // spot light of radius 0 or a degenerate rectangle.
 [[nodiscard]] std::optional<LightEmitter> lightEmitter(const LightDesc& light,
                                                        const std::optional<glm::vec3>& viewer = std::nullopt);

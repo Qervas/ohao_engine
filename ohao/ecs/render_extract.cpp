@@ -47,13 +47,10 @@ public:
         reg.on_construct<Light>().connect<&ExtractState::markLightsDirty>(this);
         reg.on_update<Light>().connect<&ExtractState::markLightsDirty>(this);
         reg.on_destroy<Light>().connect<&ExtractState::markLightsDirty>(this);
-        reg.on_construct<EmissiveProxyLight>().connect<&ExtractState::markLightsDirty>(this);
-        reg.on_update<EmissiveProxyLight>().connect<&ExtractState::markLightsDirty>(this);
-        reg.on_destroy<EmissiveProxyLight>().connect<&ExtractState::markLightsDirty>(this);
         // Installed into a world that already has renderables or lights (a host that
         // starts its renderer after loading): they are picked up on the first run.
         for (const entt::entity e : reg.view<MeshRenderer>()) reg.emplace_or_replace<RenderDirty>(e);
-        m_lightsDirty = !reg.view<Light>().empty() || !reg.view<EmissiveProxyLight>().empty();
+        m_lightsDirty = !reg.view<Light>().empty();
     }
 
     ~ExtractState() {
@@ -64,9 +61,6 @@ public:
         m_reg.on_construct<Light>().disconnect(this);
         m_reg.on_update<Light>().disconnect(this);
         m_reg.on_destroy<Light>().disconnect(this);
-        m_reg.on_construct<EmissiveProxyLight>().disconnect(this);
-        m_reg.on_update<EmissiveProxyLight>().disconnect(this);
-        m_reg.on_destroy<EmissiveProxyLight>().disconnect(this);
         // The World is going away: take its instances and lights out of the scene.
         for (uint32_t slot = 0; slot < m_owner.size(); ++slot)
             if (m_owner[slot] != entt::null) m_rs.destroyInstance(slot);
@@ -95,7 +89,7 @@ public:
         m_pending.clear();
         bool lightsTouched = false;
         for (const entt::entity e : m_reg.view<RenderDirty>()) {
-            if (!lightsTouched && m_reg.any_of<Light, EmissiveProxyLight>(e)) lightsTouched = true;
+            if (!lightsTouched && m_reg.all_of<Light>(e)) lightsTouched = true;
             const auto* mr = m_reg.try_get<MeshRenderer>(e);
             const auto* wt = m_reg.try_get<WorldTransform>(e);
             if (!mr || !wt) continue;
@@ -226,16 +220,6 @@ private:
             d.areaEdge2 = basis * l.areaEdge2;
             d.castShadows = l.castShadows;
             if (wt.prevWorld != wt.world) d.lastFrameMotion = wt.prevWorld * glm::inverse(wt.world);
-            d.order = creationSeq(m_reg, e);
-            m_lights.push_back(d);
-        }
-        for (auto [e, p, wt] : m_reg.view<const EmissiveProxyLight, const WorldTransform>().each()) {
-            render::LightDesc d{};
-            d.kind = render::LightKind::EmissiveProxy;
-            d.position = glm::vec3(wt.world * glm::vec4(p.localCenter, 1.0f));
-            d.color = p.color;
-            d.intensity = p.intensity;
-            d.radius = p.radius;
             d.order = creationSeq(m_reg, e);
             m_lights.push_back(d);
         }

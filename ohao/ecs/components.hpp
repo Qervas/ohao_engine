@@ -42,7 +42,7 @@ struct WorldTransform {
 struct Parent { entt::entity entity{entt::null}; };
 struct Children { std::vector<entt::entity> entities; };
 
-// Change tracking: like Transform, MeshRenderer, Light, EmissiveProxyLight and
+// Change tracking: Transform, MeshRenderer and Light
 // are picked up by the render extract only when written through
 // registry.patch<T>() or registry.replace<T>() (or emplaced/removed). A plain
 // get<T>() write fires no signal and never reaches the renderer.
@@ -69,15 +69,6 @@ struct Light {
     glm::vec3 areaEdge1{1.0f, 0.0f, 0.0f};   // AreaRect, local space
     glm::vec3 areaEdge2{0.0f, 0.0f, 1.0f};
     bool castShadows{true};
-};
-
-// A point light approximating a mesh's emissive texture (ported from the renderer's
-// emissive auto-light). localCenter/radius are in the entity's model space.
-struct EmissiveProxyLight {
-    glm::vec3 localCenter{0.0f};
-    float radius{0.0f};
-    glm::vec3 color{1.0f};
-    float intensity{0.0f};
 };
 
 // Monotonic creation sequence, set by World::create. Unlike entity ids it is never
@@ -120,8 +111,8 @@ struct QuadPrim {
 };
 struct BoxPrim { glm::vec3 lo{-0.5f}; glm::vec3 hi{0.5f}; glm::vec3 color{1.0f}; };
 
-// Where an entity's mesh comes from. Instantiate builds MeshRenderer (and the derived
-// EmissiveProxyLight) from it; meshes are shared per distinct value.
+// Where an entity's mesh comes from. Instantiate builds MeshRenderer from it; meshes are shared per
+// distinct value.
 struct MeshSource {
     std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim, ConePrim, QuadPrim, BoxPrim> source;
 };

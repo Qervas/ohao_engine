@@ -18,7 +18,7 @@ struct RenderSlot { uint32_t slot; };
 //   2. creates an instance for every renderable without a slot (in creation order),
 //   3. re-uploads every RenderDirty renderable (moved, or MeshRenderer patched),
 //   4. clears RenderDirty,
-//   5. rebuilds the light list when a Light/EmissiveProxyLight changed, appeared or
+//   5. rebuilds the light list when a Light changed, appeared or
 //      was destroyed.
 // The RenderScene must outlive the World: destroying the World releases its slots
 // and clears the lights it set. Install at most once per World.

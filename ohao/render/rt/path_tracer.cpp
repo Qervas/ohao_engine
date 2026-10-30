@@ -109,6 +109,11 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         OHAO_LOG(Error, render, "PathTracer: failed to create descriptor resources");
         return false;
     }
+    // After the descriptors: they clamp the bindless capacity the collect pass's table shares.
+    if (!m_emissive.initialize(m_device, m_physicalDevice, m_bindlessCapacity)) {
+        OHAO_LOG(Error, render, "PathTracer: the emissive lights could not be created");
+        return false;
+    }
 
     if (!createRTPipeline()) {
         OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline");
@@ -182,6 +187,10 @@ void PathTracer::setSceneBuffers(const render::RenderScene& scene) {
     m_instances = scene.instanceBuffer();
     m_materialRefs = scene.materialRefBuffer();
     m_lightBuffer = scene.rtLightBuffer();
+    m_emissiveInstances = scene.emissiveInstances();
+    m_emissiveVersion = scene.emissiveVersion();
+    m_instanceSlotEnd = scene.instanceSlotEnd();
+    m_analyticLightPower = scene.analyticLightPower();
 }
 
 // ─── Accumulation reset ──────────────────────────────────────────────
@@ -352,6 +361,7 @@ void PathTracer::destroy() {
 
     m_openpbrTables.destroy();
     m_radianceCache.destroy();
+    m_emissive.destroy();
 
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }

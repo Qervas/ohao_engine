@@ -253,8 +253,9 @@ present | readback  window: blit to the swapchain (+ requested copy); headless: 
 
 `quality: reference` swaps the realtime shadow and GI passes for their converging forms
 (8 shadow rays to every light, 32 GI rays at full resolution, averaged over the frames).
-A path-traced frame is the skin passes, `scene.upload`, the tracer's stages (`pt.cache.update`
-and `pt.cache.resolve` in the realtime profile, `pt.trace`, `pt.denoise`), then `pt.present` or
+A path-traced frame is the skin passes, `scene.upload`, the tracer's stages (`emissive.lights`,
+which turns every emissive triangle into a light with its power, `pt.cache.update` and
+`pt.cache.resolve` in the realtime profile, `pt.trace`, `pt.denoise`), then `pt.present` or
 `pt.readback`.
 
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
@@ -530,7 +531,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-38 passes registered; budget names matching none: []
+39 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 

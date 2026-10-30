@@ -210,7 +210,7 @@ static_assert(offsetof(ShadowFilterPush, extent) == 0);
 static_assert(offsetof(ShadowFilterPush, seed) == 16);
 static_assert(sizeof(ShadowFilterPush) == 32);
 
-// one light as RT GI's bounce sees it (a storage buffer of every raster light but emissive proxies), attenuated as the lighting pass attenuates it
+// one light as RT GI's bounce sees it (a storage buffer of every raster light but flashes), attenuated as the lighting pass attenuates it
 struct alignas(16) GILight {
     alignas(16) std::array<float, 4> positionAndType{};
     alignas(16) std::array<float, 4> directionAndRange{};

@@ -109,7 +109,9 @@ struct InstanceDesc {
     glm::vec4 emitterLight{0.0f};   // see InstanceGpu
 };
 
-enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };
+// Flash: an effect's light (vfx_draw's flashes): a point in the raster table only, with no emitter mesh
+// and no shadow, its range its radius x 10; neither the path tracer nor RT GI sees it.
+enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, Flash };
 
 // World-space light, already resolved from the ECS. `order` sorts the light list
 // (creation sequence) so both light buffers are deterministic.
@@ -125,7 +127,7 @@ struct LightDesc {
     float outerConeDeg{45.0f};
     glm::vec3 areaEdge1{1, 0, 0};
     glm::vec3 areaEdge2{0, 0, 1};
-    bool castShadows{true};   // emissive proxies never do
+    bool castShadows{true};   // flashes never do
     uint64_t order{0};
     // Where the light was last frame, as the transform taking this frame's world space to it
     // (the entity's prevWorld * inverse(world)): its emitter mesh's prevWorld is this times its
@@ -138,19 +140,9 @@ struct LightDesc {
 // (gpu::shared::kShadowMaxLights). A pixel traces at most gpu::shared::kShadowLightsPerPixel of
 // them, the most important; a casting light past them is lit unshadowed.
 inline constexpr uint32_t kMaxShadowLights = 8;
-// LightData::params.w: -1 never shadowed (castShadows false, emissive proxies);
+// LightData::params.w: -1 never shadowed (castShadows false, flashes);
 // 0..kMaxShadowLights-1 its RT visibility channel (CSM shadows a directional one without RT).
 inline constexpr float kShadowNever = -1.0f;
-
-// A point light approximating a mesh's emissive texture (ported from the renderer's
-// emissive auto-light). localCenter/radius are in the mesh's model space; the light
-// table turns radius into range = radius * 10.
-struct EmissiveProxy {
-    glm::vec3 localCenter{0.0f};
-    float radius{0.0f};
-    glm::vec3 color{1.0f};
-    float intensity{0.0f};
-};
 
 // std430, matches shaders/includes/scene/scene_data.glsl
 struct InstanceGpu {

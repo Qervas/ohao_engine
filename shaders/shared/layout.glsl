@@ -191,7 +191,7 @@ struct ShadowFilterPush {
     uvec4 seed;   // x render seed, y frame index since the last temporal reset: the output's dither
 };
 
-// one light as RT GI's bounce sees it (a storage buffer of every raster light but emissive proxies), attenuated as the lighting pass attenuates it
+// one light as RT GI's bounce sees it (a storage buffer of every raster light but flashes), attenuated as the lighting pass attenuates it
 struct GILight {
     vec4 positionAndType;   // xyz position (a rect: its centre); w type: 0 directional, 1 point, 2 spot
     vec4 directionAndRange;   // xyz the unit direction the light travels (directional, spot); w the range

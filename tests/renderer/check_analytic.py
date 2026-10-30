@@ -5,6 +5,10 @@ straight down: no other surface, so no bounce for GI or the path tracer to add. 
 floor reflects toward the camera has a closed form:
 
   directional light, intensity I, at elevation e:          L = a / pi * I * sin(e)
+  an emissive rectangle (a mesh) of radiance Le, parallel to the floor h above it:
+                                                         L = a / pi * Le * pi * F, F the rectangle's form factor
+                                                         (the corner formula, by inclusion and exclusion; frontier
+                                                         F3: emissive triangles are lights)
   point light, intensity I, height h above the probed point: L = a / pi * I / h^2
   spot light pointing straight down, the point on its axis:  L = a / pi * I / h^2
 
@@ -82,6 +86,27 @@ def probe(img, x):
     return float(img[h // 2 - 3:h // 2 + 3, cx - 3:cx + 3].reshape(-1, 3).mean())
 
 
+def corner_factor(x, y):
+    # The form factor from a floor point to a parallel rectangle above it with one corner straight
+    # overhead, its sides x and y in units of the height (odd in each).
+    a, b = math.sqrt(1 + x * x), math.sqrt(1 + y * y)
+    return (x / a * math.atan(y / a) + y / b * math.atan(x / b)) / (2 * math.pi)
+
+
+def rectangle_factor(px, x1, x2, z1, z2, h):
+    # The form factor from the floor point (px, 0, 0) to the rectangle [x1, x2] x [z1, z2] at height h.
+    f = lambda x, z: corner_factor((x - px) / h, z / h)
+    return f(x2, z2) - f(x1, z2) - f(x2, z1) + f(x1, z1)
+
+
+def emissive_quad(le, h, x1, x2, z1, z2):
+    # A rectangle mesh of radiance le (emission_color white x emission_luminance), facing the floor.
+    return {"Name": {"value": "Glow"},
+            "MeshSource": {"source": {"QuadPrim": {"a": [x1, h, z1], "b": [x2, h, z1], "c": [x2, h, z2], "d": [x1, h, z2],
+                                                    "normal": [0, -1, 0], "color": [0, 0, 0]}}},
+            "Material": {"base_color": [0, 0, 0], "specular_weight": 0, "emission_luminance": le}}
+
+
 def cases():
     lam = ALBEDO / math.pi
     for elev in (90, 45):
@@ -97,6 +122,11 @@ def cases():
                               "Light": {"type": "Spot", "color": [1, 1, 1], "intensity": 10.0, "range": 1000,
                                         "radius": 0.05, "innerConeDeg": 30, "outerConeDeg": 40}},
            lam * 10.0 / 4.0)
+    # An emissive rectangle 1 m up, beside the view (so it hides none of the floor seen), the floor
+    # probed 0.6 m from its edge: lit by the rectangle's triangles as lights.
+    x1, x2, z1, z2, h, le = 1.6, 2.6, -0.5, 0.5, 1.0, 20.0
+    yield ("emissive_quad", 1.0, emissive_quad(le, h, x1, x2, z1, z2),
+           lam * le * math.pi * rectangle_factor(1.0, x1, x2, z1, z2, h))
 
 
 def spot(i, x, intensity):
@@ -171,7 +201,10 @@ def main():
         with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
             json.dump(scene(light), f, indent=1)
         results[name] = {"expected": round(expected, 5)}
-        for mode, args in (("deferred", ["--frames", "32"]), ("rt_offline", ["--spp", "256", "--denoise", "none"])):
+        # The emissive rectangle reaches deferred's floor through RT GI's rays only: at reference quality
+        # (realtime GI's denoiser keeps 85% of so small and bright a source: frontier F5's to fix).
+        deferred = ["--frames", "32"] + (["--quality", "reference"] if name == "emissive_quad" else [])
+        for mode, args in (("deferred", deferred), ("rt_offline", ["--spp", "256", "--denoise", "none"])):
             cmd = [OHAO, "run", rel + ".scene.json", "--render", "%s.%s.png" % (rel, mode), "--hdr",
                    "%s.%s.pfm" % (rel, mode), "--mode", mode, "--size", "%dx%d" % (W, H)] + args
             r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)

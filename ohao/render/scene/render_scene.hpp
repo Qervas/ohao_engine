@@ -70,7 +70,7 @@ public:
     void setLights(std::span<const LightDesc> lights);
     // Lights of this frame that are not in the scene: an effect's flash (sub-project 12, the vfx_draw
     // sync system). They join the raster table after setLights' lights, every frame they are given
-    // (an empty list clears them); they have no emitter mesh and no shadow (EmissiveProxy kind).
+    // (an empty list clears them); they have no emitter mesh and no shadow (Flash kind).
     void setTransientLights(std::span<const LightDesc> lights);
     // Spheres the frame draws that are not in the registry (sub-project 12: a test grenade in flight): a
     // black sphere of the emitter mesh, an ordinary instance (it casts shadows, it emits nothing). Every
@@ -80,6 +80,22 @@ public:
         float radius{0.05f};
     };
     void setPresentedSpheres(std::span<const PresentedSphere> spheres);
+    // The instances whose triangles the path tracer samples as lights (render/rt/emissive_lights.hpp):
+    // live, visible, with an emissive material, neither a light's emitter mesh nor a view model; in
+    // slot order, with their meshes' triangle counts. `emissiveVersion` changes when the set does.
+    struct EmissiveInstance {
+        uint32_t slot;
+        uint32_t triangles;
+    };
+    [[nodiscard]] std::vector<EmissiveInstance> emissiveInstances() const;
+    [[nodiscard]] uint64_t emissiveVersion() const;
+    // The power (flux) of the path tracer's analytic lights, for choosing between them and the
+    // emissive triangles by power: a point 4 pi I, a spot its cone's share of that, an area light
+    // pi L A, a sun its irradiance over the scene's cross-section (pi R^2, R the radius of the
+    // visible draws' bounds).
+    [[nodiscard]] float analyticLightPower() const;
+    // One past the highest instance slot in use (the instance table's high-water mark).
+    [[nodiscard]] uint32_t instanceSlotEnd() const;
     // Whether the last setLights had a directional light: it stands for the sun, so the
     // environment lights without its own (render/rt/env_sun.hpp, VulkanRenderer::render).
     [[nodiscard]] bool hasDirectionalLight() const;
