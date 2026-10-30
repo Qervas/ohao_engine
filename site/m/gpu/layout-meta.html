@@ -56,7 +56,7 @@
 <div class="prose reveal">
 <p>Vulkan guarantees only 128 bytes of push-constant space; anything above that is a device capability, not a promise. Exactly one contract sits above the floor — the path tracer&#x27;s 256 — and no code queries `maxPushConstantsSize`; across `ohao/`, `shaders/` and `examples/` the identifier occurs only in comments, each noting that 128 is the floor. On a minimum-spec device the failure surfaces at pipeline-layout creation, not at compile time. The raster blocks are far below the line: the G-buffer pushes 16 bytes and the shadow pass 64.</p>
 <p>The path-tracer block is also the one with no headroom: three matrices and four `uvec4`/`vec4` lanes fill the 256 bytes exactly.</p>
-<div class="citation-chip"><code class="citation-code">};  // total = 256 bytes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L458" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:458</a></div>
+<div class="citation-chip"><code class="citation-code">};  // total = 256 bytes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L456" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:456</a></div>
 <p>The bounce limit, the sample index, the running mean&#x27;s length and the motion-vector flag all share lanes with other values. A size contract that is exactly satisfied has stopped being a check and become a design constraint: a new per-frame value has to find a spare word, not a new field.</p>
 </div>
 <div class="section-rule"><h2 id="the-per-draw-block-that-became-a-record">The per-draw block that became a record</h2></div>
@@ -81,7 +81,7 @@
 <p>but which float is which lane is not, and each reader restates it in a comment beside its own decode — in `gbuffer.frag`:</p>
 <div class="citation-chip"><code class="citation-code">vec4 row1 = matRows[m * kMaterialRows + 1u];   // roughness, metallic, normalTex, emissiveTex</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L105" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:105</a></div>
 <p>and in the path tracer&#x27;s closest-hit shader:</p>
-<div class="citation-chip"><code class="citation-code">float roughness = row1.x, metalness = row1.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L764" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:764</a></div>
+<div class="citation-chip"><code class="citation-code">float roughness = row1.x, metalness = row1.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L760" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:760</a></div>
 <p>The transparent pass decodes the same lanes again by hand. They agree today. Because there is a single packer the pipelines cannot disagree about lane order, but the agreement is hand-written copies of one diagram in several shaders, with the size assert as the only mechanical witness. A reordered row needs coordinated edits in every reader and fails only as wrong pixels.</p>
 </div>
 <div class="section-rule"><h2 id="two-sentinel-decoders-in-one-shader">Two sentinel decoders in one shader</h2></div>
@@ -91,7 +91,7 @@
 <p>4096 is not arbitrary — it is the bindless array&#x27;s capacity as the renderer constructs the manager:</p>
 <div class="citation-chip"><code class="citation-code">if (!m_textureManager-&gt;initialize(m_device, m_physicalDevice, nullptr, 4096,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L127" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:127</a></div>
 <p>The two tests agree on every value the packer produces, so this is not a live bug; it is a hazard in two directions. `&lt; 4096u` rejects a garbage lane and `!= 0xFFFFFFFFu` does not — so if a lane ever carries an arbitrary bit pattern, the albedo and normal lookups pass the sentinel test and index `textures[]` with it, while the other two reject it. And the bound is a literal, so raising `maxTextures` past 4096 hides the high descriptors from two of the four lookups and leaves them visible to the other two. The path tracer&#x27;s closest hit shares the literal: it tests every index against 4096, the size its bindless array is declared at.</p>
-<div class="citation-chip"><code class="citation-code">if (normalTex &lt; 4096u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L738" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:738</a></div>
+<div class="citation-chip"><code class="citation-code">if (normalTex &lt; 4096u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L734" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:734</a></div>
 </div>
 <div class="section-rule"><h2 id="what-reaches-the-gpu-from-a-material">What reaches the GPU from a material</h2></div>
 <div class="prose reveal">

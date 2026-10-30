@@ -147,10 +147,29 @@ weighted.
 
 {{cite shaders/rt/path_tracer.slang "if (stop || depth > bounces) break;"}}
 
-Random numbers are one PCG stream per pixel and sample, seeded from the pixel and
-the sample index.
+## Where the random numbers come from
 
-{{cite shaders/rt/path_tracer.slang "rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));"}}
+Every draw is a coordinate of Owen-scrambled, shuffled Sobol (`sampling/sobol.slang`,
+Burley 2020). A pixel's samples are one sequence, indexed by the sample index, so
+its frames stay stratified however many accumulate; pixels are decorrelated by a seed
+hashed from the pixel alone.
+
+{{cite shaders/rt/path_tracer.slang "Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0x7F4A7C15u)));"}}
+
+Draws come in groups of four, each group one 4-D Sobol point scrambled by a seed
+hashed from the pixel's and the group's number, so dimensions in one group are
+jointly stratified and different groups are independent. The raygen places related
+draws in one group: group 0 is the pixel jitter; at vertex $d$, group $1+3d$ the light
+choice and its point, $2+3d$ the environment texel and its point, $3+3d$ the BSDF's
+three numbers and the Russian roulette test.
+
+{{cite shaders/rt/path_tracer.slang "rng.group(1u + 3u * depth);"}}
+
+{{cite shaders/rt/path_tracer.slang "rng.group(3u + 3u * depth);"}}
+
+A branch that skips a draw cannot shift later decisions onto other dimensions: each
+group starts at its own dimension. The PCG hash is left for the pixel seed and the
+any-hit shader's coin for blended surfaces.
 
 ## Shadow rays carry no boolean
 

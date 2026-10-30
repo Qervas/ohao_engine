@@ -10,17 +10,17 @@ MODULE = {
     "children": [
         page(
             'sobol',
-            'Sobol + Owen',
-            'Host-side Sobol generator and Owen scramble, tested by sobol_test.',
-            files=['ohao/render/rt/sobol_generator.cpp', 'ohao/render/rt/sobol_generator.hpp', 'ohao/render/rt/owen_scramble.cpp', 'ohao/render/rt/owen_scramble.hpp'],
-            design=['Sobol sequences + Owen scrambling on the CPU; no shader reads them: the path tracer draws from its own PCG stream.', 'sobol_test checks the generator and the scramble.'],
+            'Owen-scrambled Sobol',
+            "Burley's shuffled, Owen-scrambled 4-D Sobol in sobol.slang: the path tracer's sampler, drawn in groups of four.",
+            files=['shaders/sampling/sobol.slang', 'shaders/rt/path_tracer.slang', 'ohao/render/rt/sobol_generator.cpp', 'ohao/render/rt/owen_scramble.cpp', 'tools/sampling/sobol_kernel.slang', 'tests/renderer/sobol_test.cpp'],
+            design=["Joe-Kuo direction numbers for dimensions 0-3; Burley 2020's nested uniform scramble (Vegdahl's constants) on the shuffled index and each coordinate.", 'Sampler draws in groups of four, one 4-D point a group seeded by hashCombine(pixelSeed, group): group 0 the jitter; bounce d: 1+3d light, 2+3d environment, 3+3d BSDF and Russian roulette.', 'CPU twin: sobol_generator.* and owen_scramble.*, and the module compiled to C++ by slangc (tools/sampling, ohao_sobol_cpu); sobol_test holds the shader bit for bit to them.'],
         ),
         page(
             'pcg',
-            'PCG stream',
-            'The path tracer\'s hash-based random stream.',
-            files=['shaders/rt/path_tracer.slang'],
-            design=['path_tracer.slang carries its own PCG stream (Rng), seeded per pixel and sample; 24-bit floats in [0, 1).', 'The any-hit shader hashes the ray and triangle with the same function for stochastic opacity.'],
+            'PCG hash',
+            "The PCG permutation as a hash: the pixel seed, the any-hit coin, the hybrid traces' keyed draws.",
+            files=['shaders/rt/path_tracer.slang', 'shaders/rt/shadow_trace.slang', 'shaders/rt/gi_trace.slang', 'shaders/rt/shadow_filter.slang'],
+            design=["path_tracer.slang: the pixel seed of the Sobol sequence and the any-hit shader's stochastic-opacity coin.", 'shadow_trace, gi_trace and shadow_filter carry their own copies for stateless keyed draws.'],
         ),
         page(
             'mis',

@@ -54,6 +54,10 @@ reports carries the choice, $1/n$:
 
 {{cite shaders/rt/path_tracer.slang "const uint i = min(uint(rng.next() * float(n)), n - 1u);"}}
 
+The choice and the light's point are the first three coordinates of one 4-D Sobol
+point (the vertex's light group, *Owen-scrambled Sobol*), so they are stratified
+together across a pixel's samples.
+
 A sphere (a point or spot light, at least 1 cm) is sampled uniformly over its cone
 of directions, a rectangle by its area, a sun along its direction. The bounce rays
 that the BSDF draws are traced against the scene *and* the lights' emitter meshes —

@@ -106,7 +106,7 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">materialColors.push_back(glm::vec4(mat.diffuse, 0.7f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L245" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:245</a></div>
 <p>Per-texel roughness only appears if a `{material}_gloss_*` image is sitting beside the model, which the loader inverts and repacks into the green channel of a rough-metal texture. That lands where the closest-hit sampler looks — but the sampler *multiplies*, against that 0.7 scalar. A gloss-mapped OBJ therefore cannot exceed roughness 0.7 at any texel, and every texel is scaled to 70% of its authored value rather than used as authored.</p>
 <div class="citation-chip"><code class="citation-code">packed[i * 4 + 1] = 255 - gloss;     // roughness = 1 - gloss</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L315" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:315</a></div>
-<div class="citation-chip"><code class="citation-code">roughness *= rm.g;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L769" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:769</a></div>
+<div class="citation-chip"><code class="citation-code">roughness *= rm.g;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L765" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:765</a></div>
 </div>
 <div class="section-rule"><h2 id="procedural-primitives">Procedural primitives</h2></div>
 <div class="prose reveal">

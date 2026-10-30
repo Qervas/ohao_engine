@@ -1,9 +1,6 @@
-// Sobol direction numbers for dimensions 0-3, from Joe-Kuo
-// new-joe-kuo-6.21201. Each dimension has 32 direction numbers (one per
-// bit). Dimension 0 (van der Corput) has directions 1<<31, 1<<30, ...,
-// 1<<0. Dimension 1 uses the primitive polynomial x+1 with initial
-// numbers m_1 = 1. Dimensions 2 and 3 use higher-order polynomials from
-// the Joe-Kuo table.
+// Sobol direction numbers for dimensions 0-3, from Joe-Kuo new-joe-kuo-6.21201 by the
+// Bratley-Fox recurrence (tests/renderer/sobol_test.cpp holds them to it). Dimension 0 is the van
+// der Corput sequence; dimensions 1-3 are Joe-Kuo's d = 2, 3, 4 (their s, a and m below).
 #include "render/rt/sobol_generator.hpp"
 
 namespace ohao {
@@ -22,7 +19,7 @@ constexpr uint32_t kDirectionNumbers[SobolGenerator::kDimensions * 32] = {
     0x00000080u, 0x00000040u, 0x00000020u, 0x00000010u,
     0x00000008u, 0x00000004u, 0x00000002u, 0x00000001u,
 
-    // Dimension 1: primitive polynomial x+1, initial m_1 = 1
+    // Dimension 1: Joe-Kuo d=2, s=1, a=0, m={1}
     0x80000000u, 0xC0000000u, 0xA0000000u, 0xF0000000u,
     0x88000000u, 0xCC000000u, 0xAA000000u, 0xFF000000u,
     0x80800000u, 0xC0C00000u, 0xA0A00000u, 0xF0F00000u,
@@ -32,25 +29,25 @@ constexpr uint32_t kDirectionNumbers[SobolGenerator::kDimensions * 32] = {
     0x80808080u, 0xC0C0C0C0u, 0xA0A0A0A0u, 0xF0F0F0F0u,
     0x88888888u, 0xCCCCCCCCu, 0xAAAAAAAAu, 0xFFFFFFFFu,
 
-    // Dimension 2: primitive polynomial x^2+x+1, initial m = {1, 3}
-    0x80000000u, 0x40000000u, 0xE0000000u, 0x50000000u,
-    0x98000000u, 0xBC000000u, 0xAE000000u, 0x25000000u,
-    0x5B800000u, 0x91400000u, 0x65600000u, 0x2E500000u,
-    0x91180000u, 0x88D40000u, 0xDD360000u, 0x02950000u,
-    0x4C888000u, 0x09EB4000u, 0x86CA6000u, 0x13B15000u,
-    0x42ADD800u, 0x3DF8D400u, 0x2FE57E00u, 0x56EB8100u,
-    0x8C41A680u, 0xE68455C0u, 0x3C9CE8E0u, 0xB44DBFF0u,
-    0x7C27F6C8u, 0x5239A6ACu, 0x853B0EDEu, 0x52EB2EF9u,
+    // Dimension 2: Joe-Kuo d=3, s=2, a=1, m={1, 3}
+    0x80000000u, 0xC0000000u, 0x60000000u, 0x90000000u,
+    0xE8000000u, 0x5C000000u, 0x8E000000u, 0xC5000000u,
+    0x68800000u, 0x9CC00000u, 0xEE600000u, 0x55900000u,
+    0x80680000u, 0xC09C0000u, 0x60EE0000u, 0x90550000u,
+    0xE8808000u, 0x5CC0C000u, 0x8E606000u, 0xC5909000u,
+    0x6868E800u, 0x9C9C5C00u, 0xEEEE8E00u, 0x5555C500u,
+    0x8000E880u, 0xC0005CC0u, 0x60008E60u, 0x9000C590u,
+    0xE8006868u, 0x5C009C9Cu, 0x8E00EEEEu, 0xC5005555u,
 
-    // Dimension 3: primitive polynomial x^3+x+1, initial m = {1, 1, 1}
+    // Dimension 3: Joe-Kuo d=4, s=3, a=1, m={1, 3, 1}
     0x80000000u, 0xC0000000u, 0x20000000u, 0x50000000u,
     0xF8000000u, 0x74000000u, 0xA2000000u, 0x93000000u,
     0xD8800000u, 0x25400000u, 0x59E00000u, 0xE6D00000u,
     0x78080000u, 0xB40C0000u, 0x82020000u, 0xC3050000u,
-    0x208F8000u, 0x51CBC000u, 0xFBEA2000u, 0x75AD5000u,
-    0xA00AF800u, 0x90077400u, 0xD800A200u, 0x25009300u,
-    0x59E08480u, 0xE6D0CEC0u, 0x78088520u, 0xB40CEBB0u,
-    0x82028348u, 0xC305C274u, 0x208FB552u, 0x51CB9AE9u,
+    0x208F8000u, 0x51474000u, 0xFBEA2000u, 0x75D93000u,
+    0xA0858800u, 0x914E5400u, 0xDBE79E00u, 0x25DB6D00u,
+    0x58800080u, 0xE54000C0u, 0x79E00020u, 0xB6D00050u,
+    0x800800F8u, 0xC00C0074u, 0x200200A2u, 0x50050093u,
 };
 
 // Compute the Sobol value at index i by XOR-accumulating direction numbers

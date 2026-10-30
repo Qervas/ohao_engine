@@ -186,12 +186,12 @@ window.OHAO_GLOSSARY = {
   // ── Sampling ────────────────────────────────────────────────────
   Sobol: {
     expand: "Sobol quasi-Monte Carlo sequence",
-    def: "Low-discrepancy sample sequence (often Owen-scrambled). OHAO has a host-side generator (sobol_generator.*), tested by sobol_test; no shader draws Sobol points.",
+    def: "Low-discrepancy sample sequence. The path tracer draws every sample from Owen-scrambled 4-D Sobol points (shaders/sampling/sobol.slang, Burley 2020), in groups of four, in both profiles.",
     group: "Sampling",
   },
   PCG: {
     expand: "Permuted Congruential Generator",
-    def: "Fast hash-style RNG. The path tracer draws every sample from one PCG stream a pixel and sample, in both profiles.",
+    def: "Fast integer hash (permuted congruential generator). The path tracer uses it to seed each pixel's Sobol sequence and for the any-hit shader's stochastic opacity.",
     group: "Sampling",
   },
   CDF: {

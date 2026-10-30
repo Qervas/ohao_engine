@@ -25,6 +25,7 @@
 // OIDN's albedo and normal (6, 7), NRD's and DLSS's guides (19-26).
 import shared.layout;
 import material.openpbr;
+import sampling.sobol;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> accumBuffer;
@@ -102,7 +103,10 @@ struct PathPayload
     float pad;
 };
 
-// ---- random numbers: one PCG stream a pixel and sample ------------------------------------
+// ---- random numbers -------------------------------------------------------------------------
+// The path's draws are Owen-scrambled Sobol (sampling/sobol.slang): group 0 the camera's jitter;
+// bounce d's light choice and point in group 1 + 3d, its environment sample in 2 + 3d, its BSDF
+// sample and Russian roulette in 3 + 3d. PCG hashes the pixel's seed and the any-hit's coin.
 
 uint pcg(uint v)
 {
@@ -110,16 +114,6 @@ uint pcg(uint v)
     const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
 }
-
-struct Rng
-{
-    uint state;
-    [mutating] float next()
-    {
-        state = pcg(state);
-        return float(state >> 8u) * (1.0 / 16777216.0);
-    }
-};
 
 // ---- geometry helpers ------------------------------------------------------------------------
 
@@ -228,7 +222,7 @@ struct LightSample
     bool valid;
 };
 
-LightSample sampleLight(float3 p, inout Rng rng)
+LightSample sampleLight(float3 p, inout Sampler rng)
 {
     LightSample s;
     s.valid = false;
@@ -356,7 +350,7 @@ float envPdf(float3 dir)
 }
 
 // A direction drawn by the CDF: a texel, then a point uniformly in it.
-float3 sampleEnv(inout Rng rng)
+float3 sampleEnv(inout Sampler rng)
 {
     const uint W = pc.control.w, H = uint(pc.tuning.y);
     const uint y = searchCdf(envMarginal, 0u, H, rng.next());
@@ -449,8 +443,7 @@ void raygen()
     const uint flags = pc.control.x;
     const bool accumulateAOVs = (flags & kFlagAccumulateAOVs) != 0u;
     const bool blendAOVs = accumulateAOVs && pc.control.y > 0u;
-    Rng rng;
-    rng.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z * 0x9E3779B9u + 0x7F4A7C15u)));
+    Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0x7F4A7C15u)));
 
     OpenPBRTables tables;
     tables.data = openpbrTables;
@@ -586,6 +579,7 @@ void raygen()
         const float3 p = hit.position + hit.geoNormal * 1e-3;
 
         // Next-event estimation: a light, then the environment, each weighed against the BSDF.
+        rng.group(1u + 3u * depth);
         const LightSample ls = sampleLight(hit.position, rng);
         if (ls.valid)
         {
@@ -605,6 +599,7 @@ void raygen()
         }
         if (envSampled())
         {
+            rng.group(2u + 3u * depth);
             const float3 L = sampleEnv(rng);
             const float pdfL = envPdf(L);
             const float3 wi = toLocal(L, t, b, n);
@@ -620,6 +615,7 @@ void raygen()
         }
 
         // The next direction.
+        rng.group(3u + 3u * depth);
         const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
         if (!(s.pdf > 0.0)) break;
         const float3 next = toWorld(s.wi, t, b, n);

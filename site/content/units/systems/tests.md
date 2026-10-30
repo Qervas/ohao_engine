@@ -203,13 +203,11 @@ make them CI-able, where the goldens are not, if a CI workflow existed.
 
 {{cite tests/renderer/CMakeLists.txt "add_executable(sobol_test sobol_test.cpp"}}
 
-`sobol_test` pins the first eight points of dimensions 0–3, but only dims 0–1 are
-externally anchored — against Joe-Kuo `new-joe-kuo-6.21201`. The dim-2 expectations
-are, by the test's own comment, bit-expanded from the same `kDirectionNumbers`
-table the test is checking, so dims 2–3 pin the XOR-accumulate loop and say nothing
-about the table: a wrong direction number in those rows is invisible to this test.
+`sobol_test` anchors the C++ direction numbers outside the table: it expands Joe-Kuo
+`new-joe-kuo-6.21201`'s published $(s, a, m)$ for dimensions 0–3 by the Bratley-Fox
+recurrence and compares every one of the 128 words.
 
-{{cite tests/renderer/sobol_test.cpp "computed from the dim-2 direction numbers"}}
+{{cite tests/renderer/sobol_test.cpp "TEST(Sobol, DirectionNumbersAreJoeKuos) {"}}
 
 It then probes the one place a direct-bit-expansion generator breaks: at index
 $2^{31}$ the dimension-1 direction number is `0xFFFFFFFF`, which a naive
@@ -217,9 +215,19 @@ $2^{31}$ the dimension-1 direction number is `0xFFFFFFFF`, which a naive
 
 {{cite tests/renderer/sobol_test.cpp "float v = SobolGenerator::sample1D(2147483648u, 1);"}}
 
-`SobolGenerator` and `owenScramble` have zero callers anywhere in the engine, and no
-shader samples a Sobol sequence: the path tracer draws from its own PCG stream.
-`sobol_test` is what keeps the two C++ files correct; it gates nothing that renders.
+It also tests the path tracer's sampler itself. `tools/sampling` compiles
+`sobol_kernel.slang`, which imports `shaders/sampling/sobol.slang`, to C++ with
+slangc (`ohao_sobol_cpu`); the test links it and holds the module bit for bit to a
+C++ reference built from `SobolGenerator` and `owenScramble`, checks that scrambling
+keeps every pair of dimensions' stratification (all $2^m$ elementary intervals for
+dimensions 0 and 1), and that two groups of one sample are independent.
+
+{{cite tests/renderer/CMakeLists.txt "target_link_libraries(sobol_test PRIVATE ohao_sobol_cpu)"}}
+
+{{cite tests/renderer/sobol_test.cpp "TEST(Sampler, ModuleIsBurleysShuffledScrambledSobol) {"}}
+
+`SobolGenerator` and `owenScramble` have no caller in the engine: they are the
+shader module's CPU twin, and `sobol_test` is their only user.
 
 `env_cdf_test` asserts the invariants the GPU inverse-CDF lookup depends on:
 marginal and conditional rows monotone non-decreasing and terminating at 1.0, and

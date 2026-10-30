@@ -74,6 +74,12 @@ than a grid of fixed directions:
 
 {{cite shaders/rt/path_tracer.slang "const float u = (float(x) + rng.next()) / float(W);"}}
 
+The four uniforms — row, column and the point inside the texel — are one 4-D point of
+the path's Sobol sequence (the vertex's environment group, *Owen-scrambled Sobol*), so
+they are jointly stratified across a pixel's samples:
+
+{{cite shaders/rt/path_tracer.slang "rng.group(2u + 3u * depth);"}}
+
 ## One density for both sides of a weight
 
 `envPdf` turns any direction back into that density: it bins the direction into

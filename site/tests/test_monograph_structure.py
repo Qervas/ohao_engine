@@ -104,9 +104,9 @@ class MonographStructureTest(unittest.TestCase):
         self.assertIn("path_tracer.slang", html)
         # Side-by-side dual pane + honest line anchors (sampleLight in path_tracer.slang)
         self.assertIn("dual-pane", html)
-        self.assertIn("L240", html)  # const uint n = lightCount();
-        self.assertIn('class="ln">242</span>', html)  # the uniform pick
-        self.assertIn('class="ln">277</span>', html)  # the cone's 1 - cos without cancellation
+        self.assertIn("L234", html)  # const uint n = lightCount();
+        self.assertIn('class="ln">236</span>', html)  # the uniform pick
+        self.assertIn('class="ln">271</span>', html)  # the cone's 1 - cos without cancellation
         self.assertIn("sphere", html.lower())
         # The shadow ray stops at the sphere's near side; the sphere delivers I/d², not I/r²
         self.assertIn("s.dist", html)

@@ -402,12 +402,12 @@
       <article class="gloss-card" data-key="PCG" data-group="Sampling">
         <h3>PCG</h3>
         <div class="expand">Permuted Congruential Generator</div>
-        <p>Fast hash-style RNG. The path tracer draws every sample from one PCG stream a pixel and sample, in both profiles.</p>
+        <p>Fast integer hash (permuted congruential generator). The path tracer uses it to seed each pixel's Sobol sequence and for the any-hit shader's stochastic opacity.</p>
       </article>
       <article class="gloss-card" data-key="Sobol" data-group="Sampling">
         <h3>Sobol</h3>
         <div class="expand">Sobol quasi-Monte Carlo sequence</div>
-        <p>Low-discrepancy sample sequence (often Owen-scrambled). OHAO has a host-side generator (sobol_generator.*), tested by sobol_test; no shader draws Sobol points.</p>
+        <p>Low-discrepancy sample sequence. The path tracer draws every sample from Owen-scrambled 4-D Sobol points (shaders/sampling/sobol.slang, Burley 2020), in groups of four, in both profiles.</p>
       </article>
       </div>
       <h2 class="gloss-group" id="g-scene">Scene</h2>

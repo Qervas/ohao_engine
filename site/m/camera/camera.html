@@ -62,7 +62,7 @@ $$</div>
 <p>No renderer reads the basis through these accessors either — it round-trips through the view matrix. `glm::lookAt` packs the three axes into the rotation block:</p>
 <div class="citation-chip"><code class="citation-code">viewMatrix = glm::lookAt(position, position + front, up);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L41" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:41</a></div>
 <p>and the path tracer&#x27;s raygen (`rt/path_tracer.slang`, both RT profiles) pulls them straight back out of the inverse, column by column, to build the pinhole ray:</p>
-<div class="citation-chip"><code class="citation-code">const float3 fwd = -pc.invView[2].xyz;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L463" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:463</a></div>
+<div class="citation-chip"><code class="citation-code">const float3 fwd = -pc.invView[2].xyz;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L456" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:456</a></div>
 <p>So the accessors are a gameplay convenience; the vectors they expose are what the renderer actually consumes.</p>
 </div>
 <div class="section-rule"><h2 id="two-projections-from-one-camera">Two projections from one camera</h2></div>
@@ -88,7 +88,7 @@ $$</div>
 P_{22} = \frac{1}{\tan(\phi/2)} \quad\Longrightarrow\quad \left(P^{-1}\right)_{22} = \tan(\phi/2)
 $$</div>
 <p>The push constants carry the matrix as its four columns, so that element is the `.y` of the 0-indexed column `[1]`, and that is the one the raygen reads. $P_{11}$, and the aspect baked into it, is never touched:</p>
-<div class="citation-chip"><code class="citation-code">const float tanY = abs(pc.invProj[1].y);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L466" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:466</a></div>
+<div class="citation-chip"><code class="citation-code">const float tanY = abs(pc.invProj[1].y);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L459" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:459</a></div>
 </div>
 <div class="section-rule"><h2 id="the-near-plane-is-twice-what-it-says">The near plane is twice what it says</h2></div>
 <div class="prose reveal">

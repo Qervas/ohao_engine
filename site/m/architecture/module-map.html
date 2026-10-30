@@ -115,7 +115,7 @@
 <p>Second, there are two independent answers to &quot;where are the SPIR-V files&quot;. Raster passes probe a candidate list at `VulkanRenderer` construction, using `core_deferred_lighting.slang.spv` as the sentinel and then broadcasting the winner to `RenderPassBase`:</p>
 <div class="citation-chip"><code class="citation-code">std::ifstream test(path + &quot;core_deferred_lighting.slang.spv&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L79" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:79</a></div>
 <p>The RT pipeline ignores that result entirely — `PathTracerShaderSet` hardcodes relative `bin/shaders/` paths to `rt/path_tracer.slang`&#x27;s four entry points, and both `RTOfflineRenderer` and `RTRealtimeRenderer` take that default:</p>
-<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_path_tracer.slang.raygen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L63" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:63</a></div>
+<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_path_tracer.slang.raygen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L62" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:62</a></div>
 <p>So the path tracer&#x27;s shader lookup is working-directory sensitive in a way the raster path is not, and the two can disagree about which build&#x27;s SPIR-V they loaded.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>

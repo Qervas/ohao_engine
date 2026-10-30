@@ -563,7 +563,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   profiles), a correct estimator of OpenPBR's base
   (`shaders/material/openpbr.slang`): one path a sample, light and environment sampling weighed
   against BSDF sampling by the power heuristic, Russian roulette from the third vertex, 32
-  bounces. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
+  bounces. Its random numbers are Owen-scrambled Sobol (Burley 2020, `shaders/sampling/sobol.slang`):
+  draws come in groups of four, one 4-D point each, seeded by the pixel and the group; a bounce's
+  draws sit in fixed groups (light, environment, BSDF and roulette), so a branch never shifts the
+  next bounce's dimensions. A new draw goes into a group (`Sampler.group`), never after another
+  bounce's. `sobol_test` runs the module through slangc's C++ (`tools/sampling`) against the CPU
+  generator, bit for bit, and holds its stratification. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
   weighs it by the light's index in `InstanceGpu.emitterLight.w`; a light without a mesh (a
   point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
   full weight. Emissive proxies are not path tracer lights (the surfaces are). `--bounces N`

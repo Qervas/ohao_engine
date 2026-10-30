@@ -143,7 +143,7 @@ control.
 
 {{cite shaders/rt/path_tracer.slang "uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment CDF's width"}}
 
-`params` is the resolution, the sample index that seeds the raygen's PCG stream, and
+`params` is the resolution, the sample index (the raygen's Sobol index), and
 the bounce limit. `control.y` and `control.z` are the two answers the host's clocks
 give (below): how many frames the running mean already holds, and whether last frame's
 view-projection is a rendered frame's, so motion vectors can be computed.
@@ -153,7 +153,7 @@ view-projection is a rendered frame's, so motion vectors can be computed.
 ## The jitter is computed on the host
 
 No mode samples at pixel centre. The raygen draws a uniform point of the pixel from
-its PCG stream per sample and adds it to the primary-ray UV in all denoise modes.
+its sampler's first group per sample and adds it to the primary-ray UV in all denoise modes.
 
 {{cite shaders/rt/path_tracer.slang "const float2 uv = (float2(pixel) + jit + pc.jitter.xy) / float2(size);"}}
 

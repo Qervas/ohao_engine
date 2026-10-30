@@ -206,6 +206,7 @@ if(BUILD_VFX_TESTS)
 endif()
 # OpenPBR on the CPU: the energy-table generator and the module's tests (tests/material).
 add_subdirectory(tools/material)
+add_subdirectory(tools/sampling)
 option(BUILD_MATERIAL_TESTS "Build material tests (OpenPBR's module on the CPU)" ON)
 if(BUILD_MATERIAL_TESTS)
     add_subdirectory(tests/material)

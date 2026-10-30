@@ -1,136 +1,144 @@
 ---
 module: sampling
 id: sobol
-title: Sobol + Owen
+title: Owen-scrambled Sobol
 standard: v2
 ---
 
-## A host generator with no shader behind it
+## The path tracer's random numbers
 
-`ohao/render/rt/` holds a Sobol generator for four dimensions and Burley's
-hash-based Owen scramble, both pure C++. No shader in the tree draws Sobol
-points: the path tracer, the RT shadow trace and RT GI's trace all take their
-uniforms from PCG hashes (*PCG stream*). The two files are compiled into the
-renderer library by the source glob and have no engine caller; `sobol_test` is
-the only code that calls them. Their headers name the role they are kept for: the
-CPU twin of an Owen-scrambled Sobol sampler in `rt/path_tracer.slang`, which the
-tracer does not yet have.
+Every draw the path tracer makes, in both RT profiles, comes from one module,
+`shaders/sampling/sobol.slang`: Burley's shuffled, Owen-scrambled Sobol sequence in
+four dimensions (Burley 2020, "Practical Hash-based Owen Scrambling"). A pixel's
+samples are one sequence, so its frames are stratified against each other however
+many there are; pixels are decorrelated by a seed.
 
-{{cite ohao/render/rt/sobol_generator.hpp "static float sample1D(uint32_t index, uint32_t dim);"}}
-{{cite tests/renderer/CMakeLists.txt "add_executable(sobol_test sobol_test.cpp   # Sobol + Owen scramble"}}
+{{cite shaders/rt/path_tracer.slang "import sampling.sobol;"}}
 
-What follows is what that code computes, and what its tests do and do not hold.
+The sampler is built once per launch from the sample index and a pixel seed. The
+index is `params.z`, which the host advances once a frame and puts back at the render
+seed on a reset; the seed is a PCG hash of the pixel alone (*PCG hash*), so it does
+not change from frame to frame:
 
-## Direct bit expansion
+{{cite shaders/rt/path_tracer.slang "Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0x7F4A7C15u)));"}}
+{{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
 
-The direction-number table is four dimensions wide and labelled Joe-Kuo
-`new-joe-kuo-6.21201`. Dimension 0 is van der Corput — the identity table
-$2^{31}, 2^{30}, \dots, 2^0$ — and dimension 1 is the primitive polynomial $x{+}1$
-with $m_1 = 1$.
+:::why
+The seed belongs to the pixel and the index to the sequence. A seed that changed
+with the frame would draw each frame's point from a different scrambled sequence,
+and the running mean of a pixel would converge like white noise. Keeping the seed
+fixed is what lets frame $k$ fill the strata frames $0 \dots k{-}1$ left empty.
+:::
 
-{{cite ohao/render/rt/sobol_generator.cpp "constexpr uint32_t kDirectionNumbers[SobolGenerator::kDimensions * 32] = {"}}
+## Four dimensions of direct bit expansion
 
-A Sobol value is built by direct bit expansion: for sample index $i$ with binary
-digits $b_j$, the value in dimension $d$ is the XOR of the direction numbers
-whose bit position is set,
+The direction numbers are Joe and Kuo's (`new-joe-kuo-6.21201`): dimension 0 is the
+bit reversal (the van der Corput sequence), dimensions 1 to 3 are their polynomials
+$d = 2, 3, 4$, expanded to 32 numbers each.
 
-$$x_i^{(d)} \;=\; igoplus_{j\,:\,b_j = 1} v_j^{(d)}, \qquad i = \sum_j b_j 2^{\,j}$$
+{{cite shaders/sampling/sobol.slang "static const uint kSobolDirections[128] = {"}}
 
-where $v_j^{(d)}$ is the 32-bit direction number for bit $j$ of dimension $d$.
-That is the whole generator — one XOR per set bit, no Gray-code recurrence, so an
-arbitrary index is evaluated with no state from the previous sample.
+A value is the XOR of the direction numbers whose bit is set in the index $i$,
 
-{{cite ohao/render/rt/sobol_generator.cpp "result ^= dirs[bit];"}}
+$$x_i^{(d)} = \bigoplus_{j\,:\,b_j = 1} v_j^{(d)}, \qquad i = \sum_j b_j 2^{\,j},$$
 
-## The scramble
+where $v_j^{(d)}$ is the 32-bit direction number for bit $j$ of dimension $d$. There is
+no Gray-code recurrence, so any index is evaluated without state from the previous
+sample:
 
-Raw Sobol has two problems. Its first point is the origin — every dimension of
-index 0 is exactly zero — and it is deterministic, so its structure aliases into
-visible patterns. Owen scrambling permutes the digits of the value: the permutation
-is measure-preserving (an estimator stays unbiased) and maps dyadic intervals to
-dyadic intervals (the stratification survives). `owenScramble` is Burley's 2020
-construction — reverse the bits so the hash acts on the *most* significant digits
-first, run the XOR-multiply rounds folded with the seed, reverse back:
+{{cite shaders/sampling/sobol.slang "if ((index & 1u) != 0u) x ^= kSobolDirections[dim * 32u + bit];"}}
 
-{{cite ohao/render/rt/owen_scramble.cpp "v ^= v * 0x3d20adeau;"}}
+## The scramble and the shuffle
 
-The tests hold it deterministic, decorrelated across seeds and valid at input 0;
-they do not hold it to a reference implementation's values.
+Owen scrambling permutes a value's binary digits, each digit flipped by a choice that
+depends only on the digits above it. The permutation preserves measure (the estimate
+stays unbiased) and maps dyadic intervals to dyadic intervals (the net's
+stratification survives). `owenScramble` is Burley's hash form of it: reverse the
+bits so the hash, which only carries information upward, acts on the most
+significant digits first; mix with Vegdahl's constants and the seed; reverse back.
 
-{{cite tests/renderer/sobol_test.cpp "TEST(Owen, DifferentSeedsDecorrelate) {"}}
+{{cite shaders/sampling/sobol.slang "v ^= v * 0x3d20adeau;"}}
 
-## Eight bits thrown away on purpose
+`reverseBits` is written out with masks and shifts because slangc's C++ target, which
+the CPU twin compiles through, has no `reversebits`:
 
-The float conversion discards the low byte and scales by $2^{-24}$ rather than
-dividing the full 32-bit value by $2^{32}$.
+{{cite shaders/sampling/sobol.slang "// The bits of v in reverse order (written out: slangc's C++ target has no reversebits)."}}
 
-{{cite ohao/render/rt/sobol_generator.cpp "return static_cast<float>(v >> 8) * (1.0f / static_cast<float>(1u << 24));"}}
+`sobol4` scrambles twice. The index itself is Owen-scrambled first (Burley's shuffle,
+so a pixel visits the sequence's points in a seed-dependent order), and then each
+coordinate is scrambled with its own seed, `hashCombine(seed, d)`:
 
-This buys the half-open interval for free. A 32-bit integer near `0xFFFFFFFF` has
-more significant bits than a `float` mantissa holds, so round-to-nearest lands on
-exactly $2^{32}$ and the division returns 1.0. After the shift the value is at most
-$2^{24}-1$, exactly representable, so the product is strictly below 1. It is not the
-only way — pbrt keeps all 32 bits and clamps the result to `OneMinusEpsilon` — but
-it is the one that costs no instructions. A host regression test guards it at index
-$2^{31}$ in dimension 1, whose direction number is `0xFFFFFFFF`:
+{{cite shaders/sampling/sobol.slang "const uint i = owenScramble(index, seed);"}}
+{{cite shaders/sampling/sobol.slang "p[d] = float(owenScramble(sobolBits(i, d), hashCombine(seed, d)) >> 8u) * (1.0 / 16777216.0);"}}
 
-{{cite ohao/render/rt/sobol_generator.cpp "cast of values near 0xFFFFFFFF rounds up to exactly 1.0 in IEEE-754."}}
-{{cite tests/renderer/sobol_test.cpp "float v = SobolGenerator::sample1D(2147483648u, 1);"}}
+The shift by 8 keeps the top 24 bits, which a float holds exactly, so every
+coordinate lies in $[0, 1)$ and `uint(u * n)` stays below `n`.
 
-## What the tests hold
+## Groups of four
 
-Exactly one test checks against numbers from outside the tree, and it covers
-dimensions 0 and 1. The dimension-2 and dimension-3 tests state in their own
-comments that their references were computed from the direction numbers under
-test, so they pass for whatever the table holds.
+A path needs far more than four numbers. `Sampler` hands them out in groups: a group
+is one 4-D point, seeded by hashing the pixel's seed with the group's number
+(Burley's padding), so dimensions of different groups are independent, while the four
+coordinates inside a group are jointly stratified.
 
-{{cite tests/renderer/sobol_test.cpp "TEST(Sobol, First8PointsMatchJoeKuoReference) {"}}
-{{cite tests/renderer/sobol_test.cpp "// Dim 2 reference values, computed from the dim-2 direction numbers"}}
+{{cite shaders/sampling/sobol.slang "if ((dim & 3u) == 0u) point = sobol4(index, hashCombine(seed, dim >> 2u));"}}
 
-## Two of the four columns are not Sobol
+The tracer places related draws in one group. Group 0 is the camera jitter; bounce
+$d$ takes its light choice and light point from group $1 + 3d$, its environment
+sample from $2 + 3d$, and its BSDF sample and Russian roulette test from $3 + 3d$:
 
-The initial numbers are recoverable from the table. Direction number $v_{k-1}$
-stores $m_k \cdot 2^{\,32-k}$, so $m_k = v_{k-1} \gg (32-k)$. Feeding those back
-through the Sobol recurrence for a degree-$s$ polynomial with coefficients $a_i$,
+{{cite shaders/rt/path_tracer.slang "rng.group(1u + 3u * depth);"}}
+{{cite shaders/rt/path_tracer.slang "rng.group(2u + 3u * depth);"}}
+{{cite shaders/rt/path_tracer.slang "rng.group(3u + 3u * depth);"}}
 
-$$m_k \;=\; \bigoplus_{i=1}^{s-1} 2^{\,i} a_i\, m_{k-i} \;\oplus\; 2^{\,s} m_{k-s} \;\oplus\; m_{k-s}$$
+Because each decision starts at its group's first coordinate, a branch that draws
+fewer numbers (no light sample, no environment) moves no later decision onto another
+dimension.
 
-regenerates the rest of the column — if the column came from that polynomial.
-Dimension 1 regenerates for all 32 numbers under $x{+}1$ with $m_1 = 1$, matching
-its comment. The other two columns do not match theirs.
+:::key
+Measured on the closed forms at 64 samples a pixel, against the PCG stream the
+tracer otherwise would draw from: the closed box's RMSE is 0.065 (PCG 0.104) and the
+white furnace's 0.0112 (PCG 0.0322).
+:::
 
-Dimension 2's comment names $x^2{+}x{+}1$ with $m = \{1, 3\}$, but $v_2$ is
-`0x40000000`, i.e. $m_2 = 1$. Recovered, the column reads
-$m = \{1, 1, 7, 5, 19, 47, \dots\}$, and neither admissible start reproduces it:
-$\{1,1\}$ generates $1, 1, 7, 11$ and $\{1,3\}$ generates $1, 3, 3, 9$. A search
-over every recurrence of the form above up to degree 8 — all $2^{\,s-1}$
-coefficient choices, primitive or not, seeded from the column's own leading
-values — matches at most $m_1 \dots m_9$ before diverging, and eight of those
-nine are the seed. That column is not a Sobol dimension from any polynomial in
-that range.
+## The CPU twin and its tests
 
-{{cite ohao/render/rt/sobol_generator.cpp "// Dimension 2: primitive polynomial x^2+x+1, initial m = {1, 3}"}}
-{{cite ohao/render/rt/sobol_generator.cpp "0x80000000u, 0x40000000u, 0xE0000000u, 0x50000000u,"}}
+`ohao/render/rt/sobol_generator.*` and `owen_scramble.*` are the module's CPU twin:
+the same direction numbers and the same scramble, in C++. The generator's table
+says where its numbers come from:
 
-Dimension 3's polynomial is right and its comment is wrong the other way: $v_2 =$
-`0xC0000000` and $v_3 =$ `0x20000000` give $m = \{1, 3, 1\}$, not the $\{1,1,1\}$
-the comment claims. With $\{1,3,1\}$, $x^3{+}x{+}1$ regenerates $m_1$ through
-$m_{17}$ and then breaks: the recurrence requires $v_{18} =$ `0x51474000`
-($m_{18} = 83229$), the table holds `0x51CBC000` ($m_{18} = 83759$). Seventeen of
-its 32 direction numbers are the ones the polynomial dictates.
+{{cite ohao/render/rt/sobol_generator.cpp "// Dimension 2: Joe-Kuo d=3, s=2, a=1, m={1, 3}"}}
 
-{{cite ohao/render/rt/sobol_generator.cpp "// Dimension 3: primitive polynomial x^3+x+1, initial m = {1, 1, 1}"}}
-{{cite ohao/render/rt/sobol_generator.cpp "0x208F8000u, 0x51CBC000u, 0xFBEA2000u, 0x75AD5000u,"}}
+`sobol_test` holds the twin and the module to outside references and to each other:
 
-Two consequences. Dimensions 2 and 3 carry no equidistribution guarantee beyond
-whatever they happen to have; replaying the table offline, of the six dimension
-pairs only (0, 1) is a (0,2)-net at N = 16, 64 and 256. And the two tests that
-would have caught this are the two that were written from the table instead of
-from a reference.
+- `Sobol.DirectionNumbersAreJoeKuos` regenerates all 128 direction numbers from Joe
+  and Kuo's $(s, a, m)$ by the Bratley-Fox recurrence and compares them with the table.
+- `Sampler.ModuleIsBurleysShuffledScrambledSobol` runs `sobol.slang` itself — compiled
+  to C++ by slangc through `tools/sampling/sobol_kernel.slang` into the library
+  `ohao_sobol_cpu` — and requires its points to equal a C++ reference of Burley's
+  `shuffled_scrambled_sobol4d`, built from the generator and `owenScramble`, bit for
+  bit.
+- `Sampler.ScramblingKeepsEveryPairsStratification` checks that, for every pair of
+  dimensions and every split of the first $2^8$ points into elementary intervals, the
+  scrambled points occupy as many intervals as the unscrambled sequence does (all
+  $2^m$ for dimensions 0 and 1).
+- `Sampler.GroupsAreIndependent` checks that two groups of one sample differ.
+
+{{cite tests/renderer/sobol_test.cpp "TEST(Sobol, DirectionNumbersAreJoeKuos) {"}}
+{{cite tests/renderer/sobol_test.cpp "TEST(Sampler, ModuleIsBurleysShuffledScrambledSobol) {"}}
+{{cite tools/sampling/CMakeLists.txt "add_library(ohao_sobol_cpu STATIC sobol_cpu.cpp ${OHAO_SOBOL_KERNEL_CPP})"}}
+{{cite tests/renderer/CMakeLists.txt "target_link_libraries(sobol_test PRIVATE ohao_sobol_cpu)"}}
+
+The generator's float conversion drops the low byte the same way the shader does, and
+a test guards it at index $2^{31}$ in dimension 1, whose direction number is
+`0xFFFFFFFF`:
+
+{{cite ohao/render/rt/sobol_generator.cpp "(v >> 8) is at most 2^24-1, so (v >> 8) * (1/2^24) < 1 exactly."}}
 
 ## Contracts
 
-- No shader consumes this code. A shader sampler built on it must take its table and scramble from these files (or a generated copy checked against them) and be tested against `SobolGenerator::sample1D` and `owenScramble` on the GPU, which nothing does today.
-- Only four dimensions exist, and only (0, 1) is a jointly stratified pair. Dimensions 2 and 3 must be regenerated from their polynomials, with tests from an outside reference, before anything relies on them.
-- Sample values must stay in [0, 1). The `>> 8` before the float multiply is load-bearing.
-- An Owen seed that varies with the sample index turns a progressive Sobol estimate into white noise while still passing every test in `sobol_test`; the seed belongs to the pixel (and the dimension group), the index to the sequence.
+- `kSobolDirections` in `sobol.slang` and `kDirectionNumbers` in `sobol_generator.cpp` are one table in two languages; `Sampler.ModuleIsBurleysShuffledScrambledSobol` fails if they part.
+- The sequence has four dimensions. A decision needing more than four numbers spans two groups and loses joint stratification across them.
+- A new decision in the path takes its own group (or the unused coordinates of an existing one); two decisions drawing from the same coordinates are correlated.
+- The pixel seed must not depend on the sample index; the index must advance once per frame and return to the render seed on a reset.
+- Draws are in $[0, 1)$; the `>> 8u` before the float multiply is load-bearing.

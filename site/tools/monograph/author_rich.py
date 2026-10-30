@@ -508,14 +508,14 @@ KNOWLEDGE: dict[str, dict] = {
         ],
     },
     "sampling/sobol": {
-        "what": ["Host-side Sobol + Owen scramble low-discrepancy generator, tested by sobol_test; no shader reads it."],
-        "how": ["sobol_generator.cpp + owen_scramble.cpp."],
-        "why": "Lower discrepancy → faster convergence than white noise.",
+        "what": ["Burley's shuffled, Owen-scrambled 4-D Sobol (shaders/sampling/sobol.slang): the path tracer's sampler in both profiles."],
+        "how": ["Sampler draws in groups of four, one scrambled 4-D point a group; sobol_generator.cpp, owen_scramble.cpp and tools/sampling are its CPU twin for sobol_test."],
+        "why": "Stratified across a pixel's frames: closed-box RMSE 0.065 against 0.104 for a PCG stream at 64 spp.",
     },
     "sampling/pcg": {
-        "what": ["PCG hash RNG for interactive path tracing."],
-        "how": ["path_tracer.slang's Rng: one PCG stream a pixel and sample."],
-        "why": "Interactive budgets cannot afford full Sobol table traffic every frame.",
+        "what": ["The PCG permutation used as an integer hash."],
+        "how": ["path_tracer.slang: the Sobol pixel seed and the any-hit coin; the hybrid traces' own keyed draws."],
+        "why": "A cheap, well-mixed hash where no sequence is needed.",
     },
     "sampling/mis": {
         "what": ["Multiple importance sampling balance/power heuristics for NEE vs BRDF samples."],

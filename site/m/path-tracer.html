@@ -171,8 +171,8 @@
       <div class="section-rule"><h2 id="nee-walk">Deep walk · NEE sphere branch</h2></div>
       <div class="prose reveal">
         <p class="lead">
-          Source: <code>shaders/rt/path_tracer.slang</code>, <code>sampleLight</code> lines <strong>231–293</strong>
-          and its use in <code>raygen</code> at <strong>588–605</strong>. We walk the <strong>sphere light</strong>
+          Source: <code>shaders/rt/path_tracer.slang</code>, <code>sampleLight</code> lines <strong>225–287</strong>
+          and its use in <code>raygen</code> at <strong>581–598</strong>. We walk the <strong>sphere light</strong>
           branch (point and spot lights, <code>l.type</code> 0 and 2), the general solid-angle case.
         </p>
       </div>
@@ -196,19 +196,19 @@
 
       <!-- Step 1 pick light -->
       <div class="nee-step reveal">
-        <div class="nee-step-head"><span class="sn">L240–246</span><h4>Step 1 · Pick a light uniformly</h4></div>
+        <div class="nee-step-head"><span class="sn">L234–240</span><h4>Step 1 · Pick a light uniformly</h4></div>
         <div class="nee-step-body">
-          <p>If any lights exist (<code>lightCount()</code>, the light buffer's header), one index is drawn from the path's PCG stream (242) and its choice probability kept as <code>choose</code> (243). The light is decoded from five rows of the buffer (<code>loadLight</code>, 171–190), and <code>s.mis</code> records whether it has an emitter mesh a bounce ray could meet (245).</p>
+          <p>If any lights exist (<code>lightCount()</code>, the light buffer's header), one index is drawn from the first coordinate of the bounce's light group, a point of the path's Owen-scrambled Sobol sequence (236) and its choice probability kept as <code>choose</code> (237). The light is decoded from five rows of the buffer (<code>loadLight</code>, 165–184), and <code>s.mis</code> records whether it has an emitter mesh a bounce ray could meet (239).</p>
           <div class="dual-pane">
             <div class="pane">
               <div class="pane-bar">Slang · path_tracer.slang (exact lines)</div>
-              <pre><span class="ln">240</span><span class="kw">const</span> uint n = lightCount();
-<span class="ln">241</span><span class="kw">if</span> (n == 0u) <span class="kw">return</span> s;
-<span class="ln">242</span><span class="kw">const</span> uint i = min(uint(rng.next() * float(n)), n - 1u);
-<span class="ln">243</span><span class="kw">const</span> float choose = <span class="num">1.0</span> / float(n);
-<span class="ln">244</span><span class="kw">const</span> Light l = loadLight(i);
-<span class="ln">245</span>s.mis = l.emitter;
-<span class="ln">246</span><span class="kw">const</span> float u1 = rng.next(), u2 = rng.next();</pre>
+              <pre><span class="ln">234</span><span class="kw">const</span> uint n = lightCount();
+<span class="ln">235</span><span class="kw">if</span> (n == 0u) <span class="kw">return</span> s;
+<span class="ln">236</span><span class="kw">const</span> uint i = min(uint(rng.next() * float(n)), n - 1u);
+<span class="ln">237</span><span class="kw">const</span> float choose = <span class="num">1.0</span> / float(n);
+<span class="ln">238</span><span class="kw">const</span> Light l = loadLight(i);
+<span class="ln">239</span>s.mis = l.emitter;
+<span class="ln">240</span><span class="kw">const</span> float u1 = rng.next(), u2 = rng.next();</pre>
             </div>
             <div class="pane">
               <div class="pane-bar">Formula</div>
@@ -226,18 +226,18 @@
 
       <!-- Step 2 radiance -->
       <div class="nee-step reveal">
-        <div class="nee-step-head"><span class="sn">L194–209</span><h4>Step 2 · The sphere's radiance</h4></div>
+        <div class="nee-step-head"><span class="sn">L188–203</span><h4>Step 2 · The sphere's radiance</h4></div>
         <div class="nee-step-body">
           <p>A point or spot light of intensity \(I\) is a sphere of its radius \(r\) (at least 1 cm) whose radiance is \(I/(\pi r^{2})\), so it delivers \(I/d^{2}\) at distance \(d\) as the deferred frame's point light does. The range window \((1-(d/\text{range})^4)^2\) and a spot's cone toward the shaded point multiply it.</p>
           <div class="dual-pane">
             <div class="pane">
               <div class="pane-bar">Slang · sphereRadiance</div>
-              <pre><span class="ln">196</span><span class="kw">const</span> float r = l.radius;
-<span class="ln">197</span>float3 le = l.radiance / (kPi * r * r);
-<span class="ln">198</span><span class="kw">const</span> float d = distance(p, l.position);
-<span class="ln">199</span><span class="kw">const</span> float x = d / l.range;
-<span class="ln">200</span><span class="kw">const</span> float w = saturate(<span class="num">1.0</span> - x * x * x * x);
-<span class="ln">201</span>le *= w * w;</pre>
+              <pre><span class="ln">190</span><span class="kw">const</span> float r = l.radius;
+<span class="ln">191</span>float3 le = l.radiance / (kPi * r * r);
+<span class="ln">192</span><span class="kw">const</span> float d = distance(p, l.position);
+<span class="ln">193</span><span class="kw">const</span> float x = d / l.range;
+<span class="ln">194</span><span class="kw">const</span> float w = saturate(<span class="num">1.0</span> - x * x * x * x);
+<span class="ln">195</span>le *= w * w;</pre>
             </div>
             <div class="pane">
               <div class="pane-bar">Formula</div>
@@ -255,25 +255,25 @@
 
       <!-- Step 3 sample sphere -->
       <div class="nee-step reveal">
-        <div class="nee-step-head"><span class="sn">L271–292</span><h4>Step 3 · Sphere branch: sample its cone of directions</h4></div>
+        <div class="nee-step-head"><span class="sn">L265–286</span><h4>Step 3 · Sphere branch: sample its cone of directions</h4></div>
         <div class="nee-step-body">
-          <p>From the shading point the sphere fills a cone of half-angle \(\theta_{\max}\), \(\sin^2\theta_{\max}=r^2/d^2\). A direction is drawn uniformly inside that cone, so every sample sees the sphere and none is wasted on its back. \(1-\cos\theta_{\max}\) is computed without cancellation (277). The shadow ray stops at the sphere's near side along the sampled direction (288).</p>
+          <p>From the shading point the sphere fills a cone of half-angle \(\theta_{\max}\), \(\sin^2\theta_{\max}=r^2/d^2\). A direction is drawn uniformly inside that cone, so every sample sees the sphere and none is wasted on its back. \(1-\cos\theta_{\max}\) is computed without cancellation (271). The shadow ray stops at the sphere's near side along the sampled direction (282).</p>
           <div class="dual-pane">
             <div class="pane">
               <div class="pane-bar">Slang · sphere branch</div>
-              <pre><span class="ln">272</span><span class="kw">const</span> float3 toC = l.position - p;
-<span class="ln">273</span><span class="kw">const</span> float d2 = dot(toC, toC);
-<span class="ln">274</span><span class="kw">const</span> float r = l.radius;
-<span class="ln">275</span><span class="kw">const</span> float sin2 = r * r / d2;
-<span class="ln">276</span><span class="kw">if</span> (sin2 &gt;= <span class="num">1.0</span>) <span class="kw">return</span> s;
-<span class="ln">277</span><span class="kw">const</span> float oneMinusCosMax = sin2 / (<span class="num">1.0</span> + sqrt(<span class="num">1.0</span> - sin2));
-<span class="ln">278</span><span class="kw">const</span> float oneMinusCos = u1 * oneMinusCosMax;
-<span class="ln">279</span><span class="kw">const</span> float cosT = <span class="num">1.0</span> - oneMinusCos;
-<span class="ln">281</span><span class="kw">const</span> float phi = kTwoPi * u2;
-<span class="ln">286</span>s.L = normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + w * cosT);
-<span class="ln">288</span>s.dist = max(dc - sqrt(max(r * r - d2 + dc * dc, <span class="num">0.0</span>)), <span class="num">0.0</span>) - <span class="num">1e-3</span>;
-<span class="ln">289</span>s.pdf = choose / (kTwoPi * oneMinusCosMax);
-<span class="ln">290</span>s.radiance = sphereRadiance(l, p);</pre>
+              <pre><span class="ln">266</span><span class="kw">const</span> float3 toC = l.position - p;
+<span class="ln">267</span><span class="kw">const</span> float d2 = dot(toC, toC);
+<span class="ln">268</span><span class="kw">const</span> float r = l.radius;
+<span class="ln">269</span><span class="kw">const</span> float sin2 = r * r / d2;
+<span class="ln">270</span><span class="kw">if</span> (sin2 &gt;= <span class="num">1.0</span>) <span class="kw">return</span> s;
+<span class="ln">271</span><span class="kw">const</span> float oneMinusCosMax = sin2 / (<span class="num">1.0</span> + sqrt(<span class="num">1.0</span> - sin2));
+<span class="ln">272</span><span class="kw">const</span> float oneMinusCos = u1 * oneMinusCosMax;
+<span class="ln">273</span><span class="kw">const</span> float cosT = <span class="num">1.0</span> - oneMinusCos;
+<span class="ln">275</span><span class="kw">const</span> float phi = kTwoPi * u2;
+<span class="ln">280</span>s.L = normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + w * cosT);
+<span class="ln">282</span>s.dist = max(dc - sqrt(max(r * r - d2 + dc * dc, <span class="num">0.0</span>)), <span class="num">0.0</span>) - <span class="num">1e-3</span>;
+<span class="ln">283</span>s.pdf = choose / (kTwoPi * oneMinusCosMax);
+<span class="ln">284</span>s.radiance = sphereRadiance(l, p);</pre>
             </div>
             <div class="pane">
               <div class="pane-bar">Formula · uniform cone</div>
@@ -285,7 +285,7 @@
           </div>
           <div class="jargon">
             <div class="j-term">Jargon · solid angle</div>
-            <p>How big a surface looks from the shading point. Sampling the cone directly gives a density in solid angle with no area-to-solid-angle conversion, and the same density (<code>spherePdf</code>, 212–219) is what a bounce ray that meets the sphere's emitter mesh is weighed against.</p>
+            <p>How big a surface looks from the shading point. Sampling the cone directly gives a density in solid angle with no area-to-solid-angle conversion, and the same density (<code>spherePdf</code>, 206–213) is what a bounce ray that meets the sphere's emitter mesh is weighed against.</p>
           </div>
           <div class="why-callout">
             <div class="why-label">Why the cone, not the whole sphere</div>
@@ -296,19 +296,19 @@
 
       <!-- Step 4 shadow -->
       <div class="nee-step reveal">
-        <div class="nee-step-head"><span class="sn">L386–399</span><h4>Step 4 · Shadow ray (visibility)</h4></div>
+        <div class="nee-step-head"><span class="sn">L380–393</span><h4>Step 4 · Shadow ray (visibility)</h4></div>
         <div class="nee-step-body">
-          <p>Only if the BSDF is nonzero and the direction leaves on the geometric side the ray came from. The ray starts 1 mm off the surface along the geometric normal (586), traces <code>kRayMaskScene</code> (so no emitter mesh occludes its own light), accepts the first hit and skips the closest-hit shader. The payload starts as a hit; only the miss shader clears it.</p>
+          <p>Only if the BSDF is nonzero and the direction leaves on the geometric side the ray came from. The ray starts 1 mm off the surface along the geometric normal (579), traces <code>kRayMaskScene</code> (so no emitter mesh occludes its own light), accepts the first hit and skips the closest-hit shader. The payload starts as a hit; only the miss shader clears it.</p>
           <div class="dual-pane">
             <div class="pane">
               <div class="pane-bar">Slang · visible</div>
-              <pre><span class="ln">388</span><span class="kw">if</span> (dist &lt;= <span class="num">0.0</span>) <span class="kw">return</span> false;
-<span class="ln">392</span>ray.TMin = <span class="num">1e-4</span>;
-<span class="ln">393</span>ray.TMax = dist;
-<span class="ln">395</span>p.flags = kHit;
-<span class="ln">396</span>TraceRay(scene, traceFlags() | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-<span class="ln">397</span>         kRayMaskScene, 0, 0, 0, ray, p);
-<span class="ln">398</span><span class="kw">return</span> (p.flags &amp; kHit) == 0u;</pre>
+              <pre><span class="ln">382</span><span class="kw">if</span> (dist &lt;= <span class="num">0.0</span>) <span class="kw">return</span> false;
+<span class="ln">386</span>ray.TMin = <span class="num">1e-4</span>;
+<span class="ln">387</span>ray.TMax = dist;
+<span class="ln">389</span>p.flags = kHit;
+<span class="ln">390</span>TraceRay(scene, traceFlags() | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+<span class="ln">391</span>         kRayMaskScene, 0, 0, 0, ray, p);
+<span class="ln">392</span><span class="kw">return</span> (p.flags &amp; kHit) == 0u;</pre>
             </div>
             <div class="pane">
               <div class="pane-bar">Formula</div>
@@ -326,18 +326,18 @@
 
       <!-- Step 5 shade -->
       <div class="nee-step reveal">
-        <div class="nee-step-head"><span class="sn">L588–605</span><h4>Step 5 · BSDF × radiance × MIS weight / pdf</h4></div>
+        <div class="nee-step-head"><span class="sn">L581–598</span><h4>Step 5 · BSDF × radiance × MIS weight / pdf</h4></div>
         <div class="nee-step-body">
           <p>On a visible sample, <code>OpenPBRBase::eval</code> (BSDF × cosine) times the light's radiance, weighted by the power heuristic against the BSDF's own density for that direction and divided by the light's density. A sun is a delta (its radiance already divided by its choice); a light without an emitter mesh can only be found this way and takes full weight.</p>
           <div class="dual-pane">
             <div class="pane">
               <div class="pane-bar">Slang · raygen (exact lines)</div>
-              <pre><span class="ln">589</span><span class="kw">const</span> LightSample ls = sampleLight(hit.position, rng);
-<span class="ln">593</span><span class="kw">const</span> float3 f = base.eval(wo, wi, tables);
-<span class="ln">594</span><span class="kw">if</span> (any(f &gt; <span class="num">0.0</span>) &amp;&amp; dot(ls.L, hit.geoNormal) &gt; <span class="num">0.0</span> &amp;&amp; visible(p, ls.L, ls.dist))
-<span class="ln">598</span>  <span class="kw">const</span> float w = ls.pdf &gt; <span class="num">0.0</span> ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : <span class="num">1.0</span>) / ls.pdf : <span class="num">1.0</span>;
-<span class="ln">599</span>  <span class="kw">const</span> float3 c = throughput * f * ls.radiance * w;
-<span class="ln">600</span>  radiance += c;</pre>
+              <pre><span class="ln">583</span><span class="kw">const</span> LightSample ls = sampleLight(hit.position, rng);
+<span class="ln">587</span><span class="kw">const</span> float3 f = base.eval(wo, wi, tables);
+<span class="ln">588</span><span class="kw">if</span> (any(f &gt; <span class="num">0.0</span>) &amp;&amp; dot(ls.L, hit.geoNormal) &gt; <span class="num">0.0</span> &amp;&amp; visible(p, ls.L, ls.dist))
+<span class="ln">592</span>  <span class="kw">const</span> float w = ls.pdf &gt; <span class="num">0.0</span> ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : <span class="num">1.0</span>) / ls.pdf : <span class="num">1.0</span>;
+<span class="ln">593</span>  <span class="kw">const</span> float3 c = throughput * f * ls.radiance * w;
+<span class="ln">594</span>  radiance += c;</pre>
             </div>
             <div class="pane">
               <div class="pane-bar">Formula</div>
@@ -348,7 +348,7 @@
           </div>
           <div class="why-callout">
             <div class="why-label">Why the other half of the weight lives in the bounce</div>
-            <p>When the BSDF-sampled bounce ray meets the same light's emitter mesh (493–508), <code>emitterRadiance</code> recomputes the light-sampling density for that direction and the hit is weighed by \(p_f^2/(p_f^2+p_L^2)\). The two weights sum to one, so a near-mirror and a rough surface both count the light once.</p>
+            <p>When the BSDF-sampled bounce ray meets the same light's emitter mesh (486–501), <code>emitterRadiance</code> recomputes the light-sampling density for that direction and the hit is weighed by \(p_f^2/(p_f^2+p_L^2)\). The two weights sum to one, so a near-mirror and a rough surface both count the light once.</p>
           </div>
         </div>
       </div>
@@ -371,7 +371,7 @@
 
       <div class="section-rule"><h2 id="files">Source map</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc">Both profiles · NEE L231–293 · raygen L443–663</span></div>
+        <div class="row"><code>shaders/rt/path_tracer.slang</code><span class="desc">Both profiles · NEE L225–287 · raygen L438–659</span></div>
         <div class="row"><code>shaders/material/openpbr.slang</code><span class="desc">OpenPBR base BSDF: eval, pdf, sample</span></div>
         <div class="row"><code>path_tracer_descriptors.cpp</code><span class="desc">Binding layout</span></div>
         <div class="row"><code>gpu_light.hpp</code><span class="desc">80-byte light struct</span></div>

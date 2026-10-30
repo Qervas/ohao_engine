@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>07 · Sampling & MIS — OHAO Monograph</title>
-  <meta name="description" content="Sampling in the path tracer: the PCG stream, BSDF sampling, MIS, the env CDF pipeline." />
+  <meta name="description" content="Sampling in the path tracer: Owen-scrambled Sobol, BSDF sampling, MIS, the env CDF pipeline." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
@@ -57,7 +57,7 @@
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
         <ol>
           <li><a href="#mc">Monte Carlo baseline</a></li>
-          <li><a href="#stream">One PCG stream a pixel and sample</a></li>
+          <li><a href="#stream">Owen-scrambled Sobol</a></li>
           <li><a href="#lobes">BSDF sampling</a></li>
           <li><a href="#mis">MIS workflow</a></li>
           <li><a href="#env">Env CDF: build → upload → sample</a></li>
@@ -75,17 +75,18 @@
         <p>Variance falls like \(1/\sqrt N\). Better \(p\) (BSDF sampling, the environment CDF, next-event estimation) and MIS cut the constant — that is this chapter’s job.</p>
       </div>
 
-      <div class="section-rule"><h2 id="stream">One PCG stream a pixel and sample</h2></div>
+      <div class="section-rule"><h2 id="stream">Owen-scrambled Sobol, in groups of four</h2></div>
       <div class="algo reveal">
-        <div class="algo-bar">Every raygen invocation</div>
+        <div class="algo-bar">Every raygen invocation (shaders/sampling/sobol.slang)</div>
         <ol>
-          <li>Seed: <code>pcg(pixel.x ^ pcg(pixel.y ^ pcg(sampleIndex * 0x9E3779B9 + 0x7F4A7C15)))</code></li>
-          <li>Each <code>rng.next()</code> iterates the PCG hash and returns 24 bits as a float in [0, 1)</li>
-          <li>Draws are taken in program order: pixel jitter, the light choice and its point, the environment texel and its point, the BSDF's lobe and direction, the Russian roulette test</li>
+          <li><code>Sampler rng = Sampler(pc.params.z, pcg(pixel.x ^ pcg(pixel.y ^ 0x7F4A7C15u)))</code>: the sample's index in the pixel's sequence, and a seed hashed from the pixel</li>
+          <li>Draws come in groups of four: a group is one point of the 4-D Sobol sequence (Joe-Kuo direction numbers, dimension 0 the bit reversal), its index shuffled and its coordinates Owen-scrambled (Burley 2020, Vegdahl's constants) by <code>hashCombine(pixelSeed, group)</code></li>
+          <li>Group 0 is the camera jitter; bounce <em>d</em> takes group 1+3d for the light choice and point, 2+3d for the environment sample, 3+3d for the BSDF sample and Russian roulette (<code>rng.group(g)</code>)</li>
+          <li>Each coordinate is 24 bits as a float in [0, 1)</li>
         </ol>
       </div>
-      <div class="why-callout reveal"><div class="why-label">Why a plain stream</div>
-        <p>A stream needs no dimension bookkeeping: a branch that skips a draw cannot shift the decisions after it onto another sequence's dimensions. The host-side Sobol generator (<code>sobol_generator.*</code>, <code>owen_scramble.*</code>) is tested by <code>sobol_test</code> and read by no shader.</p>
+      <div class="why-callout reveal"><div class="why-label">Why groups</div>
+        <p>The draws of one decision are jointly stratified because they share a point; different groups are independent because their scrambles are seeded apart. A pixel's samples across frames are one sequence, so they stay stratified however many there are. Measured on the closed forms at 64 samples a pixel: closed-box RMSE 0.065 against 0.104 for a PCG stream, furnace 0.0112 against 0.0322. The CPU twin (<code>tools/sampling/</code>, the module compiled to C++ by slangc) lets <code>sobol_test</code> check the shader bit for bit against <code>sobol_generator.cpp</code> and <code>owen_scramble.cpp</code>.</p>
       </div>
 
       <div class="section-rule"><h2 id="lobes">BSDF sampling (used in MIS)</h2></div>
@@ -143,10 +144,11 @@
         </div>
       </div>
       <div class="file-map reveal">
-        <div class="row"><code>rt/path_tracer.slang</code><span class="desc">Rng, powerHeuristic, sampleEnv / envPdf</span></div>
+        <div class="row"><code>sampling/sobol.slang</code><span class="desc">Sampler: Owen-scrambled Sobol</span></div>
+        <div class="row"><code>rt/path_tracer.slang</code><span class="desc">groups, powerHeuristic, sampleEnv / envPdf</span></div>
         <div class="row"><code>material/openpbr.slang</code><span class="desc">BSDF sample + pdf</span></div>
         <div class="row"><code>env_cdf.cpp</code><span class="desc">CPU CDF</span></div>
-        <div class="row"><code>sobol_generator.* / owen_scramble.*</code><span class="desc">Host-side Sobol, tested, unused by shaders</span></div>
+        <div class="row"><code>sobol_generator.* / owen_scramble.* / tools/sampling</code><span class="desc">CPU twin for sobol_test</span></div>
       </div>
 
       <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
@@ -154,13 +156,13 @@
       <div class="catalog reveal">
         <a class="tree-card" href="sampling/sobol.html">
           <div class="num">sobol</div>
-          <h3>Sobol + Owen</h3>
-          <p>Host-side Sobol generator and Owen scramble, tested by sobol_test.</p>
+          <h3>Owen-scrambled Sobol</h3>
+          <p>Burley&#x27;s shuffled, Owen-scrambled 4-D Sobol in sobol.slang: the path tracer&#x27;s sampler, drawn in groups of four.</p>
         </a>
         <a class="tree-card" href="sampling/pcg.html">
           <div class="num">pcg</div>
-          <h3>PCG stream</h3>
-          <p>The path tracer&#x27;s hash-based random stream.</p>
+          <h3>PCG hash</h3>
+          <p>The PCG permutation as a hash: the pixel seed, the any-hit coin, the hybrid traces&#x27; keyed draws.</p>
         </a>
         <a class="tree-card" href="sampling/mis.html">
           <div class="num">mis</div>

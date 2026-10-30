@@ -357,12 +357,12 @@ window.OHAO_NAV_TREE = [
     "children": [
       {
         "id": "sampling/sobol",
-        "title": "Sobol + Owen",
+        "title": "Owen-scrambled Sobol",
         "href": "m/sampling/sobol.html"
       },
       {
         "id": "sampling/pcg",
-        "title": "PCG stream",
+        "title": "PCG hash",
         "href": "m/sampling/pcg.html"
       },
       {

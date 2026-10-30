@@ -172,10 +172,11 @@ add_executable(env_sun_test env_sun_test.cpp   # the environment's sun, found an
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_sun.cpp
 )
 target_link_libraries(env_sun_test PRIVATE glm)
-add_executable(sobol_test sobol_test.cpp   # Sobol + Owen scramble
+add_executable(sobol_test sobol_test.cpp   # the path tracer's sampler against its CPU twin
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/sobol_generator.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
 )
+target_link_libraries(sobol_test PRIVATE ohao_sobol_cpu)
 add_executable(denoise_parse_test denoise_parse_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
 )
