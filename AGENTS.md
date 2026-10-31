@@ -328,7 +328,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
   `tests/bench/render_budgets.json`, each tagged `gatedFrom` the 2b step that delivers it
   (gated once `currentStep` reaches it, else reported `pending` with its measurement);
-  headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p`,
+  headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p`, `sponza_night_1080p` (RT direct
+  light's showcase, 37 lamps; no budget yet), `sponza_1080p` (Khronos Sponza by day; no budget yet),
   `bench10k_1080p`/`bench100k_1080p`, `play_hud_1080p` (the play scene with its HUD: the
   `hud` pass, 0.05 ms) and `play_vfx_1080p` (the play scene's effects: a grenade thrown and the
   rifle held down, stepped to the boom and before every frame: `vfx.expand` 0.08, `vfx.sort` 0.04,

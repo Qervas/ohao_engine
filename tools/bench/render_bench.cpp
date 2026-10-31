@@ -121,6 +121,10 @@ const std::vector<SceneSpec>& sceneSpecs() {
         {"cornell_720p", "assets/scenes/cornell_box.scene.json", 1280, 720, {}, std::nullopt},
         {"helmet_game_720p", "assets/scenes/helmet_game.scene.json", 1280, 720, {"taa", "bloom"}, 0.0f},
         {"helmet_game_1080p", "assets/scenes/helmet_game.scene.json", 1920, 1080, {"taa", "bloom"}, 0.0f},
+        // RT direct light's showcase: Sponza at night, 37 lamps and no sun, ReSTIR DI at full load (frontier F4).
+        {"sponza_night_1080p", "assets/scenes/sponza_night.scene.json", 1920, 1080, {"taa", "bloom"}, 0.0f},
+        // Khronos Sponza by day: the heaviest checked-in geometry, the sun and the sky.
+        {"sponza_1080p", "assets/scenes/khronos_sponza.scene.json", 1920, 1080, {"taa", "bloom"}, 0.0f},
         {"bench10k_1080p", "build/render_bench/bench10k.scene.json", 1920, 1080, {"taa", "bloom"}, 0.0f},
         {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "bloom"}, 0.0f},
         // The play scene through the player's eyes with its HUD (health, ammo, crosshair).
