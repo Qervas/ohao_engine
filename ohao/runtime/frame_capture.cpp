@@ -324,8 +324,9 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
     const VulkanRenderer::RenderSettings r = renderer.renderSettings();
     api::RenderSettings s;
     s.quality = r.quality == RenderQuality::Reference ? api::Quality::reference : api::Quality::realtime;
-    s.rtDirect = {r.rtDirect, static_cast<int32_t>(r.rtDirectCandidates), static_cast<int32_t>(r.rtDirectSpatial)};
-    s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::GIResolution::full : api::GIResolution::half,
+    s.rtDirect = {r.rtDirect, static_cast<int32_t>(r.rtDirectCandidates), static_cast<int32_t>(r.rtDirectSpatial),
+                  r.rtDirectFullResolution ? api::TraceResolution::full : api::TraceResolution::half};
+    s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::TraceResolution::full : api::TraceResolution::half,
               static_cast<int32_t>(r.rtGIRays)};
     s.ssao = r.ssao;
     s.ssr = r.ssr;
@@ -349,8 +350,9 @@ void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s)
     r.rtDirect = s.rtDirect.enabled;
     r.rtDirectCandidates = static_cast<uint32_t>(std::clamp(s.rtDirect.candidates, 1, 32));
     r.rtDirectSpatial = static_cast<uint32_t>(std::clamp(s.rtDirect.spatial, 0, 8));
+    r.rtDirectFullResolution = s.rtDirect.resolution == api::TraceResolution::full;
     r.rtGI = s.rtGI.enabled;
-    r.rtGIFullResolution = s.rtGI.resolution == api::GIResolution::full;
+    r.rtGIFullResolution = s.rtGI.resolution == api::TraceResolution::full;
     r.rtGIRays = static_cast<uint32_t>(std::clamp(s.rtGI.rays, 1, 32));
     r.ssao = s.ssao;
     r.ssr = s.ssr;

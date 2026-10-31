@@ -1,5 +1,6 @@
 #include "renderer_impl.hpp"
 #include "core/log.hpp"
+#include "render/rt/rt_compute.hpp"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -271,6 +272,7 @@ bool VulkanRenderer::createLogicalDevice() {
     // successfully and simply cannot run those.
     bool rayQuerySupported = false;
     bool bufferAtomicAddSupported = false;
+    bool pipelineStats = false;
     {
         uint32_t availCount = 0;
         vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, nullptr);
@@ -338,6 +340,12 @@ bool VulkanRenderer::createLogicalDevice() {
         };
         if (extSupported(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) && !enabled(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME))
             m_enabledDeviceExtensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+
+        // OHAO_PIPELINE_STATS=1: compute pipelines log the driver's statistics (rtc::setPipelineStats).
+        const char* statsVar = std::getenv("OHAO_PIPELINE_STATS");
+        pipelineStats = statsVar && *statsVar && std::strcmp(statsVar, "0") != 0 &&
+                        extSupported(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+        if (pipelineStats) m_enabledDeviceExtensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
     }
 
     // A window's presents can be confirmed (sub-project 9: when each frame was presented) with
@@ -453,6 +461,15 @@ bool VulkanRenderer::createLogicalDevice() {
         optionalChainTail = &meshShaderFeatures;
     }
 
+    // Pipeline statistics (OHAO_PIPELINE_STATS). Same conditional-chain rule.
+    VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pipelineStatsFeatures{};
+    if (pipelineStats) {
+        pipelineStatsFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
+        pipelineStatsFeatures.pipelineExecutableInfo = VK_TRUE;
+        pipelineStatsFeatures.pNext = optionalChainTail;
+        optionalChainTail = &pipelineStatsFeatures;
+    }
+
     // Present id and present wait (a window, both supported). Same conditional-chain rule.
     if (m_presentWaitEnabled) {
         presentIdFeatures.presentId = VK_TRUE;
@@ -497,6 +514,7 @@ bool VulkanRenderer::createLogicalDevice() {
     }
 
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
+    rtc::setPipelineStats(pipelineStats);
     if (m_presentWaitEnabled) {
         m_waitForPresent = reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(m_device, "vkWaitForPresentKHR"));
         if (!m_waitForPresent) m_presentWaitEnabled = false;

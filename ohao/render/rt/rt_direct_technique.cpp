@@ -25,7 +25,7 @@ constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 constexpr VkAccessFlags kReadWrite = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 
 constexpr uint32_t kFlagReference = 1u;
-constexpr uint32_t kDenoiseBindings[] = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 14};
+constexpr uint32_t kDenoiseBindings[] = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13};
 constexpr uint32_t kFlagHistory = 2u;
 
 // A full memory dependency between compute dispatches (and from earlier frames' readers).
@@ -97,7 +97,7 @@ bool RTDirectTechnique::createScreenImages() {
         ok = make(m_resA[i], kReservoirFormat, kStorage) && make(m_resB[i], kReservoirFormat, kStorage) &&
              make(m_histDiffuse[i], kLightFormat, kStorage) && make(m_histSpecular[i], kLightFormat, kStorage) &&
              make(m_surfA[i], kReservoirFormat, kStorage) && make(m_surfB[i], kReservoirFormat, kStorage) &&
-             make(m_guide[i], kGuideFormat, kStorage);
+             make(m_guide[i], kGuideFormat, kStorage) && make(m_moments[i], kMeanFormat, kStorage);
     m_imagesReady = false;
     m_historyValid = false;
     m_refFrames = 0;
@@ -110,7 +110,7 @@ void RTDirectTechnique::destroyScreenImages() {
         rtc::destroyImage(m_device, *img);
     for (uint32_t i = 0; i < 2; ++i)
         for (Image* img : {&m_resA[i], &m_resB[i], &m_histDiffuse[i], &m_histSpecular[i], &m_surfA[i], &m_surfB[i],
-                           &m_guide[i]})
+                           &m_guide[i], &m_moments[i]})
             rtc::destroyImage(m_device, *img);
 }
 
@@ -152,7 +152,7 @@ bool RTDirectTechnique::createDescriptorResources() {
     if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &m_sampleSetLayout) != VK_SUCCESS) return false;
 
     // The denoiser (rt/di_denoise.slang): the noisy light 0-1, the guides 2-3, the velocity 4, the
-    // accumulations and outputs 6-11, this frame's surfaces' B 14.
+    // accumulations and outputs 6-11, the mean square luminances and frames 12-13.
     std::vector<VkDescriptorSetLayoutBinding> denoise;
     for (const uint32_t b : kDenoiseBindings) denoise.push_back(layoutBinding(b, b == 4 ? sampled : storage));
     li.pNext = nullptr;
@@ -163,7 +163,7 @@ bool RTDirectTechnique::createDescriptorResources() {
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT},
         {sampled, (7 + 1 * 4) * MAX_FRAMES_IN_FLIGHT},
-        {storage, (15 + 11 * 4) * MAX_FRAMES_IN_FLIGHT},
+        {storage, (15 + 12 * 4) * MAX_FRAMES_IN_FLIGHT},
         {buffer, 5 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_textureCapacity * MAX_FRAMES_IN_FLIGHT},
     };
@@ -193,16 +193,18 @@ bool RTDirectTechnique::createPipelines() {
     const VkDescriptorSetLayout sets[] = {m_sampleSetLayout, m_alphaTablesLayout, m_texturesLayout};
     // The second pipeline of each pair makes its own layout, identical to the first's (so the first's
     // binds both) and destroyed at once.
-    VkPipelineLayout shadeLayout = VK_NULL_HANDLE, atrousLayout = VK_NULL_HANDLE;
+    VkPipelineLayout spatialLayout = VK_NULL_HANDLE, shadeLayout = VK_NULL_HANDLE, atrousLayout = VK_NULL_HANDLE;
     const bool ok = rtc::createComputePipeline(m_device, "rt_restir_di.slang.initial.spv", "initial", sets,
                                                sizeof(shared::DIPush), m_sampleLayout, m_initial) &&
+                    rtc::createComputePipeline(m_device, "rt_restir_di.slang.spatial.spv", "spatial", sets,
+                                               sizeof(shared::DIPush), spatialLayout, m_spatial) &&
                     rtc::createComputePipeline(m_device, "rt_restir_di.slang.shade.spv", "shade", sets,
                                                sizeof(shared::DIPush), shadeLayout, m_shade) &&
                     rtc::createComputePipeline(m_device, "rt_di_denoise.slang.temporal.spv", "temporal",
                                                m_denoiseSetLayout, sizeof(shared::DIPush), m_denoiseLayout, m_temporal) &&
                     rtc::createComputePipeline(m_device, "rt_di_denoise.slang.atrous.spv", "atrous", m_denoiseSetLayout,
                                                sizeof(shared::DIPush), atrousLayout, m_atrous);
-    for (VkPipelineLayout l : {shadeLayout, atrousLayout})
+    for (VkPipelineLayout l : {spatialLayout, shadeLayout, atrousLayout})
         if (l) vkDestroyPipelineLayout(m_device, l, nullptr);
     return ok;
 }
@@ -228,7 +230,7 @@ void RTDirectTechnique::writeSampleSet(const DirectInput& input) {
     const VkImageView mean[2] = {reference ? m_meanDiffuse.view : m_meanDummy.view,
                                  reference ? m_meanSpecular.view : m_meanDummy.view};
     // 8-9 last frame's reservoirs, 13-16 this frame's, 17-20 the light, 21-24 the surfaces (this
-    // frame's, last frame's).
+    // frame's, last frame's), 25 the denoiser's guide.
     const std::pair<uint32_t, VkImageView> storageViews[] = {
         {8, m_resA[prev].view},   {9, m_resB[prev].view},   {13, m_midA.view},           {14, m_midB.view},
         {15, m_resA[m_cur].view}, {16, m_resB[m_cur].view}, {17, m_noisyDiffuse.view},   {18, m_noisySpecular.view},
@@ -287,6 +289,11 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
     m_velocityView = input.velocityBuffer;
     if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
     if (!reference) m_refFrames = 0;              // a realtime frame breaks the reference run
+    const uint32_t shift = !reference && input.halfResolution ? 1u : 0u;
+    if (shift != m_shift) m_historyValid = false;   // last frame's reservoirs are another image's
+    m_shift = shift;
+    m_traceWidth = (m_width + shift) >> shift;
+    m_traceHeight = (m_height + shift) >> shift;
     m_cur ^= 1u;
 
     // Earlier frames' readers of these images (the passes, lighting) finish first; new images
@@ -296,7 +303,8 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
         for (Image* img : {&m_midA, &m_midB, &m_noisyDiffuse, &m_noisySpecular, &m_tmpDiffuse, &m_tmpSpecular,
                            &m_resA[0], &m_resA[1], &m_resB[0], &m_resB[1], &m_histDiffuse[0], &m_histDiffuse[1],
                            &m_histSpecular[0], &m_histSpecular[1], &m_surfA[0], &m_surfA[1], &m_surfB[0],
-                           &m_surfB[1], &m_guide[0], &m_guide[1], &m_meanDummy})
+                           &m_surfB[1], &m_guide[0], &m_guide[1], &m_moments[0], &m_moments[1],
+                           &m_meanDummy})
             rtc::transition(cmd, *img, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute, kReadWrite, true);
         m_imagesReady = true;
         m_historyValid = false;
@@ -313,15 +321,25 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
                      (reference ? kFlagReference : 0u) | (m_historyValid ? kFlagHistory : 0u), reference ? m_refFrames : 0u};
     m_push.cameraPos = {input.cameraPos.x, input.cameraPos.y, input.cameraPos.z, 0.0f};
     m_push.weather = {input.weather.x, input.weather.y, input.weather.z, 0.0f};
+    m_push.trace = {m_traceWidth, m_traceHeight, m_shift, 0u};
     writeSampleSet(input);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_initial);
+    dispatchSample(cmd, m_initial, m_traceWidth, m_traceHeight);
+    m_rendered = true;
+}
+
+void RTDirectTechnique::dispatchSample(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t width, uint32_t height) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     const VkDescriptorSet sets[] = {m_sampleSets[m_slot], m_alphaTables, m_textures};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sampleLayout, 0, 3, sets, 0, nullptr);
     vkCmdPushConstants(cmd, m_sampleLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(m_push), &m_push);
-    vkCmdDispatch(cmd, (m_width + 7) / 8, (m_height + 7) / 8, 1);
+    vkCmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
     barrier(cmd, kCompute);
-    m_rendered = true;
+}
+
+void RTDirectTechnique::trace(VkCommandBuffer cmd) {
+    if (!m_rendered) return;
+    dispatchSample(cmd, m_spatial, m_traceWidth, m_traceHeight);
 }
 
 void RTDirectTechnique::shade(VkCommandBuffer cmd) {
@@ -339,7 +357,7 @@ void RTDirectTechnique::shade(VkCommandBuffer cmd) {
                             VK_ACCESS_SHADER_READ_BIT, false);
         m_historyValid = false;
     } else {
-        barrier(cmd, kCompute);   // the denoiser reads the light and the reservoirs' guides
+        barrier(cmd, kCompute);   // the denoiser reads the light and the guide
     }
 }
 
@@ -367,13 +385,13 @@ void RTDirectTechnique::denoise(VkCommandBuffer cmd) {
         vkCmdDispatch(cmd, (m_width + 7) / 8, (m_height + 7) / 8, 1);
     };
     const auto& sets = m_denoiseSets[m_slot];
-    // The views every pass binds: the noisy light, the velocity, the surfaces, the accumulations.
+    // The views every pass binds: the noisy light, the guides, the velocity, the accumulations.
     const auto views = [&](VkImageView in0, VkImageView in1, VkImageView out0, VkImageView out1) {
         return std::array<VkImageView, 15>{m_noisyDiffuse.view,      m_noisySpecular.view,      m_guide[prev].view,
                                            m_guide[m_cur].view,      m_velocityView,            VK_NULL_HANDLE,
                                            m_histDiffuse[prev].view, m_histSpecular[prev].view, in0,
                                            in1,                      out0,                      out1,
-                                           VK_NULL_HANDLE,           VK_NULL_HANDLE,            m_surfB[m_cur].view};
+                                           m_moments[prev].view,     m_moments[m_cur].view};
     };
     // temporal: noisy + last frame's accumulation (guided by last frame's guides) -> this frame's.
     run(m_temporal, sets[0],
@@ -416,7 +434,7 @@ void RTDirectTechnique::resize(uint32_t width, uint32_t height) {
 void RTDirectTechnique::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
-    for (VkPipeline* p : {&m_initial, &m_shade, &m_temporal, &m_atrous})
+    for (VkPipeline* p : {&m_initial, &m_spatial, &m_shade, &m_temporal, &m_atrous})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_sampleLayout, &m_denoiseLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }

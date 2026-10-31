@@ -74,14 +74,16 @@ public:
     // captures that reset.
     void setQuality(RenderQuality quality) noexcept { m_quality = quality; }
     [[nodiscard]] RenderQuality quality() const noexcept { return m_quality; }
-    // RT direct light's light points a pixel draws a frame (1-32) and the neighbours its spatial
-    // reuse combines (0-8).
-    void setDirectSampling(uint32_t candidates, uint32_t spatial) noexcept {
+    // RT direct light's light points a pixel draws a frame (1-32), the neighbours its spatial reuse
+    // combines (0-8) and, realtime, whether it resamples and traces every pixel (else half resolution).
+    void setDirectSampling(uint32_t candidates, uint32_t spatial, bool fullResolution) noexcept {
         m_directCandidates = std::clamp(candidates, 1u, 32u);
         m_directSpatial = std::min(spatial, 8u);
+        m_directFull = fullResolution;
     }
     [[nodiscard]] uint32_t directCandidates() const noexcept { return m_directCandidates; }
     [[nodiscard]] uint32_t directSpatial() const noexcept { return m_directSpatial; }
+    [[nodiscard]] bool directFullResolution() const noexcept { return m_directFull; }
     // The emissive triangle lights (the renderer's table, which this frame records before RT
     // direct light samples it) and the bindless table RT direct light reads emissive textures from.
     void setEmissiveLights(render::EmissiveLights* lights) noexcept { m_emissiveLights = lights; }
@@ -216,8 +218,9 @@ private:
     // RT direct light (replaces the lighting loop's lights and CSM when it runs)
     std::unique_ptr<RTDirectTechnique> m_rtDirect;
     bool m_rtDirectWanted{true};
-    uint32_t m_directCandidates{4};
+    uint32_t m_directCandidates{8};
     uint32_t m_directSpatial{2};
+    bool m_directFull{false};
     render::EmissiveLights* m_emissiveLights{nullptr};
     bool m_rayQuery{false};
     bool m_meshShader{false};

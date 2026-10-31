@@ -232,6 +232,7 @@ struct DIPush {
     uvec4 params;   // x candidates a pixel, y spatial neighbours, z flags (1 reference, 2 last frame's reservoirs and history valid), w reference: the frames already in the running mean; the denoiser: the a-trous step in pixels
     vec4 cameraPos;   // xyz the camera's position (the guides' distance is from it)
     vec4 weather;   // x wetness, y snow cover, z frost cover: the lighting pass's, so the target is the material it shades
+    uvec4 trace;   // x, y the resampling images' size (the frame's >> z), z the shift: 0 full resolution, 1 half (a pixel of each 2x2 block resamples and traces; di.shade shades every pixel from its 4 nearest)
 };
 
 // one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh

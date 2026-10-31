@@ -404,7 +404,7 @@ the device once the host has one (`gpu: {name, driver, rayTracing, meshShaders}`
 in a window, after the first capture headless.
 
 `render_settings` reads the knobs that decide what a frame runs, and `set` changes them:
-`quality`, `rtDirect {enabled, candidates 1–32, spatial 0–8}`, `rtGI {enabled, resolution half | full,
+`quality`, `rtDirect {enabled, candidates 1–32, spatial 0–8, resolution half | full}`, `rtGI {enabled, resolution half | full,
 rays 1–32}`, `ssao`, `ssr`, `sss`, `geometry` (`auto`, `meshlets`, `instances`),
 `occlusionCulling`, `csm {cascades 1–4, size 512–4096}`, `ev100`, `tonemap`. A `set` merges (what
 it leaves out keeps its value), is checked against the limits before anything applies

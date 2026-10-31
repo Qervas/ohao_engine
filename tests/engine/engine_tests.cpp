@@ -1896,6 +1896,19 @@ static double meanAbsDiff(const std::vector<uint8_t>& a, const std::vector<uint8
     return s / double(n);
 }
 
+// The mean of a - b over the colour channels: the bias, where meanAbsDiff is bias and noise.
+static double meanSignedDiff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+    if (a.size() != b.size() || a.empty()) return 1e9;
+    double s = 0.0;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (i % 4 == 3) continue;
+        s += int(a[i]) - int(b[i]);
+        ++n;
+    }
+    return s / double(n);
+}
+
 // A capture after a reset is exact run to run, realtime and reference.
 static void f4_the_capture_after_a_reset_is_exact_run_to_run() {
     TEST_BEGIN("f4: an RT direct light capture after a reset is exact run to run (realtime and reference)");
@@ -1988,7 +2001,8 @@ static void f4_realtime_converges_toward_the_reference() {
     const ShadowRun rt1 = shadowRun(lights, ohao::RenderQuality::Realtime, 1);
     const ShadowRun rt16 = shadowRun(lights, ohao::RenderQuality::Realtime, 16);
     const double d1 = meanAbsDiff(rt1.px, ref.px), d16 = meanAbsDiff(rt16.px, ref.px);
-    std::cout << "(mean |realtime - reference|: frame 1 " << d1 << ", frame 16 " << d16 << ") ";
+    std::cout << "(mean |realtime - reference|: frame 1 " << d1 << ", frame 16 " << d16 << "; mean realtime - reference: "
+              << meanSignedDiff(rt1.px, ref.px) << ", " << meanSignedDiff(rt16.px, ref.px) << ") ";
     EXPECT(d1 < 2.0 && d16 < 2.0, "realtime frames 1 and 16 within 2 levels of the converged reference");
     TEST_PASS();
 }
@@ -2152,7 +2166,8 @@ static void sp2b_t10_realtime_converges_toward_the_reference() {
     const GIRun rt1 = giRun(ohao::RenderQuality::Realtime, 1);
     const GIRun rt16 = giRun(ohao::RenderQuality::Realtime, 16);
     const double d1 = meanAbsDiff(rt1.px, ref.px), d16 = meanAbsDiff(rt16.px, ref.px);
-    std::cout << "(mean |realtime - reference|: frame 1 " << d1 << ", frame 16 " << d16 << ") ";
+    std::cout << "(mean |realtime - reference|: frame 1 " << d1 << ", frame 16 " << d16 << "; mean realtime - reference: "
+              << meanSignedDiff(rt1.px, ref.px) << ", " << meanSignedDiff(rt16.px, ref.px) << ") ";
     EXPECT(d16 < d1, "the temporal accumulation converges toward the reference");
     TEST_PASS();
 }
@@ -2769,7 +2784,7 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
         return;
     }
     const auto& b = d.readBack;
-    EXPECT(b.quality == ohao::RenderQuality::Realtime && b.rtDirect && b.rtDirectCandidates == 4 &&
+    EXPECT(b.quality == ohao::RenderQuality::Realtime && b.rtDirect && b.rtDirectCandidates == 8 && !b.rtDirectFullResolution &&
                b.rtDirectSpatial == 2 && b.rtGI &&
                !b.rtGIFullResolution && b.rtGIRays == 2 && !b.ssao && b.ssr && b.sss &&
                b.geometry == ohao::GpuCulling::Geometry::Auto && b.occlusionCulling && b.csmCascades == 4 &&
@@ -2785,6 +2800,7 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     }
     ohao::VulkanRenderer::RenderSettings s;
     s.rtDirectCandidates = 12;
+    s.rtDirectFullResolution = true;
     s.rtDirectSpatial = 6;
     s.rtGIRays = 5;
     s.ssao = true;
@@ -2795,7 +2811,7 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     s.ev100 = 1.5f;
     s.tonemap = render::DisplayCurve::Neutral;
     const auto t = settingsRun(s).readBack;
-    EXPECT(t.rtDirectCandidates == 12 && t.rtDirectSpatial == 6 && t.rtGIRays == 5 && t.ssao && t.geometry == ohao::GpuCulling::Geometry::Instances &&
+    EXPECT(t.rtDirectCandidates == 12 && t.rtDirectSpatial == 6 && t.rtDirectFullResolution && t.rtGIRays == 5 && t.ssao && t.geometry == ohao::GpuCulling::Geometry::Instances &&
                !t.occlusionCulling && t.csmCascades == 3 && t.csmSize == 1024 && t.ev100 == 1.5f && t.tonemap == render::DisplayCurve::Neutral,
            "every changed knob reads back");
     TEST_PASS();
@@ -2819,7 +2835,7 @@ static void sp2b_t14_switches_turn_their_passes_off() {
     const SettingsRun ssao = settingsRun(s);
     EXPECT(ran(on, "ssr") && ran(on, "sss") && !ran(on, "ssao"), "the defaults run ssr and sss, not ssao");
     EXPECT(!ran(off, "ssr") && !ran(off, "sss"), "ssr and sss off: neither runs");
-    EXPECT(!ran(off, "rt.gi") && !ran(off, "rt.gi.denoise") && !ran(off, "di.sample") && !ran(off, "di.shade"),
+    EXPECT(!ran(off, "rt.gi") && !ran(off, "rt.gi.denoise") && !ran(off, "di.sample") && !ran(off, "di.trace") && !ran(off, "di.shade"),
            "rtGI and rtDirect off: none of their passes");
     EXPECT(ran(off, "csm"), "rtDirect off: the CSM fallback draws the sun's shadow");
     EXPECT(ran(ssao, "ssao"), "ssao on: it runs");

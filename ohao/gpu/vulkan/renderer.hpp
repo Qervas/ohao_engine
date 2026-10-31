@@ -267,8 +267,9 @@ public:
     struct RenderSettings {
         RenderQuality quality{RenderQuality::Realtime};
         bool rtDirect{true};
-        uint32_t rtDirectCandidates{4};  // light points a pixel draws a frame (1-32)
+        uint32_t rtDirectCandidates{8};  // light points a pixel draws a frame (1-32)
         uint32_t rtDirectSpatial{2};     // realtime: neighbours a pixel's reservoir reuses (0-8)
+        bool rtDirectFullResolution{false};  // realtime: resample and trace every pixel, not half
         bool rtGI{true};
         bool rtGIFullResolution{false};  // realtime: the trace at the frame's size, not half
         uint32_t rtGIRays{2};            // realtime: rays a pixel (1-32)

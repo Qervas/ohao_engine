@@ -229,7 +229,8 @@
        {"name": "extent", "type": "uint4", "doc": "x width, y height, z frame index since the last temporal reset, w render seed"},
        {"name": "params", "type": "uint4", "doc": "x candidates a pixel, y spatial neighbours, z flags (1 reference, 2 last frame's reservoirs and history valid), w reference: the frames already in the running mean; the denoiser: the a-trous step in pixels"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the guides' distance is from it)"},
-       {"name": "weather", "type": "float4", "doc": "x wetness, y snow cover, z frost cover: the lighting pass's, so the target is the material it shades"}
+       {"name": "weather", "type": "float4", "doc": "x wetness, y snow cover, z frost cover: the lighting pass's, so the target is the material it shades"},
+       {"name": "trace", "type": "uint4", "doc": "x, y the resampling images' size (the frame's >> z), z the shift: 0 full resolution, 1 half (a pixel of each 2x2 block resamples and traces; di.shade shades every pixel from its 4 nearest)"}
      ]},
     {"name": "MeshletGpu", "doc": "one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh",
      "fields": [

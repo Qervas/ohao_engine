@@ -176,17 +176,18 @@ struct RenderCaptureParams {
 
 // render.settings (sub-project 2b spec, "The agent-facing surface"): every quality knob of
 // the host's renderer. Host state: never in scene files. The defaults are the budgeted frame.
-enum class GIResolution : uint8_t { half, full };
+enum class TraceResolution : uint8_t { half, full };
 enum class GeometryPath : uint8_t { automatic, meshlets, instances };   // "auto", "meshlets", "instances"
 
 struct RtDirectSettings {
     bool enabled{true};
-    int32_t candidates{4};
+    int32_t candidates{8};
     int32_t spatial{2};
+    TraceResolution resolution{TraceResolution::half};
 };
 struct RtGISettings {
     bool enabled{true};
-    GIResolution resolution{GIResolution::half};
+    TraceResolution resolution{TraceResolution::half};
     int32_t rays{2};
 };
 struct CsmSettings {

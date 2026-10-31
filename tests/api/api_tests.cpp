@@ -261,7 +261,7 @@ static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
 
     const Reply set(s.call("render.settings", R"({"set":{"rtGI":{"rays":8},"ssr":false,"quality":"reference"}})"));
     CHECK(set.ok() && host.settingsSet == 1 && host.settings->rtGI.rays == 8 && host.settings->rtGI.enabled &&
-              host.settings->rtGI.resolution == api::GIResolution::half && !host.settings->ssr &&
+              host.settings->rtGI.resolution == api::TraceResolution::half && !host.settings->ssr &&
               host.settings->sss && host.settings->quality == api::Quality::reference,
           "a set changes the members given, nested ones too; the rest keep their value");
     CHECK(set.json("/result/rtGI/rays") == "8" && set.json("/result/ssr") == "false", "and answers the settings now in effect");

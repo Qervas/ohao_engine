@@ -186,9 +186,9 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; absent: render.settings'")
         .field("timings", &RenderCaptureParams::timings).doc("Add the capture frame's per-pass GPU times")
         .field("hud", &RenderCaptureParams::hud).doc("Draw the combat HUD over the frame, as a window shows it (deferred)");
-    r.enumeration<GIResolution>("GIResolution").doc("RT GI's realtime trace resolution")
-        .value("half", GIResolution::half, "Half the frame's size, upsampled (the budgeted frame)")
-        .value("full", GIResolution::full, "The frame's size");
+    r.enumeration<TraceResolution>("TraceResolution").doc("A realtime ray-traced technique's resolution")
+        .value("half", TraceResolution::half, "Half the frame's size, upsampled (the budgeted frame)")
+        .value("full", TraceResolution::full, "The frame's size");
     r.enumeration<GeometryPath>("GeometryPath").doc("How the G-buffer draws")
         .value("auto", GeometryPath::automatic, "Meshlets for draws of 4,096 triangles or more, instances below")
         .value("meshlets", GeometryPath::meshlets, "Every draw with meshlets")
@@ -200,7 +200,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("candidates", &RtDirectSettings::candidates).doc("Light samples a pixel draws a frame")
             .unitless().min(1).max(32)
         .field("spatial", &RtDirectSettings::spatial).doc("Realtime: neighbours whose samples a pixel reuses")
-            .unitless().min(0).max(8);
+            .unitless().min(0).max(8)
+        .field("resolution", &RtDirectSettings::resolution)
+            .doc("Realtime: resampling and tracing resolution (half: a pixel of each 2x2 block; every pixel shades "
+                 "two of the 4 nearest)");
     r.type<RtGISettings>("RtGISettings").doc("Ray-traced one-bounce indirect light")
         .field("enabled", &RtGISettings::enabled).doc("Trace RT GI (needs ray tracing); off: no indirect light")
         .field("resolution", &RtGISettings::resolution).doc("Realtime trace resolution")

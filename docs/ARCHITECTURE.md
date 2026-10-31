@@ -233,9 +233,10 @@ gbuffer.late        late lists drawn
 lights.cluster      froxel light lists (16x9x24, up to 256 each)
 ssao                half-res horizon AO, blurred   [ssao, or post "ssao"]
 emissive.lights     the emissive triangles as lights, their power's mips (with the path tracer)
-di.sample           ReSTIR DI: candidates by RIS, last frame's reservoir, a visibility ray   [rtDirect.*]
-di.shade            ReSTIR DI: neighbours' reservoirs, the final shadow ray, diffuse + specular
-di.denoise          temporal accumulation, 3 a-trous steps (realtime quality)
+di.sample           ReSTIR DI, half res: candidates by RIS, last frame's reservoir, a visibility ray   [rtDirect.*]
+di.trace            ReSTIR DI, half res: neighbours' reservoirs, the final shadow ray
+di.shade            every pixel: two nearby samples through its own material, diffuse + specular
+di.denoise          temporal accumulation, 3 a-trous steps stopped by luminance (realtime quality)
 rt.gi               one-bounce GI, half res 2 rays by default   [rtGI.enabled, .resolution, .rays]
 rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
 lighting            RT direct light (or the froxel list + CSM) + IBL + GI into the HDR image (+ env specular, its weight)
@@ -533,7 +534,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-40 passes registered; budget names matching none: []
+41 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 

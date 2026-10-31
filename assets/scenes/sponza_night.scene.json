@@ -1,0 +1,874 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "Light": 1,
+    "MeshSource": 1,
+    "Name": 1,
+    "Transform": 1
+  },
+  "entities": [
+    {
+      "id": "5b0a9e3c1d7f2a01",
+      "Name": {
+        "value": "MainCamera"
+      },
+      "Transform": {
+        "position": [
+          10.5,
+          1.6,
+          -3.8
+        ],
+        "rotation": [
+          0.024023,
+          0.724932,
+          -0.025315,
+          0.687935
+        ]
+      },
+      "Camera": {
+        "fovDeg": 70
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a02",
+      "Name": {
+        "value": "Environment"
+      },
+      "Environment": {
+        "sky": false
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a03",
+      "Name": {
+        "value": "Sponza"
+      },
+      "MeshSource": {
+        "source": {
+          "ModelAsset": {
+            "asset": {
+              "path": "assets/khronos/Sponza/Sponza.gltf"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a10",
+      "Name": {
+        "value": "AtriumLight0"
+      },
+      "Transform": {
+        "position": [
+          -10,
+          2.5,
+          0
+        ]
+      },
+      "Light": {
+        "color": [
+          1,
+          0.85,
+          0.65
+        ],
+        "intensity": 40,
+        "radius": 0.2
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a11",
+      "Name": {
+        "value": "AtriumLight1"
+      },
+      "Transform": {
+        "position": [
+          -5,
+          2.5,
+          0
+        ]
+      },
+      "Light": {
+        "color": [
+          1,
+          0.85,
+          0.65
+        ],
+        "intensity": 40,
+        "radius": 0.2
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a12",
+      "Name": {
+        "value": "AtriumLight2"
+      },
+      "Transform": {
+        "position": [
+          0,
+          2.5,
+          0
+        ]
+      },
+      "Light": {
+        "color": [
+          1,
+          0.85,
+          0.65
+        ],
+        "intensity": 40,
+        "radius": 0.2
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a13",
+      "Name": {
+        "value": "AtriumLight3"
+      },
+      "Transform": {
+        "position": [
+          5,
+          2.5,
+          0
+        ]
+      },
+      "Light": {
+        "color": [
+          1,
+          0.85,
+          0.65
+        ],
+        "intensity": 40,
+        "radius": 0.2
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a14",
+      "Name": {
+        "value": "AtriumLight4"
+      },
+      "Transform": {
+        "position": [
+          10,
+          2.5,
+          0
+        ]
+      },
+      "Light": {
+        "color": [
+          1,
+          0.85,
+          0.65
+        ],
+        "intensity": 40,
+        "radius": 0.2
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3000",
+      "Name": {
+        "value": "ArcadeLight0"
+      },
+      "Transform": {
+        "position": [
+          -11.2,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3001",
+      "Name": {
+        "value": "ArcadeLight1"
+      },
+      "Transform": {
+        "position": [
+          -8.0,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          0.5125
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3002",
+      "Name": {
+        "value": "ArcadeLight2"
+      },
+      "Transform": {
+        "position": [
+          -4.8,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          0.35,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3003",
+      "Name": {
+        "value": "ArcadeLight3"
+      },
+      "Transform": {
+        "position": [
+          -1.6,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.8375,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3004",
+      "Name": {
+        "value": "ArcadeLight4"
+      },
+      "Transform": {
+        "position": [
+          1.6,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3005",
+      "Name": {
+        "value": "ArcadeLight5"
+      },
+      "Transform": {
+        "position": [
+          4.8,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.8375
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3006",
+      "Name": {
+        "value": "ArcadeLight6"
+      },
+      "Transform": {
+        "position": [
+          8.0,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          1.0,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3007",
+      "Name": {
+        "value": "ArcadeLight7"
+      },
+      "Transform": {
+        "position": [
+          11.2,
+          2.0,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          0.5125,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3008",
+      "Name": {
+        "value": "ArcadeLight8"
+      },
+      "Transform": {
+        "position": [
+          -11.2,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          0.5125,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3009",
+      "Name": {
+        "value": "ArcadeLight9"
+      },
+      "Transform": {
+        "position": [
+          -8.0,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f300a",
+      "Name": {
+        "value": "ArcadeLight10"
+      },
+      "Transform": {
+        "position": [
+          -4.8,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          0.5125
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f300b",
+      "Name": {
+        "value": "ArcadeLight11"
+      },
+      "Transform": {
+        "position": [
+          -1.6,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          0.35,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f300c",
+      "Name": {
+        "value": "ArcadeLight12"
+      },
+      "Transform": {
+        "position": [
+          1.6,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.8375,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f300d",
+      "Name": {
+        "value": "ArcadeLight13"
+      },
+      "Transform": {
+        "position": [
+          4.8,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f300e",
+      "Name": {
+        "value": "ArcadeLight14"
+      },
+      "Transform": {
+        "position": [
+          8.0,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.8375
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f300f",
+      "Name": {
+        "value": "ArcadeLight15"
+      },
+      "Transform": {
+        "position": [
+          11.2,
+          2.0,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          1.0,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3010",
+      "Name": {
+        "value": "ArcadeLight16"
+      },
+      "Transform": {
+        "position": [
+          -11.2,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          1.0,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3011",
+      "Name": {
+        "value": "ArcadeLight17"
+      },
+      "Transform": {
+        "position": [
+          -8.0,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          0.5125,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3012",
+      "Name": {
+        "value": "ArcadeLight18"
+      },
+      "Transform": {
+        "position": [
+          -4.8,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3013",
+      "Name": {
+        "value": "ArcadeLight19"
+      },
+      "Transform": {
+        "position": [
+          -1.6,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          0.5125
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3014",
+      "Name": {
+        "value": "ArcadeLight20"
+      },
+      "Transform": {
+        "position": [
+          1.6,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          0.35,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3015",
+      "Name": {
+        "value": "ArcadeLight21"
+      },
+      "Transform": {
+        "position": [
+          4.8,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.8375,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3016",
+      "Name": {
+        "value": "ArcadeLight22"
+      },
+      "Transform": {
+        "position": [
+          8.0,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3017",
+      "Name": {
+        "value": "ArcadeLight23"
+      },
+      "Transform": {
+        "position": [
+          11.2,
+          7.2,
+          -4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.8375
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3018",
+      "Name": {
+        "value": "ArcadeLight24"
+      },
+      "Transform": {
+        "position": [
+          -11.2,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.8375
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f3019",
+      "Name": {
+        "value": "ArcadeLight25"
+      },
+      "Transform": {
+        "position": [
+          -8.0,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          1.0,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f301a",
+      "Name": {
+        "value": "ArcadeLight26"
+      },
+      "Transform": {
+        "position": [
+          -4.8,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          0.5125,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f301b",
+      "Name": {
+        "value": "ArcadeLight27"
+      },
+      "Transform": {
+        "position": [
+          -1.6,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.35,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f301c",
+      "Name": {
+        "value": "ArcadeLight28"
+      },
+      "Transform": {
+        "position": [
+          1.6,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          0.5125
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f301d",
+      "Name": {
+        "value": "ArcadeLight29"
+      },
+      "Transform": {
+        "position": [
+          4.8,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.675,
+          0.35,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f301e",
+      "Name": {
+        "value": "ArcadeLight30"
+      },
+      "Transform": {
+        "position": [
+          8.0,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          1.0,
+          0.8375,
+          0.35
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f301f",
+      "Name": {
+        "value": "ArcadeLight31"
+      },
+      "Transform": {
+        "position": [
+          11.2,
+          7.2,
+          4.4
+        ]
+      },
+      "Light": {
+        "color": [
+          0.35,
+          1.0,
+          1.0
+        ],
+        "intensity": 12,
+        "radius": 0.08
+      }
+    }
+  ]
+}

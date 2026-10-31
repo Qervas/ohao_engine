@@ -373,7 +373,7 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
     m_rtDirectWanted = s.rtDirect;
     if (!m_deferredRenderer) return;
     DeferredRenderer& d = *m_deferredRenderer;
-    d.setDirectSampling(s.rtDirectCandidates, s.rtDirectSpatial);
+    d.setDirectSampling(s.rtDirectCandidates, s.rtDirectSpatial, s.rtDirectFullResolution);
     d.setRTGIEnabled(s.rtGI);
     if (s.rtGIFullResolution != d.rtGIFullResolution() || s.rtGIRays != d.rtGIRays())
         d.setRTGIRealtime(s.rtGIFullResolution, s.rtGIRays);
@@ -410,6 +410,7 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     DeferredRenderer& d = *m_deferredRenderer;
     s.rtDirectCandidates = d.directCandidates();
     s.rtDirectSpatial = d.directSpatial();
+    s.rtDirectFullResolution = d.directFullResolution();
     s.rtGI = d.rtGIEnabled();
     s.rtGIFullResolution = d.rtGIFullResolution();
     s.rtGIRays = d.rtGIRays();

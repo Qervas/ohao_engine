@@ -1,36 +1,45 @@
-// The deferred frame's direct light (frontier F4): ReSTIR DI (Bitterli et al. 2020, "Spatiotemporal
+// The deferred frame's direct light (frontier F4, half resolution F4b): ReSTIR DI (Bitterli et al. 2020, "Spatiotemporal
 // reservoir resampling for real-time ray tracing with dynamic direct lighting") over the lights the
 // path tracer samples (rt/lights.slang: every analytic light but flashes, and the emissive
 // triangles), in MegaLights' structure: sample, trace, shade, then denoise (rt/di_denoise.slang).
 //
-// initial  Each pixel writes its surface (a compact copy: position, distance from the camera,
+// Resampling runs on the trace image: the frame at realtime quality's half resolution (pc.trace.z 1:
+// one pixel of each 2x2 block, picked afresh each frame by a hash, stands for the block), at full
+// resolution (0) for reference quality and `rtDirect.resolution full`.
+//
+// initial  Each trace pixel writes its surface (a compact copy: position, distance from the camera,
 //          normal, and the few numbers the target needs), draws `candidates` light points
 //          (drawLightPoint: the light by power, a point on it) and keeps one by resampled importance
 //          sampling against the target
 //            p(y) = luminance(Le(y)) x (kd / pi + ks x D x Vis) x cos x G(y)      unshadowed:
 //          Lambert under GGX with the surface's diffuse and specular reflectance (RIS needs a
 //          target near the light's shape; W carries the difference, and shading is exact); then
-//          last frame's reservoir at the pixel the motion vectors give, where last frame's surface
-//          there is the same (distance, normal), its M capped at kDIHistoryCap x candidates; one
-//          shadow ray to the chosen point (visibility reuse: occluded, it keeps its M and loses its
-//          weight).
-// shade    `spatial` neighbours within kDISpatialRadius pixels whose surfaces are the same are
-//          combined with the pixel's (the reservoir kept for next frame's temporal reuse); one
-//          shadow ray to the final point (alpha cutouts and smoke as RT GI's rays meet them), and
-//          its light
-//            f x Le x G x V x W        f OpenPBR's (evalLobes)
+//          last frame's reservoir at the trace pixel the motion vectors give, where last frame's
+//          surface there is the same (distance, normal), its M capped at kDIHistoryCap x candidates;
+//          one shadow ray to the chosen point (visibility reuse: occluded, it keeps its M and loses
+//          its weight); the boiling filter.
+// spatial  `spatial` neighbours within kDISpatialRadius frame pixels whose surfaces are the same are
+//          combined with the pixel's; one shadow ray to the final point (alpha cutouts and smoke as RT
+//          GI's rays meet them); the boiling filter again. The result, its weight 0 when occluded, is
+//          both the reservoir kept for next frame's temporal reuse and the sample shade() shades.
+// shade    Every frame pixel shades the trace pixels around it (the 2x2 nearest at half resolution,
+//          bilinear weights, those on the same surface; its own at full) with its own material:
+//            f x Le x G x W        f OpenPBR's (evalLobes), V in W
 //          split into the diffuse and specular lobes, each over its directional albedo toward the
 //          viewer (demodulated: the denoiser filters light, lighting multiplies the albedos back).
-//          Reference quality reuses nothing and keeps the running mean of the frames since the last
-//          reset: an unbiased estimate that converges.
+//          Two of those 4 a pixel, drawn by their weights, at a quarter of the rays (MegaLights'
+//          downsampled tracing); a sample's visibility is its trace pixel's, so a shadow edge is
+//          resolved at the trace resolution and the jittered pick and the denoiser's accumulation
+//          soften it. Reference quality reuses nothing and keeps the running mean of the frames
+//          since the last reset: an unbiased estimate that converges.
 //
 // Combinations stream (each reservoir weighed by its point's target at this pixel) and normalise by
 // Z, the M of the inputs whose own surface could have drawn the chosen point: its target there above
 // 0 and the point visible from it (Bitterli et al.'s Algorithm 6 with its visibility rays, RTXDI's
 // ray-traced bias correction). 1/M counts a neighbour that sees the far side of a sphere light or is
-// in shadow, and darkens a penumbra more with every frame that reuses it. Temporal reuse reads last
-// frame's reservoir at the same surface, so the one ray that tests the chosen point here answers for
-// both. Every number is a hash of (seed, frame since the reset, pixel, pass): no atomics, no order,
+// in shadow, and darkens a penumbra more with every frame that reuses it. Temporal reuse's last-frame
+// surface is another pick of the block, so it gets a ray of its own too (without it a still view
+// darkened 2% over 60 frames). Every number is a hash of (seed, frame since the reset, pixel, pass): no atomics, no order,
 // so a frame repeats bit for bit.
 import shared.layout;
 import material.openpbr;
@@ -47,7 +56,8 @@ import rt.smoke_proxy;
 [[vk::binding(5, 0)]] Texture2D<float4> gOpenPBR;    // base_diffuse_roughness, (specular_ior - 1) / 2.55
 [[vk::binding(6, 0)]] Texture2D<float2> gVelocity;   // UV motion: current minus previous
 [[vk::binding(7, 0)]] StructuredBuffer<float> openpbrTables;
-// Reservoirs, two RGBA32F images each: A (the point, the light as bits), B (W, M).
+// Reservoirs (the trace image's size), two RGBA32F images each: A (the point, the light as bits), B (W,
+// M; spatial's output: z the point's target at its trace pixel, the bound of what it may shade).
 [[vk::binding(8, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> prevA;   // last frame's, after reuse
 [[vk::binding(9, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> prevB;
 [[vk::binding(13, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> midA;   // after the temporal reuse
@@ -59,14 +69,15 @@ import rt.smoke_proxy;
 [[vk::binding(18, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> noisySpecular;
 [[vk::binding(19, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> meanDiffuse;
 [[vk::binding(20, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> meanSpecular;
-// Surfaces, two RGBA32F images each: A (position, distance from the camera; 0 none), B (the normal
-// as two 16-bit octahedral halves, GGX alpha, diffuse and specular reflectance). This frame's and
-// last frame's: the guides of temporal and spatial reuse and of the denoiser.
+// Surfaces (the trace image's size), two RGBA32F images each: A (position, distance from the camera;
+// 0 none), B (the normal as two 16-bit octahedral halves, GGX alpha, diffuse and specular
+// reflectance). This frame's and last frame's: the guides of temporal and spatial reuse.
 [[vk::binding(21, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> surfA;
 [[vk::binding(22, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> surfB;
 [[vk::binding(23, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> prevSurfA;
 [[vk::binding(24, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> prevSurfB;
-// The denoiser's guide (rt/di_denoise.slang), 8 bytes a pixel: the distance and the packed normal.
+// The denoiser's guide (rt/di_denoise.slang), the frame's size, 8 bytes a pixel: the distance, the
+// normal and the specular's spread packed (packGuide).
 [[vk::binding(25, 0)]] [[vk::image_format("rg32f")]] RWTexture2D<float2> guide;
 [[vk::push_constant]] ConstantBuffer<DIPush> pc;
 
@@ -189,7 +200,17 @@ void storeSurf(uint2 q, Surf f)
     const float n = asfloat(packNormal(f.normal));
     surfA[q] = float4(f.position, f.dist);
     surfB[q] = float4(n, f.alpha, f.kd, f.ks);
-    guide[q] = float2(f.dist, n);
+}
+
+// The denoiser's guide: the normal octahedral in 12 bits a coordinate, the specular's spread (none
+// below roughness 0.05, all of the kernel from 0.3: a mirror's small highlight stays where it is) in 8.
+float2 packGuide(Surf f)
+{
+    float2 e = f.normal.xy / (abs(f.normal.x) + abs(f.normal.y) + abs(f.normal.z));
+    if (f.normal.z < 0.0) e = (1.0 - abs(e.yx)) * float2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
+    const uint2 o = uint2(saturate(e * 0.5 + 0.5) * 4095.0 + 0.5);
+    const uint spread = uint(smoothstep(0.05, 0.3, sqrt(f.alpha)) * 255.0 + 0.5);
+    return float2(f.dist, asfloat(o.x | (o.y << 12u) | (spread << 24u)));
 }
 
 Surf loadSurf(RWTexture2D<float4> a, RWTexture2D<float4> b, uint2 q)
@@ -214,13 +235,9 @@ bool sameSurface(Surf a, Surf b)
     return abs(b.dist - a.dist) <= 0.05 * a.dist && dot(a.normal, b.normal) > 0.95;
 }
 
-// The target: what light point (light, y) gives surface s, unshadowed, as a luminance.
-float target(Surf s, uint light, float3 y)
+// The target from what a light point gives s (arriveFrom's direction, radiance and geometry term).
+float targetFrom(Surf s, float3 L, float3 le, float g)
 {
-    if (light == kNoLight || !(s.dist > 0.0)) return 0.0;
-    float3 L, le;
-    float dist, g;
-    if (!arriveFrom(light, y, s.position, L, dist, le, g)) return 0.0;
     const float nl = dot(s.normal, L);
     if (nl <= 0.0) return 0.0;
     const float3 V = normalize(pc.cameraPos.xyz - s.position);
@@ -234,6 +251,16 @@ float target(Surf s, uint light, float3 y)
     // (Karis): enough for a target.
     const float vis = 0.5 / max(nl * (nv * (1.0 - s.alpha) + s.alpha) + nv * (nl * (1.0 - s.alpha) + s.alpha), 1e-6);
     return luminance(le) * (s.kd * (1.0 / kPi) + s.ks * D * vis) * nl * g;
+}
+
+// The target: what light point (light, y) gives surface s, unshadowed, as a luminance.
+float target(Surf s, uint light, float3 y)
+{
+    if (light == kNoLight || !(s.dist > 0.0)) return 0.0;
+    float3 L, le;
+    float dist, g;
+    if (!arriveFrom(light, y, s.position, L, dist, le, g)) return 0.0;
+    return targetFrom(s, L, le, g);
 }
 
 // ---- reservoirs -----------------------------------------------------------------------------
@@ -372,15 +399,53 @@ bool couldDraw(Surf s, uint light, float3 y)
     return arriveFrom(light, y, origin, L, dist, le, g) && unoccluded(origin, L, dist);
 }
 
+// ---- the trace image ------------------------------------------------------------------------
+
+uint2 traceExtent() { return pc.trace.xy; }
+
+// The frame pixel a trace pixel stands for: at half resolution one of its 2x2 block, by a hash of the
+// block and the frame (so frames together cover the block), inside the frame.
+uint2 framePixelOf(uint2 t)
+{
+    if (pc.trace.z == 0u) return t;
+    const uint pick = pcg(pc.extent.z ^ pcg(t.x ^ pcg(t.y ^ pcg(pc.extent.w ^ 0x9E3779B9u))));
+    const uint2 p = (t << 1u) + uint2(pick & 1u, (pick >> 1u) & 1u);
+    return min(p, pc.extent.xy - 1u);
+}
+
 // ---- initial: candidates, temporal reuse, visibility -----------------------------------------
 
-// The boiling filter (RTXDI's): a reservoir whose estimate (its point's target x W) is over
-// kBoilingFactor x the mean of its 8x8 tile's non-zero ones is dropped. In a shadow, RIS against an
-// unshadowed target sometimes keeps a dim light's point with the occluded light's weight: unbiased,
-// but temporal reuse holds such an outlier for many frames and the denoiser spreads it into a blob.
+// The boiling filter (RTXDI's), after the temporal reuse and after the spatial: a reservoir whose
+// estimate (its point's target x W) is over kBoilingFactor x the mean of its 8x8 group's non-zero
+// ones is dropped. In a shadow, RIS against an unshadowed target sometimes keeps a dim light's point
+// with the occluded light's weight, and spatial reuse can make one from a neighbour's: unbiased, but
+// temporal reuse holds such an outlier for many frames and the denoiser spreads it into a blob.
+// Every thread of the group must call it (two barriers).
 static const float kBoilingFactor = 20.0;
 groupshared float gEstimate[64];
 groupshared float gMeanEstimate;
+
+bool boils(float estimate, uint li)
+{
+    gEstimate[li] = estimate;
+    GroupMemoryBarrierWithGroupSync();
+    if (li == 0u)
+    {
+        // In a fixed order: the same bits every run.
+        float sum = 0.0, n = 0.0;
+        for (uint k = 0u; k < 64u; ++k)
+        {
+            if (gEstimate[k] > 0.0)
+            {
+                sum += gEstimate[k];
+                n += 1.0;
+            }
+        }
+        gMeanEstimate = n > 0.0 ? sum / n : 0.0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    return (pc.params.z & kFlagReference) == 0u && estimate > kBoilingFactor * gMeanEstimate;
+}
 
 Reservoir initialReservoir(uint2 q, Surf s)
 {
@@ -409,10 +474,11 @@ Reservoir initialReservoir(uint2 q, Surf s)
     // Temporal reuse.
     if ((pc.params.z & kFlagReference) == 0u && (pc.params.z & kFlagHistory) != 0u)
     {
-        const float2 uv = (float2(q) + 0.5) / float2(pc.extent.xy);
-        const float2 prevUv = uv - gVelocity.Load(int3(q, 0));
-        const int2 pq = int2(floor(prevUv * float2(pc.extent.xy)));
-        if (all(pq >= 0) && all(pq < int2(pc.extent.xy)))
+        const uint2 fp = framePixelOf(q);
+        const float2 uv = (float2(fp) + 0.5) / float2(pc.extent.xy);
+        const float2 prevUv = uv - gVelocity.Load(int3(fp, 0));
+        const int2 pq = int2(floor(prevUv * float2(traceExtent())));
+        if (all(pq >= 0) && all(pq < int2(traceExtent())))
         {
             const Surf ps = loadSurf(prevSurfA, prevSurfB, uint2(pq));
             if (sameSurface(s, ps))
@@ -422,11 +488,11 @@ Reservoir initialReservoir(uint2 q, Surf s)
                 Combiner t = emptyCombiner();
                 t.add(r.light, r.y, r.W, r.M, target(s, r.light, r.y), rng.next());
                 t.add(prev.light, prev.y, prev.W, prev.M, target(s, prev.light, prev.y), rng.next());
-                // Z: this pixel's candidates if its target is above 0 at the point, last frame's if
-                // last frame's surface's is. Visibility is the ray below's.
+                // Z: this pixel's candidates if its target is above 0 at the point (visibility is the
+                // ray below's), last frame's if its surface could have drawn it.
                 float Z = 0.0;
                 if (target(s, t.light, t.y) > 0.0) Z += r.M;
-                if (target(ps, t.light, t.y) > 0.0) Z += prev.M;
+                if (couldDraw(ps, t.light, t.y)) Z += prev.M;
                 r = t.result(Z);
             }
         }
@@ -446,14 +512,14 @@ Reservoir initialReservoir(uint2 q, Surf s)
 void initial(uint3 id : SV_DispatchThreadID, uint li : SV_GroupIndex)
 {
     const uint2 q = id.xy;
-    const bool inside = all(q < pc.extent.xy);
+    const bool inside = all(q < traceExtent());
     Surf s;
     s.dist = 0.0;
     Reservoir r = emptyReservoir();
     float estimate = 0.0;
     if (inside)
     {
-        s = surfOf(pixelAt(q));
+        s = surfOf(pixelAt(framePixelOf(q)));
         storeSurf(q, s);
         if (s.dist > 0.0)
         {
@@ -461,25 +527,9 @@ void initial(uint3 id : SV_DispatchThreadID, uint li : SV_GroupIndex)
             if (r.light != kNoLight) estimate = r.W * target(s, r.light, r.y);
         }
     }
-    gEstimate[li] = estimate;
-    GroupMemoryBarrierWithGroupSync();
-    if (li == 0u)
-    {
-        // In a fixed order: the same bits every run.
-        float sum = 0.0, n = 0.0;
-        for (uint k = 0u; k < 64u; ++k)
-        {
-            if (gEstimate[k] > 0.0)
-            {
-                sum += gEstimate[k];
-                n += 1.0;
-            }
-        }
-        gMeanEstimate = n > 0.0 ? sum / n : 0.0;
-    }
-    GroupMemoryBarrierWithGroupSync();
+    const bool drop = boils(estimate, li);
     if (!inside) return;
-    if ((pc.params.z & kFlagReference) == 0u && estimate > kBoilingFactor * gMeanEstimate)
+    if (drop)
     {
         r.W = 0.0;
         r.light = kNoLight;
@@ -487,7 +537,135 @@ void initial(uint3 id : SV_DispatchThreadID, uint li : SV_GroupIndex)
     store(midA, midB, q, r);
 }
 
-// ---- shade: spatial reuse, the final ray, the light ------------------------------------------
+// ---- spatial: spatial reuse, the final ray ---------------------------------------------------
+
+Reservoir spatialReservoir(uint2 q, Surf s, bool reference)
+{
+    Rng rng = rngOf(q, 1u);
+    Reservoir own = load(midA, midB, q);
+    Combiner c = emptyCombiner();
+    c.add(own.light, own.y, own.W, own.M, target(s, own.light, own.y), rng.next());
+    // The neighbours combined, for Z.
+    int2 used[kDIMaxSpatial];
+    float usedM[kDIMaxSpatial];
+    uint usedCount = 0u;
+    if (!reference)
+    {
+        const uint count = min(pc.params.y, kDIMaxSpatial);
+        const float radiusMax = float(kDISpatialRadius >> pc.trace.z);
+        for (uint k = 0u; k < count; ++k)
+        {
+            // A neighbour uniform in the disc of kDISpatialRadius frame pixels.
+            const float radius = radiusMax * sqrt(rng.next());
+            const float angle = kTwoPi * rng.next();
+            const int2 n = int2(q) + int2(round(float2(cos(angle), sin(angle)) * radius));
+            const float u = rng.next();
+            if (any(n < 0) || any(n >= int2(traceExtent())) || all(n == int2(q))) continue;
+            if (!sameSurface(s, loadSurf(surfA, surfB, uint2(n)))) continue;
+            const Reservoir r = load(midA, midB, uint2(n));
+            c.add(r.light, r.y, r.W, r.M, target(s, r.light, r.y), u);
+            used[usedCount] = n;
+            usedM[usedCount] = r.M;
+            ++usedCount;
+        }
+    }
+    // The final ray: the chosen point's visibility here.
+    float v = 0.0;
+    if (c.light != kNoLight) v = visibilityOf(s, c.light, c.y, rng);
+    // Z: this pixel's M when it sees the point (else nothing is shaded), and each neighbour's when it
+    // could have drawn it: one more ray a neighbour, only when the point is lit here.
+    float Z = c.M;
+    if (usedCount > 0u && v > 0.0)
+    {
+        Z = own.M;
+        for (uint k = 0u; k < usedCount; ++k)
+            if (couldDraw(loadSurf(surfA, surfB, uint2(used[k])), c.light, c.y)) Z += usedM[k];
+    }
+    Reservoir r = c.result(Z);
+    // An occluded point leaves the kept reservoir (visibility reuse at the end): it shades nothing,
+    // and next frame's temporal reuse and its neighbours' spatial reuse never draw it again.
+    if (!(v > 0.0))
+    {
+        r.W = 0.0;
+        r.light = kNoLight;
+    }
+    return r;
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void spatial(uint3 id : SV_DispatchThreadID, uint li : SV_GroupIndex)
+{
+    const uint2 q = id.xy;
+    const bool inside = all(q < traceExtent());
+    Reservoir r = emptyReservoir();
+    float here = 0.0;
+    if (inside)
+    {
+        const Surf s = loadSurf(surfA, surfB, q);
+        if (s.dist > 0.0) r = spatialReservoir(q, s, (pc.params.z & kFlagReference) != 0u);
+        if (r.W > 0.0) here = target(s, r.light, r.y);
+    }
+    const bool drop = boils(r.W * here, li);
+    if (!inside) return;
+    if (drop)
+    {
+        r.W = 0.0;
+        r.light = kNoLight;
+    }
+    outA[q] = float4(r.y, asfloat(r.light));
+    outB[q] = float4(r.W, r.M, r.W > 0.0 ? here : 0.0, 0.0);
+}
+
+// ---- shade: every frame pixel from the trace pixels around it ---------------------------------
+
+// A sample shades a frame pixel with at most kShadeRatio x the target it had at its trace pixel (1 for
+// a trace pixel on another surface): W is about 1 / its own surface's target, and a pixel where the
+// target is far larger (a grazing column's sample on the ceiling beside it, a normal map's tilt) would
+// shade it as an outlier the denoiser spreads into a blob.
+static const float kShadeRatio = 4.0;
+
+// What the samples of trace pixels taps[0] and taps[1] (weights w, 0 unused) give frame pixel p
+// (surface s) through its material: diffuse and specular light (not yet over the albedos). The same
+// light point in both (reuse copies a point to its neighbours) is evaluated once, with their bounded
+// weights summed. The loop is over the draws, not the 4 trace pixels, so a warp runs two evaluations
+// whatever its lanes drew; the view's table lookups are not hoisted out of it and nothing here traces:
+// this kernel's speed is its occupancy (OHAO_PIPELINE_STATS: 80 registers; hoisting cost 16 more, a
+// ray query 32). `elsewhere`: the taps are on other surfaces, so their visibility and targets are not
+// p's: each shades at most its own target.
+void shadeTaps(Pixel p, Surf s, uint2 taps[2], float w[2], bool elsewhere, out float3 ld, out float3 ls)
+{
+    ld = float3(0.0);
+    ls = float3(0.0);
+    [loop]
+    for (uint k = 0u; k < 2u; ++k)
+    {
+        if (!(w[k] > 0.0)) continue;
+        const float4 a = outA[taps[k]];
+        if (k == 1u && w[0] > 0.0 && all(outA[taps[0]] == a)) continue;   // shaded with the first
+        const uint light = asuint(a.w);
+        float3 L, le;
+        float dist, g;
+        if (!arriveFrom(light, a.xyz, p.position, L, dist, le, g)) continue;
+        const float3 wi = toLocalFrame(L, p);
+        if (!(wi.z > 0.0)) continue;
+        const float here = targetFrom(s, L, le, g);
+        float sum = 0.0;
+        for (uint m = k; m < 2u; ++m)
+        {
+            if (!(w[m] > 0.0) || (m != k && any(outA[taps[m]] != a))) continue;
+            const float4 b = outB[taps[m]];
+            const float bound = (elsewhere ? 1.0 : kShadeRatio) * b.z;
+            sum += w[m] * b.x * (here > bound ? bound / here : 1.0);
+        }
+        if (!(sum > 0.0)) continue;
+        float3 Ls, Ld;
+        p.bsdf.evalLobes(p.wo, wi, tables(), Ls, Ld);
+        const float3 light3 = le * (g * sum);
+        ld += Ld * light3;
+        ls += Ls * light3;
+    }
+}
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -496,79 +674,64 @@ void shade(uint3 id : SV_DispatchThreadID)
     const uint2 q = id.xy;
     if (any(q >= pc.extent.xy)) return;
     const bool reference = (pc.params.z & kFlagReference) != 0u;
-    const Surf s = loadSurf(surfA, surfB, q);
+    const Pixel p = pixelAt(q);
+    const Surf s = surfOf(p);
+    guide[q] = packGuide(s);
     float3 diffuse = float3(0.0), specular = float3(0.0);
     if (s.dist > 0.0)
     {
-        Rng rng = rngOf(q, 1u);
-        Reservoir own = load(midA, midB, q);
-        Combiner c = emptyCombiner();
-        c.add(own.light, own.y, own.W, own.M, target(s, own.light, own.y), rng.next());
-        // The neighbours combined, for Z.
-        int2 used[kDIMaxSpatial];
-        float usedM[kDIMaxSpatial];
-        uint usedCount = 0u;
-        if (!reference)
+        uint2 drawn[2] = {q, q};
+        float dw[2] = {1.0, 0.0};
+        bool elsewhere = false;
+        if (pc.trace.z != 0u)
         {
-            const uint count = min(pc.params.y, kDIMaxSpatial);
-            for (uint k = 0u; k < count; ++k)
+            // The 2x2 trace pixels around this pixel's centre, bilinear; those on its surface, or
+            // all of them when none is (an edge, a thin feature no pick landed on), each bounded by
+            // its own target: another surface's visibility stands in for this one's.
+            Rng rng = rngOf(q, 2u);
+            uint2 taps[4];
+            float w[4];
+            const float2 c = (float2(q) + 0.5) * 0.5 - 0.5;
+            const int2 base = int2(floor(c));
+            const float2 f = c - float2(base);
+            bool same[4];
+            float wSame = 0.0, wAll = 0.0;
+            for (uint k = 0u; k < 4u; ++k)
             {
-                // A neighbour uniform in the disc of kDISpatialRadius pixels.
-                const float radius = float(kDISpatialRadius) * sqrt(rng.next());
-                const float angle = kTwoPi * rng.next();
-                const int2 n = int2(q) + int2(round(float2(cos(angle), sin(angle)) * radius));
-                const float u = rng.next();
-                if (any(n < 0) || any(n >= int2(pc.extent.xy)) || all(n == int2(q))) continue;
-                if (!sameSurface(s, loadSurf(surfA, surfB, uint2(n)))) continue;
-                const Reservoir r = load(midA, midB, uint2(n));
-                c.add(r.light, r.y, r.W, r.M, target(s, r.light, r.y), u);
-                used[usedCount] = n;
-                usedM[usedCount] = r.M;
-                ++usedCount;
+                const int2 o = int2(k & 1u, k >> 1u);
+                taps[k] = uint2(clamp(base + o, int2(0), int2(traceExtent()) - 1));
+                w[k] = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+                same[k] = sameSurface(s, loadSurf(surfA, surfB, taps[k]));
+                wAll += w[k];
+                if (same[k]) wSame += w[k];
+            }
+            elsewhere = !(wSame > 0.0);
+            const float norm = 1.0 / (elsewhere ? wAll : wSame);
+            for (uint k = 0u; k < 4u; ++k)
+                w[k] = elsewhere || same[k] ? w[k] * norm : 0.0;
+            // Two of them, drawn stratified by their weights (u / 2 and (u + 1) / 2 along their sum),
+            // each counting a half: the same mean at half the evaluations.
+            const float u = rng.next();
+            float cdf = 0.0;
+            for (uint k = 0u; k < 4u; ++k)
+            {
+                const float lo = cdf;
+                cdf += w[k];
+                for (uint j = 0u; j < 2u; ++j)
+                {
+                    const float x = (u + float(j)) * 0.5;
+                    if (w[k] > 0.0 && x >= lo && (x < cdf || k == 3u))
+                    {
+                        drawn[j] = taps[k];
+                        dw[j] = 0.5;
+                    }
+                }
             }
         }
-        // The shading ray: the chosen point's visibility here.
-        float v = 0.0;
-        if (c.light != kNoLight) v = visibilityOf(s, c.light, c.y, rng);
-        // Z: this pixel's M when it sees the point (else nothing is shaded), and each neighbour's
-        // when it could have drawn it: one more ray a neighbour, only when the point is lit here.
-        float Z = c.M;
-        if (usedCount > 0u && v > 0.0)
-        {
-            Z = own.M;
-            for (uint k = 0u; k < usedCount; ++k)
-                if (couldDraw(loadSurf(surfA, surfB, uint2(used[k])), c.light, c.y)) Z += usedM[k];
-        }
-        Reservoir r = c.result(Z);
-
-        // The light, with the full material: OpenPBR's lobes, over their directional albedos.
-        const Pixel p = pixelAt(q);
-        if (r.W > 0.0 && v > 0.0)
-        {
-            float3 L, le;
-            float dist, g;
-            if (arriveFrom(r.light, r.y, p.position, L, dist, le, g))
-            {
-                const float3 wi = toLocalFrame(L, p);
-                float3 Ls, Ld;
-                p.bsdf.evalLobes(p.wo, wi, tables(), Ls, Ld);
-                const float3 light = le * (g * r.W * v);
-                diffuse = Ld * light / max(p.bsdf.diffuseAlbedo(p.wo, tables()), float3(1e-3));
-                specular = Ls * light / max(p.bsdf.specularAlbedo(p.wo, tables()), float3(1e-3));
-            }
-        }
-        // The kept reservoir loses an occluded point's weight (visibility reuse at the end): next
-        // frame's temporal reuse and its neighbours' spatial reuse never draw it again.
-        if (!(v > 0.0))
-        {
-            r.W = 0.0;
-            r.light = kNoLight;
-        }
-        store(outA, outB, q, r);
-    }
-    else
-    {
-        store(outA, outB, q, emptyReservoir());
+        float3 ld, ls;
+        shadeTaps(p, s, drawn, dw, elsewhere, ld, ls);
+        diffuse = ld / max(p.bsdf.diffuseAlbedo(p.wo, tables()), float3(1e-3));
+        specular = ls / max(p.bsdf.specularAlbedo(p.wo, tables()), float3(1e-3));
     }
 
     if (reference)

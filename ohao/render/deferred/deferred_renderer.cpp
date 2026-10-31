@@ -430,6 +430,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 di.quality = m_quality;
                 di.candidates = m_directCandidates;
                 di.spatial = m_directSpatial;
+                di.halfResolution = !m_directFull;
                 di.cameraPos = m_cameraPos;
                 di.weather = m_lightingPass ? m_lightingPass->weather() : glm::vec3(0.0f);
                 di.tlas = sceneTlas;
@@ -440,6 +441,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 di.emissive = m_emissiveLights;
                 m_rtDirect->sample(c, di);
             });
+        m_renderGraph.addComputePass("di.trace", [&](PassBuilder&) {}, [&](VkCommandBuffer c) { m_rtDirect->trace(c); });
         m_renderGraph.addComputePass("di.shade", [&](PassBuilder&) {},
             [&](VkCommandBuffer c) {
                 m_rtDirect->shade(c);

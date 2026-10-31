@@ -177,6 +177,7 @@ $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/renderer/check_fireflies.py > /dev/null   # gpu
 $ python tests/renderer/check_env_orientation.py > /dev/null   # gpu
 $ python tests/renderer/check_analytic.py > /dev/null   # gpu
+$ python tests/renderer/check_direct_light.py > /dev/null   # gpu
 $ python tests/renderer/check_material.py > /dev/null   # gpu
 $ python tests/renderer/check_parity.py > /dev/null   # gpu # slow
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
@@ -294,7 +295,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   and the log saying the environment's sun was taken out. The speck test is Frank's ruling of
   2026-10-29: with the sky the right way up, what GI adds alone counted 363, mostly thin features
   (the rifle, fingers) that the real sky's bounce lights differently from what is behind them.
-- **Render goldens** (`tests/golden/manifest.json`, 32 scenes; two the transparency scene,
+- **Render goldens** (`tests/golden/manifest.json`, 33 scenes; one RT direct light's showcase, `sponza_night.scene.json`; two the transparency scene,
   `transparency.scene.json` (blended panes, the MASK leaf card, lit soft smoke, sparks; deferred exact
   and path traced); 8 examples, 22 through
   `ohao run`; eight at the deferred frame's `reference` quality; three the skinned animation rig
@@ -735,24 +736,35 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--frames 30`). Without `VK_KHR_ray_query` there is no RT GI. With it, lighting drops its
   diffuse IBL term and the constant ambient: GI rays that leave the scene bring the
   environment back, occluded.
-- **RT direct light** (frontier F4, `render/rt/rt_direct_technique.*`, `rt/restir_di.slang`,
+- **RT direct light** (frontier F4 and F4b, `render/rt/rt_direct_technique.*`, `rt/restir_di.slang`,
   `rt/di_denoise.slang`): ReSTIR DI (Bitterli et al. 2020) over the path tracer's lights (`rt/lights.slang`,
   one module both import: every light but flashes, and the emissive triangles), in MegaLights'
-  structure. `di.sample`: `rtDirect.candidates` (4) light points by power (`drawLightPoint`: a point
-  on the light, so a neighbour re-evaluates the same point) kept by RIS against a cheap target
-  (luminance of Le x Lambert under GGX x G from a compact surface: RIS needs the shape, W carries
-  the rest), last frame's reservoir where last frame's surface is the same (M capped at 20x), then
-  one visibility ray. `di.shade`: `rtDirect.spatial` (2) neighbours within 30 px, the final shadow
-  ray, the exact OpenPBR lobes, diffuse and specular each over its directional albedo (lighting
-  multiplies them back). `di.denoise`: a reprojected accumulation (16 frames, a firefly clamp to 2x
-  the 3x3 maximum) and three 3x3 a-trous steps; the specular spreads only as far as the surface is
-  rough. **Z, not 1/M**: a combination counts the M of the inputs whose own surface could have drawn
-  the chosen point, its target above 0 and the point visible from it (a ray a neighbour, Bitterli's
-  Algorithm 6): 1/M darkened penumbrae, more with every frame (0.89 of reference at 16 frames).
+  structure: resampling and tracing at half resolution (`rtDirect.resolution`; one pixel of each 2x2
+  block, picked by a hash each frame, stands for it), shading and denoising at full. `di.sample`:
+  `rtDirect.candidates` (8) light points by power (`drawLightPoint`: a point on the light, so a
+  neighbour re-evaluates the same point) kept by RIS against a cheap target (luminance of Le x
+  Lambert under GGX x G from a compact surface: RIS needs the shape, W carries the rest), last
+  frame's reservoir where last frame's surface is the same (M capped at 20x), one visibility ray.
+  `di.trace`: `rtDirect.spatial` (2) neighbours within 30 frame pixels, the final shadow ray.
+  `di.shade`: every pixel shades two of its 4 nearest trace pixels' samples (drawn by their bilinear
+  weights, on its own surface) with the exact OpenPBR lobes, diffuse and specular each over its
+  directional albedo (lighting multiplies them back); a sample shades at most 4x the target it had
+  at its trace pixel (1x from another surface), else a grazing column's sample lit the ceiling beside
+  it 100x over. `di.denoise`: a reprojected accumulation (16 frames) and three 3x3 a-trous steps
+  stopped by luminance once a pixel has 4 frames (SVGF, the larger of the two pixels' deviations:
+  symmetric, or bright pixels take dark neighbours that refuse them and the frame darkens); the
+  specular spreads only as far as the surface is rough. **Shade's speed is its occupancy**: 72
+  registers (`OHAO_PIPELINE_STATS=1` logs every compute pipeline's; a ray query there cost 32 more,
+  the view's table lookups hoisted 16), and it loops over its two draws, not the 4 trace pixels, or a
+  warp runs all four evaluations. **Z, not 1/M**: a combination counts the M of the inputs whose own
+  surface could have drawn the chosen point, its target above 0 and the point visible from it (a ray
+  a neighbour, Bitterli's Algorithm 6, and one from last frame's surface, another pick of the block):
+  1/M darkened penumbrae, more with every frame (0.89 of reference at 16 frames).
   **Spatial output feeds temporal reuse, so outliers travel**: a boiling filter (RTXDI's) drops a
-  reservoir over 20x its 8x8 tile's mean, and an occluded final point leaves the kept reservoir
-  (weight 0); without them a dim light's point carrying an occluded light's weight streaked a
-  shadow 3x too bright. Lighting leaves every light but flashes out of its loop when RT direct
+  reservoir over 20x its 8x8 group's mean, after the temporal reuse and after the spatial, and an
+  occluded final point leaves the kept reservoir (weight 0); without them a dim light's point
+  carrying an occluded light's weight streaked a shadow 3x too bright. `check_direct_light.py` holds
+  the realtime frame to reference quality on Sponza at night (`sponza_night.scene.json`, 37 lamps). Lighting leaves every light but flashes out of its loop when RT direct
   light ran (`LightGpu.params.w`: 1 casts shadows, 0 not, -1 a flash); without ray queries, or
   `rtDirect.enabled` off, the loop lights everything and CSM shadows a casting sun. **castShadows
   only matters to that fallback**: RT direct light shadows every light, as the path tracer always

@@ -273,12 +273,14 @@ struct alignas(16) DIPush {
     alignas(16) std::array<uint32_t, 4> params{};
     alignas(16) std::array<float, 4> cameraPos{};
     alignas(16) std::array<float, 4> weather{};
+    alignas(16) std::array<uint32_t, 4> trace{};
 };
 static_assert(offsetof(DIPush, extent) == 0);
 static_assert(offsetof(DIPush, params) == 16);
 static_assert(offsetof(DIPush, cameraPos) == 32);
 static_assert(offsetof(DIPush, weather) == 48);
-static_assert(sizeof(DIPush) == 64);
+static_assert(offsetof(DIPush, trace) == 64);
+static_assert(sizeof(DIPush) == 80);
 
 // one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
 struct alignas(16) MeshletGpu {

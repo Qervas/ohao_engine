@@ -38,6 +38,12 @@ void destroyImage(VkDevice device, Image& img);
 void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelineStageFlags src,
                 VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess, bool discard);
 
+// Pipeline statistics (OHAO_PIPELINE_STATS=1 on a device with VK_KHR_pipeline_executable_properties,
+// which the device then enables): every compute pipeline made below logs the driver's statistics
+// for it (registers, shared memory, ...) on the render channel. A kernel's occupancy is not in any
+// timing; this is how to see it.
+void setPipelineStats(bool enabled) noexcept;
+
 // A compute pipeline of `entry` in bin/shaders/<spirv>, one descriptor set, `pushBytes` of
 // push constants. Logs and returns false when the SPIR-V is missing or creation fails.
 bool createComputePipeline(VkDevice device, const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
