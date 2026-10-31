@@ -12,11 +12,17 @@ light's showcase, `assets/scenes/sponza_night.scene.json`: 37 lamps, no sun, ReS
 
 ## 2. Results
 
-The first runs were noisy (a game running on the same GPU and CPU: `wait_quiet.py` found SkyrimSE.exe at 135% of a core
-for 5 minutes), so these are not a baseline: frame medians 17.0 ms (night) and 19.7 ms (day). In both the largest pass
-was `rt.gi`, about 5.1-5.3 ms, against 0.7 ms in helmet_game_1080p in the same conditions; then `di.denoise` (1.6, 2.4
-ms) and `rt.gi.denoise` (1.0 ms). A quiet run is needed before any budget.
+`render_bench --only <scene>`, medians of 100 frames, the GPU otherwise idle (the CPU busy: the run is marked noisy):
+
+| scene | frame | rt.gi | di.denoise | rt.gi.denoise | lighting | di.shade |
+|---|---|---|---|---|---|---|
+| sponza_night_1080p | 7.64 | 1.83 | 1.37 | 1.03 | 0.88 | 0.57 |
+| sponza_1080p | 8.18 | 2.24 | 1.74 | 1.01 | 0.50 | 0.60 |
+| helmet_game_1080p (beside them) | 5.36 | 0.78 | 1.12 | 0.92 | | 0.53 |
+
+A first run beside a game on the same GPU measured `rt.gi` at 5.1-5.3 ms: never judge a GPU budget beside another GPU
+load.
 
 ## 3. Known gaps
 
-- No budgets; `rt.gi`'s cost on Sponza is the next thing to measure on a quiet machine.
+- No budgets. `rt.gi` is the largest pass on Sponza (2.2 ms by day), then the two denoisers.
