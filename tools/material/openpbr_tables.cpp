@@ -15,6 +15,10 @@
 //               single-scatter albedo there (OpenPBR's alpha mapping); every table above is read at
 //               it, so an anisotropic lobe is compensated as an isotropic one is
 //   AnisoE1Avg  [aniso][rough], 8 x 16: the cosine-weighted average of E1 read at AnisoRough
+//   AnisoS56    [aniso][rough][mu][phi][2], AnisoRough's grid: the anisotropic lobe's S5 and S6
+//               (single scatter weighted by (1 - c)^5 and c (1 - c)^6), interleaved. With E1 at
+//               AnisoRough they make an F82 metal's albedo exact; a dielectric's is corrected by
+//               them (OpenPBRBase.viewedFrom)
 //
 // Grid point i of n is at i / (n - 1), a mu axis at its square; mu is evaluated at no less than 1e-3 and roughness at no
 // less than the module's kMinSpecularRoughness (0.01), where the lookups clamp. Each cell is the
@@ -153,17 +157,14 @@ std::vector<float> build() {
         const double b = at(ir + 1, im) * (1.0 - fm) + at(ir + 1, im + 1) * fm;
         return a * (1.0 - fr) + b * fr;
     };
-    std::vector<float> anisoRough(kAA * kAR * kAM * kAP), anisoE1Avg(kAA * kAR);
+    std::vector<float> anisoRough(kAA * kAR * kAM * kAP), anisoE1Avg(kAA * kAR), anisoS56(2 * kAA * kAR * kAM * kAP);
     for (unsigned a = 0; a < kAA; ++a)
         for (unsigned r = 0; r < kAR; ++r)
             for (unsigned m = 0; m < kAM; ++m)
                 for (unsigned p = 0; p < kAP; ++p) {
-                    float& out = anisoRough[((a * kAR + r) * kAM + m) * kAP + p];
+                    const unsigned cell = ((a * kAR + r) * kAM + m) * kAP + p;
+                    float& out = anisoRough[cell];
                     const float rough = gridAt(r, kAR);
-                    if (a == 0) {   // isotropic: the roughness itself
-                        out = rough;
-                        continue;
-                    }
                     const float mu = std::max(muAt(m, kAM), kMinMu);
                     const float phi = 0.5f * 3.14159265f * gridAt(p, kAP);
                     const float s = std::sqrt(std::max(0.0f, 1.0f - mu * mu));
@@ -177,9 +178,19 @@ std::vector<float> build() {
                         it.v = {(static_cast<float>(k) + 0.5f) / static_cast<float>(kAnisoSamples), radicalInverse(k), 0.0f};
                     }
                     ohao::material::run(items, {});
-                    double e = 0.0;
-                    for (const Item& it : items) e += it.r0[0];
+                    double e = 0.0, e5 = 0.0, e6 = 0.0;
+                    for (const Item& it : items) {
+                        e += it.r0[0];
+                        e5 += it.r0[1];
+                        e6 += it.r0[2];
+                    }
                     e /= kAnisoSamples;
+                    anisoS56[2 * cell] = static_cast<float>(e5 / kAnisoSamples);
+                    anisoS56[2 * cell + 1] = static_cast<float>(e6 / kAnisoSamples);
+                    if (a == 0) {   // isotropic: the roughness itself
+                        out = rough;
+                        continue;
+                    }
                     // E1 falls with roughness: bisect for the roughness that reads e.
                     double lo = 0.0, hi = 1.0;
                     if (e >= e1Lookup(mu, 0.0)) hi = 0.0;
@@ -216,7 +227,7 @@ std::vector<float> build() {
             anisoE1Avg[a * kAR + r] = static_cast<float>(2.0 * sum / (kStepsMu * kStepsPhi));
         }
     std::vector<float> all;
-    for (const auto* t : {&e1, &s5, &s6, &e1Avg, &favg, &essD, &essDLow, &anisoRough, &anisoE1Avg})
+    for (const auto* t : {&e1, &s5, &s6, &e1Avg, &favg, &essD, &essDLow, &anisoRough, &anisoE1Avg, &anisoS56})
         all.insert(all.end(), t->begin(), t->end());
     return all;
 }

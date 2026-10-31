@@ -51,7 +51,8 @@ static const uint kPbrAnisoMu = 16u;
 static const uint kPbrAnisoPhi = 8u;       // phi over [0, pi/2] from the tangent
 static const uint kPbrOffAnisoRough = kPbrOffEssDLow + kPbrDielMu * kPbrDielRough * kPbrDielEta;
 static const uint kPbrOffAnisoE1Avg = kPbrOffAnisoRough + kPbrAnisoA * kPbrAnisoRough * kPbrAnisoMu * kPbrAnisoPhi;
-static const uint kPbrTableFloats = kPbrOffAnisoE1Avg + kPbrAnisoA * kPbrAnisoRough;
+static const uint kPbrOffAnisoS56 = kPbrOffAnisoE1Avg + kPbrAnisoA * kPbrAnisoRough;   // AnisoRough's grid x 2
+static const uint kPbrTableFloats = kPbrOffAnisoS56 + 2u * kPbrAnisoA * kPbrAnisoRough * kPbrAnisoMu * kPbrAnisoPhi;
 // EssDLow's eta axis: 1 + kPbrLowEtaSpan g^2 over the grid g, below which EssD is read from it (a
 // base under a coat sees an IOR near 1, where grazing Fresnel changes fastest).
 static const float kPbrLowEtaSpan = 0.3;
@@ -144,6 +145,28 @@ struct OpenPBRTables
         return v;
     }
 
+    // The anisotropic lobe's own S5 and S6 seen from w, on AnisoRough's grid.
+    float2 AnisoS56(float aniso, float rough, float3 w)
+    {
+        uint ia, ir, im, ip;
+        float fa, fr, fm, fp;
+        pbrGridCoord(1.0 - sqrt(saturate(1.0 - aniso)), kPbrAnisoA, ia, fa);
+        pbrGridCoord(rough, kPbrAnisoRough, ir, fr);
+        pbrGridCoord(sqrt(saturate(w.z)), kPbrAnisoMu, im, fm);
+        pbrGridCoord(atan2(abs(w.y), abs(w.x)) * (2.0 / kPbrPi), kPbrAnisoPhi, ip, fp);
+        float2 v = float2(0.0);
+        [unroll]
+        for (uint k = 0u; k < 16u; ++k)
+        {
+            const uint da = k & 1u, dr = (k >> 1u) & 1u, dm = (k >> 2u) & 1u, dp = k >> 3u;
+            const float w4 = (da == 1u ? fa : 1.0 - fa) * (dr == 1u ? fr : 1.0 - fr) * (dm == 1u ? fm : 1.0 - fm)
+                           * (dp == 1u ? fp : 1.0 - fp);
+            const uint i = 2u * ((((ia + da) * kPbrAnisoRough + ir + dr) * kPbrAnisoMu + im + dm) * kPbrAnisoPhi + ip + dp);
+            v += w4 * float2(data[kPbrOffAnisoS56 + i], data[kPbrOffAnisoS56 + i + 1u]);
+        }
+        return v;
+    }
+
     // E1's cosine-weighted average over every direction, read at AnisoRough.
     float AnisoE1Avg(float aniso, float rough)
     {
@@ -166,6 +189,15 @@ float pbrTableRough(OpenPBRTables t, float rough, float anisotropy, float3 w)
 float pbrE1Avg(OpenPBRTables t, float rough, float anisotropy)
 {
     return anisotropy > 0.0 ? t.AnisoE1Avg(anisotropy, rough) : t.E1Avg(rough);
+}
+
+// What an anisotropic lobe's S5 and S6 seen from w are over the isotropic tables' at its table
+// roughness r: E1 matches there, the Fresnel-weighted moments do not (a coloured metal read 20%
+// high at 81 degrees, a coat 46%). 0 for an isotropic lobe.
+float2 pbrS56Delta(OpenPBRTables t, float rough, float anisotropy, float3 w, float r)
+{
+    if (!(anisotropy > 0.0)) return float2(0.0);
+    return t.AnisoS56(anisotropy, rough, w) - float2(t.S5(w.z, r), t.S6(w.z, r));
 }
 
 // ---- GGX ------------------------------------------------------------------------------------
@@ -341,6 +373,19 @@ float3 fresnelF82(float c, float3 F0, float3 b)
     const float m = 1.0 - saturate(c);
     const float m5 = m * m * m * m * m;
     return saturate(F0 + (1.0 - F0) * m5 - b * (c * m5 * m));
+}
+
+// The dielectric's single scatter changed by a change d of the lobe's S5 and S6: its exact Fresnel
+// in F82's form, F0 + (1 - F0)(1 - c)^5 - b c (1 - c)^6, b fitted to it at c = 1/7.
+float dielectricS56(float eta, float2 d)
+{
+    if (all(d == float2(0.0))) return 0.0;
+    const float r = (eta - 1.0) / (eta + 1.0);
+    const float F0 = r * r;
+    const float m = 1.0 - kF82Mu;
+    const float m5 = m * m * m * m * m;
+    const float b = (F0 + (1.0 - F0) * m5 - fresnelDielectric(kF82Mu, eta)) / (kF82Mu * m5 * m);
+    return (1.0 - F0) * d.x - b * d.y;
 }
 
 // Kulla-Conty's multiple-scattering factor for a lobe whose Fresnel averages favg.
@@ -559,6 +604,7 @@ struct OpenPBRBase
     float anisotropy;    // specular_roughness_anisotropy; 0: the isotropic lobe
     float2 alphaXY;      // (alpha_t, alpha_b) when anisotropic
     float tableRough;    // the roughness the albedos read the tables at: rough, or viewedFrom()'s
+    float2 s56Delta;     // viewedFrom()'s pbrS56Delta: the anisotropic lobe's Fresnel moments
     float eta;           // the dielectric's IOR after specular_weight
     float3 specColor;
     float3 metalF0;      // specular_weight folded in below
@@ -575,6 +621,7 @@ struct OpenPBRBase
         anisotropy = saturate(m.specularRoughnessAnisotropy);
         alphaXY = anisotropy > 0.0 ? ggxAnisoAlpha(rough, anisotropy) : float2(alpha);
         tableRough = rough;
+        s56Delta = float2(0.0);
         eta = clamp(modulatedIor(m.specularIor, m.specularWeight), 1.0, kPbrEtaMax);
         specColor = saturate(m.specularColor);
         metalF0 = rho;
@@ -597,13 +644,14 @@ struct OpenPBRBase
     float dielectricAlbedo(float mu, OpenPBRTables t)
     {
         const float ms = msFresnel(float3(t.FavgD(eta)), pbrE1Avg(t, rough, anisotropy)).x;
-        return t.EssD(mu, tableRough, eta) + ms * (1.0 - t.E1(mu, tableRough));
+        return t.EssD(mu, tableRough, eta) + dielectricS56(eta, s56Delta) + ms * (1.0 - t.E1(mu, tableRough));
     }
 
     float3 metalAlbedo(float mu, OpenPBRTables t)
     {
         const float e1 = t.E1(mu, tableRough);
-        const float3 ess = metalWeight * (metalF0 * e1 + (1.0 - metalF0) * t.S5(mu, tableRough) - metalB * t.S6(mu, tableRough));
+        const float s5 = t.S5(mu, tableRough) + s56Delta.x, s6 = t.S6(mu, tableRough) + s56Delta.y;
+        const float3 ess = metalWeight * (metalF0 * e1 + (1.0 - metalF0) * s5 - metalB * s6);
         return ess + msFresnel(metalFavg(), pbrE1Avg(t, rough, anisotropy)) * (1.0 - e1);
     }
 
@@ -649,6 +697,7 @@ struct OpenPBRBase
         b.alpha = b.rough * b.rough;
         b.alphaXY = b.anisotropy > 0.0 ? ggxAnisoAlpha(b.rough, b.anisotropy) : float2(b.alpha);
         b.tableRough = b.rough;
+        b.s56Delta = float2(0.0);
         return b;
     }
 
@@ -659,6 +708,7 @@ struct OpenPBRBase
     {
         OpenPBRBase b = this;
         b.tableRough = pbrTableRough(t, rough, anisotropy, wo);
+        b.s56Delta = pbrS56Delta(t, rough, anisotropy, wo, b.tableRough);
         return b;
     }
 
@@ -763,7 +813,8 @@ struct OpenPBRCoat
     {
         const float r = pbrTableRough(t, rough, anisotropy, wo);
         const float ms = msFresnel(float3(t.FavgD(eta)), pbrE1Avg(t, rough, anisotropy)).x;
-        return t.EssD(wo.z, r, eta) + ms * (1.0 - t.E1(wo.z, r));
+        return t.EssD(wo.z, r, eta) + dielectricS56(eta, pbrS56Delta(t, rough, anisotropy, wo, r))
+             + ms * (1.0 - t.E1(wo.z, r));
     }
 
     // BSDF x cos(wi).

@@ -37,14 +37,19 @@ Every white, non-absorbing material still reflects exactly what it receives:
     - `eval`, `sample` and `pdf`, with lobes drawn by the luminance of their albedos;
     - the directional albedos, and `coatAlbedo`;
     - `widened(da)`: a light's size widens each specular lobe from its own roughness.
-  - **The energy tables** gain two parts:
+  - **The energy tables** gain three parts:
     - **EssDLow:** the dielectric's albedo at IOR 1 to 1.3 on a squared axis. A base under a coat sees IOR 1.5/1.6
       inverted, 1.067, where EssD's 0.13 spacing left a coated white furnace 1.6% over at 85°.
     - **AnisoRough** (8×16×16×8, the anisotropy axis dense toward 1) and **AnisoE1Avg:** for each anisotropy,
       roughness, view cosine and azimuth, the isotropic roughness whose E1 is the anisotropic lobe's single-scatter
       albedo. Every isotropic table is read there.
+    - **AnisoS56** (AnisoRough's grid, two floats a cell): the anisotropic lobe's own S5 and S6, single scatter
+      weighted by (1 - c)^5 and c (1 - c)^6. An F82 metal's albedo is linear in E1, S5 and S6, so with them a
+      coloured anisotropic metal's albedo is exact but for the grids. A dielectric (the specular's or the coat's)
+      adds the change of S5 and S6 over the isotropic tables' at AnisoRough through its exact Fresnel in F82's
+      form, `F0 + (1 - F0)(1 - c)^5 - b c (1 - c)^6` with b fitted at c = 1/7 (`dielectricS56`).
 
-    Step 1's tables are unchanged, byte for byte; the header grew from 7,232 to 27,840 floats.
+    Step 1's tables are unchanged, byte for byte; the header grew from 7,232 to 60,608 floats.
 - **T2, data.**
   - `ecs::Material` gains `specular_roughness_anisotropy`, `coat_weight`, `coat_color`, `coat_roughness`,
     `coat_roughness_anisotropy`, `coat_ior`, `coat_darkening`, `fuzz_weight`, `fuzz_color`, `fuzz_roughness` and
@@ -146,10 +151,19 @@ reads 1.9999, 1.7500 and 1.5000 (offline), 1.9720 (realtime) and 1.9656 (deferre
 ## 6. Known gaps
 
 - **T5, LTC area lights:** not built. Rectangles keep the representative point per lobe.
-- **Anisotropic lobes' Fresnel-weighted albedos.** AnisoRough makes E1 exact; the dielectric's and a coloured metal's albedos read at it are not. Against the integral of `eval()`: a coloured anisotropic metal reads 1.9% high at 60° and 20% at 81°; an anisotropic coat alone reads 46% high at 81° (0.278 against 0.191). White metals are exact (the furnace). The albedos weigh what lies under a lobe, so an anisotropic coat or dielectric darkens what is under it at grazing views. `material_tests` holds anisotropic cases to 60° (2%; 4% layered). The fix is anisotropic Fresnel-weighted tables (S5, S6 and EssD over AnisoRough's axes).
+- **An anisotropic dielectric's albedo.** Before AnisoS56 a coloured anisotropic metal read 20% high at 81° and an
+  anisotropic coat alone 46% (0.278 against 0.191). With it, against the integral of `eval()` at 4M samples, at 18°,
+  60° and 81° along and across the tangent: white and gold metals within 0.42%, the coat alone 0.93%, everything
+  layered 1.7%, a dielectric 1.55% and its specular alone 3.4% (0.0758 against 0.0733 at 60°: the F82 form of its
+  Fresnel, over step 1's EssD, itself 0.8% off at 18°). `material_tests` holds them to 1%, 1.5%, 2.5%, 2.5% and 5%,
+  with room for 2^19 samples' noise. An exact one needs an anisotropic EssD, a 5-D table.
+- **The isotropic car paint** (a coat over a rough metal) reads 0.57% high at 60° at 4M samples, over its old 0.5%
+  bound, which it had passed by its seed: step 1's EssD under the coat. It is held to 1% off normal.
 - **A scene with a layered material pays the layered kernel** for every pixel (126 registers). Classifying tiles by
   material would let plain pixels take the plain kernel.
-- **`material_tests` takes about 9 minutes** in the gate (it was about 3): chi-square and integrals over 21 more materials.
+- **`material_tests` takes about 11 minutes** in the gate (it was about 3): chi-square and integrals over the step 2
+  materials. `material_tests NAME` runs one test (`material_tests t2_albedo`). The anisotropic cases' gold, satin and
+  gloss sample as the brushed metal does and are left out of chi-square.
 - **Anisotropy at grazing views:** within 5% (4.2% worst) at 85° across the grain. Past alpha_t = 1 (roughness above
   about 0.84 at anisotropy 0.9, 0.67 at 0.5), the lobe leaves GGX's table range and loses energy. The worst measured
   was roughness 1, anisotropy 0.9, 85° across the grain: 0.67.

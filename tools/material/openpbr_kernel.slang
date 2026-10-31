@@ -28,9 +28,9 @@
 //   6 lobes     the lobes alone, without the cosine, for reciprocity: 6.x GGX single scatter,
 //               (anisotropic when the material is), 6.yzw EON at rho = base_color, 7.x the
 //               multiple-scattering lobe, 7.y the coat's lobe
-//   7 aniso     an anisotropic bounded-VNDF sample's single-scatter weight for u.xy at the full wo
-//               (the material's specular_roughness and specular_roughness_anisotropy), F = 1; 0
-//               below the horizon
+//   7 aniso     an anisotropic bounded-VNDF sample's single-scatter weight w for u.xy at the full wo
+//               (the material's specular_roughness and specular_roughness_anisotropy), as (w,
+//               w (1-c)^5, w c (1-c)^6); 0 below the horizon
 import material.openpbr;
 
 RWStructuredBuffer<float4> io;
@@ -104,11 +104,16 @@ void run(uint3 id : SV_DispatchThreadID)
     else if (op == 7u)
     {
         const float2 a = ggxAnisoAlpha(mi.specularRoughness, mi.specularRoughnessAnisotropy);
-        const float3 wi = reflect(-wo, ggxSampleBoundedAniso(wo, a, v.xy));
+        const float3 m = ggxSampleBoundedAniso(wo, a, v.xy);
+        const float3 wi = reflect(-wo, m);
         if (wi.z > 0.0)
         {
             const float pdf = ggxPdfBoundedAniso(wo, wi, a);
-            r0.x = pdf > 0.0 ? ggxSingleAniso(wo, wi, a) / pdf : 0.0;
+            const float w = pdf > 0.0 ? ggxSingleAniso(wo, wi, a) / pdf : 0.0;
+            const float c = saturate(dot(wo, m));
+            const float m1 = 1.0 - c;
+            const float m5 = m1 * m1 * m1 * m1 * m1;
+            r0.xyz = float3(w, w * m5, w * c * m5 * m1);
         }
     }
     else if (op == 5u)

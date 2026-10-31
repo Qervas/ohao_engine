@@ -316,7 +316,7 @@
       "golden": "tests/golden/materials_step2_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "OpenPBR step 2 (2026-10-31): a car paint (a smooth coat over a rough blue metal), velvet (fuzz over a dark red base), a brushed metal (anisotropy 0.85 along the sphere's parallels) and a lacquered wood (a tinted coat), in the studio environment with an area light. Deferred: the coat, fuzz and anisotropy from the G-buffer's layers target and the material table; RT GI's reflection follows the coat (ruling O8). Looked at against the path tracer's golden. Re-captured 2026-10-31: RT direct light's shading split into a kernel with OpenPBR's layers and one without; the layered one rounds 1 level differently on scattered pixels of the velvet sphere's top (41 deferred, 54 reference), looked at."
+      "_note": "OpenPBR step 2 (2026-10-31): a car paint (a smooth coat over a rough blue metal), velvet (fuzz over a dark red base), a brushed metal (anisotropy 0.85 along the sphere's parallels) and a lacquered wood (a tinted coat), in the studio environment with an area light. Deferred: the coat, fuzz and anisotropy from the G-buffer's layers target and the material table; RT GI's reflection follows the coat (ruling O8). Looked at against the path tracer's golden. Re-captured 2026-10-31: RT direct light's shading split into a kernel with OpenPBR's layers and one without; the layered one rounds 1 level differently on scattered pixels of the velvet sphere's top (41 deferred, 54 reference), looked at. Re-captured 2026-10-31 for the anisotropic Fresnel tables (AnisoS56): the brushed metal's albedo is its own at grazing views now, which moves its rim by up to 2 levels on 705 px in a ring at the silhouette, looked at."
     },
     {
       "name": "cli_materials_step2_reference",
@@ -324,7 +324,7 @@
       "golden": "tests/golden/materials_step2_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "OpenPBR step 2 (2026-10-31): the same scene at the deferred frame's reference quality. Re-captured 2026-10-31: RT direct light's shading split into a kernel with OpenPBR's layers and one without; the layered one rounds 1 level differently on scattered pixels of the velvet sphere's top (41 deferred, 54 reference), looked at."
+      "_note": "OpenPBR step 2 (2026-10-31): the same scene at the deferred frame's reference quality. Re-captured 2026-10-31: RT direct light's shading split into a kernel with OpenPBR's layers and one without; the layered one rounds 1 level differently on scattered pixels of the velvet sphere's top (41 deferred, 54 reference), looked at. Re-captured 2026-10-31 for the anisotropic Fresnel tables (AnisoS56): the brushed metal's rim moves by up to 2 levels on 710 px, as the deferred golden's, looked at."
     },
     {
       "name": "cli_materials_step2_pt",
