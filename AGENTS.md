@@ -794,7 +794,9 @@ deferred, reference, path traced); two the transparency scene,
   symmetric, or bright pixels take dark neighbours that refuse them and the frame darkens); the
   specular spreads only as far as the surface is rough. **Shade's speed is its occupancy**: 72
   registers (`OHAO_PIPELINE_STATS=1` logs every compute pipeline's; a ray query there cost 32 more,
-  the view's table lookups hoisted 16), and it loops over its two draws, not the 4 trace pixels, or a
+  the view's table lookups hoisted 16, OpenPBR's layers 54), so it is two kernels: `shade`, and
+  `shadeLayered` (126), dispatched only while the material table holds a coat, fuzz or anisotropy
+  (`RenderScene::anyLayeredMaterial`); and it loops over its two draws, not the 4 trace pixels, or a
   warp runs all four evaluations. **Temporal reuse: Z, not 1/M**: it counts the M of the inputs whose
   own surface could have drawn the chosen point, its target above 0 and the point visible from it (a
   ray from last frame's surface, another pick of the block; Bitterli's Algorithm 6): 1/M darkened

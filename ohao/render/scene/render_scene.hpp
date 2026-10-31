@@ -139,6 +139,7 @@ public:
     [[nodiscard]] VkBuffer triangleSlotBuffer() const;
     [[nodiscard]] VkBuffer meshTable() const;
     [[nodiscard]] VkBuffer materialBuffer() const;
+    [[nodiscard]] bool anyLayeredMaterial() const;   // MaterialTable::anyLayered
     [[nodiscard]] VkBuffer materialRefBuffer() const;
     [[nodiscard]] VkBuffer instanceBuffer() const;
     // The light list last given to setLights, sorted by order (host copy).

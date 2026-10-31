@@ -149,7 +149,9 @@ struct Pixel
 
 float3 toLocalFrame(float3 v, Pixel s) { return float3(dot(v, s.t), dot(v, s.b), dot(v, s.normal)); }
 
-Pixel pixelAt(uint2 q)
+// layers: false for a frame whose materials have no coat, fuzz or anisotropy (the renderer
+// knows: RenderScene::anyLayeredMaterial), which skips the layers target and its code.
+Pixel pixelAt(uint2 q, bool layers = true)
 {
     Pixel s;
     const float4 g0 = gPosition.Load(int3(q, 0));
@@ -163,7 +165,7 @@ Pixel pixelAt(uint2 q)
     w.frostCover = pc.weather.z;
     MaterialInputs mi = gbufferMaterial(g0, g1, gAlbedo.Load(int3(q, 0)), gSpecular.Load(int3(q, 0)),
                                         gOpenPBR.Load(int3(q, 0)).rg, s.normal, w);
-    const float3 tangent = gbufferLayers(mi, gLayers.Load(int3(q, 0)), materials, s.normal);
+    const float3 tangent = layers ? gbufferLayers(mi, gLayers.Load(int3(q, 0)), materials, s.normal) : float3(0.0);
     s.bsdf = OpenPBRSurface(mi);
     if (dot(tangent, tangent) > 0.0)
     {
@@ -725,14 +727,29 @@ void shadeTaps(Pixel p, Surf s, uint2 taps[2], float w[2], bool elsewhere, out f
     }
 }
 
+// Two entry points: shadeLayered for a frame with OpenPBR's layers, shade without them. A kernel's
+// registers are its heaviest path's, so the layers' code alone took shade from 72 registers to 128
+// (OHAO_PIPELINE_STATS) and its time from 0.53 to 0.84 ms on helmet_game_1080p, whatever the
+// materials on screen.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void shade(uint3 id : SV_DispatchThreadID)
 {
-    const uint2 q = id.xy;
+    shadePixel(id.xy, false);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void shadeLayered(uint3 id : SV_DispatchThreadID)
+{
+    shadePixel(id.xy, true);
+}
+
+void shadePixel(uint2 q, bool layers)
+{
     if (any(q >= pc.extent.xy)) return;
     const bool reference = (pc.params.z & kFlagReference) != 0u;
-    const Pixel p = pixelAt(q);
+    const Pixel p = pixelAt(q, layers);
     const Surf s = surfOf(p);
     guide[q] = packGuide(s);
     float3 diffuse = float3(0.0), specular = float3(0.0);

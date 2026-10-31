@@ -194,18 +194,21 @@ bool RTDirectTechnique::createPipelines() {
     const VkDescriptorSetLayout sets[] = {m_sampleSetLayout, m_alphaTablesLayout, m_texturesLayout};
     // The second pipeline of each pair makes its own layout, identical to the first's (so the first's
     // binds both) and destroyed at once.
-    VkPipelineLayout spatialLayout = VK_NULL_HANDLE, shadeLayout = VK_NULL_HANDLE, atrousLayout = VK_NULL_HANDLE;
+    VkPipelineLayout spatialLayout = VK_NULL_HANDLE, shadeLayout = VK_NULL_HANDLE, atrousLayout = VK_NULL_HANDLE,
+                     layeredLayout = VK_NULL_HANDLE;
     const bool ok = rtc::createComputePipeline(m_device, "rt_restir_di.slang.initial.spv", "initial", sets,
                                                sizeof(shared::DIPush), m_sampleLayout, m_initial) &&
                     rtc::createComputePipeline(m_device, "rt_restir_di.slang.spatial.spv", "spatial", sets,
                                                sizeof(shared::DIPush), spatialLayout, m_spatial) &&
                     rtc::createComputePipeline(m_device, "rt_restir_di.slang.shade.spv", "shade", sets,
                                                sizeof(shared::DIPush), shadeLayout, m_shade) &&
+                    rtc::createComputePipeline(m_device, "rt_restir_di.slang.shadeLayered.spv", "shadeLayered", sets,
+                                               sizeof(shared::DIPush), layeredLayout, m_shadeLayered) &&
                     rtc::createComputePipeline(m_device, "rt_di_denoise.slang.temporal.spv", "temporal",
                                                m_denoiseSetLayout, sizeof(shared::DIPush), m_denoiseLayout, m_temporal) &&
                     rtc::createComputePipeline(m_device, "rt_di_denoise.slang.atrous.spv", "atrous", m_denoiseSetLayout,
                                                sizeof(shared::DIPush), atrousLayout, m_atrous);
-    for (VkPipelineLayout l : {spatialLayout, shadeLayout, atrousLayout})
+    for (VkPipelineLayout l : {spatialLayout, shadeLayout, atrousLayout, layeredLayout})
         if (l) vkDestroyPipelineLayout(m_device, l, nullptr);
     return ok;
 }
@@ -289,6 +292,7 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
     const bool reference = input.quality == RenderQuality::Reference;
     if (reference && !ensureReferenceImages()) return;
     m_quality = input.quality;
+    m_layers = input.layers;
     m_slot = input.frameSlot;
     m_alphaTables = input.alphaTables;
     m_textures = input.textures;
@@ -351,7 +355,7 @@ void RTDirectTechnique::trace(VkCommandBuffer cmd) {
 void RTDirectTechnique::shade(VkCommandBuffer cmd) {
     if (!m_rendered) return;
     const bool reference = m_quality == RenderQuality::Reference;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_shade);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layers ? m_shadeLayered : m_shade);
     const VkDescriptorSet sets[] = {m_sampleSets[m_slot], m_alphaTables, m_textures};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sampleLayout, 0, 3, sets, 0, nullptr);
     vkCmdPushConstants(cmd, m_sampleLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(m_push), &m_push);
@@ -440,7 +444,7 @@ void RTDirectTechnique::resize(uint32_t width, uint32_t height) {
 void RTDirectTechnique::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
-    for (VkPipeline* p : {&m_initial, &m_spatial, &m_shade, &m_temporal, &m_atrous})
+    for (VkPipeline* p : {&m_initial, &m_spatial, &m_shade, &m_shadeLayered, &m_temporal, &m_atrous})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_sampleLayout, &m_denoiseLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }

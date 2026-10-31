@@ -133,21 +133,22 @@ reads 1.9999, 1.7500 and 1.5000 (offline), 1.9720 (realtime) and 1.9656 (deferre
 
 `render_bench --only helmet_game_1080p` (GPU medians of 100 frames; the CPU was busy, so the run is marked noisy, which does not touch GPU timestamps), against the same scene before step 2 (`docs/changes/2026-10-31-bench-sponza.md`):
 
-| pass | before | after |
-|---|---|---|
-| frame | 5.36 | 5.72 |
-| `di.shade` | 0.53 | 0.84 |
-| `gbuffer.early` | | 0.41 |
-| `lighting` | | 0.47 |
-| `rt.gi` | 0.78 | 0.85 |
+| pass | before | step 2 | two shade kernels |
+|---|---|---|---|
+| frame | 5.36 | 5.72 | 5.51 |
+| `di.shade` | 0.53 | 0.84 | 0.50 |
+| `gbuffer.early` | | 0.41 | |
+| `lighting` | | 0.47 | |
+| `rt.gi` | 0.78 | 0.85 | |
 
-`di.shade` is the cost: its speed is its occupancy (AGENTS.md), and `OpenPBRSurface` is a larger struct than the base. Budgets are not proposed until it is looked at.
+`di.shade`'s speed is its occupancy (AGENTS.md). With the layers' code in it, it took 126 registers (`OHAO_PIPELINE_STATS=1`) against step 1's 72, whatever the materials on screen: the base without the layers measured 96, the layers without the base 96, and the layers' decode removed 72. It is now two kernels in `rt/restir_di.slang`: `shade` without the layers (72 registers) and `shadeLayered` (126), and RT direct light dispatches the second only while a material in the table has a coat, a fuzz or specular anisotropy (`MaterialTable::anyLayered`, `RenderScene::anyLayeredMaterial`). The helmet room has none. A material once added keeps counting, so a scene that drops its last layered material keeps the layered kernel. Splitting it changed the compiler's rounding in the layered kernel: `cli_materials_step2_deferred` and `_reference` moved 1 level on 41 and 54 scattered pixels of the velvet sphere's top, looked at and re-captured with a note; every other golden is exact.
 
 ## 6. Known gaps
 
 - **T5, LTC area lights:** not built. Rectangles keep the representative point per lobe.
 - **Anisotropic lobes' Fresnel-weighted albedos.** AnisoRough makes E1 exact; the dielectric's and a coloured metal's albedos read at it are not. Against the integral of `eval()`: a coloured anisotropic metal reads 1.9% high at 60° and 20% at 81°; an anisotropic coat alone reads 46% high at 81° (0.278 against 0.191). White metals are exact (the furnace). The albedos weigh what lies under a lobe, so an anisotropic coat or dielectric darkens what is under it at grazing views. `material_tests` holds anisotropic cases to 60° (2%; 4% layered). The fix is anisotropic Fresnel-weighted tables (S5, S6 and EssD over AnisoRough's axes).
-- **`di.shade` is 0.31 ms slower** (above).
+- **A scene with a layered material pays the layered kernel** for every pixel (126 registers). Classifying tiles by
+  material would let plain pixels take the plain kernel.
 - **`material_tests` takes about 9 minutes** in the gate (it was about 3): chi-square and integrals over 21 more materials.
 - **Anisotropy at grazing views:** within 5% (4.2% worst) at 85° across the grain. Past alpha_t = 1 (roughness above
   about 0.84 at anisotropy 0.9, 0.67 at 0.5), the lobe leaves GGX's table range and loses energy. The worst measured

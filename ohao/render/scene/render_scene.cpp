@@ -959,6 +959,7 @@ VkBuffer RenderScene::indexArena() const { return m->meshes.indexArena(); }
 VkBuffer RenderScene::triangleSlotBuffer() const { return m->meshes.triangleSlotBuffer(); }
 VkBuffer RenderScene::meshTable() const { return m->meshes.meshTable(); }
 VkBuffer RenderScene::materialBuffer() const { return m->materials.buffer(); }
+bool RenderScene::anyLayeredMaterial() const { return m->materials.anyLayered(); }
 VkBuffer RenderScene::materialRefBuffer() const { return m->instances.materialRefBuffer(); }
 VkBuffer RenderScene::instanceBuffer() const { return m->instances.instanceBuffer(); }
 std::span<const LightDesc> RenderScene::lights() const { return m->lights.descs(); }

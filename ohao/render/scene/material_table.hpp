@@ -38,6 +38,12 @@ public:
     [[nodiscard]] bool emissive(uint32_t index) const noexcept {
         return index < m_emissive.size() && m_emissive[index] != 0;
     }
+    // Whether any material has OpenPBR's layers (a coat, a fuzz or specular anisotropy). A frame
+    // without them runs RT direct light's shading without the layers' code (its registers).
+    [[nodiscard]] bool anyLayered() const noexcept { return m_layered > 0; }
+    [[nodiscard]] static bool layered(const MaterialDesc& desc) noexcept {
+        return desc.coatWeight > 0.0f || desc.fuzzWeight > 0.0f || desc.specularAnisotropy > 0.0f;
+    }
     [[nodiscard]] static Pack pack(const MaterialDesc& desc);
 
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept { return m_dirty.size() * sizeof(Pack); }
@@ -52,6 +58,7 @@ private:
     std::vector<uint8_t> m_doubleSided;   // host only: the draw table's face-culling flag
     std::vector<uint8_t> m_alphaMode;     // host only: AlphaMode
     std::vector<uint8_t> m_emissive;      // host only: emits
+    uint32_t m_layered{0};                // materials with layers (layered())
     std::set<uint32_t> m_dirty;
 };
 

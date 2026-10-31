@@ -55,6 +55,7 @@ struct DirectInput {
     VkDescriptorSet textures = VK_NULL_HANDLE;
     VkBuffer lightData = VK_NULL_HANDLE;   // RenderScene::rtLightBuffer: the path tracer's lights
     VkBuffer materials = VK_NULL_HANDLE;   // RenderScene::materialBuffer
+    bool layers = true;                    // RenderScene::anyLayeredMaterial: di.shade's layered kernel
     const render::EmissiveLights* emissive = nullptr;   // this frame's table, recorded before sample()
 };
 
@@ -155,6 +156,8 @@ private:
     VkDescriptorSetLayout m_sampleSetLayout = VK_NULL_HANDLE, m_denoiseSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_sampleLayout = VK_NULL_HANDLE, m_denoiseLayout = VK_NULL_HANDLE;
     VkPipeline m_initial = VK_NULL_HANDLE, m_spatial = VK_NULL_HANDLE, m_shade = VK_NULL_HANDLE;
+    VkPipeline m_shadeLayered = VK_NULL_HANDLE;   // shade with OpenPBR's layers (restir_di.slang)
+    bool m_layers = true;
     VkPipeline m_temporal = VK_NULL_HANDLE, m_atrous = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sampleSets{};

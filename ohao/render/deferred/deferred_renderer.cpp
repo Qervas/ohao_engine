@@ -398,6 +398,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 di.textures = texturesSet;
                 di.lightData = m_renderScene->rtLightBuffer();
                 di.materials = m_renderScene->materialBuffer();
+                di.layers = m_renderScene->anyLayeredMaterial();
                 di.emissive = m_emissiveLights;
                 m_rtDirect->sample(c, di);
             });
