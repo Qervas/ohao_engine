@@ -208,21 +208,6 @@ static_assert(offsetof(GITracePush, flags) == 32);
 static_assert(offsetof(GITracePush, cameraPos) == 48);
 static_assert(sizeof(GITracePush) == 64);
 
-// SSAO (compute/ssao.slang) push constants, both entries
-struct alignas(16) SSAOPush {
-    alignas(16) std::array<float, 16> viewProj{};
-    alignas(16) std::array<float, 4> cameraPosRadius{};
-    alignas(16) std::array<float, 4> params{};
-    alignas(16) std::array<uint32_t, 4> extent{};
-    alignas(16) std::array<uint32_t, 4> config{};
-};
-static_assert(offsetof(SSAOPush, viewProj) == 0);
-static_assert(offsetof(SSAOPush, cameraPosRadius) == 64);
-static_assert(offsetof(SSAOPush, params) == 80);
-static_assert(offsetof(SSAOPush, extent) == 96);
-static_assert(offsetof(SSAOPush, config) == 112);
-static_assert(sizeof(SSAOPush) == 128);
-
 // SSS (postprocess/sss.slang) push constants, both entries
 struct alignas(16) SSSPush {
     alignas(16) std::array<uint32_t, 4> extent{};

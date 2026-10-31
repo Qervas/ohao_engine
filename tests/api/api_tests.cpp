@@ -230,8 +230,8 @@ struct FakeHost final : api::Host {
 // render.settings (2b test 14): E_STATE on a host without settings (the CLI), reads the
 // host's settings, a set changes only the members given (nested ones too), limits and
 // unknown fields are refused before the host is touched, a set counts as a change and a read
-// does not; captures take quality, post (ssao) and ev100 from the settings unless they
-// name their own, and carry gpuMs and (timings) the pass list.
+// does not; captures take quality and ev100 from the settings unless they name their own
+// (post: none unless named), and carry gpuMs and (timings) the pass list.
 static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
     World w;
     api::Session s(w, engineTypes());
@@ -262,7 +262,7 @@ static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
     const Reply set(s.call("render.settings", R"({"set":{"rtGI":{"rays":8},"sss":false,"quality":"reference"}})"));
     CHECK(set.ok() && host.settingsSet == 1 && host.settings->rtGI.rays == 8 && host.settings->rtGI.enabled &&
               host.settings->rtGI.resolution == api::TraceResolution::half && !host.settings->sss &&
-              !host.settings->ssao && host.settings->quality == api::Quality::reference,
+              host.settings->quality == api::Quality::reference,
           "a set changes the members given, nested ones too; the rest keep their value");
     CHECK(set.json("/result/rtGI/rays") == "8" && set.json("/result/sss") == "false", "and answers the settings now in effect");
     CHECK(s.changeCount() == changes + 1, "a set counts as a change (a lockstep window redraws)");
@@ -273,16 +273,17 @@ static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
               Reply(s.call("render.settings", R"({"set":{"csm":{"size":256}}})")).code() == "E_RANGE" &&
               Reply(s.call("render.settings", R"({"set":{"geometry":"triangles"}})")).code() == "E_ENUM" &&
               Reply(s.call("render.settings", R"({"set":{"ssgi":true}})")).code() == "E_UNKNOWN_FIELD" &&
+              Reply(s.call("render.settings", R"({"set":{"ssao":true}})")).code() == "E_UNKNOWN_FIELD" &&
               Reply(s.call("render.settings", R"({"set":{"ev100":-21}})")).code() == "E_RANGE",
           "limits, enum names and unknown settings are refused");
     CHECK(host.settingsSet == 1 && s.changeCount() == changes, "(before the host is touched)");
 
-    // Captures default to the settings: quality reference (set above), ssao, exposure.
-    (void)s.call("render.settings", R"({"set":{"ssao":true,"ev100":2.5}})");
+    // Captures default to the settings: quality reference (set above), exposure; no post effect.
+    (void)s.call("render.settings", R"({"set":{"ev100":2.5}})");
     const Reply cap(s.call("render.capture", R"({"inline":true,"timings":true})"));
     CHECK(cap.ok() && !seen.empty() && seen.back().quality == "reference" &&
-              seen.back().post == std::vector<std::string>{"ssao"} && seen.back().ev100 == 2.5f && seen.back().timings,
-          "a capture that names none takes quality, post (ssao) and ev100 from the settings");
+              seen.back().post.empty() && seen.back().ev100 == 2.5f && seen.back().timings,
+          "a capture that names none takes quality and ev100 from the settings, and no post effect");
     CHECK(cap.json("/result/gpuMs") == "1.235" &&
               cap.json("/result/timings") == R"([["gbuffer.early",0.071],["lighting",0.27]])",
           "gpuMs and the pass list come back, in microseconds");
@@ -359,16 +360,17 @@ static void t09_render_capture_needs_a_host_and_checks_its_params() {
     const Reply ok(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"size":1})"));
     CHECK(ok.code() == "E_UNKNOWN_FIELD" && ok.str("/error/data/0/path") == "/size", "unknown params are refused");
     const Reply good(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"width":640,)"
-                                              R"("height":360,"denoise":"none","post":["taa","ssao"],"ev100":1.5})"));
+                                              R"("height":360,"denoise":"none","post":["taa","bloom"],"ev100":1.5})"));
     CHECK(good.ok() && good.str("/result/path") == "a.png" && good.str("/result/frames") == "7" && seen.size() == 1,
           "a valid capture reaches the host and reports frames and ms");
     const api::RenderRequest& r = seen.back();
-    const std::vector<std::string> effects{"taa", "ssao"};
+    const std::vector<std::string> effects{"taa", "bloom"};
     CHECK(r.mode == "rt_offline" && r.spp == 4 && r.width == 640u && r.height == 360u && r.denoise == "none" &&
               r.post == effects && r.ev100 == 1.5f && r.frames == 0 && !r.inlineImage && !r.region,
           "with every param as given");
     CHECK(Reply(s.call("render.capture", R"({"path":"a.png","mode":"raster"})")).code() == "E_ENUM" &&
               Reply(s.call("render.capture", R"({"path":"a.png","post":["glow"]})")).code() == "E_ENUM" &&
+              Reply(s.call("render.capture", R"({"path":"a.png","post":["ssao"]})")).code() == "E_ENUM" &&
               Reply(s.call("render.capture", R"({"path":"a.png","width":8})")).code() == "E_RANGE" &&
               Reply(s.call("render.capture", R"({"path":"a.png","ev100":31})")).code() == "E_RANGE" &&
               Reply(s.call("render.capture", "{}")).code() == "E_COMMAND",

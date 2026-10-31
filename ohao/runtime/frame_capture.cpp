@@ -216,7 +216,6 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
             const auto on = [&](std::string_view e) { return std::find(r.post.begin(), r.post.end(), e) != r.post.end(); };
             pp->setBloomEnabled(on("bloom"));
             pp->setTAAEnabled(on("taa"));
-            pp->setSSAOEnabled(on("ssao"));
         }
     }
     // Every mode displays through the post stack's EV100 and curve (the path tracer reads them).
@@ -328,7 +327,6 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
                   r.rtDirectFullResolution ? api::TraceResolution::full : api::TraceResolution::half};
     s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::TraceResolution::full : api::TraceResolution::half,
               static_cast<int32_t>(r.rtGIRays)};
-    s.ssao = r.ssao;
     s.sss = r.sss;
     s.geometry = r.geometry == GpuCulling::Geometry::Meshlets    ? api::GeometryPath::meshlets
                  : r.geometry == GpuCulling::Geometry::Instances ? api::GeometryPath::instances
@@ -353,7 +351,6 @@ void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s)
     r.rtGI = s.rtGI.enabled;
     r.rtGIFullResolution = s.rtGI.resolution == api::TraceResolution::full;
     r.rtGIRays = static_cast<uint32_t>(std::clamp(s.rtGI.rays, 1, 32));
-    r.ssao = s.ssao;
     r.sss = s.sss;
     r.geometry = s.geometry == api::GeometryPath::meshlets    ? GpuCulling::Geometry::Meshlets
                  : s.geometry == api::GeometryPath::instances ? GpuCulling::Geometry::Instances

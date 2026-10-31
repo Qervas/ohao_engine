@@ -192,14 +192,6 @@
        {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, 2 when RT direct light lights emissive surfaces (a hit's emission is then not brought back), z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the denoiser's depth guide is the distance from it); w the environment's intensity (Environment.intensity: a miss brings back the environment times it)"}
      ]},
-    {"name": "SSAOPush", "doc": "SSAO (compute/ssao.slang) push constants, both entries",
-     "fields": [
-       {"name": "viewProj", "type": "float4x4", "doc": "the unjittered view-projection: a direction's end projected to the screen"},
-       {"name": "cameraPosRadius", "type": "float4", "doc": "xyz the camera's position (the blur's depth guide is the distance from it), w the sampling radius in metres"},
-       {"name": "params", "type": "float4", "doc": "x bias (metres along the normal), y intensity, z, w the distance falloff's start and end"},
-       {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
-       {"name": "config", "type": "uint4", "doc": "x directions a pixel, y steps a direction; z, w the 4x4 interleaved noise: 4 bits a texel (x + 4y; z texels 0-7, w 8-15), the stratum k of rotation (k + 0.5) / 16 of the angle between two directions"}
-     ]},
     {"name": "SSSPush", "doc": "SSS (postprocess/sss.slang) push constants, both entries",
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x, y the frame's size; z, w its tiles across and down"},
@@ -307,7 +299,7 @@
      "fields": [
        {"name": "viewProj", "type": "float4x4", "doc": "the jittered view-projection (screen positions for the froxel and RT GI lookups)"},
        {"name": "viewZ", "type": "float4", "doc": "the view matrix's third row: a point's view depth is -(dot(viewZ.xyz, p) + viewZ.w) (the froxel's slice)"},
-       {"name": "camera", "type": "float4", "doc": "xyz the camera's position; w the environment's intensity with flag 4, else the constant ambient intensity"},
+       {"name": "camera", "type": "float4", "doc": "xyz the camera's position; w the environment's intensity (flag 4)"},
        {"name": "screen", "type": "float4", "doc": "x, y the frame's size; z, w the froxel slice scale and bias (ClusterPush.screen.zw)"},
        {"name": "config", "type": "uint4", "doc": "x particle slots, y batches, z lights (without clusters), w flags: 1 clustered, 2 RT GI, 4 environment, 8 TLAS (sun shadow ray)"}
      ]},
@@ -350,7 +342,7 @@
     {"name": "ForwardPush", "doc": "the transparent pass's mesh shader (vfx/transparent_mesh.slang) push constants",
      "fields": [
        {"name": "view", "type": "float4x4", "doc": "the view matrix (the froxel's slice)"},
-       {"name": "camera", "type": "float4", "doc": "xyz the camera's position, w the constant ambient intensity"},
+       {"name": "camera", "type": "float4", "doc": "xyz the camera's position, w unused"},
        {"name": "screen", "type": "float4", "doc": "x, y the frame's size; z, w the froxel slice scale and bias"},
        {"name": "config", "type": "uint4", "doc": "x lights (without clusters), y flags: 1 clustered, 2 RT GI, 4 environment (IBL), 8 TLAS (sun shadow ray)"},
        {"name": "env", "type": "float4", "doc": "x the environment's intensity"}

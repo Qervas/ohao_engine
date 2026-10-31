@@ -8,7 +8,7 @@ namespace ohao {
 
 // The frame's raster lights: the scene's light table (clustered lighting uploads it to the
 // frame slot only when its version changed). A scene without lights has none, in the deferred
-// frame as in the path tracer: it is lit by its environment (or the constant ambient) alone.
+// frame as in the path tracer: it is lit by its environment alone, or not at all.
 void VulkanRenderer::setFrameLights() {
     if (!m_deferredRenderer) return;
     std::span<const LightData> lights;
@@ -17,7 +17,7 @@ void VulkanRenderer::setFrameLights() {
         lights = m_renderScene->rasterLights();
         version = m_renderScene->rasterLightsVersion();
     }
-    m_deferredRenderer->setLights(lights, version, m_ambientOverride.value_or(0.35f));
+    m_deferredRenderer->setLights(lights, version);
 }
 
 } // namespace ohao

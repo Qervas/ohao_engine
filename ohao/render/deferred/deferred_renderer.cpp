@@ -259,18 +259,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
         m_lightingPass->setLights(m_lightClusters ? m_lightClusters->lightBuffer(frameIndex) : VK_NULL_HANDLE,
-                                  m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u, m_ambient);
-
-        // SSAO texture is set after executeSSAO() call below
+                                  m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u);
     }
 
-    // SSAO's inputs: the G-buffer and the unjittered camera
-    if (m_postProcessing && m_gbufferPass) {
-        m_postProcessing->setSSAOInputs(m_gbufferPass->getPositionView(), m_gbufferPass->getNormalView(),
-                                        m_proj * m_view, m_cameraPos);
-    }
-
-    // --- Render Graph: barrier-tracked passes (CSM → GBuffer → SSAO → Lighting) ---
+    // --- Render Graph: barrier-tracked passes (CSM → GBuffer → RT → Lighting) ---
     // The graph computes inter-pass image layout barriers centrally.
     // Each pass still manages its own VkRenderPass/VkFramebuffer internally.
 
@@ -321,7 +313,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 2.4. decals — the frame's decal boxes projected onto the G-buffer's albedo and normal, over the
-    //      surfaces inside them (sub-project 12, step 3). After gbuffer.late: the clusters, SSAO and the
+    //      surfaces inside them (sub-project 12, step 3). After gbuffer.late: the clusters and the
     //      lighting read the targets it leaves. The records are this frame's (RenderScene::vfx()).
     if (m_decals && m_decalsDrawn && m_renderScene && m_gbufferPass) {
         m_decals->prepare(frameIndex, m_renderScene->vfx());
@@ -356,30 +348,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                     m_lightingPass->setClusters(m_lightClusters->clusterBuffer(), m_lightClusters->sliceScale(),
                                                 m_lightClusters->sliceBias());
             });
-    }
-
-    // 3. SSAO — reads the G-buffer's position and normal (SHADER_READ_ONLY after the
-    //    G-buffer pass, whose render pass makes its writes visible to later shaders) and
-    //    manages its own images' layouts. Only when the effect is on, so a frame without it
-    //    has no ssao pass (or timing); lighting then binds its fallback view.
-    const bool ssaoOn = m_postProcessing && m_postProcessing->getSSAOEnabled();
-    if (!ssaoOn && m_lightingPass) m_lightingPass->setSSAOTexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
-    if (ssaoOn && m_gbufferPass) {
-        m_renderGraph.addComputePass("ssao",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.readComputeTexture(m_graphNormalHandle);
-            },
-            [&](VkCommandBuffer c) {
-                m_postProcessing->executeSSAO(c, frameIndex);
-                if (m_lightingPass) {
-                    VkImageView ssaoView = m_postProcessing->getSSAOOutput();
-                    VkSampler ssaoSampler = m_postProcessing->getSSAOSampler();
-                    if (ssaoView != VK_NULL_HANDLE && ssaoSampler != VK_NULL_HANDLE)
-                        m_lightingPass->setSSAOTexture(ssaoView, ssaoSampler);
-                }
-            });
-
     }
 
     // This frame's index since the last temporal reset: with the render seed, it seeds
@@ -554,7 +522,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         vfxLighting.clusters = clustered ? m_lightClusters->clusterBuffer() : VK_NULL_HANDLE;
         vfxLighting.sliceScale = m_lightClusters ? m_lightClusters->sliceScale() : 0.0f;
         vfxLighting.sliceBias = m_lightClusters ? m_lightClusters->sliceBias() : 0.0f;
-        vfxLighting.ambient = m_ambient;
         vfxLighting.tlas = sceneTlas;
         vfxLighting.giRadiance = giTraced && m_rtGI->rendered() ? m_rtGI->getOutput().indirectLightView : VK_NULL_HANDLE;
         vfxLighting.envIrradiance = m_envIrradiance;
@@ -686,7 +653,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 
     // Reconnect after resize
     if (m_lightingPass && m_gbufferPass) {
-        // SSAO, RT GI and the RT shadow mask may all have been recreated above;
+        // RT GI and RT direct light may have been recreated above;
         // lighting still holds their old views. Drop them before the rewrite --
         // render() re-supplies them before the lighting pass executes.
         m_lightingPass->clearPerFrameInputs();
@@ -737,10 +704,9 @@ void DeferredRenderer::setCameraData(const glm::mat4& view, const glm::mat4& pro
     m_farPlane = farPlane;
 }
 
-void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t version, float ambient) {
+void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t version) {
     m_lights = lights;
     m_lightsVersion = version;
-    m_ambient = ambient;
     for (const LightData& l : lights) {
         if (l.position.w != 0.0f || glm::dot(glm::vec3(l.direction), glm::vec3(l.direction)) == 0.0f) continue;
         setSunDirection(-glm::vec3(l.direction));   // direction is where the light travels
@@ -772,13 +738,6 @@ VkImage DeferredRenderer::getFinalOutputImage() const {
     }
     if (m_lightingPass) {
         return m_lightingPass->getOutputImage();
-    }
-    return VK_NULL_HANDLE;
-}
-
-VkImageView DeferredRenderer::getSSAOOutput() const {
-    if (m_postProcessing) {
-        return m_postProcessing->getSSAOOutput();
     }
     return VK_NULL_HANDLE;
 }

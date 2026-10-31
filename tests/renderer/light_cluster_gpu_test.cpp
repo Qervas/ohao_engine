@@ -180,7 +180,7 @@ struct Capture {
 };
 
 // A scene captured as `ohao run` captures it (host::RenderHost + api::Session), 480x270
-// deferred, `frames` frames (`post`: TAA, SSAO, bloom), lighting clustered or not.
+// deferred, `frames` frames (`post`: TAA, bloom), lighting clustered or not.
 Capture capture(const std::string& scenePath, bool clustered, int frames, bool post, const std::string& png) {
     ecs::FileAssetResolver assets(OHAO_SOURCE_DIR);
     host::RenderHost host(assets, api::HostKind::Headless);
@@ -216,7 +216,7 @@ Capture capture(const std::string& scenePath, bool clustered, int frames, bool p
         r.height = 270;
         r.frames = frames;
         if (post) {
-            r.post = {"taa", "ssao", "bloom"};
+            r.post = {"taa", "bloom"};
             r.ev100 = 0.0f;
         }
         r.path = png;

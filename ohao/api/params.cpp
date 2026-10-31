@@ -26,8 +26,7 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("neutral", Tonemap::neutral, "Khronos PBR Neutral: base colours shown as themselves");
     r.enumeration<PostEffect>("PostEffect").doc("Deferred post effect")
         .value("bloom", PostEffect::bloom, "Bloom")
-        .value("taa", PostEffect::taa, "Temporal anti-aliasing")
-        .value("ssao", PostEffect::ssao, "Screen-space ambient occlusion");
+        .value("taa", PostEffect::taa, "Temporal anti-aliasing");
     r.enumeration<Quality>("Quality").doc("Hybrid deferred frame quality")
         .value("realtime", Quality::realtime, "The budgeted frame: RT shadows from up to 4 lights a pixel, 1 ray each, filtered")
         .value("reference", Quality::reference,
@@ -178,7 +177,7 @@ void registerParams(reflect::TypeRegistry& r) {
             .min(16).max(8192)
         .field("denoise", &RenderCaptureParams::denoise).doc("Path tracer denoiser")
         .field("post", &RenderCaptureParams::post)
-            .doc("Deferred post effects to turn on; absent: render.settings' ssao alone")
+            .doc("Deferred post effects to turn on; absent: none")
         .field("ev100", &RenderCaptureParams::ev100)
             .doc("The camera's exposure, EV at ISO 100 (radiance L displays as L / (1.2 x 2^EV100)); absent: "
                  "render.settings'").unit("EV").min(-20.0).max(30.0)
@@ -221,7 +220,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("quality", &RenderSettings::quality).doc("Deferred quality")
         .field("rtDirect", &RenderSettings::rtDirect).doc("RT direct light")
         .field("rtGI", &RenderSettings::rtGI).doc("RT GI")
-        .field("ssao", &RenderSettings::ssao).doc("Screen-space ambient occlusion")
         .field("sss", &RenderSettings::sss).doc("Subsurface scattering")
         .field("geometry", &RenderSettings::geometry).doc("G-buffer geometry path")
         .field("occlusionCulling", &RenderSettings::occlusionCulling).doc("The late pass's Hi-Z occlusion test")

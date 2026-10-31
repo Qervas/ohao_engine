@@ -94,7 +94,7 @@ endif()
 add_dependencies(restore_render_gpu_test shaders)
 
 # Deferred rendering is bit-identical across fresh renderers and processes, post effects
-# included, and the render seed reaches SSAO (sub-project 4, step 1).
+# included, and the render seed reaches the RT traces (sub-project 4, step 1).
 add_executable(deferred_determinism_gpu_test deferred_determinism_gpu_test.cpp)
 target_compile_features(deferred_determinism_gpu_test PRIVATE cxx_std_20)
 target_compile_definitions(deferred_determinism_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}"

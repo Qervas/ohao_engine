@@ -26,12 +26,6 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
-    m_ssaoPass = std::make_unique<SSAOPass>();
-    m_ssaoPass->setNoiseSeed(m_noiseSeed);
-    if (!m_ssaoPass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
     // The display pass binds the metered EV100 whether or not a window meters.
     m_autoExposure = std::make_unique<AutoExposure>();
     if (!m_autoExposure->initialize(device, physicalDevice)) return false;
@@ -54,7 +48,6 @@ void PostProcessingPipeline::cleanup() {
     };
     resetPass(m_bloomPass);
     resetPass(m_taaPass);
-    resetPass(m_ssaoPass);
     resetPass(m_autoExposure);
 
     // Cleanup tonemapping
@@ -67,18 +60,6 @@ void PostProcessingPipeline::cleanup() {
     safeDestroy(m_sampler);
 
     destroyFinalOutput();
-}
-
-void PostProcessingPipeline::setNoiseSeed(uint32_t seed) {
-    m_noiseSeed = seed;
-    if (m_ssaoPass) m_ssaoPass->setNoiseSeed(seed);
-}
-
-void PostProcessingPipeline::executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex) {
-    // SSAO runs before lighting so its output can modulate ambient occlusion
-    if (m_ssaoEnabled && m_ssaoPass) {
-        m_ssaoPass->execute(cmd, frameIndex);
-    }
 }
 
 void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
@@ -187,7 +168,6 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     // Resize sub-passes
     if (m_bloomPass) m_bloomPass->onResize(width, height);
     if (m_taaPass) m_taaPass->onResize(width, height);
-    if (m_ssaoPass) m_ssaoPass->onResize(width, height);
 
     // Recreate final output
     safeDestroy(m_tonemapFramebuffer);
@@ -227,13 +207,6 @@ PostProcessingPipeline::BoundGBufferInputs PostProcessingPipeline::boundGBufferI
     return b;
 }
 
-void PostProcessingPipeline::setSSAOInputs(VkImageView position, VkImageView normal, const glm::mat4& viewProj,
-                                           const glm::vec3& cameraPos) {
-    if (!m_ssaoPass) return;
-    m_ssaoPass->setInputs(position, normal);
-    m_ssaoPass->setCamera(viewProj, cameraPos);
-}
-
 void PostProcessingPipeline::setVelocityBuffer(VkImageView velocity) {
     if (m_taaPass) m_taaPass->setVelocityBuffer(velocity);
 }
@@ -252,29 +225,6 @@ glm::vec2 PostProcessingPipeline::getJitterOffset(uint32_t frameIndex) const {
         return m_taaPass->getJitterOffset(frameIndex);
     }
     return glm::vec2(0.0f);
-}
-
-void PostProcessingPipeline::setSSAORadius(float radius) {
-    if (m_ssaoPass) m_ssaoPass->setRadius(radius);
-}
-
-void PostProcessingPipeline::setSSAOIntensity(float intensity) {
-    if (m_ssaoPass) m_ssaoPass->setIntensity(intensity);
-}
-
-VkImageView PostProcessingPipeline::getSSAOOutput() const {
-    if (m_ssaoPass) return m_ssaoPass->getOutputView();
-    return VK_NULL_HANDLE;
-}
-
-VkImage PostProcessingPipeline::getSSAOImage() const {
-    if (m_ssaoPass) return m_ssaoPass->getOutputImage();
-    return VK_NULL_HANDLE;
-}
-
-VkSampler PostProcessingPipeline::getSSAOSampler() const {
-    if (m_ssaoPass) return m_ssaoPass->getSampler();
-    return VK_NULL_HANDLE;
 }
 
 void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {

@@ -311,7 +311,7 @@ std::vector<uint8_t> sceneCapture(const char* path, const char* capture, GpuCull
         r.height = 270;
         if (std::strcmp(capture, "post") == 0) {
             r.frames = 30;
-            r.post = {"taa", "ssao", "bloom"};
+            r.post = {"taa", "bloom"};
             r.ev100 = 0.0f;
         } else {
             r.frames = 10;

@@ -2,11 +2,10 @@
 
 // Render Technique Interfaces — pluggable rendering methods.
 //
-// Each feature (shadows, GI, reflections, AO) has an interface.
+// Each feature (shadows, GI, reflections) has an interface.
 // Multiple implementations exist per interface:
 //   IGITechnique      →  SSGI, RTGI, PathTracedGI
 //   IReflectionTech   →  SSR, RTReflections
-//   IAOTechnique      →  SSAO, RTAO
 //
 // The renderer holds one active technique per feature.
 // Swap at runtime: renderer.setGITechnique(std::make_unique<RTGI>());
@@ -120,42 +119,6 @@ public:
     virtual void resize(uint32_t width, uint32_t height) = 0;
     virtual void render(VkCommandBuffer cmd, const ReflectionInput& input) = 0;
     virtual ReflectionOutput getOutput() const = 0;
-    virtual void destroy() = 0;
-};
-
-// ─── AO Technique ────────────────────────────────────────────────────
-
-struct AOInput {
-    VkImageView positionBuffer;
-    VkImageView normalBuffer;
-    VkImageView depthBuffer;
-    glm::mat4 view;
-    glm::mat4 proj;
-    uint32_t width;
-    uint32_t height;
-    float radius;
-    float intensity;
-
-    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-};
-
-struct AOOutput {
-    VkImage aoMask;                // R8 — 0=occluded, 1=visible
-    VkImageView aoMaskView;
-};
-
-class IAOTechnique {
-public:
-    virtual ~IAOTechnique() = default;
-
-    virtual const char* getName() const = 0;
-    virtual bool needsRT() const = 0;
-
-    virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-                      uint32_t width, uint32_t height) = 0;
-    virtual void resize(uint32_t width, uint32_t height) = 0;
-    virtual void render(VkCommandBuffer cmd, const AOInput& input) = 0;
-    virtual AOOutput getOutput() const = 0;
     virtual void destroy() = 0;
 };
 

@@ -113,10 +113,10 @@ public:
                        const glm::vec3& position, float nearPlane, float farPlane);
 
     // This frame's raster lights (the light table, in order; the caller keeps them alive until
-    // render() returns), their version (unchanged lights are not uploaded again; 0: always) and
-    // the ambient intensity. The first directional light is the sun: the CSM fallback's light
-    // follows it (the physical sky follows it through the environment, render/sky/atmosphere.hpp).
-    void setLights(std::span<const LightData> lights, uint64_t version, float ambient);
+    // render() returns) and their version (unchanged lights are not uploaded again; 0: always).
+    // The first directional light is the sun: the CSM fallback's light follows it (the physical
+    // sky follows it through the environment, render/sky/atmosphere.hpp).
+    void setLights(std::span<const LightData> lights, uint64_t version);
     // Clustered lighting on (the default) or every pixel summing every light (tests: the same
     // image when no froxel overflows).
     void setClusteredLighting(bool on) noexcept { m_clusteredLighting = on; }
@@ -192,9 +192,6 @@ public:
     // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post.
     [[nodiscard]] VkImage getLitImage() const;
 
-    // Get SSAO output for deferred lighting
-    [[nodiscard]] VkImageView getSSAOOutput() const;
-
     // Get jitter offset for TAA
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
@@ -264,7 +261,6 @@ private:
     glm::vec3 m_lightDirection{0.0f, -1.0f, 0.0f};
     std::span<const LightData> m_lights;
     uint64_t m_lightsVersion{0};
-    float m_ambient{0.35f};
     bool m_clusteredLighting{true};
     float m_clusterFar{1000.0f};
     std::unique_ptr<LightClusters> m_lightClusters;   // the light table and the froxel lists

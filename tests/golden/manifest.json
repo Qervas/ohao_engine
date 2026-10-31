@@ -112,7 +112,7 @@
     },
     {
       "name": "cli_damaged_helmet_deferred",
-      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/damaged_helmet_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -120,7 +120,7 @@
     },
     {
       "name": "cli_helmet_game_deferred",
-      "command": "./build/ohao run assets/scenes/helmet_game.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/helmet_game.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/helmet_game_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -152,7 +152,7 @@
     },
     {
       "name": "cli_helmet_game_reference",
-      "command": "./build/ohao run assets/scenes/helmet_game.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --quality reference",
+      "command": "./build/ohao run assets/scenes/helmet_game.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --quality reference",
       "golden": "tests/golden/helmet_game_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -168,7 +168,7 @@
     },
     {
       "name": "cli_khronos_metal_rough_spheres_deferred",
-      "command": "./build/ohao run assets/scenes/khronos_metal_rough_spheres.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/khronos_metal_rough_spheres.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/khronos_metal_rough_spheres_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -176,7 +176,7 @@
     },
     {
       "name": "cli_khronos_metal_rough_spheres_reference",
-      "command": "./build/ohao run assets/scenes/khronos_metal_rough_spheres.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --quality reference",
+      "command": "./build/ohao run assets/scenes/khronos_metal_rough_spheres.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --quality reference",
       "golden": "tests/golden/khronos_metal_rough_spheres_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -192,7 +192,7 @@
     },
     {
       "name": "cli_khronos_flight_helmet_deferred",
-      "command": "./build/ohao run assets/scenes/khronos_flight_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/khronos_flight_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/khronos_flight_helmet_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -200,7 +200,7 @@
     },
     {
       "name": "cli_khronos_flight_helmet_reference",
-      "command": "./build/ohao run assets/scenes/khronos_flight_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --quality reference",
+      "command": "./build/ohao run assets/scenes/khronos_flight_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --quality reference",
       "golden": "tests/golden/khronos_flight_helmet_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -208,7 +208,7 @@
     },
     {
       "name": "cli_khronos_sponza_deferred",
-      "command": "./build/ohao run assets/scenes/khronos_sponza.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/khronos_sponza.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/khronos_sponza_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -216,7 +216,7 @@
     },
     {
       "name": "cli_khronos_sponza_reference",
-      "command": "./build/ohao run assets/scenes/khronos_sponza.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --quality reference",
+      "command": "./build/ohao run assets/scenes/khronos_sponza.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --quality reference",
       "golden": "tests/golden/khronos_sponza_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -224,7 +224,7 @@
     },
     {
       "name": "cli_anim_rig_deferred",
-      "command": "./build/ohao run assets/scenes/anim_rig.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/anim_rig.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/anim_rig_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -232,7 +232,7 @@
     },
     {
       "name": "cli_anim_rig_reference",
-      "command": "./build/ohao run assets/scenes/anim_rig.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --quality reference",
+      "command": "./build/ohao run assets/scenes/anim_rig.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --quality reference",
       "golden": "tests/golden/anim_rig_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -248,7 +248,7 @@
     },
     {
       "name": "cli_area_light_deferred",
-      "command": "./build/ohao run assets/scenes/area_light.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/area_light.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/area_light_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -256,7 +256,7 @@
     },
     {
       "name": "cli_area_light_reference",
-      "command": "./build/ohao run assets/scenes/area_light.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --quality reference",
+      "command": "./build/ohao run assets/scenes/area_light.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --quality reference",
       "golden": "tests/golden/area_light_reference.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -264,7 +264,7 @@
     },
     {
       "name": "cli_blockout_room_deferred",
-      "command": "./build/ohao run assets/scenes/blockout_room.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/blockout_room.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/blockout_room_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -272,7 +272,7 @@
     },
     {
       "name": "cli_blockout_play_deferred",
-      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
       "golden": "tests/golden/blockout_play_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -280,7 +280,7 @@
     },
     {
       "name": "cli_blockout_play_hud",
-      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --steps 45 --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --ev100 0 --hud",
+      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --steps 45 --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0 --hud",
       "golden": "tests/golden/blockout_play_hud.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -288,7 +288,7 @@
     },
     {
       "name": "cli_transparency_deferred",
-      "command": "./build/ohao run assets/scenes/transparency.scene.json --steps 30 --render {out} --mode deferred --frames 10 --post taa,ssao,bloom --ev100 0",
+      "command": "./build/ohao run assets/scenes/transparency.scene.json --steps 30 --render {out} --mode deferred --frames 10 --post taa,bloom --ev100 0",
       "golden": "tests/golden/transparency_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,

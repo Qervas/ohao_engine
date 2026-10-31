@@ -2,7 +2,7 @@
 // material's draw, vertex shader core/gbuffer.vert (the draw table through firstInstance), shaded
 // per pixel as core/deferred_lighting.frag shades a G-buffer pixel: the clustered lights (the
 // forward copy of its loop, includes/lighting/clustered_lights.slang), the sun's shadow by one ray
-// query (flag 8), RT GI's radiance or the environment's irradiance or the constant ambient, the
+// query (flag 8), RT GI's radiance or the environment's irradiance (else no indirect light), the
 // split-sum environment specular, emission. Colour is blended by coverage (base colour alpha x the
 // albedo texture's x opacity); coverage also goes to the transparency mask.
 // Set 0: the bindless textures; set 1: GBufferPass's scene set (instances, materials, refs, ...);
@@ -160,7 +160,6 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const float4 gi = rtGI ? giRadiance.SampleLevel(linearSampler, i.position.xy / pc.screen.xy, 0.0) : float4(0.0, 0.0, 0.0, 1.0);
     float3 ambient = float3(0.0);
     if (rtGI) ambient += gi.rgb * diffuseAlbedo * ao;
-    else if (!ibl) ambient += float3(pc.camera.w) * diffuseAlbedo * ao;
     const float NdotV = surface.wo.z;
     const float3 reflectWeight = specularAlbedo * specularOcclusion(NdotV, ao, roughness);
     if (ibl)

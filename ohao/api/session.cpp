@@ -721,7 +721,7 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     if (p.hdr && !usePath(s, params, "hdr", *p.hdr, PathUse::Write, ctx, hdrFile)) return false;
     static constexpr const char* kModes[] = {"deferred", "rt_realtime", "rt_offline"};
     static constexpr const char* kDenoisers[] = {"none", "oidn", "nrd", "dlss"};
-    static constexpr const char* kEffects[] = {"bloom", "taa", "ssao"};
+    static constexpr const char* kEffects[] = {"bloom", "taa"};
     RenderRequest r;
     r.path = file;
     r.hdrPath = hdrFile;
@@ -734,11 +734,8 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     r.denoise = kDenoisers[static_cast<int>(p.denoise)];
     // What the capture leaves out comes from the host's render.settings.
     const std::optional<RenderSettings> settings = s.render->renderSettings();
-    if (p.post) {
+    if (p.post)
         for (const PostEffect e : *p.post) r.post.emplace_back(kEffects[static_cast<int>(e)]);
-    } else if (settings && settings->ssao) {
-        r.post.emplace_back("ssao");
-    }
     r.ev100 = p.ev100 ? p.ev100 : (settings ? std::optional<float>(settings->ev100) : std::nullopt);
     if (const std::optional<Tonemap> t = p.tonemap ? p.tonemap : (settings ? std::optional<Tonemap>(settings->tonemap)
                                                                              : std::nullopt))

@@ -51,7 +51,7 @@ class DeferredRenderer;
 
 // Render mode selection
 enum class RenderMode {
-    Deferred,     // Raster path: G-buffer, CSM, SSAO, post-processing (+ hybrid RT shadows/GI)
+    Deferred,     // Raster path: G-buffer, post-processing, RT direct light and GI (CSM without ray queries)
     RTRealtime,   // Path tracing tuned for interactive use
     RTOffline     // Path tracing tuned for reference/offline rendering
 };
@@ -243,8 +243,8 @@ public:
     void notifyCameraChanged();
     void resetAccumulation();
     /// The render's one seed: the path tracers' base sample index after an accumulation
-    /// reset, the deferred path's RT shadow and GI sample seed (with the frame index since
-    /// the reset) and its SSAO noise. Kept, so renderers created later get it.
+    /// reset and the deferred path's RT direct light and GI sample seed (with the frame index
+    /// since the reset). Kept, so renderers created later get it.
     void setRenderSeed(uint32_t seed);
     [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
     [[nodiscard]] uint32_t getPathTracerFrameIndex() const;
@@ -273,7 +273,6 @@ public:
         bool rtGI{true};
         bool rtGIFullResolution{false};  // realtime: the trace at the frame's size, not half
         uint32_t rtGIRays{2};            // realtime: rays a pixel (1-32)
-        bool ssao{false};
         bool sss{true};
         GpuCulling::Geometry geometry{GpuCulling::Geometry::Auto};
         bool occlusionCulling{true};
@@ -292,10 +291,6 @@ public:
     };
     void setRenderSettings(const RenderSettings& s);
     [[nodiscard]] RenderSettings renderSettings() const;
-    // The deferred frame's constant ambient light, in place of the default (0.35); nullopt: the
-    // default. A fallback only: lighting applies it to a frame with neither RT GI nor an
-    // environment.
-    void setAmbientIntensity(std::optional<float> ambient) noexcept { m_ambientOverride = ambient; }
     // Clustered lighting: the newest finished frame's froxel overflow (lights left out of
     // froxels past 256, the froxels that left any out, the largest froxel count).
     // Collects finished frames first.
@@ -424,7 +419,7 @@ private:
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
     // This frame's raster lights for the deferred renderer: the scene's light table (none
-    // without lights, as in the path tracer); sets the ambient intensity.
+    // without lights, as in the path tracer).
     void setFrameLights();
 
     void prepareRTSceneForFrame(const RTRenderSettings& defaults);
@@ -572,7 +567,6 @@ private:
 
     // Queue family index
     uint32_t m_graphicsQueueFamily{0};
-    std::optional<float> m_ambientOverride;
 
     // Sub-plan 4.C T3b: stash the instance + device extension name lists we
     // enabled at vkCreateInstance / vkCreateDevice time so NRD's NRI device

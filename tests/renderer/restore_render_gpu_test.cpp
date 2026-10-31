@@ -11,7 +11,7 @@
 //   5. render.capture C, which must be bit-identical to A (post effects off and on);
 //   6. world.restore again (nothing differs): it reports no change and its frame uploads
 //      0 instance bytes.
-// The sequence runs twice: post effects off (as cornell_box renders), then TAA, SSAO and
+// The sequence runs twice: post effects off (as cornell_box renders), then TAA and
 // bloom on, whose temporal history a later capture must also start afresh. Validation
 // must report nothing. Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
@@ -127,7 +127,7 @@ int main() {
         bool ok;
     };
     std::vector<Check> checks;
-    const std::pair<const char*, const char*> configs[] = {{"plain", "[]"}, {"post", R"(["taa","ssao","bloom"])"}};
+    const std::pair<const char*, const char*> configs[] = {{"plain", "[]"}, {"post", R"(["taa","bloom"])"}};
     for (const auto& [tag, post] : configs) {
         const Sequence q = runSequence(types, assets, out, tag, post);
         const std::size_t ab = differing(q.a, q.b), ac = differing(q.a, q.c);

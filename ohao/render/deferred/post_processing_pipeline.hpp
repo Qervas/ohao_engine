@@ -3,7 +3,6 @@
 #include "render_pass_base.hpp"
 #include "bloom_pass.hpp"
 #include "taa_pass.hpp"
-#include "ssao_pass.hpp"
 #include "auto_exposure.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "render/display/display.hpp"
@@ -53,8 +52,6 @@ public:
     // Feature toggles
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
-    void setSSAOEnabled(bool enabled) { m_ssaoEnabled = enabled; }
-    [[nodiscard]] bool getSSAOEnabled() const { return m_ssaoEnabled; }
     [[nodiscard]] bool getBloomEnabled() const { return m_bloomEnabled; }
     [[nodiscard]] bool getTAAEnabled() const { return m_taaEnabled; }
     void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }
@@ -88,30 +85,12 @@ public:
     void setTAABlendFactor(float factor);
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
-    // SSAO configuration
-    void setSSAORadius(float radius);
-    void setSSAOIntensity(float intensity);
-    // SSAO's per-frame inputs: the G-buffer's position and normal, the unjittered
-    // view-projection and the camera position (DeferredRenderer::render).
-    void setSSAOInputs(VkImageView position, VkImageView normal, const glm::mat4& viewProj, const glm::vec3& cameraPos);
-    // The SSAO noise seed (VulkanRenderer::setRenderSeed); kept across re-initialization.
-    void setNoiseSeed(uint32_t seed);
-    // The seed the SSAO pass's noise comes from.
-    [[nodiscard]] uint32_t noiseSeed() const noexcept { return m_ssaoPass ? m_ssaoPass->noiseSeed() : m_noiseSeed; }
-
     void setDeltaTime(float dt)          { m_totalTime += dt; }
-
-    // Execute SSAO separately (called before lighting pass by DeferredRenderer)
-    void executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex);
 
     // Get final output
     [[nodiscard]] VkImageView getOutputView() const { return m_finalOutputView; }
     [[nodiscard]] VkImage getOutputImage() const { return m_finalOutput; }
     [[nodiscard]] bool didExecute() const { return m_didExecute; }
-    [[nodiscard]] VkImageView getSSAOOutput() const;
-    [[nodiscard]] VkImage getSSAOImage() const;
-    [[nodiscard]] VkSampler getSSAOSampler() const;
-    [[nodiscard]] SSAOPass* ssaoPass() noexcept { return m_ssaoPass.get(); }
 
 private:
     [[nodiscard]] bool createTonemappingPass();
@@ -123,9 +102,7 @@ private:
     // Sub-passes
     std::unique_ptr<BloomPass> m_bloomPass;
     std::unique_ptr<TAAPass> m_taaPass;
-    std::unique_ptr<SSAOPass> m_ssaoPass;
     std::unique_ptr<AutoExposure> m_autoExposure;
-    uint32_t m_noiseSeed{0};
 
     // Tonemapping (final pass)
     VkRenderPass m_tonemapRenderPass{VK_NULL_HANDLE};
@@ -154,7 +131,6 @@ private:
     // Feature toggles (disabled by default for stability)
     bool m_bloomEnabled{false};
     bool m_taaEnabled{false};
-    bool m_ssaoEnabled{false};
     bool m_tonemappingEnabled{true};
     bool m_didExecute{false};
     render::GpuPassTimer* m_passTimer{nullptr};

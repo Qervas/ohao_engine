@@ -45,7 +45,7 @@ std::string_view modeName(RenderMode m) {
 // The window's live post settings, kept across a lockstep capture (which sets its own, and
 // its own quality). A realtime capture is the next live frame, with the live settings.
 struct PostState {
-    bool bloom{false}, taa{false}, ssao{false};
+    bool bloom{false}, taa{false};
     float ev100{render::kDefaultEv100};
     render::DisplayCurve curve{render::DisplayCurve::AgX};
     bool autoExposure{false};
@@ -486,7 +486,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         }
         PostState live;
         auto* pp = m_renderer->getDeferredRenderer() ? m_renderer->getDeferredRenderer()->getPostProcessing() : nullptr;
-        if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->ev100(), pp->displayCurve(),
+        if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->ev100(), pp->displayCurve(),
                         pp->autoExposure()};
         const RenderQuality liveQuality = m_renderer->renderQuality();
         const DenoiseMode liveDenoise = m_renderer->getDenoiseMode();
@@ -501,7 +501,6 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         if (pp) {
             pp->setBloomEnabled(live.bloom);
             pp->setTAAEnabled(live.taa);
-            pp->setSSAOEnabled(live.ssao);
             pp->setEv100(live.ev100);
             pp->setDisplayCurve(live.curve);
             pp->setAutoExposure(live.autoExposure);

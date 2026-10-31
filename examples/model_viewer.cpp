@@ -183,7 +183,6 @@ int main(int rawArgc, char* rawArgv[]) {
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
-            pp->setSSAOEnabled(true);
             pp->setEv100(0.0f);
         }
     }

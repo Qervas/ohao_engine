@@ -115,7 +115,6 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
         if (auto* pp = deferred->getPostProcessing()) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
-            pp->setSSAOEnabled(true);
             pp->setEv100(0.0f);
         }
     }

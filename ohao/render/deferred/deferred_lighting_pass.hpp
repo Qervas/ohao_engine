@@ -23,14 +23,13 @@ public:
 
     // Configuration
     void setGBufferPass(GBufferPass* gbufferPass);
-    // Forget the inputs that other passes own and re-supply every frame (SSAO,
-    // SSGI/RT GI, RT direct light). Call it when those passes may have recreated
+    // Forget the inputs that other passes own and re-supply every frame (RT GI,
+    // RT direct light). Call it when those passes may have recreated
     // their images -- a resize -- BEFORE anything rewrites this pass's
     // descriptors; the bindings fall back to the dummy view until render()
     // hands the new views back. Does not itself touch descriptors.
     void clearPerFrameInputs();
     void setShadowMap(VkImageView shadowMap, VkSampler shadowSampler);
-    void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
     // RT GI's diffuse (binding 11) and its reflection (binding 22, frontier F5b); both or neither.
     void setSSGITexture(VkImageView ssgi, VkImageView reflection, VkSampler ssgiSampler);
     // RT direct light's demodulated diffuse and specular (render/rt/rt_direct_technique.hpp):
@@ -51,12 +50,10 @@ public:
     [[nodiscard]] VkImage getOutputImage() const { return m_hdrOutput.image; }
     [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
 
-    // The light table (LightGpu records, binding 5), its light count and the ambient intensity
-    // (the fallback fill of a frame with neither RT GI nor an environment).
-    void setLights(VkBuffer lightBuffer, uint32_t count, float ambient) {
+    // The light table (LightGpu records, binding 5) and its light count.
+    void setLights(VkBuffer lightBuffer, uint32_t count) {
         m_lightBuffer = lightBuffer;
         m_lightCount = count;
-        m_params.ambientIntensity = ambient;
     }
     // The froxel lists (binding 16) and the slice mapping they were built with; a null buffer
     // makes every pixel sum every light.
@@ -121,8 +118,6 @@ private:
     VkImageView m_irradianceView{VK_NULL_HANDLE};
     VkImageView m_prefilteredView{VK_NULL_HANDLE};
     VkSampler m_iblSampler{VK_NULL_HANDLE};
-    VkImageView m_ssaoView{VK_NULL_HANDLE};
-    VkSampler m_ssaoSampler{VK_NULL_HANDLE};
     VkImageView m_ssgiView{VK_NULL_HANDLE};
     VkImageView m_giReflectionView{VK_NULL_HANDLE};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
@@ -151,7 +146,7 @@ private:
         glm::mat4 invViewProj{1.0f};
         glm::mat4 view{1.0f};
         glm::vec3 cameraPos{0.0f};
-        float ambientIntensity{0.35f};
+        float pad0{0.0f};
         glm::vec2 screenSize{0.0f};
         uint32_t lightCount{0};
         uint32_t flags{0};

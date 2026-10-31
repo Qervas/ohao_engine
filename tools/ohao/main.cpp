@@ -12,7 +12,7 @@
 //   ohao summary  <scene> [--depth D] [--max-children N] [--max-nodes N]
 //   ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
-//                  [--denoise X] [--size WxH] [--post bloom,taa,ssao] [--ev100 EV] [--tonemap agx|neutral]
+//                  [--denoise X] [--size WxH] [--post bloom,taa] [--ev100 EV] [--tonemap agx|neutral]
 //                  [--quality realtime|reference] [--hud] [--hdr out.pfm]]
 //                 [--save out.scene.json]
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU

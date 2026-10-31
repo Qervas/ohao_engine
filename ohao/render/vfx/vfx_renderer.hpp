@@ -75,7 +75,6 @@ public:
         uint32_t lightCount{0};
         VkBuffer clusters{VK_NULL_HANDLE};     // null: every light (no clusters)
         float sliceScale{0.0f}, sliceBias{0.0f};
-        float ambient{0.35f};
         VkAccelerationStructureKHR tlas{VK_NULL_HANDLE};   // the sun's shadow ray (null: unshadowed)
         VkImageView giRadiance{VK_NULL_HANDLE};             // RT GI's output (null: none)
         VkImageView envIrradiance{VK_NULL_HANDLE};          // null: no environment

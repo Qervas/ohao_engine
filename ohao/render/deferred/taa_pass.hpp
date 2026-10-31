@@ -22,7 +22,7 @@ public:
     void setCurrentFrame(VkImageView currentFrame);
     void setVelocityBuffer(VkImageView velocity);
     void setDepthBuffer(VkImageView depth);
-    // Both G-buffer inputs at once, one descriptor rewrite (see SSAOPass).
+    // Both G-buffer inputs at once, one descriptor rewrite.
     void setGBufferInputs(VkImageView depth, VkImageView velocity);
     // The transparent pass's coverage (R8, SHADER_READ_ONLY when TAA runs): history weighs less
     // where it is set (sub-project 12, OPEN ruling 15). Null: none bound.

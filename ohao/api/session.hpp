@@ -95,7 +95,7 @@ struct RenderRequest {
     std::optional<uint32_t> width;     // absent: the host's size (headless 1920x1080; a window its own)
     std::optional<uint32_t> height;
     std::string denoise{"none"};       // none | oidn | nrd | dlss
-    std::vector<std::string> post;     // deferred post effects turned on: bloom, taa, ssao
+    std::vector<std::string> post;     // deferred post effects turned on: bloom, taa
     std::optional<float> ev100;        // the camera's exposure; absent: the renderer's own default
     std::string tonemap;               // agx | neutral; empty: the renderer's own default
     std::string quality{"realtime"};   // deferred: realtime | reference

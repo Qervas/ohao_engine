@@ -1312,7 +1312,7 @@ static void runOrphanedEntryPointTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("a deferred resize with SSAO, TAA and bloom on leaves the layer silent");
+    TEST_BEGIN("a deferred resize with TAA and bloom on leaves the layer silent");
     {
         // ohao_game's post-processing configuration. After a resize each pass
         // rebuilds its images and descriptor sets; any set left unwritten, or any
@@ -1337,7 +1337,6 @@ static void runOrphanedEntryPointTests() {
         EXPECT(deferred && deferred->getPostProcessing(), "deferred post-processing exists");
         if (deferred && deferred->getPostProcessing()) {
             auto* pp = deferred->getPostProcessing();
-            pp->setSSAOEnabled(true);
             pp->setTAAEnabled(true);
             pp->setBloomEnabled(true);
         }
@@ -1457,7 +1456,6 @@ static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() 
     auto* d = renderer.getDeferredRenderer();
     EXPECT(d && d->getPostProcessing(), "deferred post-processing exists");
     auto* pp = d->getPostProcessing();
-    pp->setSSAOEnabled(true);
     pp->setTAAEnabled(true);
     pp->setBloomEnabled(true);
 
@@ -1478,8 +1476,8 @@ static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() 
     }
     const FrameTiming& last = frames.back();
     for (const char* name : {"scene.upload", "cull.instances", "gbuffer.early", "hiz.build", "cull.late", "gbuffer.late",
-                             "ssao", "lighting", "post.bloom", "post.taa", "post.tonemap", "readback"})
-        EXPECT(hasPass(last, name), "a frame with SSAO, TAA and bloom runs " + std::string(name));
+                             "lighting", "post.bloom", "post.taa", "post.tonemap", "readback"})
+        EXPECT(hasPass(last, name), "a frame with TAA and bloom runs " + std::string(name));
     EXPECT(!hasPass(last, "present") && !hasPass(last, "pt.trace"), "a headless deferred frame has no present");
     // The timer reports a refused pass once per process: read the whole run's errors.
     const auto errors = ohao::log::read(0, ohao::log::Level::Error, ohao::log::Channel::render, 4096);
@@ -1487,12 +1485,11 @@ static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() 
         EXPECT(rec.msg.find("pass timing") == std::string::npos, "no pass was refused by the timer: " + rec.msg);
 
     pp->setBloomEnabled(false);
-    pp->setSSAOEnabled(false);
     const std::vector<FrameTiming> after = timedFrames(renderer, 2);
     EXPECT(!after.empty(), "frames after the change are timed");
-    EXPECT(!hasPass(after.back(), "post.bloom") && !hasPass(after.back(), "ssao") &&
-               hasPass(after.back(), "post.taa") && hasPass(after.back(), "post.tonemap"),
-           "bloom and SSAO turned off leave the timings; TAA and tonemapping stay");
+    EXPECT(!hasPass(after.back(), "post.bloom") && hasPass(after.back(), "post.taa") &&
+               hasPass(after.back(), "post.tonemap"),
+           "bloom turned off leaves the timings; TAA and tonemapping stay");
     std::cout << "(frame " << last.gpuMs << " ms, " << last.count << " passes) ";
     TEST_PASS();
 }
@@ -2224,38 +2221,32 @@ static void sp2b_t10_a_reference_mean_restarts_after_realtime_frames() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Test 5 (2b step 9): SSAO. A floor meeting a wall, one point light of `light` intensity and
-// a constant ambient of `ambient`, which lighting applies only without RT GI (and without an
-// environment, which this scene has none of): `rtGI` false turns RT GI off; one frame after a
-// reset, SSAO on or off. Empty without a device.
-struct AORun {
-    std::vector<uint8_t> px;
-    bool ssaoPass{false};
-};
-
-static AORun aoRun(bool ssao, float light, float ambient, bool rtGI = true) {
+// Frontier F5c: no fill. A floor meeting a wall, one point light of `light` intensity (0: none),
+// no environment; `rtGI` false turns RT GI off, `geometry` false leaves the floor and wall out.
+// One frame after a reset. Empty without a device.
+static std::vector<uint8_t> fillRun(float light, bool rtGI, bool geometry = true) {
     ohao::VulkanRenderer r(160, 120);
     if (!r.initialize()) return {};
-    AORun out;
+    std::vector<uint8_t> out;
     {
         ohao::ecs::World world;
         ohao::ecs::installRenderExtract(world, r.renderScene());
-        ohao::Model floor, wall;
-        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
-        ohao::PrimitiveMeshGenerator::generateBox(wall, {-8.0f, 0.0f, -1.3f}, {8.0f, 3.0f, -1.0f}, {1, 1, 1});
-        ohao::render::MaterialDesc grey;
-        grey.baseColor = {0.7f, 0.7f, 0.7f};
-        grey.roughness = 0.9f;
-        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
-        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), wall, "wall", {}, &grey);
-        ohao::ecs::Light l = shadowLight(light, 0.1f);
-        ohao::ecs::spawnLight(world, "light", l, ohao::ecs::Transform{{0.0f, 2.0f, 1.0f}});
+        if (geometry) {
+            ohao::Model floor, wall;
+            ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+            ohao::PrimitiveMeshGenerator::generateBox(wall, {-8.0f, 0.0f, -1.3f}, {8.0f, 3.0f, -1.0f}, {1, 1, 1});
+            ohao::render::MaterialDesc grey;
+            grey.baseColor = {0.7f, 0.7f, 0.7f};
+            grey.roughness = 0.9f;
+            ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
+            ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), wall, "wall", {}, &grey);
+        }
+        if (light > 0.0f)
+            ohao::ecs::spawnLight(world, "light", shadowLight(light, 0.1f), ohao::ecs::Transform{{0.0f, 2.0f, 1.0f}});
         r.setRenderMode(ohao::RenderMode::Deferred);
-        r.setAmbientIntensity(ambient);
         auto settings = r.renderSettings();
         settings.rtGI = rtGI;
         r.setRenderSettings(settings);
-        r.getDeferredRenderer()->getPostProcessing()->setSSAOEnabled(ssao);
         r.getCamera().setPosition({0.0f, 1.5f, 2.5f});
         r.getCamera().setRotation(-30.0f, -90.0f);   // down at the crease where the floor meets the wall
         world.sync();
@@ -2265,77 +2256,30 @@ static AORun aoRun(bool ssao, float light, float ambient, bool rtGI = true) {
         r.requestReadback();
         r.render();
         const auto px = r.readback();
-        out.px.assign(px.begin(), px.end());
-        for (const auto& f : r.frameTimings(1))
-            for (uint32_t i = 0; i < f.count; ++i) out.ssaoPass = out.ssaoPass || f.pass[i] == ohao::render::passIndex("ssao");
+        out.assign(px.begin(), px.end());
     }
     return out;
 }
 
-// Test 5: SSAO darkens the ambient term where it is occluded, and nothing else: with only
-// ambient light (the fallback without RT GI), AO on darkens the crease and brightens nothing;
-// with only a point light (and RT GI), AO on changes no pixel.
-static void sp2b_t05_ssao_darkens_only_the_ambient_term() {
-    TEST_BEGIN("sp2b_t05: SSAO darkens ambient light in the crease; a point-lit frame is unchanged");
-    const AORun ambOff = aoRun(false, 0.0f, 0.6f, false);
-    if (ambOff.px.empty()) {
+// Without RT GI and without an environment a deferred frame has no indirect light, as the path
+// tracer has none: an unlit floor and wall are the empty frame's black, with RT GI off or on;
+// lit by a point light they show.
+static void f5c_no_indirect_light_without_rt_gi_or_environment() {
+    TEST_BEGIN("f5c: no fill: an unlit scene without an environment is black, RT GI off or on");
+    const std::vector<uint8_t> empty = fillRun(0.0f, false, false);
+    if (empty.empty()) {
         std::cout << "(no Vulkan device -- skipped) ";
         TEST_PASS();
         return;
     }
-    const AORun ambOn = aoRun(true, 0.0f, 0.6f, false);
-    const AORun litOff = aoRun(false, 30.0f, 0.0f);
-    const AORun litOn = aoRun(true, 30.0f, 0.0f);
-    int darker = 0, brighter = 0;
-    for (std::size_t p = 0; p + 3 < ambOn.px.size() && p + 3 < ambOff.px.size(); p += 4) {
-        const int d = int(ambOff.px[p + 1]) - int(ambOn.px[p + 1]);
-        darker += d >= 2;
-        brighter += d <= -1;
-    }
-    std::cout << "(ambient only: " << darker << " px darker, " << brighter << " brighter; point light: max_abs "
-              << maxAbsDiff(litOn.px, litOff.px) << ") ";
-    EXPECT(ambOn.ssaoPass && !ambOff.ssaoPass, "the ssao pass runs when the effect is on, and only then");
-    EXPECT(darker > 200, "ambient light is occluded along the crease (>= 1% of the frame darker)");
-    EXPECT_EQ(brighter, 0, "occlusion never brightens");
-    EXPECT_EQ(maxAbsDiff(litOn.px, litOff.px), 0, "direct and RT GI light are not occluded by SSAO");
-    TEST_PASS();
-}
-
-// Test 5: SSAO frames are the same from fresh renderers.
-static void sp2b_t05_ssao_twin_renders_are_identical() {
-    TEST_BEGIN("sp2b_t05: two fresh renderers' SSAO frames are identical");
-    const AORun a = aoRun(true, 10.0f, 0.6f);
-    if (a.px.empty()) {
-        std::cout << "(no Vulkan device -- skipped) ";
-        TEST_PASS();
-        return;
-    }
-    const AORun b = aoRun(true, 10.0f, 0.6f);
-    EXPECT_EQ(maxAbsDiff(a.px, b.px), 0, "bit-identical");
-    TEST_PASS();
-}
-
-// The constant ambient is a fallback for frames without another source of indirect light: with
-// RT GI on, its intensity changes no pixel (the walls are lit by GI's rays only); with RT GI off
-// (and no environment) it lights the frame.
-static void ambient_is_a_fallback_only_without_rt_gi() {
-    TEST_BEGIN("ambient: no effect with RT GI on; the fallback fill without it");
-    const AORun giNone = aoRun(false, 10.0f, 0.0f);
-    if (giNone.px.empty()) {
-        std::cout << "(no Vulkan device -- skipped) ";
-        TEST_PASS();
-        return;
-    }
-    const AORun giAmbient = aoRun(false, 10.0f, 0.6f);
-    const AORun noGiNone = aoRun(false, 10.0f, 0.0f, false);
-    const AORun noGiAmbient = aoRun(false, 10.0f, 0.6f, false);
-    int brighter = 0;
-    for (std::size_t p = 0; p + 3 < noGiNone.px.size() && p + 3 < noGiAmbient.px.size(); p += 4)
-        brighter += int(noGiAmbient.px[p + 1]) - int(noGiNone.px[p + 1]) >= 2;
-    std::cout << "(RT GI on: max_abs " << maxAbsDiff(giAmbient.px, giNone.px) << "; off: " << brighter
-              << " px brighter) ";
-    EXPECT_EQ(maxAbsDiff(giAmbient.px, giNone.px), 0, "with RT GI, the ambient intensity changes no pixel");
-    EXPECT(brighter > 10000, "without RT GI, the ambient fallback lights most of the frame");
+    const std::vector<uint8_t> unlitNoGI = fillRun(0.0f, false);
+    const std::vector<uint8_t> unlitGI = fillRun(0.0f, true);
+    const std::vector<uint8_t> lit = fillRun(10.0f, false);
+    std::cout << "(unlit vs empty: RT GI off max_abs " << maxAbsDiff(unlitNoGI, empty) << ", on "
+              << maxAbsDiff(unlitGI, empty) << "; lit vs empty " << maxAbsDiff(lit, empty) << ") ";
+    EXPECT_EQ(maxAbsDiff(unlitNoGI, empty), 0, "without RT GI or an environment, no surface receives indirect light");
+    EXPECT_EQ(maxAbsDiff(unlitGI, empty), 0, "RT GI brings nothing back from a scene without light");
+    EXPECT(maxAbsDiff(lit, empty) > 20, "a point light lights the floor and wall");
     TEST_PASS();
 }
 
@@ -2400,11 +2344,9 @@ static void sp2b_s9_sss_runs_only_on_flagged_tiles() {
     TEST_PASS();
 }
 
-static void runSSAOTests() {
-    std::cout << "\n=== SSAO, SSS ===" << std::endl;
-    sp2b_t05_ssao_darkens_only_the_ambient_term();
-    sp2b_t05_ssao_twin_renders_are_identical();
-    ambient_is_a_fallback_only_without_rt_gi();
+static void runFillAndSSSTests() {
+    std::cout << "\n=== No fill, SSS ===" << std::endl;
+    f5c_no_indirect_light_without_rt_gi_or_environment();
     sp2b_s9_sss_runs_only_on_flagged_tiles();
 }
 
@@ -2477,7 +2419,6 @@ static void sp2b_s10_the_reset_does_not_wait_for_the_gpu() {
         r.setRenderQuality(ohao::RenderQuality::Reference);   // the heaviest frame: full-resolution RT GI
         auto* pp = r.getDeferredRenderer()->getPostProcessing();
         pp->setTAAEnabled(true);
-        pp->setSSAOEnabled(true);
         world.sync();
         r.render();   // builds the acceleration structures
         double worstMs = 0.0;
@@ -2784,7 +2725,7 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     const auto& b = d.readBack;
     EXPECT(b.quality == ohao::RenderQuality::Realtime && b.rtDirect && b.rtDirectCandidates == 8 && !b.rtDirectFullResolution &&
                b.rtDirectSpatial == 2 && b.rtGI &&
-               !b.rtGIFullResolution && b.rtGIRays == 2 && !b.ssao && b.sss &&
+               !b.rtGIFullResolution && b.rtGIRays == 2 && b.sss &&
                b.geometry == ohao::GpuCulling::Geometry::Auto && b.occlusionCulling && b.csmCascades == 4 &&
                b.csmSize == 2048 && b.ev100 == defaults.ev100 && b.tonemap == defaults.tonemap,
            "the defaults read back unchanged");
@@ -2801,7 +2742,6 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     s.rtDirectFullResolution = true;
     s.rtDirectSpatial = 6;
     s.rtGIRays = 5;
-    s.ssao = true;
     s.geometry = ohao::GpuCulling::Geometry::Instances;
     s.occlusionCulling = false;
     s.csmCascades = 3;
@@ -2809,14 +2749,14 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     s.ev100 = 1.5f;
     s.tonemap = render::DisplayCurve::Neutral;
     const auto t = settingsRun(s).readBack;
-    EXPECT(t.rtDirectCandidates == 12 && t.rtDirectSpatial == 6 && t.rtDirectFullResolution && t.rtGIRays == 5 && t.ssao && t.geometry == ohao::GpuCulling::Geometry::Instances &&
+    EXPECT(t.rtDirectCandidates == 12 && t.rtDirectSpatial == 6 && t.rtDirectFullResolution && t.rtGIRays == 5 && t.geometry == ohao::GpuCulling::Geometry::Instances &&
                !t.occlusionCulling && t.csmCascades == 3 && t.csmSize == 1024 && t.ev100 == 1.5f && t.tonemap == render::DisplayCurve::Neutral,
            "every changed knob reads back");
     TEST_PASS();
 }
 
 static void sp2b_t14_switches_turn_their_passes_off() {
-    TEST_BEGIN("sp2b_t14: sss, ssao, rtGI and rtDirect switch their passes; the frame still renders");
+    TEST_BEGIN("sp2b_t14: sss, rtGI and rtDirect switch their passes; the frame still renders");
     const SettingsRun on = settingsRun({});
     if (!on.ok) {
         std::cout << "(no Vulkan device -- skipped) ";
@@ -2828,14 +2768,11 @@ static void sp2b_t14_switches_turn_their_passes_off() {
     s.rtGI = false;
     s.rtDirect = false;
     const SettingsRun off = settingsRun(s);
-    s.ssao = true;
-    const SettingsRun ssao = settingsRun(s);
-    EXPECT(ran(on, "sss") && !ran(on, "ssao"), "the defaults run sss, not ssao");
+    EXPECT(ran(on, "sss"), "the defaults run sss");
     EXPECT(!ran(off, "sss"), "sss off: it does not run");
     EXPECT(!ran(off, "rt.gi") && !ran(off, "rt.gi.denoise") && !ran(off, "di.sample") && !ran(off, "di.trace") && !ran(off, "di.shade"),
            "rtGI and rtDirect off: none of their passes");
     EXPECT(ran(off, "csm"), "rtDirect off: the CSM fallback draws the sun's shadow");
-    EXPECT(ran(ssao, "ssao"), "ssao on: it runs");
     EXPECT(!off.px.empty() && !on.px.empty(), "both frames read back");
     TEST_PASS();
 }
@@ -3410,7 +3347,7 @@ int main() {
     runReadbackTests();
     runRTShadowTests();
     runRTGITests();
-    runSSAOTests();
+    runFillAndSSSTests();
     runRenderSettingsTests();
     runCapturePathTests();
     runOrphanedEntryPointTests();

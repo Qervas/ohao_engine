@@ -126,7 +126,6 @@ int main(int argc, char** argv) {
         if (auto* pp = deferred->getPostProcessing()) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
-            pp->setSSAOEnabled(true);
             pp->setEv100(0.0f);
         }
     }

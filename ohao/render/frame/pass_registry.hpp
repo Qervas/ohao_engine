@@ -30,7 +30,6 @@ inline constexpr PassInfo kPasses[] = {
     {"gbuffer.late", PassKind::Raster, "the late lists drawn into the G-buffer"},
     {"decals", PassKind::Raster, "projected decals into the G-buffer's albedo and normal, over the surfaces inside their boxes (vfx/decal.slang)"},
     {"lights.cluster", PassKind::Compute, "clustered lighting: every froxel's (16x9 tiles x 24 slices) list of the lights that reach it"},
-    {"ssao", PassKind::Compute, "screen-space ambient occlusion (the ssao post effect)"},
     {"emissive.lights", PassKind::Compute, "the emissive triangle lights (path tracer and RT direct light): each triangle and its power, the power image's levels"},
     {"di.sample", PassKind::RayTracing, "ReSTIR DI at the trace resolution (render.settings rtDirect.resolution, default half): rtDirect.candidates light points a pixel by RIS, last frame's reservoir, a visibility ray"},
     {"di.trace", PassKind::RayTracing, "ReSTIR DI at the trace resolution: rtDirect.spatial neighbours' reservoirs, one shadow ray to the final point"},

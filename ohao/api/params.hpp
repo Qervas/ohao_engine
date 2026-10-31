@@ -30,7 +30,7 @@ inline constexpr std::size_t kMaxQueuedInput = 100'000;   // injected events wai
 enum class SaveLayout : uint8_t { compact, pretty };
 enum class CaptureMode : uint8_t { deferred, rt_realtime, rt_offline };
 enum class Denoiser : uint8_t { none, oidn, nrd, dlss };
-enum class PostEffect : uint8_t { bloom, taa, ssao };
+enum class PostEffect : uint8_t { bloom, taa };
 enum class Quality : uint8_t { realtime, reference };
 // The display curve (frontier F2, ruling F-R4): AgX by default, Khronos PBR Neutral for material review.
 enum class Tonemap : uint8_t { agx, neutral };
@@ -166,7 +166,7 @@ struct RenderCaptureParams {
     std::optional<int32_t> width;
     std::optional<int32_t> height;
     Denoiser denoise{Denoiser::none};
-    std::optional<std::vector<PostEffect>> post;   // absent: the host's render.settings (ssao)
+    std::optional<std::vector<PostEffect>> post;   // absent: none
     std::optional<float> ev100;                    // absent: render.settings ev100
     std::optional<Tonemap> tonemap;                // absent: render.settings tonemap
     std::optional<Quality> quality;                // absent: render.settings quality
@@ -206,7 +206,6 @@ struct RenderSettings {
     Quality quality{Quality::realtime};
     RtDirectSettings rtDirect;
     RtGISettings rtGI;
-    bool ssao{false};
     bool sss{true};
     GeometryPath geometry{GeometryPath::automatic};
     bool occlusionCulling{true};

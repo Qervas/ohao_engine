@@ -393,7 +393,6 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
         c->setSettings(cs);
     }
     if (auto* pp = d.getPostProcessing()) {
-        pp->setSSAOEnabled(s.ssao);
         pp->setEv100(s.ev100);
         pp->setDisplayCurve(s.tonemap);
         pp->setAutoExposure(s.autoExposure);
@@ -428,7 +427,6 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
         s.occlusionCulling = c->settings().occlusion;
     }
     if (auto* pp = d.getPostProcessing()) {
-        s.ssao = pp->getSSAOEnabled();
         s.ev100 = pp->ev100();
         s.tonemap = pp->displayCurve();
         s.autoExposure = pp->autoExposure();
@@ -560,10 +558,7 @@ void VulkanRenderer::resetAccumulation() {
 void VulkanRenderer::setRenderSeed(uint32_t seed) {
     m_renderSeed = seed;
     forEachRTRenderer([&](IRTRendererProfile& r) { r.setRenderSeed(seed); });
-    if (m_deferredRenderer) {
-        m_deferredRenderer->setRenderSeed(seed);   // RT shadows and GI
-        if (auto* pp = m_deferredRenderer->getPostProcessing()) pp->setNoiseSeed(seed);
-    }
+    if (m_deferredRenderer) m_deferredRenderer->setRenderSeed(seed);   // RT direct light and GI
 }
 
 void VulkanRenderer::notifyCameraChanged() {
@@ -747,7 +742,6 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
         pp->setEv100(RenderSettings{}.ev100);
         pp->setDisplayCurve(RenderSettings{}.tonemap);
-        pp->setNoiseSeed(m_renderSeed);
     }
     // capture.preview: without it, inline captures read the full frame and preview on the CPU.
     m_previewPass = std::make_unique<CapturePreviewPass>();

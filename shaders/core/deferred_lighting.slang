@@ -6,8 +6,8 @@
 //               denoised), its diffuse and specular times their directional albedos, and the
 //               froxel's flashes; without it each light of the pixel's froxel, a directional light
 //               shadowed by the CSM;
-//   indirect    diffuse: RT GI's incoming radiance, else the environment's irradiance, else the
-//               constant ambient, times the diffuse's directional albedo beneath the specular layer
+//   indirect    diffuse: RT GI's incoming radiance, else the environment's irradiance, else none
+//               (as in the path tracer), times the diffuse's directional albedo beneath the specular layer
 //               (EON's, scaled by what the specular lets through); specular: RT GI's reflection (one
 //               ray a pixel from the GGX lobe, frontier F5b), else the prefiltered environment (the
 //               split sum), times the specular lobes' own directional albedo (OpenPBR's energy
@@ -24,7 +24,6 @@ import includes.lighting.gbuffer_material;
 [[vk::binding(5, 0)]] StructuredBuffer<LightGpu> lights;
 [[vk::binding(6, 0)]] Sampler2DArrayShadow shadowMap;   // CSM, comparison LESS_OR_EQUAL
 [[vk::binding(7, 0)]] Sampler2D envIrradiance;      // the environment's irradiance over pi
-[[vk::binding(10, 0)]] Sampler2D ssaoTexture;       // half resolution: (ao, distance from the camera)
 [[vk::binding(11, 0)]] Sampler2D ssgiTexture;       // RT GI: mean incoming radiance, the environment's visibility
 [[vk::binding(22, 0)]] Sampler2D giReflection;      // RT GI's reflection: the radiance over the GGX lobe (frontier F5b)
 [[vk::binding(12, 0)]] ConstantBuffer<CascadeData> cascades;
@@ -53,10 +52,10 @@ struct LightingPush
     float4 invViewProj[4];
     float4 view[4];
     float3 cameraPos;
-    float ambientIntensity;
+    float pad0;
     float2 screenSize;
     uint lightCount;   // every light (without clusters)
-    uint flags;        // 1 IBL, 2 SSAO, 4 CSM, 8 RT GI, 32 RT direct light, 64 every light (no froxel lists)
+    uint flags;        // 1 IBL, 4 CSM, 8 RT GI, 32 RT direct light, 64 every light (no froxel lists)
     float wetness;
     float sliceScale;
     float snowCover;
@@ -72,31 +71,6 @@ struct LightingOut
 };
 
 float4 mulColumns(float4 c[4], float4 v) { return c[0] * v.x + c[1] * v.y + c[2] * v.z + c[3] * v.w; }
-
-// SSAO at this pixel: the 4 nearest half-resolution samples, weighted bilinearly and by how close
-// their distance from the camera is to this pixel's (within 5%); where none is the same surface,
-// the closest one.
-float ssaoAt(int2 pixel, float dist)
-{
-    uint w, h, levels;
-    ssaoTexture.GetDimensions(0, w, h, levels);
-    const int2 size = int2(w, h);
-    const int2 base = pixel >> 1;
-    const float2 f = float2(pixel & 1) * 0.5;
-    float sum = 0.0, wsum = 0.0, best = 1.0, bestErr = 1e30;
-    for (int i = 0; i < 4; ++i)
-    {
-        const int2 o = int2(i & 1, i >> 1);
-        const float2 s = ssaoTexture.Load(int3(min(base + o, size - 1), 0)).xy;
-        if (s.y <= 0.0) continue;
-        const float err = abs(s.y - dist);
-        if (err < bestErr) { bestErr = err; best = s.x; }
-        const float wt = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) * max(0.0, 1.0 - err / (0.05 * dist));
-        sum += wt * s.x;
-        wsum += wt;
-    }
-    return wsum > 1e-3 ? sum / wsum : best;
-}
 
 int selectCascade(float viewDepth)
 {
@@ -183,10 +157,6 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     vis.directional = !vis.traced && (pc.flags & 4u) != 0u ? shadowCSM(P, viewDepth) : 1.0;
     float3 Lo = directLight(s, lights, clusters, list, clustered, vis, tables);
 
-    // SSAO darkens the ambient and environment terms only (not direct light, which shadows occlude,
-    // nor RT GI, whose rays see occluders).
-    const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(int2(fragCoord.xy), distance(P, pc.cameraPos)) : 1.0;
-
     // The surface's directional albedos toward the viewer: what its specular lobes reflect of a
     // uniform surround, and what its diffuse beneath them does.
     const float3 diffuseAlbedo = s.bsdf.diffuseAlbedo(s.wo, tables);
@@ -195,21 +165,18 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
         Lo += directDiffuse.SampleLevel(uv, 0.0).rgb * diffuseAlbedo + directSpecular.SampleLevel(uv, 0.0).rgb * specularAlbedo;
 
     // Indirect diffuse: RT GI's rays (the incoming radiance), else the environment's irradiance
-    // (below), else the constant ambient, a fill with no counterpart in the path tracer.
+    // (below), else none: without either a frame has no indirect light, as in the path tracer.
     const bool rtGI = (pc.flags & 8u) != 0u;
     const bool ibl = (pc.flags & 1u) != 0u;
     const float4 gi = rtGI ? ssgiTexture.SampleLevel(uv, 0.0) : float4(0.0, 0.0, 0.0, 1.0);
     float3 ambient = float3(0.0);
     if (rtGI) ambient += gi.rgb * diffuseAlbedo * ao;
-    else if (!ibl) ambient += pc.ambientIntensity * diffuseAlbedo * ao * ssao;
 
-    // The reflection's weight: the specular albedo times the share of the
-    // reflection that survives the occlusion the rays do not resolve through specular occlusion (the
-    // reflection is a narrower cone than the hemisphere they measure): the material's AO, and SSAO
-    // only without RT GI (whose reflection ray sees occluders).
+    // The reflection's weight: the specular albedo times the share of the reflection that survives
+    // the material's AO through specular occlusion (the reflection is a narrower cone than the
+    // hemisphere AO measures).
     const float NdotV = s.wo.z;
-    const float occlusion = rtGI ? ao : ao * ssao;
-    const float3 specularWeight = specularAlbedo * specularOcclusion(NdotV, occlusion, roughness);
+    const float3 specularWeight = specularAlbedo * specularOcclusion(NdotV, ao, roughness);
     if (rtGI)
     {
         // RT GI's reflection ray: what the lobe sees, traced (the environment where it escapes).
@@ -221,8 +188,8 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
         const float3 prefiltered = pc.envIntensity *
             envPrefiltered.SampleLevel(equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;
         const float3 irradiance = pc.envIntensity * envIrradiance.SampleLevel(equirectUV(s.normal), 0.0).rgb;   // over pi
-        // Without ray tracing the split sum: the environment, unoccluded but by AO and SSAO.
-        ambient += prefiltered * specularWeight + diffuseAlbedo * irradiance * occlusion;
+        // Without ray tracing the split sum: the environment, unoccluded but by the material's AO.
+        ambient += prefiltered * specularWeight + diffuseAlbedo * irradiance * ao;
     }
 
     o.color = float4(ambient + Lo + emitted.rgb, 1.0);

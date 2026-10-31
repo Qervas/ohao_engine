@@ -11,7 +11,6 @@
     {"scene": "cornell_720p", "name": "csm", "passes": ["csm"], "budgetMs": 0.00, "gatedFrom": 7},
     {"scene": "cornell_720p", "name": "rt.gi", "passes": ["rt.gi"], "budgetMs": 0.11, "gatedFrom": 8, "moved": "2b step 13 (spec rule, 'Frame cost'): 0.30 -> 0.10 toward lighting; measures 0.065. Frank's ruling 2026-10-29: 0.10 -> 0.11 for the bounce's shadow ray (one sampled light per GI hit), measured 0.101"},
     {"scene": "cornell_720p", "name": "rt.gi.denoise", "passes": ["rt.gi.denoise"], "budgetMs": 0.20, "gatedFrom": 8},
-    {"scene": "cornell_720p", "name": "ssao", "passes": ["ssao"], "budgetMs": 0.00, "gatedFrom": 9},
     {"scene": "cornell_720p", "name": "lights.cluster", "passes": ["lights.cluster"], "budgetMs": 0.03, "gatedFrom": 13},
     {"scene": "cornell_720p", "name": "lighting", "passes": ["lighting"], "budgetMs": 0.32, "gatedFrom": 13, "moved": "2b step 13 (spec rule, 'Frame cost'): 0.12 -> 0.32 from rt.gi; Cornell's 12 lights all render now (the 8-light cap is gone), about 0.022 ms a light over a 0.027 ms base, and the BRDF is held exact by test 8"},
     {"scene": "cornell_720p", "name": "sss", "passes": ["sss"], "budgetMs": 0.02, "gatedFrom": 9},

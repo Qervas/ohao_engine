@@ -97,7 +97,7 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_pipeline == VK_NULL_HANDLE || m_pipelineLayout == VK_NULL_HANDLE ||
         frameIndex >= MAX_FRAMES_IN_FLIGHT || m_descriptorSets[frameIndex] == VK_NULL_HANDLE) return;
 
-    // Inputs (light buffer, SSAO, SSGI, RT direct light, env map) change between
+    // Inputs (light buffer, RT GI, RT direct light, env map) change between
     // frames, so this frame's set is rewritten from them here, at record time.
     writeDescriptorSet(frameIndex);
 
@@ -169,12 +169,11 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // IBL (bit 0): the prefiltered environment and its irradiance are both bound.
     if (m_prefilteredView != VK_NULL_HANDLE && m_irradianceView != VK_NULL_HANDLE)
         m_params.flags |= 1;
-    if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO
     if (m_directDiffuseView != VK_NULL_HANDLE)
         m_params.flags |= 32;  // RT direct light (bit 5)
     else if (m_shadowMapView != VK_NULL_HANDLE)
         m_params.flags |= 4;   // CSM fallback (bit 2)
-    if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // SSGI
+    if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // RT GI
     if (m_clusterBuffer == VK_NULL_HANDLE) m_params.flags |= 64; // every light (no froxel lists)
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -216,11 +215,6 @@ void DeferredLightingPass::setEnvironment(VkImageView prefiltered, VkImageView i
     m_params.envIntensity = intensity;
 }
 
-void DeferredLightingPass::setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler) {
-    m_ssaoView = ssao;
-    m_ssaoSampler = ssaoSampler;
-}
-
 void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkImageView reflection, VkSampler ssgiSampler) {
     m_ssgiView = ssgi != VK_NULL_HANDLE && reflection != VK_NULL_HANDLE ? ssgi : VK_NULL_HANDLE;
     m_giReflectionView = m_ssgiView != VK_NULL_HANDLE ? reflection : VK_NULL_HANDLE;
@@ -241,8 +235,6 @@ void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::m
 }
 
 void DeferredLightingPass::clearPerFrameInputs() {
-    m_ssaoView = VK_NULL_HANDLE;
-    m_ssaoSampler = VK_NULL_HANDLE;
     m_ssgiView = VK_NULL_HANDLE;
     m_giReflectionView = VK_NULL_HANDLE;
     m_ssgiSampler = VK_NULL_HANDLE;
@@ -258,13 +250,13 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     const VkDescriptorSet set = m_descriptorSets[slot];
     if (!m_gbufferPass || set == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write all 15 bindings, dummy resources for the unbound ones: Vulkan requires every
+    // Always write every binding, dummy resources for the unbound ones: Vulkan requires every
     // declared binding written before the set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 16> imageInfos{};
-    std::array<VkWriteDescriptorSet, 20> writes{};
+    std::array<VkDescriptorImageInfo, 15> imageInfos{};
+    std::array<VkWriteDescriptorSet, 19> writes{};
     VkDescriptorBufferInfo tablesInfo{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
@@ -348,8 +340,6 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     // levels (binding 15); the dummy view without an environment (flag bit 0 stays clear).
     const VkSampler iblSampler = m_iblSampler != VK_NULL_HANDLE ? m_iblSampler : fallbackSampler;
     imageWrite(7, 7, 6, m_irradianceView != VK_NULL_HANDLE ? m_irradianceView : fallbackView, iblSampler);
-    imageWrite(8, 10, 7, m_ssaoView != VK_NULL_HANDLE ? m_ssaoView : fallbackView,
-               m_ssaoSampler != VK_NULL_HANDLE ? m_ssaoSampler : fallbackSampler);
     imageWrite(9, 11, 8, m_ssgiView != VK_NULL_HANDLE ? m_ssgiView : fallbackView,
                m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler);
 
@@ -368,7 +358,7 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     imageWrite(11, 14, 9, m_directDiffuseView != VK_NULL_HANDLE ? m_directDiffuseView : fallbackView, m_gbufferSampler);
     imageWrite(18, 21, 14, m_directSpecularView != VK_NULL_HANDLE ? m_directSpecularView : fallbackView, m_gbufferSampler);
     // RT GI's reflection (binding 22), with the diffuse's sampler
-    imageWrite(19, 22, 15, m_giReflectionView != VK_NULL_HANDLE ? m_giReflectionView : fallbackView,
+    imageWrite(8, 22, 7, m_giReflectionView != VK_NULL_HANDLE ? m_giReflectionView : fallbackView,
                m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler);
     imageWrite(12, 15, 10, m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView, iblSampler);
     // The G-buffer's emitted radiance (binding 17)
@@ -516,8 +506,7 @@ bool DeferredLightingPass::createDescriptors() {
     // 5: The light table (SSBO, LightGpu records)
     // 6: Shadow map array (sampler2DArray, 4 cascades)
     // 7: The environment's irradiance (EnvPrefilter)
-    // 10: SSAO texture
-    // 11: SSGI texture
+    // 11: RT GI's diffuse
     // 12: CascadeData UBO
     // 14, 21: RT direct light's diffuse and specular
     // 22: RT GI's reflection
@@ -531,7 +520,7 @@ bool DeferredLightingPass::createDescriptors() {
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {12, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},         {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
@@ -558,7 +547,7 @@ bool DeferredLightingPass::createDescriptors() {
     // Descriptor pool — 15 image samplers, 1 UBO (cascade data), 3 SSBOs (lights, froxels, OpenPBR's tables)
     std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 16 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[0].descriptorCount = 15 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;

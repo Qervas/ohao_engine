@@ -805,7 +805,7 @@ void VfxRenderer::expand(VkCommandBuffer cmd, uint32_t slot, const Lighting& lig
     copyMatrix(pc.viewProj, viewProj);
     pc.viewZ = {m_view.view[0][2], m_view.view[1][2], m_view.view[2][2], m_view.view[3][2]};
     pc.camera = {m_view.cameraPos.x, m_view.cameraPos.y, m_view.cameraPos.z,
-                 (flags & 4u) != 0u ? lighting.envIntensity : lighting.ambient};
+                 (flags & 4u) != 0u ? lighting.envIntensity : 0.0f};
     pc.screen = {static_cast<float>(m_width), static_cast<float>(m_height), lighting.sliceScale, lighting.sliceBias};
     pc.config = {m_stats.particles, m_stats.batches, lighting.lightCount, flags};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_expandPipeline);
@@ -902,7 +902,7 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
     const uint32_t flags = lightingFlags(lighting);
     shared::ForwardPush fp{};
     copyMatrix(fp.view, m_view.view);
-    fp.camera = {m_view.cameraPos.x, m_view.cameraPos.y, m_view.cameraPos.z, lighting.ambient};
+    fp.camera = {m_view.cameraPos.x, m_view.cameraPos.y, m_view.cameraPos.z, 0.0f};
     fp.screen = {static_cast<float>(m_width), static_cast<float>(m_height), lighting.sliceScale, lighting.sliceBias};
     fp.config = {lighting.lightCount, flags, 0u, 0u};
     fp.env = {lighting.envIntensity, 0.0f, 0.0f, 0.0f};

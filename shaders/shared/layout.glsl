@@ -189,15 +189,6 @@ struct GITracePush {
     vec4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it); w the environment's intensity (Environment.intensity: a miss brings back the environment times it)
 };
 
-// SSAO (compute/ssao.slang) push constants, both entries
-struct SSAOPush {
-    mat4 viewProj;   // the unjittered view-projection: a direction's end projected to the screen
-    vec4 cameraPosRadius;   // xyz the camera's position (the blur's depth guide is the distance from it), w the sampling radius in metres
-    vec4 params;   // x bias (metres along the normal), y intensity, z, w the distance falloff's start and end
-    uvec4 extent;   // x, y the half-resolution size; z, w the frame's
-    uvec4 config;   // x directions a pixel, y steps a direction; z, w the 4x4 interleaved noise: 4 bits a texel (x + 4y; z texels 0-7, w 8-15), the stratum k of rotation (k + 0.5) / 16 of the angle between two directions
-};
-
 // SSS (postprocess/sss.slang) push constants, both entries
 struct SSSPush {
     uvec4 extent;   // x, y the frame's size; z, w its tiles across and down
@@ -320,7 +311,7 @@ struct VfxParticleGpu {
 struct VfxExpandPush {
     mat4 viewProj;   // the jittered view-projection (screen positions for the froxel and RT GI lookups)
     vec4 viewZ;   // the view matrix's third row: a point's view depth is -(dot(viewZ.xyz, p) + viewZ.w) (the froxel's slice)
-    vec4 camera;   // xyz the camera's position; w the environment's intensity with flag 4, else the constant ambient intensity
+    vec4 camera;   // xyz the camera's position; w the environment's intensity (flag 4)
     vec4 screen;   // x, y the frame's size; z, w the froxel slice scale and bias (ClusterPush.screen.zw)
     uvec4 config;   // x particle slots, y batches, z lights (without clusters), w flags: 1 clustered, 2 RT GI, 4 environment, 8 TLAS (sun shadow ray)
 };
@@ -370,7 +361,7 @@ struct TracerPush {
 // the transparent pass's mesh shader (vfx/transparent_mesh.slang) push constants
 struct ForwardPush {
     mat4 view;   // the view matrix (the froxel's slice)
-    vec4 camera;   // xyz the camera's position, w the constant ambient intensity
+    vec4 camera;   // xyz the camera's position, w unused
     vec4 screen;   // x, y the frame's size; z, w the froxel slice scale and bias
     uvec4 config;   // x lights (without clusters), y flags: 1 clustered, 2 RT GI, 4 environment (IBL), 8 TLAS (sun shadow ray)
     vec4 env;   // x the environment's intensity

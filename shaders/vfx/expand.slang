@@ -4,8 +4,8 @@
 // (vfx/particle_math.hpp's expressions, the CPU reference): position under gravity and drag, size,
 // colour and alpha over life, flipbook frame. A lit emitter's particle is lit at its centre: the
 // clustered lights through the froxel it is in, the sun through one shadow ray against the scene
-// (kRayMaskScene), and ambient from RT GI's radiance at its screen position, else the environment's
-// irradiance, else the constant ambient (OPEN ruling 13). No atomics, no frame counter: slot i is
+// (kRayMaskScene), and indirect light from RT GI's radiance at its screen position, else the
+// environment's irradiance, else none (OPEN ruling 13). No atomics, no frame counter: slot i is
 // the same particle every run.
 import shared.layout;
 import includes.lighting.clustered_lights;
@@ -175,14 +175,10 @@ void expand(uint3 id : SV_DispatchThreadID)
         const uint2 list = lightList(clusters, clustered, pc.config.z, clamp(pixel, float2(0.0), pc.screen.xy - 1.0),
                                      pc.screen.xy, viewDepth, pc.screen.z, pc.screen.w);
         light = particleLight(position, lights, clusters, list, clustered, sunVisibility(position));
-        float3 ambient;
         if ((pc.config.w & 2u) != 0u && clip.w > 0.0 && all(abs(ndc) <= 1.0))
-            ambient = giRadiance.SampleLevel(linearSampler, ndc * 0.5 + 0.5, 0.0).rgb;
+            light += giRadiance.SampleLevel(linearSampler, ndc * 0.5 + 0.5, 0.0).rgb;
         else if ((pc.config.w & 4u) != 0u)
-            ambient = pc.camera.w * envIrradiance.SampleLevel(linearSampler, equirectUV(float3(0.0, 1.0, 0.0)), 0.0).rgb;
-        else
-            ambient = float3(pc.camera.w);
-        light += ambient;
+            light += pc.camera.w * envIrradiance.SampleLevel(linearSampler, equirectUV(float3(0.0, 1.0, 0.0)), 0.0).rgb;
         color *= light;
     }
 

@@ -201,7 +201,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   idles nothing and a capture after it is the same from any frame slot; the GPU preview is
   the CPU box filter's bytes and is all a preview request copies), the render settings
   (`sp2b_t14_*`: a fresh renderer starts at the defaults and reads back what was set; the
-  SSS, SSAO, RT GI and RT direct light switches drop their passes; GI resolution and rays
+  SSS, RT GI and RT direct light switches drop their passes; GI resolution and rays
   reach the trace; CSM cascades and size rebuild the map), the HUD (`sp7_hud_*`: a capture
   with a HUD list differs from one without only inside the listed rectangles, and an empty
   list leaves the frame byte for byte). `ecs_tests`: world, hierarchy, transforms and the render extract
@@ -500,7 +500,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   the material's AO through `specularOcclusion`. Without ray tracing (the fallback) it is the split
   sum: `EnvPrefilter`'s images (`render/deferred/env_prefilter.*`, built at environment upload:
   GGX-prefiltered into `kEnvPrefilterLevels` mips read at `roughness * (levels - 1)`, and
-  irradiance), times the environment's intensity, occluded by AO and SSAO. There is no SSR: the
+  irradiance), times the environment's intensity, occluded by the material's AO. There is no SSR: the
   reflection ray sees what the screen cannot. RT GI's half-resolution noise shows as low-frequency
   blotches on flat walls; compare a metal against the path tracer before trusting its look.
 - **A directional light stands for the sun.** While the scene has one
@@ -530,9 +530,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   emits when RT direct light samples it). A new reflection source must fit that split, never be
   added on top in post.
 - Indirect diffuse light has one source per frame: RT GI's rays, else the environment's
-  irradiance, else (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment) the
-  constant ambient (`ambientIntensity`, 0.35; `setAmbientIntensity` overrides it). With RT GI the constant does nothing; RT GI carries every
-  bounce through its radiance cache (below), and its denoiser's noise shows on flat walls. A test that wants ambient light must turn RT GI off. All three are
+  irradiance, else none (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment): the
+  frame then has no indirect light, as the path tracer has none (frontier F5c: no fill; the only
+  occlusion that is not traced is the material's AO texture). RT
+  GI carries every bounce through its radiance cache (below), and its denoiser's noise shows on
+  flat walls. A test that wants indirect light without RT GI gives the scene an environment. Both are
   diffuse only, weighed by OpenPBR's diffuse directional albedo beneath the specular layer
   (`diffuseAlbedo`; the split sum's weight is `specularAlbedo`, both from
   `shaders/material/openpbr.slang` and its energy tables). RT GI's rays bounce off the hit
@@ -743,8 +745,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass
   `frames` for a converged image; the deferred goldens state theirs (`--frames 10`,
   `--frames 30`). Without `VK_KHR_ray_query` there is no RT GI. With it, lighting drops its
-  diffuse IBL term and the constant ambient: GI rays that leave the scene bring the
-  environment back, occluded.
+  diffuse IBL term: GI rays that leave the scene bring the environment back, occluded.
 - **RT direct light** (frontier F4 and F4b, `render/rt/rt_direct_technique.*`, `rt/restir_di.slang`,
   `rt/di_denoise.slang`): ReSTIR DI (Bitterli et al. 2020) over the path tracer's lights (`rt/lights.slang`,
   one module both import: every light but flashes, and the emissive triangles), in MegaLights'
@@ -1179,8 +1180,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     `render/scene/vfx_frame.hpp`). `vfx.expand` (after the sky) evaluates every particle slot in
     closed form, as `vfx/particle_math.hpp` does, and lights a `lit` one at its centre: the clustered
     lights through its froxel (every light when it is off screen), one shadow ray to the first
-    directional light, RT GI's radiance at its pixel, else the environment's irradiance, else the
-    constant ambient. `vfx.sort` orders each alpha batch (<= `kVfxSortMax`) back to front by integer
+    directional light, RT GI's radiance at its pixel, else the environment's irradiance, else nothing.
+    `vfx.sort` orders each alpha batch (<= `kVfxSortMax`) back to front by integer
     keys (distance bits, slot). `transparent` (after `sss`, before `post.bloom`) draws every blended
     mesh and effect batch back to front, ordered on the host by distance, then kind, then id, each
     with its own blend state (additive, alpha, premultiplied), with the G-buffer's jittered

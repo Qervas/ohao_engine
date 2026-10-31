@@ -16,7 +16,7 @@
 //   t32_capture_any_history   a capture at step N after 0, 7 and 200 frames rendered is the same image:
 //                             effects are a function of the step.
 //   t32_forward_parity        a plane shaded by the forward pass (BLEND, opacity 1) equals the deferred
-//                             plane within 1 LSB, RT shadows, RT GI, SSAO and post off.
+//                             plane within 1 LSB, RT shadows, RT GI and post off.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "common/materials.hpp"
@@ -566,7 +566,6 @@ void t32_forward_parity() {
         VulkanRenderer::RenderSettings s = r.renderSettings();
         s.rtDirect = false;
         s.rtGI = false;
-        s.ssao = false;
         s.sss = false;
         r.setRenderSettings(s);
     };
@@ -849,13 +848,13 @@ void t34_doorway_dims_gi() {
 // ---- t34_shadow_through_smoke -----------------------------------------------------------------
 // The smoke proxies' transmittance on the CPU: a sun ray through a sphere the closed form gives, the
 // product of exp(-density * chord) it crosses. The GPU's trace is checked by the frame (the floor under
-// the cloud is darker than the floor beside it, shadow only: RT GI and the constant ambient are off).
+// the cloud is darker than the floor beside it, shadow only: RT GI is off).
 
 void t34_shadow_through_smoke() {
     // One cloud over the floor's origin, the sun from 60 degrees up, the camera straight down. The
     // floor point the cloud shadows is where the sun ray through the cloud's centre lands; the frame's
-    // pixels there, against the same frame without the cloud, are the shadow's transmittance (RT GI and
-    // the constant ambient off, so the floor is lit by the sun alone). The optical depth is the closed
+    // pixels there, against the same frame without the cloud, are the shadow's transmittance (RT GI
+    // off, so no bounce reaches the floor). The optical depth is the closed
     // form's: the spheres the frame publishes, each crossed chord times its density.
     ecs::World w;
     w.seedIds(34);
@@ -871,7 +870,6 @@ void t34_shadow_through_smoke() {
     o.steps = 60;
     o.frames = 30;
     o.settings = [](VulkanRenderer& r) {
-        r.setAmbientIntensity(0.0f);
         if (auto* d = r.getDeferredRenderer()) d->setRTGIEnabled(false);
     };
     const Frame with = capture(scene, o, "shadow_through_smoke");

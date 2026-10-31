@@ -12,17 +12,15 @@
 // All three must give the same bytes, and so must a second capture by the second renderer
 // (RenderHost restarts temporal state between captures; live capture in sub-project 4
 // relies on it). Configurations: Cornell with post effects off, each effect alone and all
-// three (TAA, SSAO, bloom), Cornell over 8 frames and at reference quality (test 10, RT GI's
+// both (TAA, bloom), Cornell over 8 frames and at reference quality (test 10, RT GI's
 // history and running mean), and the helmet room off and on (as its golden renders it: 30
 // frames, EV100 0). Test 12's RT part (sub-project 2b, step 5): Cornell path traced,
 // offline and realtime (16 samples, no denoiser), under the same three comparisons, held to
 // the path tracer's BVH floor (at most 16 bytes, each off by 1) instead of bit identity; the
 // validation layer must report nothing for them either.
 //
-// The SSAO noise is a function of the render seed alone (pinned for seed 0), and
-// setRenderSeed reaches the SSAO pass; reseeding renders validation clean. Test 12's seed
-// part (sub-project 2b, step 4): the render seed moves the RT shadow and GI noise, and the
-// same seed renders the same image again.
+// Reseeding renders validation clean. Test 12's seed part (sub-project 2b, step 4): the render
+// seed moves the RT direct light and GI noise, and the same seed renders the same image again.
 //
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
@@ -37,7 +35,6 @@
 #include "ohao/render_host.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/post_processing_pipeline.hpp"
-#include "render/deferred/ssao_pass.hpp"
 
 #include <algorithm>
 #include <array>
@@ -74,16 +71,15 @@ struct Config {
 constexpr Config kConfigs[] = {
     {"cornell_plain", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[])"},
     {"cornell_taa", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["taa"])"},
-    {"cornell_ssao", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["ssao"])"},
     {"cornell_bloom", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["bloom"])"},
-    {"cornell_post", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["taa","ssao","bloom"])"},
+    {"cornell_post", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["taa","bloom"])"},
     // Test 10 (sub-project 2b, step 8): RT GI, realtime (above: 8 frames of the denoiser's
     // history) and reference (its running mean), across renderers and processes.
     {"cornell_gi_frames8", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[],"frames":8)"},
     {"cornell_reference", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[],"frames":4,"quality":"reference")"},
     {"helmet_plain", "assets/scenes/damaged_helmet.scene.json", "deferred", R"("post":[])"},
     {"helmet_post", "assets/scenes/damaged_helmet.scene.json", "deferred",
-     R"("post":["taa","ssao","bloom"],"frames":30,"ev100":0)"},
+     R"("post":["taa","bloom"],"frames":30,"ev100":0)"},
     // Test 12, RT part (sub-project 2b, step 5): the path tracer, offline and realtime, as the
     // RT goldens render it. Compared within the BVH floor (see rtWithinFloor), not exactly.
     {"cornell_rt_offline", "assets/scenes/cornell_box.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
@@ -91,16 +87,16 @@ constexpr Config kConfigs[] = {
     // Test 24 (sub-project 10, t24_deferred_determinism_skinned): a skinned instance (the rig
     // mid-wave): the skin pass, its bounds and the refit BLAS (RT shadows, RT GI, the tracer).
     {"anim_rig_plain", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":[])"},
-    {"anim_rig_post", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":["taa","ssao","bloom"],"frames":30,"ev100":0)"},
+    {"anim_rig_post", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":["taa","bloom"],"frames":30,"ev100":0)"},
     {"anim_rig_rt_offline", "assets/scenes/anim_rig.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
     // Test 32 (sub-project 12, t32_determinism): the transparency scene (blended panes, an
     // alpha-tested card, lit soft smoke and additive sparks at a fixed step), deferred with post and
     // path traced, and the play scene 45 steps into its fight with its effects.
     {"transparency_post", "assets/scenes/transparency.scene.json", "deferred",
-     R"("post":["taa","ssao","bloom"],"frames":10,"ev100":0)", 30},
+     R"("post":["taa","bloom"],"frames":10,"ev100":0)", 30},
     {"transparency_rt_offline", "assets/scenes/transparency.scene.json", "rt_offline", R"("spp":16,"denoise":"none")", 30},
     {"play_vfx_step45", "assets/scenes/blockout_play.scene.json", "deferred",
-     R"("post":["taa","ssao","bloom"],"frames":10,"ev100":0)", 45},
+     R"("post":["taa","bloom"],"frames":10,"ev100":0)", 45},
 };
 
 bool isRT(const Config& c) { return std::strcmp(c.mode, "deferred") != 0; }
@@ -131,10 +127,6 @@ std::vector<uint8_t> readBytes(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
-
-// FNV-1a 64 of SSAOPass::noise(0)'s bytes. The generator is integer hashing and exact float
-// arithmetic, so this holds on every compiler and machine; a change to it shows here.
-constexpr const char* kSeed0NoiseHash = "fa4bd56a0ec70335";
 
 bool ok(const std::string& reply) { return reply.rfind("{\"result\":", 0) == 0; }
 
@@ -324,28 +316,9 @@ int main(int argc, char** argv) {
         if (!a.error.empty()) std::printf("  [%s] %s\n", c.name, a.error.c_str());
     }
 
-    // t1: the SSAO noise is a function of the render seed alone, and the seed reaches the
-    // pass. Test 5 (2b step 9): it covers 16 distinct texels, a permutation of the 16 strata.
+    // t1, t12: the render seed reaches the RT traces; reseeding renders validation clean.
     {
-        const auto bytesOf = [](const std::array<float, 16>& n) {
-            std::vector<uint8_t> b(sizeof(n));
-            std::memcpy(b.data(), n.data(), sizeof(n));
-            return b;
-        };
-        const auto n0 = SSAOPass::noise(0), n7 = SSAOPass::noise(7);
-        bool strata = true;
-        for (const auto* n : {&n0, &n7}) {
-            std::array<float, 16> sorted = *n;
-            std::sort(sorted.begin(), sorted.end());
-            for (int k = 0; k < 16; ++k) strata = strata && sorted[k] == (float(k) + 0.5f) / 16.0f;
-        }
-        const std::string h0 = hex(fnv1a(bytesOf(n0)));
-        checks.push_back({"t1 the SSAO noise for a seed is the same every time", bytesOf(SSAOPass::noise(0)) == bytesOf(n0)});
-        checks.push_back({"t1 the SSAO noise for seed 0 is the pinned one (" + h0 + ")", h0 == kSeed0NoiseHash});
-        checks.push_back({"t1 another seed gives other noise", bytesOf(n7) != bytesOf(n0)});
-        checks.push_back({"t5 the noise covers 16 distinct texels: the 16 strata (k + 0.5) / 16, permuted", strata});
-
-        const Config& c = kConfigs[std::size(kConfigs) - 1];   // helmet_post: SSAO on
+        const Config& c = kConfigs[std::size(kConfigs) - 1];
         host::RenderHost h(assets);
         ecs::World world;
         api::Session s(world, types);
@@ -353,33 +326,22 @@ int main(int argc, char** argv) {
         h.bind(world);
         s.setHost(&h);
         const bool loaded = ok(s.call("scene.load", std::string("{\"path\":\"") + c.scene + "\"}"));
-        uint32_t initial = UINT32_MAX, after7 = UINT32_MAX, after0 = UINT32_MAX;
         bool rendered = false;
         std::vector<uint8_t> seed0, seed7, seed0Again;
         if (loaded && ok(s.call("render.capture", captureParams(dir / "seed0.png", c))) && h.renderer()) {
             seed0 = pixelsOf(h);
-            const auto* pp = h.renderer()->getDeferredRenderer()->getPostProcessing();
-            initial = pp->noiseSeed();
             h.renderer()->setRenderSeed(7);
-            after7 = pp->noiseSeed();
             rendered = ok(s.call("render.capture", captureParams(dir / "seed7.png", c)));
             seed7 = pixelsOf(h);
             h.renderer()->setRenderSeed(0);
-            after0 = pp->noiseSeed();
             rendered = rendered && ok(s.call("render.capture", captureParams(dir / "seed0_again.png", c)));
             seed0Again = pixelsOf(h);
         }
-        checks.push_back({"t1 a fresh renderer's SSAO noise uses seed 0", initial == 0});
-        checks.push_back({"t1 setRenderSeed reaches the SSAO pass (7, then 0)", after7 == 7 && after0 == 0});
         checks.push_back({"t1 captures after reseeding render, validation clean",
                           rendered && h.renderer()->validationEnabled() && h.renderer()->validationMessageCount() == 0});
-        std::printf("  [seed] noise(0) hash %s; SSAO seed initially %u, after setRenderSeed(7) %u, after (0) %u\n",
-                    h0.c_str(), initial, after7, after0);
-
-        // Test 12, seed part (sub-project 2b, step 4): RT shadow and GI rays are seeded by
+        // Test 12, seed part (sub-project 2b, step 4): RT direct light and GI rays are seeded by
         // (render seed, frame index since the capture's reset, pixel, sample). Another seed
-        // moves the RT noise (SSAO does not reach the image, so only RT can); the same seed
-        // after it gives the first image back bit for bit.
+        // moves the RT noise; the same seed after it gives the first image back bit for bit.
         const bool rt = h.renderer() && h.renderer()->isRTSupported();
         const std::size_t d07 = differing(seed0, seed7), d00 = differing(seed0, seed0Again);
         std::printf("  [seed] RT %s; differing bytes seed 0 vs 7: %zu, seed 0 vs 0 again: %zu\n", rt ? "on" : "off",
