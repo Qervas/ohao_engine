@@ -263,7 +263,7 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
     }
 
     // Graphics pipeline layouts: particles (their set, then the bindless textures), blended meshes
-    // (core/gbuffer.vert's: the textures, the G-buffer's scene set; then the forward set).
+    // (core/gbuffer.slang's: the textures, the G-buffer's scene set; then the forward set).
     const std::array<VkDescriptorSetLayout, 2> drawSets{m_drawLayout, textures};
     const VkPushConstantRange drawPush{kDraw, 0, sizeof(shared::VfxDrawPush)};
     VkPipelineLayoutCreateInfo li{};
@@ -353,7 +353,7 @@ bool VfxRenderer::createPipelines() {
 
     const VkShaderModule particleVert = rtc::loadShaderModule(m_device, "vfx_particle.slang.vertexMain.spv");
     const VkShaderModule particleFrag = rtc::loadShaderModule(m_device, "vfx_particle.slang.fragmentMain.spv");
-    const VkShaderModule meshVert = rtc::loadShaderModule(m_device, "core_gbuffer.vert.spv");
+    const VkShaderModule meshVert = rtc::loadShaderModule(m_device, "core_gbuffer.slang.vertexMain.spv");
     const VkShaderModule meshFrag = rtc::loadShaderModule(m_device, "vfx_transparent_mesh.slang.spv");
     const VkShaderModule tracerVert = rtc::loadShaderModule(m_device, "vfx_tracer.slang.vertexMain.spv");
     const VkShaderModule tracerFrag = rtc::loadShaderModule(m_device, "vfx_tracer.slang.fragmentMain.spv");
@@ -424,7 +424,7 @@ bool VfxRenderer::createPipelines() {
             ok = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &m_particlePipelines[mode]) == VK_SUCCESS;
         }
     }
-    // Blended meshes: core/gbuffer.vert's vertex input, straight alpha by coverage; [0] one-sided
+    // Blended meshes: core/gbuffer.slang's vertex input, straight alpha by coverage; [0] one-sided
     // (back faces culled, as the G-buffer culls them), [1] double-sided.
     if (ok) {
         const auto bindingDescs = Vertex::getBindingDescriptions();
@@ -436,7 +436,7 @@ bool VfxRenderer::createPipelines() {
         vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescs.size());
         vi.pVertexAttributeDescriptions = attributeDescs.data();
         stages[0].module = meshVert;
-        stages[0].pName = "main";
+        stages[0].pName = "vertexMain";
         stages[1].module = meshFrag;
         stages[1].pName = "fragmentMain";
         pi.pVertexInputState = &vi;
@@ -947,7 +947,7 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
                 pipeline = p;
             }
-            // firstInstance is the draw's index: core/gbuffer.vert reads its record.
+            // firstInstance is the draw's index: core/gbuffer.slang reads its record.
             vkCmdDrawIndexed(cmd, d.indexCount, 1, d.firstIndex, d.vertexOffset, i);
         } else if (o.kind == 2) {
             if (bound != Bound::Tracers) {

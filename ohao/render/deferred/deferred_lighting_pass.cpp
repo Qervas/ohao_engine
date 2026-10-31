@@ -577,7 +577,7 @@ bool DeferredLightingPass::createDescriptors() {
 
 bool DeferredLightingPass::createPipeline() {
     // Load shaders
-    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.vert.spv");
+    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.slang.spv");
     VkShaderModule fragShader = loadShaderModule("core_deferred_lighting.slang.spv");
 
     std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};

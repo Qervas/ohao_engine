@@ -409,7 +409,7 @@ bool CSMPass::createPipeline() {
     // Load shaders
     // Depth-only, vertex stage only: each cascade is its own render pass into its
     // own layer view, so the vertex shader projects straight into that cascade.
-    VkShaderModule vertShader = loadShaderModule("shadow_shadow_csm.vert.spv");
+    VkShaderModule vertShader = loadShaderModule("shadow_shadow_csm.slang.spv");
 
     std::array<VkPipelineShaderStageCreateInfo, 1> shaderStages{};
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

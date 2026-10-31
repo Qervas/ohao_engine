@@ -485,8 +485,8 @@ bool TAAPass::createDescriptors() {
 }
 
 bool TAAPass::createPipeline() {
-    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.vert.spv");
-    VkShaderModule fragShader = loadShaderModule("postprocess_taa_resolve.frag.spv");
+    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.slang.spv");
+    VkShaderModule fragShader = loadShaderModule("postprocess_taa_resolve.slang.spv");
 
     std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

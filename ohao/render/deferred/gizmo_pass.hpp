@@ -74,7 +74,7 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constants (must match gizmo.vert)
+    // Push constants (must match overlay/gizmo.slang)
     struct GizmoPushConstants {
         glm::mat4 viewProj;
         glm::mat4 model;

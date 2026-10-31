@@ -731,20 +731,20 @@ bool GBufferPass::createDescriptors() {
 
 bool GBufferPass::createPipeline() {
     // Load shaders
-    VkShaderModule vertShader = loadShaderModule("core_gbuffer.vert.spv");
-    VkShaderModule fragShader = loadShaderModule("core_gbuffer.frag.spv");
+    VkShaderModule vertShader = loadShaderModule("core_gbuffer.slang.vertexMain.spv");
+    VkShaderModule fragShader = loadShaderModule("core_gbuffer.slang.opaque.spv");
 
     std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
 
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     shaderStages[0].module = vertShader;
-    shaderStages[0].pName = "main";
+    shaderStages[0].pName = "vertexMain";
 
     shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].module = fragShader;
-    shaderStages[1].pName = "main";
+    shaderStages[1].pName = "opaque";
 
     // Vertex input - matching model.hpp Vertex struct (uses Vertex::getAttributeDescriptions())
     auto bindingDescs = Vertex::getBindingDescriptions();
@@ -886,10 +886,11 @@ bool GBufferPass::createPipeline() {
         return false;
     }
 
-    // Alpha-tested materials: the same state with core/gbuffer_mask.frag (a discard; no forced
-    // early depth test), [0] culling back faces, [1] none.
-    if (VkShaderModule maskFrag = loadShaderModule("core_gbuffer_mask.frag.spv")) {
+    // Alpha-tested materials: the same state with core/gbuffer.slang's `masked` (a discard; no
+    // forced early depth test), [0] culling back faces, [1] none.
+    if (VkShaderModule maskFrag = loadShaderModule("core_gbuffer.slang.masked.spv")) {
         shaderStages[1].module = maskFrag;
+        shaderStages[1].pName = "masked";
         for (uint32_t k = 0; k < 2; ++k) {
             rasterizer.cullMode = k == 0 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
             if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_maskPipelines[k]) !=
@@ -898,6 +899,7 @@ bool GBufferPass::createPipeline() {
         }
         vkDestroyShaderModule(m_device, maskFrag, nullptr);
         shaderStages[1].module = fragShader;
+        shaderStages[1].pName = "opaque";
         rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
     }
 

@@ -446,7 +446,7 @@ bool PostProcessingPipeline::createTonemappingPass() {
     }
 
     // Load shaders
-    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.vert.spv");
+    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.slang.spv");
     VkShaderModule fragShader = loadShaderModule("postprocess_tonemap.slang.spv");
 
     std::array<VkPipelineShaderStageCreateInfo, 2> stages{};

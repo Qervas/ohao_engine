@@ -1,5 +1,5 @@
 // The transparent pass's blended meshes (sub-project 12, "Materials: alpha modes"): a glTF BLEND
-// material's draw, vertex shader core/gbuffer.vert (the draw table through firstInstance), shaded
+// material's draw, vertex shader core/gbuffer.slang (the draw table through firstInstance), shaded
 // per pixel as core/deferred_lighting.frag shades a G-buffer pixel: the clustered lights (the
 // forward copy of its loop, includes/lighting/clustered_lights.slang), the sun's shadow by one ray
 // query (flag 8), RT GI's radiance or the environment's irradiance (else no indirect light), the

@@ -37,7 +37,7 @@ static const uint kDrawEmitter = 2u;
 static const uint kDrawViewModel = 4u;
 // DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
 static const uint kDrawSkinned = 8u;
-// DrawRecord.info.y bit: an alpha-tested material (glTF MASK): in no G-buffer culling list, drawn after the late phase by the G-buffer's discard pipeline (core/gbuffer_mask.frag); a CSM cascade draws it as opaque
+// DrawRecord.info.y bit: an alpha-tested material (glTF MASK): in no G-buffer culling list, drawn after the late phase by the G-buffer's discard pipeline (core/gbuffer.slang's `masked`); a CSM cascade draws it as opaque
 static const uint kDrawMask = 16u;
 // DrawRecord.info.y bit: a blended material (glTF BLEND): in no G-buffer, Hi-Z or CSM list; the forward pass (transparent) draws it, sorted back to front
 static const uint kDrawTransparent = 32u;
@@ -244,7 +244,7 @@ struct CullPush
     uint4 extra;   // x the first list written (its count word), y the lists written (1, 2 or 4), z the geometry mode (kGeometry*)
 };
 
-// the G-buffer's meshlet shaders (cull/meshlets.slang: task, mesh, pull) push constants, at offset 16 (gbuffer.frag's block first)
+// the G-buffer's meshlet shaders (cull/meshlets.slang: task, mesh, pull) push constants, at offset 16 (gbuffer.slang's block first)
 struct MeshletPush
 {
     uint4 config;   // x the drawn list's first command (uints into the culling commands), y flags (kCullFrustum, kCullOcclusion, kCullCone), z the Hi-Z pyramid's levels

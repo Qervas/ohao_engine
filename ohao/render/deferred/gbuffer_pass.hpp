@@ -19,11 +19,11 @@ class GpuCulling;
 // (draws them, clearing the targets), hiz.build (the depth pyramid), cull.late (every draw
 // against the frustum and the pyramid), gbuffer.late (draws the newly visible, loading the
 // targets). Each part draws GpuCulling's four lists of its phase: instance draws with
-// vkCmdDrawIndexedIndirectCount (core/gbuffer.vert; firstInstance indexes RenderScene's draw
+// vkCmdDrawIndexedIndirectCount (core/gbuffer.slang; firstInstance indexes RenderScene's draw
 // table), then meshlet draws with task and mesh shaders (cull/meshlets.slang) or, without
 // them, the fallback's per-meshlet draws through its pull vertex shader; one-sided materials
 // with back faces culled. The late part then draws the alpha-tested (MASK) draws, which no
-// list holds, one by one through core/gbuffer_mask.frag. Set 0 = bindless textures, set 1 "scene" = {instances, materials,
+// list holds, one by one through core/gbuffer.slang's `masked`. Set 0 = bindless textures, set 1 "scene" = {instances, materials,
 // material refs, camera UBO, SSS tiles, draw table, vertex arena, meshlets, meshlet vertices,
 // meshlet triangles, culling commands, Hi-Z pyramid}, one set per frame slot.
 class GBufferPass : public RenderPassBase {
@@ -89,8 +89,8 @@ public:
     // every visible fragment of a subsurface material flags its 16x16 tile; SSSPass dispatches
     // over the lists (indirect). Host-mapped: the tiles flagged by the last frame whose fence
     // has been waited on.
-    // The scene set (set 1 of core/gbuffer.vert: instances, materials, refs, camera UBO, ..., draw
-    // table) and its layout, for the transparent pass's blended meshes, which reuse gbuffer.vert. A
+    // The scene set (set 1 of core/gbuffer.slang: instances, materials, refs, camera UBO, ..., draw
+    // table) and its layout, for the transparent pass's blended meshes, which reuse gbuffer.slang. A
     // slot's set is written by this frame's execute().
     [[nodiscard]] VkDescriptorSetLayout sceneSetLayout() const { return m_sceneLayout; }
     [[nodiscard]] VkDescriptorSet sceneSet(uint32_t slot) const {
@@ -151,7 +151,7 @@ private:
     // shaders (when supported) and the fallback's pull vertex shader.
     std::array<VkPipeline, 2> m_meshPipelines{};
     std::array<VkPipeline, 2> m_pullPipelines{};
-    // Alpha-tested materials (RenderScene::maskDraws, kDrawMask): core/gbuffer_mask.frag, [0] one-
+    // Alpha-tested materials (RenderScene::maskDraws, kDrawMask): core/gbuffer.slang's `masked`, [0] one-
     // sided (back faces culled), [1] double-sided, drawn one by one after the late phase's lists.
     std::array<VkPipeline, 2> m_maskPipelines{};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
@@ -196,7 +196,7 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constants: the SSS tiles across and down (gbuffer.frag, bytes 0-15; the material
+    // Push constants: the SSS tiles across and down (gbuffer.slang, bytes 0-15; the material
     // slot comes from the draw record), then gpu::shared::MeshletPush (the meshlet shaders,
     // bytes 16-63; their block covers 0-63).
     struct DrawPushConstant {

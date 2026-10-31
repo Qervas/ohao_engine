@@ -7,10 +7,11 @@
 //   pull   the fallback without VK_EXT_mesh_shader: a vertex shader over the per-meshlet draws
 //          classifyMeshlets/scatterMeshlets wrote (firstVertex = the draw << kMeshletVertexShift,
 //          firstInstance = the meshlet), pulling each triangle corner through the meshlet
-// mesh and pull transform with one function, and both paths cull with one test, so their
-// images are identical (test 7). Outputs match core/gbuffer.frag's inputs.
+// mesh and pull transform with the instance path's function (includes/scene/gbuffer_vertex.slang),
+// and both paths cull with one test, so their images are identical (test 7).
 import shared.layout;
 import cull.common;
+import includes.scene.gbuffer_vertex;
 
 // Set 1 "scene" (GBufferPass): the instance table as float4s (kInstanceGpuStride / 16 a slot:
 // world matrix columns 0-3, last frame's 4-7), the camera, the draw table, the vertex arena as
@@ -31,7 +32,7 @@ struct CameraData
 [[vk::binding(10, 1)]] StructuredBuffer<uint> commands;
 [[vk::binding(11, 1)]] Texture2D<float> hiz;
 
-// gbuffer.frag's block (the SSS tiles) takes the first 16 bytes.
+// The G-buffer fragment shader's block (the SSS tiles) takes the first 16 bytes.
 struct GBufferPush
 {
     uint4 fragment;
@@ -42,74 +43,33 @@ struct GBufferPush
 static const uint kVertexFloats = 25u;
 static const uint kInstanceFloat4s = kInstanceGpuStride / 16u;
 
-struct GVertex
-{
-    float4 position : SV_Position;
-    [[vk::location(0)]] float3 worldPos : WORLDPOS;
-    [[vk::location(1)]] float3 normal : NORMAL;
-    [[vk::location(2)]] float3 color : COLOR;
-    [[vk::location(3)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
-    [[vk::location(5)]] float4 tangent : TANGENT;
-    [[vk::location(6)]] float4 currentPos : CURRENTPOS;
-    [[vk::location(7)]] float4 prevPos : PREVPOS;
-    [[vk::location(8)]] nointerpolation uint instance : INSTANCE;
-    [[vk::location(9)]] nointerpolation uint materialSlot : MATERIALSLOT;
-};
-
 float4x4 matrixAt(uint at)
 {
     // The four float4s are the matrix's columns.
     return transpose(float4x4(instances[at], instances[at + 1u], instances[at + 2u], instances[at + 3u]));
 }
 
-// An instance's matrices, the same for all of a draw's vertices: a mesh workgroup makes them
-// once, the pull shader per vertex, with this one function (so their values are equal).
-struct InstanceXform
-{
-    float4x4 world;
-    float4x4 prevWorld;
-    float3x3 normalMatrix;   // the world matrix's inverse transpose (gbuffer.vert's)
-};
-
+// An instance's matrices from the instance table's float4s (a mesh workgroup makes them once, the
+// pull shader per vertex).
 InstanceXform instanceXform(uint slot)
 {
-    InstanceXform x;
-    x.world = matrixAt(slot * kInstanceFloat4s);
-    x.prevWorld = matrixAt(slot * kInstanceFloat4s + 4u);
-    const float3x3 w3 = float3x3(x.world[0].xyz, x.world[1].xyz, x.world[2].xyz);
-    const float3x3 inv = spirv_asm { result:$$float3x3 = OpExtInst glsl450 MatrixInverse $w3 };
-    x.normalMatrix = transpose(inv);
-    return x;
+    return instanceXform(matrixAt(slot * kInstanceFloat4s), matrixAt(slot * kInstanceFloat4s + 4u));
 }
 
-// gbuffer.vert's transform, the same operations: the world position, the normal and tangent
-// through the inverse transpose, this and last frame's clip positions.
+// A vertex of the arena through the draw's instance.
 GVertex shadeVertex(uint vtx, DrawRecord d, InstanceXform x)
 {
     const uint b = vtx * kVertexFloats;
     const float3 p = float3(vertices[b], vertices[b + 1u], vertices[b + 2u]);
-    const float3 color = float3(vertices[b + 3u], vertices[b + 4u], vertices[b + 5u]);
-    const float3 n = float3(vertices[b + 6u], vertices[b + 7u], vertices[b + 8u]);
-    const float4 t = float4(vertices[b + 13u], vertices[b + 14u], vertices[b + 15u], vertices[b + 16u]);
-
-    GVertex v;
-    const float4 worldPos = mul(x.world, float4(p, 1.0));
-    v.worldPos = worldPos.xyz;
-    v.normal = normalize(mul(x.normalMatrix, n));
-    v.tangent = float4(normalize(mul(x.normalMatrix, t.xyz)), t.w);
-    v.color = color;
-    v.texCoord = float2(vertices[b + 9u], vertices[b + 10u]);
-    v.texCoord1 = float2(vertices[b + 11u], vertices[b + 12u]);
-    v.currentPos = mul(camera.viewProj, worldPos);
-    // A skinned instance's own mesh keeps last frame's position in boneWeights.xyz (gbuffer.vert's rule).
+    // A skinned instance's own mesh keeps last frame's position in boneWeights.xyz.
     const float3 prevLocal = (d.info.y & kDrawSkinned) != 0u
                                  ? float3(vertices[b + 21u], vertices[b + 22u], vertices[b + 23u]) : p;
-    v.prevPos = mul(camera.prevViewProj, mul(x.prevWorld, float4(prevLocal, 1.0)));
-    v.instance = d.draw.w;
-    v.materialSlot = d.info.x;
-    v.position = v.currentPos;
-    return v;
+    return transformVertex(x, camera.viewProj, camera.prevViewProj, p,
+                           float3(vertices[b + 3u], vertices[b + 4u], vertices[b + 5u]),
+                           float3(vertices[b + 6u], vertices[b + 7u], vertices[b + 8u]),
+                           float4(vertices[b + 13u], vertices[b + 14u], vertices[b + 15u], vertices[b + 16u]),
+                           float2(vertices[b + 9u], vertices[b + 10u]), float2(vertices[b + 11u], vertices[b + 12u]),
+                           prevLocal, d.draw.w, d.info.x);
 }
 
 // ---- mesh shaders ------------------------------------------------------------------------------

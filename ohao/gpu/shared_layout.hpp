@@ -43,7 +43,7 @@ inline constexpr uint32_t kDrawEmitter = 2u;
 inline constexpr uint32_t kDrawViewModel = 4u;
 // DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
 inline constexpr uint32_t kDrawSkinned = 8u;
-// DrawRecord.info.y bit: an alpha-tested material (glTF MASK): in no G-buffer culling list, drawn after the late phase by the G-buffer's discard pipeline (core/gbuffer_mask.frag); a CSM cascade draws it as opaque
+// DrawRecord.info.y bit: an alpha-tested material (glTF MASK): in no G-buffer culling list, drawn after the late phase by the G-buffer's discard pipeline (core/gbuffer.slang's `masked`); a CSM cascade draws it as opaque
 inline constexpr uint32_t kDrawMask = 16u;
 // DrawRecord.info.y bit: a blended material (glTF BLEND): in no G-buffer, Hi-Z or CSM list; the forward pass (transparent) draws it, sorted back to front
 inline constexpr uint32_t kDrawTransparent = 32u;
@@ -284,7 +284,7 @@ static_assert(offsetof(CullPush, camera) == 96);
 static_assert(offsetof(CullPush, extra) == 112);
 static_assert(sizeof(CullPush) == 128);
 
-// the G-buffer's meshlet shaders (cull/meshlets.slang: task, mesh, pull) push constants, at offset 16 (gbuffer.frag's block first)
+// the G-buffer's meshlet shaders (cull/meshlets.slang: task, mesh, pull) push constants, at offset 16 (gbuffer.slang's block first)
 struct alignas(16) MeshletPush {
     alignas(16) std::array<uint32_t, 4> config{};
     alignas(16) std::array<uint32_t, 4> hiz{};

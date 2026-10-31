@@ -393,10 +393,10 @@ bool BloomPass::createDescriptors() {
 
 bool BloomPass::createPipelines() {
     // Load shaders
-    VkShaderModule fullscreenVert = loadShaderModule("postprocess_fullscreen.vert.spv");
+    VkShaderModule fullscreenVert = loadShaderModule("postprocess_fullscreen.slang.spv");
     VkShaderModule inputFrag = loadShaderModule("postprocess_bloom_input.slang.spv");
-    VkShaderModule downsampleFrag = loadShaderModule("postprocess_bloom_downsample.frag.spv");
-    VkShaderModule upsampleFrag = loadShaderModule("postprocess_bloom_upsample.frag.spv");
+    VkShaderModule downsampleFrag = loadShaderModule("postprocess_bloom_downsample.slang.spv");
+    VkShaderModule upsampleFrag = loadShaderModule("postprocess_bloom_upsample.slang.spv");
 
     // Common pipeline state
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};

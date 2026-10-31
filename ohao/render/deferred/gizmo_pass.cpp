@@ -200,8 +200,8 @@ void GizmoPass::onResize(uint32_t width, uint32_t height) {
 }
 
 bool GizmoPass::createPipeline() {
-    VkShaderModule vertShader = loadShaderModule("overlay_gizmo.vert.spv");
-    VkShaderModule fragShader = loadShaderModule("overlay_gizmo.frag.spv");
+    VkShaderModule vertShader = loadShaderModule("overlay_gizmo.slang.vertexMain.spv");
+    VkShaderModule fragShader = loadShaderModule("overlay_gizmo.slang.fragmentMain.spv");
 
     if (vertShader == VK_NULL_HANDLE || fragShader == VK_NULL_HANDLE) {
         OHAO_LOG(Error, render, "GizmoPass: Failed to load shaders");
@@ -214,11 +214,11 @@ bool GizmoPass::createPipeline() {
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = vertShader;
-    stages[0].pName = "main";
+    stages[0].pName = "vertexMain";
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragShader;
-    stages[1].pName = "main";
+    stages[1].pName = "fragmentMain";
 
     // Vertex input: GizmoVertex = position(vec3) + color(vec3)
     VkVertexInputBindingDescription bindingDesc{};

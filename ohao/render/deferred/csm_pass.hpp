@@ -114,7 +114,7 @@ private:
     // Cascade data for shader
     CascadeData m_cascadeData{};
 
-    // Push constant for one cascade (matches shadow_csm.vert).
+    // Push constant for one cascade (matches shadow/shadow_csm.slang).
     struct ShadowPushConstant {
         glm::mat4 viewProj;   // the cascade being rendered
     };

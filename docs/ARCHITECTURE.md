@@ -433,11 +433,11 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
 1. **The shader** under `shaders/<area>/<name>.<stage>` (`.comp`, `.vert`, `.frag`,
    `.rgen`, … — the glob in `shaders/CMakeLists.txt`). The next build picks it up and
    compiles it with `glslc --target-env=vulkan1.3 -I shaders -I shaders/includes`; the
-   SPIR-V is named by flattening the path: `postprocess/bloom_downsample.frag` →
-   `postprocess_bloom_downsample.frag.spv`. Include shared code by its path under `shaders/`
+   SPIR-V is named by flattening the path: `core/gbuffer.frag` →
+   `core_gbuffer.frag.spv`. Include shared code by its path under `shaders/`
    (`#include "includes/scene/scene_data.glsl"`); every `.spv` is rebuilt when any file under
    `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
-   transitively. Fullscreen raster passes reuse `postprocess/fullscreen.vert` (no vertex
+   transitively. Fullscreen raster passes reuse `postprocess/fullscreen.slang` (no vertex
    input, `vkCmdDraw(cmd, 3, 1, 0, 0)`). **New shaders are Slang** (`.slang`; GLSL only
    for a pass not being rewritten): an entry point is a function under a
    `[shader("compute")]` attribute line (further `[...]` attribute lines may follow), and
