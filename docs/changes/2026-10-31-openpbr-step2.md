@@ -3,7 +3,7 @@
 **Spec:** `docs/specs/2026-10-29-openpbr-materials-design.md` (sections 2–8, step 2); plan
 `docs/plans/2026-10-31-openpbr-step2.md`, tasks T1–T4 and T6.
 **Status:** built (T1–T4, T6). T5 (area lights by LTC) is not built: it moves to its own step (section 6).
-Rulings O6–O9 are provisional until Frank rules on them.
+Rulings O6–O9 accepted by Frank on 2026-10-31 ("all four").
 
 ## 1. Summary
 

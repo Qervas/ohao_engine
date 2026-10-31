@@ -4,7 +4,7 @@
 `docs/changes/2026-10-29-openpbr-step1.md`. The frontier renderer (F0–F6) is done, so every consumer of the module is
 Slang: the path tracer (both profiles), deferred lighting, the clustered loop the forward pass shares, RT direct light's
 shading, RT GI's hits and its reflection.
-**Status:** T1–T4 and T6 built (2026-10-31): `docs/changes/2026-10-31-openpbr-step2.md`; T5 (LTC area lights) moves to its own step. Frank: "openpbr yes, go on". Rulings O6–O9 (below) are provisional until he rules.
+**Status:** T1–T4 and T6 built (2026-10-31): `docs/changes/2026-10-31-openpbr-step2.md`; T5 (LTC area lights) moves to its own step. Frank: "openpbr yes, go on". Rulings O6–O9 (below) accepted by Frank on 2026-10-31 ("all four").
 
 **Goal:** OpenPBR Surface 1.1.1's coat, fuzz and specular anisotropy in the module, the path tracer as a correct
 estimator of them, and the deferred frame shading them, held by the same closed forms as step 1. `KHR_materials_clearcoat`,
@@ -124,7 +124,7 @@ Lobe selection for sampling is by luminance of each lobe's albedo (fuzz, coat, b
 - AGENTS.md (the G-buffer's targets, the module, `Material`'s fields), ARCHITECTURE.md, ROADMAP row 17, the change
   record `docs/changes/2026-10-31-openpbr-step2.md`.
 
-## Rulings (provisional; Frank's to make)
+## Rulings (accepted, Frank, 2026-10-31: "all four")
 
 - **O6, the G-buffer.** One RG32_UINT target carries the material's index and the per-pixel layer values; colours and
   IORs come from the table, so the coat's and the fuzz's colour textures are not seen by deferred (the path tracer sees
@@ -133,7 +133,8 @@ Lobe selection for sampling is by luminance of each lobe's albedo (fuzz, coat, b
 - **O7, the fuzz's fits.** MaterialX's analytic fits of Zeltner's tables (Apache-2.0, with its notice), not a table of our
   own fit to a volumetric simulation.
 - **O8, one reflection ray.** Under a coat RT GI's reflection serves the coat (the sharp lobe the eye reads); the base's
-  rough specular below reuses it. A second ray is 0.5–1 ms at 1080p on Sponza; the referee measures what one costs in
+  specular below takes RT GI's mean incoming radiance, blended toward the coat's ray as the two roughnesses meet (reusing
+  the coat's sharp ray made a rough metal under a smooth coat a mirror). A second ray is 0.5–1 ms at 1080p on Sponza; the referee measures what one costs in
   error.
 - **O9, `geometry_tangent_rotation`.** The one non-OpenPBR field: a rotation of the mesh's tangent in turns, as glTF's
   anisotropy has, since a scene file cannot author a tangent field.
