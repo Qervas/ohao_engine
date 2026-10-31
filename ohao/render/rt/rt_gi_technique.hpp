@@ -157,7 +157,9 @@ private:
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_traceSets{};
     std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> m_temporalSets{}, m_upsampleSets{};
-    std::array<std::array<std::array<VkDescriptorSet, 2>, 2>, MAX_FRAMES_IN_FLIGHT> m_atrousSets{};
+    // The a-trous steps 1, 2, 4, 8: a flat wall's low-frequency noise is wider than two steps reach.
+    static constexpr uint32_t kAtrousSteps = 4;
+    std::array<std::array<std::array<VkDescriptorSet, kAtrousSteps>, 2>, MAX_FRAMES_IN_FLIGHT> m_atrousSets{};
 };
 
 static_assert(GITechniqueLike<RTGITechnique>);

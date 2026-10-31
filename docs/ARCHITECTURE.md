@@ -237,7 +237,7 @@ di.trace            ReSTIR DI, half res: neighbours' reservoirs, the final shado
 di.shade            every pixel: two nearby samples through its own material, diffuse + specular
 di.denoise          temporal accumulation, 3 a-trous steps stopped by luminance (realtime quality)
 rt.gi               GI, half res 2 rays by default, every bounce through its radiance cache (resolved here)   [rtGI.enabled, .resolution, .rays]
-rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
+rt.gi.denoise       reprojection, 4 a-trous (reflection 2), upsample (realtime quality)
 lighting            RT direct light (or the froxel list + CSM) + IBL + GI into the HDR image (+ env specular, its weight)
 vfx.expand          the effect records' particles in closed form, lit at their centres (sub-project 12)
 vfx.sort            each alpha batch's particles back to front (integer keys)

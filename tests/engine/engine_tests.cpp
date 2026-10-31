@@ -2149,10 +2149,12 @@ static void sp2b_t10_reference_is_full_resolution_32_rays() {
     TEST_PASS();
 }
 
-// Test 10: the realtime GI converges toward the reference, as the shadows do in test 9.
+// Test 10: the realtime GI converges toward the reference, as the shadows do in test 9. The
+// reference is converged (256 frames): its noise at 16 frames was as large as what the
+// denoiser's four a-trous steps leave at frame 1.
 static void sp2b_t10_realtime_converges_toward_the_reference() {
-    TEST_BEGIN("sp2b_t10: realtime GI frame 16 is closer to a 16-frame reference than frame 1");
-    const GIRun ref = giRun(ohao::RenderQuality::Reference, 16);
+    TEST_BEGIN("sp2b_t10: realtime GI frame 16 is closer to a 256-frame reference than frame 1");
+    const GIRun ref = giRun(ohao::RenderQuality::Reference, 256);
     if (ref.px.empty()) {
         std::cout << "(no ray tracing device -- skipped) ";
         TEST_PASS();

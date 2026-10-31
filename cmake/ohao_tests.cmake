@@ -121,6 +121,7 @@ function(ohao_register_harness_tests)
     # anchor the referee stands on.
     ohao_add_python_test(check_analytic LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_analytic.py)
     ohao_add_python_test(check_direct_light LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_direct_light.py)
+    ohao_add_python_test(check_gi_noise LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_gi_noise.py)
     # OpenPBR in the renderers against closed forms: the white furnace and the closed box.
     ohao_add_python_test(check_material LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_material.py)
     if(TARGET ohao_game)

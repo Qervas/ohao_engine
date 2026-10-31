@@ -5,17 +5,21 @@
 //           frame, reprojected by the G-buffer's velocity (bilinear, each tap kept only where
 //           last frame's guide is the same surface: depth and normal): a short one (blend
 //           weight down to 1/kGIFastHistoryFrames) and a long one (down to
-//           1/kGIHistoryFrames). The long history is clamped to the range of the short one
-//           over the 3x3 neighbourhood first, so a light that moves or changes drags at most
-//           a few frames behind instead of kGIHistoryFrames. The short accumulation's alpha
+//           1/kGIHistoryFrames). The long history is clamped first, so a light that changes
+//           drags at most a few frames behind instead of kGIHistoryFrames: up to the short
+//           one's minimum over the 3x3 neighbourhood (a light turned on), and down to twice its
+//           maximum (one turned off or halved). Not to its range: a pixel's few frames of two
+//           rays rarely hold the rare bright bounce, so the range's top sits below the mean,
+//           and clamping to it darkened every wall (the helmet room's 10%). The short accumulation's alpha
 //           holds the frames of history (none after a temporal reset or a disocclusion; the
 //           two start and reproject together, so one count serves both); the long one's alpha
 //           the environment's visibility, accumulated as its radiance is.
-// atrous    Twice (steps 1 and 2), at half resolution: a 5x5 B3-spline a-trous kernel over
-//           the long accumulation (radiance and visibility), edge-stopped by depth and normal.
-//           The reflection (frontier F5b, params.w 1) runs the same chain with its roughness in
-//           alpha: its kernel spreads only as far as the surface is rough (none below 0.05, all
-//           from 0.4), so a mirror keeps its reflection sharp.
+// atrous    At half resolution, a 5x5 B3-spline a-trous kernel over the long accumulation
+//           (radiance and visibility), edge-stopped by depth and normal: four times for the
+//           diffuse (steps 1, 2, 4, 8: two left a flat wall's noise as blotches some 20 pixels
+//           wide). The reflection (frontier F5b, params.w 1) runs steps 1 and 2 with its
+//           roughness in alpha: its kernel spreads only as far as the surface is rough (none
+//           below 0.05, all from 0.4), so a mirror keeps its reflection sharp.
 // upsample  To full resolution, joint-bilateral: the 4 nearest half-resolution samples
 //           weighted bilinearly and by how well their depth and normal match the pixel's.
 //           Lighting multiplies the radiance by the diffuse albedo and occludes the specular
@@ -147,7 +151,8 @@ void temporal(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
         tSlowOut[pixel] = float4(0.0);
         return;
     }
-    // The short accumulation's range over the 3x3 (surface pixels only) bounds the long history.
+    // The short accumulation's minimum and maximum over the 3x3 (surface pixels only) bound the
+    // long history: from below the minimum, from above twice the maximum (see the top).
     float3 lo = fast.rgb, hi = fast.rgb;
     [unroll]
     for (int dy = -1; dy <= 1; ++dy)
@@ -164,7 +169,7 @@ void temporal(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
     const float4 cur = tNoisy.Load(int3(pixel, 0));
     const float4 slowPrev = gSlow[ci];
     const float n = fast.a;   // min(frames of history + 1, kGIHistoryFrames)
-    const float3 slow = lerp(clamp(slowPrev.rgb, lo, hi), cur.rgb, 1.0 / n);
+    const float3 slow = lerp(clamp(slowPrev.rgb, lo, 2.0 * hi), cur.rgb, 1.0 / n);
     const float visibility = lerp(slowPrev.a, cur.a, 1.0 / n);
     tFastOut[pixel] = fast;
     tSlowOut[pixel] = float4(slow, visibility);

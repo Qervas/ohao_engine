@@ -246,17 +246,17 @@ bool RTGITechnique::createDescriptorResources() {
         if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
     }
 
-    // Per frame slot: trace, and per chain temporal, 2 a-trous, upsample.
+    // Per frame slot: trace, and per chain temporal, kAtrousSteps a-trous, upsample.
     const VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
-        {sampled, (4 + 2 * (6 + 2 * 2 + 5)) * MAX_FRAMES_IN_FLIGHT},
-        {storage, (5 + 2 * (2 + 2 * 1 + 1)) * MAX_FRAMES_IN_FLIGHT},
+        {sampled, (4 + 2 * (6 + kAtrousSteps * 2 + 5)) * MAX_FRAMES_IN_FLIGHT},
+        {storage, (5 + 2 * (2 + kAtrousSteps * 1 + 1)) * MAX_FRAMES_IN_FLIGHT},
         {buffer, 6 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1 * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 9 * MAX_FRAMES_IN_FLIGHT;
+    poolInfo.maxSets = (1 + 2 * (2 + kAtrousSteps)) * MAX_FRAMES_IN_FLIGHT;
     poolInfo.poolSizeCount = 5;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) return false;
@@ -271,10 +271,12 @@ bool RTGITechnique::createDescriptorResources() {
     };
     for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
         if (!allocate(m_traceSetLayout, &m_traceSets[s])) return false;
-        for (uint32_t c = 0; c < 2; ++c)
-            if (!allocate(m_temporalSetLayout, &m_temporalSets[s][c]) || !allocate(m_atrousSetLayout, &m_atrousSets[s][c][0]) ||
-                !allocate(m_atrousSetLayout, &m_atrousSets[s][c][1]) || !allocate(m_upsampleSetLayout, &m_upsampleSets[s][c]))
+        for (uint32_t c = 0; c < 2; ++c) {
+            if (!allocate(m_temporalSetLayout, &m_temporalSets[s][c]) || !allocate(m_upsampleSetLayout, &m_upsampleSets[s][c]))
                 return false;
+            for (VkDescriptorSet& set : m_atrousSets[s][c])
+                if (!allocate(m_atrousSetLayout, &set)) return false;
+        }
     }
     return true;
 }
@@ -523,16 +525,20 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
     }
     barrier(cmd, kCompute);
 
-    // Two a-trous iterations over the long accumulation: steps 1 then 2. The second writes
-    // over the trace's radiance, which nothing reads any more.
+    // The a-trous iterations over the long accumulation, steps 1, 2, 4, 8 (the reflection's 1
+    // and 2: its spread is the surface's roughness), between the a-trous image and the trace's
+    // radiance (which nothing reads any more); the last writes the latter.
     const uint32_t gx = (m_halfWidth + 7) / 8, gy = (m_halfHeight + 7) / 8;
-    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][0], 8,
-        {{slow[m_cur].view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {atrous.view, kGeneral}}, gx, gy);
-    barrier(cmd, kCompute);
-    pc.params[1] = 2u;
-    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][1], 8,
-        {{atrous.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {noisy.view, kGeneral}}, gx, gy);
-    barrier(cmd, kCompute);
+    const uint32_t steps = spec ? 2u : kAtrousSteps;
+    for (uint32_t i = 0; i < steps; ++i) {
+        const VkImageView in = i == 0 ? slow[m_cur].view : (i % 2 == 1 ? atrous.view : noisy.view);
+        const VkImageView out = i % 2 == 0 ? atrous.view : noisy.view;
+        pc.params[1] = 1u << i;
+        run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][i], 8,
+            {{in, kGeneral}, {m_guide[m_cur].view, kGeneral}, {out, kGeneral}}, gx, gy);
+        barrier(cmd, kCompute);
+    }
+    static_assert(kAtrousSteps % 2 == 0, "the last a-trous step writes the trace's radiance image");
 
     // The joint-bilateral upsample into the output lighting reads.
     rtc::transition(cmd, output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,

@@ -178,6 +178,7 @@ $ python tests/renderer/check_fireflies.py > /dev/null   # gpu
 $ python tests/renderer/check_env_orientation.py > /dev/null   # gpu
 $ python tests/renderer/check_analytic.py > /dev/null   # gpu
 $ python tests/renderer/check_direct_light.py > /dev/null   # gpu
+$ python tests/renderer/check_gi_noise.py > /dev/null   # gpu
 $ python tests/renderer/check_material.py > /dev/null   # gpu
 $ python tests/renderer/check_parity.py > /dev/null   # gpu # slow
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
@@ -501,8 +502,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   sum: `EnvPrefilter`'s images (`render/deferred/env_prefilter.*`, built at environment upload:
   GGX-prefiltered into `kEnvPrefilterLevels` mips read at `roughness * (levels - 1)`, and
   irradiance), times the environment's intensity, occluded by the material's AO. There is no SSR: the
-  reflection ray sees what the screen cannot. RT GI's half-resolution noise shows as low-frequency
-  blotches on flat walls; compare a metal against the path tracer before trusting its look.
+  reflection ray sees what the screen cannot. Compare a metal against the path tracer before
+  trusting its look.
 - **A directional light stands for the sun.** While the scene has one
   (`RenderScene::hasDirectionalLight`), the HDRI is uploaded with its sun painted out
   (`render/rt/env_sun.hpp`: the peak's connected texels over 64 x the median sky, if the peak is
@@ -533,8 +534,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   irradiance, else none (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment): the
   frame then has no indirect light, as the path tracer has none (frontier F5c: no fill; the only
   occlusion that is not traced is the material's AO texture). RT
-  GI carries every bounce through its radiance cache (below), and its denoiser's noise shows on
-  flat walls. A test that wants indirect light without RT GI gives the scene an environment. Both are
+  GI carries every bounce through its radiance cache (below). A test that wants indirect light without RT GI gives the scene an environment. Both are
   diffuse only, weighed by OpenPBR's diffuse directional albedo beneath the specular layer
   (`diffuseAlbedo`; the split sum's weight is `specularAlbedo`, both from
   `shaders/material/openpbr.slang` and its energy tables). RT GI's rays bounce off the hit
@@ -681,6 +681,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   builds BVHs per process), and the reference tests paths against the hit triangle's geometric
   normal, so a few pixels may differ by any amount between a window and a headless host (one
   process repeats itself bit for bit).
+- **RT GI's denoiser** (`rt/gi_denoise.slang`): a reprojected short (4 frames) and long (32) history,
+  four a-trous steps (1, 2, 4, 8) on the diffuse and two on the reflection, a joint-bilateral upsample.
+  Two rays a pixel are heavy-tailed (a few find a bright patch), so **never clamp the long history to the
+  short one's neighbourhood range**: a few frames of 3x3 rarely hold the bright samples, the range's top
+  sits below the mean, and the clamp darkened every wall 10% (the referee's helmet 0.925, spheres 0.906,
+  now 0.982 and 0.969). It is clamped up to the 3x3 minimum and down to twice the maximum. Two a-trous
+  steps left the noise as blotches some 20 pixels wide on flat walls; `check_gi_noise.py` holds the
+  helmet room's left wall under 1% blotchiness at frame 60 (the reference 0.5%) and its mean within 3%.
 - **RT GI carries every bounce** (frontier F5a, `gi_trace.slang`): a GI ray's hit reflects its OpenPBR
   albedo x (its direct light, `directAt` at the hit's geometric normal from the triangle's vertices,
   `hitGeometricNormal`, + what one more cosine ray brings back: the radiance cache's cell where it
