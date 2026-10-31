@@ -742,7 +742,12 @@ void view_model_arms_change_only_their_pixels() {
     std::printf("  footprint x %.0f..%.0f y %.0f..%.0f; arms: %zu px changed, %zu outside (max %d)\n", fp.x0, fp.x1, fp.y0,
                 fp.y1, all.changed, outside.changed, outside.maxAbs);
     check(all.changed > 200, "arms: drawn (their pixels changed)");
-    check(withinBvhFloor(outside), "arms: nothing past 24 px of their footprint changed (no shadow, no GI)");
+    // The same light past the footprint, not the same bits: RT GI's radiance cache is fed by the frame's
+    // pixels (frontier F5a), and the arms hide some, so the cache's noise moves everywhere by a level.
+    const SameLight l = sameLight(on, off, {fp});
+    std::printf("  past the footprint: mean %.4f, worst 32x32 block %.4f\n", l.whole, l.worstBlock);
+    check(l.whole <= 0.01 && l.worstBlock <= 0.05,
+          "arms: the light past 24 px of their footprint the same (no shadow, no GI; mean 1%, blocks 5%)");
 }
 
 } // namespace

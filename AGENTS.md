@@ -234,7 +234,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   as the light held still; the first-person gun (`ViewModel`, sub-project 9): a capture with
   the gun against one without it differs only inside the gun's footprint (it shadows and
   lights nothing), where a plain box at the gun's drawn place changes pixels outside it; the
-  player's skinned arms under a ViewModel change nothing past 24 px of their footprint.
+  player's skinned arms under a ViewModel leave the light past 24 px of their footprint the same (mean
+  within 1%, blocks 5%: RT GI's radiance cache is fed by the frame's pixels, and the arms hide some).
   `skinning_gpu_test` (sub-project 10, test 24, the rig): the deformed range read back equals a
   CPU skin of the same palette (positions, normals, 1e-5 relative); two instances of one mesh hold
   their own poses; after a window frame (a step, one sync, the frame) the copy's previous positions
@@ -532,9 +533,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   E/W, never be added on top in post.
 - Indirect diffuse light has one source per frame: RT GI's rays, else the environment's
   irradiance, else (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment) the
-  constant ambient (`ambientIntensity`, 0.35; `setAmbientIntensity` overrides it). With RT GI the constant does nothing, so walls are lit by direct light
-  and one bounce, darker than the multi-bounce path tracer, and RT GI's denoiser noise
-  shows on them. A test that wants ambient light must turn RT GI off. All three are
+  constant ambient (`ambientIntensity`, 0.35; `setAmbientIntensity` overrides it). With RT GI the constant does nothing; RT GI carries every
+  bounce through its radiance cache (below), and its denoiser's noise shows on flat walls. A test that wants ambient light must turn RT GI off. All three are
   diffuse only, weighed by OpenPBR's diffuse directional albedo beneath the specular layer
   (`diffuseAlbedo`; the split sum's weight is `specularAlbedo`, both from
   `shaders/material/openpbr.slang` and its energy tables). RT GI's rays bounce off the hit
@@ -681,6 +681,18 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   builds BVHs per process), and the reference tests paths against the hit triangle's geometric
   normal, so a few pixels may differ by any amount between a window and a headless host (one
   process repeats itself bit for bit).
+- **RT GI carries every bounce** (frontier F5a, `gi_trace.slang`): a GI ray's hit reflects its OpenPBR
+  albedo x (its direct light, `directAt` at the hit's geometric normal from the triangle's vertices,
+  `hitGeometricNormal`, + what one more cosine ray brings back: the radiance cache's cell where it
+  lands, at least a voxel away, and that surface's emission, or the environment). A pixel's first ray
+  computes it and adds it to the hit's cell; its other rays read their hit's cell (computing only
+  where it is empty or within a voxel). The cache is RT GI's own `RadianceCache` (the path tracer's
+  class: bindings 12-14, resolved after the trace, a history of 8 samples, cleared by a temporal reset
+  and by a reference run's start), so each frame carries light one bounce further: a still view
+  converges to every bounce, slowly where a cell takes few samples a frame (the closed box at 320x180:
+  0.937 of `Le / (1 - rho)` at 32 frames, 0.986 at 256). Pixels nearer than 0.3 m (the first-person view
+  model, drawn remapped) read the cache but never feed it. Direct light at the hit's true normal, not
+  "facing the ray": that approximation darkened every bounce (the referee went 0.926 to 0.967 on Cornell).
 - **RT GI's bounce sees every light** (`gi_trace.slang` `directAt`): up to `kGIWeighedLights`
   (16) each is weighed in one pass, past that `kGILightCandidates` (8) are drawn from an alias
   table in `GILight.cone.zw` and resampled; one shadow ray either way. `check_analytic.py` holds

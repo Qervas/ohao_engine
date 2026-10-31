@@ -31,9 +31,10 @@ struct ResolveConstants {
 
 } // namespace
 
-bool RadianceCache::create(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t capacity) {
+bool RadianceCache::create(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t capacity, uint32_t maxSamples) {
     m_device = device;
     m_capacity = capacity;
+    m_maxSamples = maxSamples;
     if (!createDeviceBuffer(device, physicalDevice, VkDeviceSize(capacity) * 4u, m_keys, m_keysMemory) ||
         !createDeviceBuffer(device, physicalDevice, VkDeviceSize(capacity) * 16u, m_accum, m_accumMemory) ||
         !createDeviceBuffer(device, physicalDevice, VkDeviceSize(capacity) * 16u, m_resolved, m_resolvedMemory)) {
@@ -100,15 +101,19 @@ void RadianceCache::destroy() {
     *this = RadianceCache{};
 }
 
+namespace {
+// The stages a cache's readers and writers run in: the path tracer's raygen, RT GI's compute.
+constexpr VkPipelineStageFlags kShaders = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+} // namespace
+
 void RadianceCache::recordBeginFrame(VkCommandBuffer cmd) {
     if (!valid()) return;
-    constexpr VkPipelineStageFlags kPrevious =
-        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    constexpr VkPipelineStageFlags kPrevious = kShaders;
     if (!m_clearPending) {
         VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, kPrevious, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 1, &b, 0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(cmd, kPrevious, kShaders, 0, 1, &b, 0, nullptr, 0, nullptr);
         return;
     }
     m_clearPending = false;
@@ -120,7 +125,7 @@ void RadianceCache::recordBeginFrame(VkCommandBuffer cmd) {
     VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 1, &after, 0,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, kShaders, 0, 1, &after, 0,
                          nullptr, 0, nullptr);
 }
 
@@ -129,17 +134,17 @@ void RadianceCache::recordResolve(VkCommandBuffer cmd) {
     VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     toCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+    vkCmdPipelineBarrier(cmd, kShaders, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                          &toCompute, 0, nullptr, 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
-    const ResolveConstants rc{m_capacity, kMaxSamples, kStaleFrames, 0};
+    const ResolveConstants rc{m_capacity, m_maxSamples, kStaleFrames, 0};
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rc), &rc);
     vkCmdDispatch(cmd, (m_capacity + 255u) / 256u, 1, 1);
     VkMemoryBarrier toTrace{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     toTrace.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     toTrace.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 1,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, kShaders, 0, 1,
                          &toTrace, 0, nullptr, 0, nullptr);
 }
 

@@ -1,8 +1,9 @@
 #pragma once
 
-// RT GI (sub-project 2b spec, "RT GI" and "Reference quality"): one-bounce diffuse indirect
-// light for the lighting pass (binding 11), traced with inline ray queries
-// (VK_KHR_ray_query; without it init() fails and the frame has no indirect light).
+// RT GI (sub-project 2b spec, "RT GI" and "Reference quality"; every bounce since frontier F5a):
+// diffuse indirect light for the lighting pass (binding 11), traced with inline ray queries
+// (VK_KHR_ray_query; without it init() fails and the frame has no indirect light). Bounces past the
+// first come from its radiance cache, which the trace feeds and render() resolves (rt/gi_trace.slang).
 //
 // realtime   render() traces half resolution, kGIRealtimeRays cosine rays a pixel
 //            (rt/gi_trace.slang), and denoise() turns it into the full-resolution output: a
@@ -19,6 +20,7 @@
 
 #include "render_technique.hpp"
 #include "render/material/openpbr_tables_buffer.hpp"
+#include "render/rt/radiance_cache.hpp"
 #include "rt_compute.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -65,6 +67,7 @@ public:
     void resetHistory() noexcept {
         m_historyValid = false;
         m_refFrames = 0;
+        m_cache.clear();   // a capture after a reset starts from an empty cache, so it repeats
     }
     // Realtime quality's trace (render.settings rtGI): half or full resolution (the denoiser
     // runs at the trace's size and the upsample becomes a copy), and its rays a pixel (1-32).
@@ -127,6 +130,12 @@ private:
     std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_lights{};
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_lightCapacity{};
     render::OpenPBRTablesBuffer m_openpbrTables;   // the trace's binding 11
+    // The bounces past the first (frontier F5a): the trace's bindings 12-14, resolved after it.
+    render::RadianceCache m_cache;
+    static constexpr uint32_t kCacheCapacity = 1u << 20;   // 1M cells, 36 MiB
+    // A cell's history in samples: light moves one bounce a frame through it, and 256 (the path
+    // tracer's) kept the first frames' fewer bounces in a cell for a hundred frames.
+    static constexpr uint32_t kCacheMaxSamples = 8;
 
     VkPipeline m_tracePipeline = VK_NULL_HANDLE, m_temporalPipeline = VK_NULL_HANDLE;
     VkPipeline m_atrousPipeline = VK_NULL_HANDLE, m_upsamplePipeline = VK_NULL_HANDLE;

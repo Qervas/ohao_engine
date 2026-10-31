@@ -13,15 +13,23 @@
 // Lighting multiplies the radiance by the diffuse albedo, and lights the specular IBL with the
 // environment where the rays escaped and with what they hit elsewhere.
 //
-// A ray that hits a surface brings back that surface's emission and its OpenPBR albedo (its
-// material resolved at the hit's uv, rt/alpha_test.slang's hitMaterial) over pi, times the direct
-// light the hit receives from the frame's
-// lights (every raster light but flashes), attenuated as the lighting pass attenuates
-// them, the hit's normal taken as facing the ray, and shadowed: one light, chosen in proportion to
-// what it would give, gets a shadow ray (directAt). Without it a hit in shadow bounced full light, and
-// every surface facing a shadowed floor (an underside, a rim) glowed. A ray that leaves the scene
-// brings back the environment map in its direction (black without one). Cosine sampling
-// makes the mean of those radiances the diffuse irradiance over pi.
+// A ray that hits a surface brings back what that surface reflects toward it and its emission. Its
+// OpenPBR albedo (its material resolved at the hit's uv, rt/alpha_test.slang's hitMaterial) times
+//   the direct light it receives over pi: the frame's lights (every raster light but flashes),
+//     attenuated as the lighting pass attenuates them, the hit's normal taken as facing the ray, and
+//     shadowed: one light, chosen in proportion to what it would give, gets a shadow ray (directAt).
+//     Without it a hit in shadow bounced full light, and every surface facing a shadowed floor (an
+//     underside, a rim) glowed;
+//   plus the light it receives from everything else (frontier F5a): one cosine ray from the hit
+//     brings back what the radiance cache holds where it lands (every bounce beyond) and that
+//     surface's emission, or the environment.
+// The same reflected light is added to the hit's cell of the cache (rt/radiance_cache.slang, RT GI's
+// own: render/rt/radiance_cache.*), whose resolve blends it after the trace; the next frame's second
+// rays read it. Each frame carries light one bounce further (SHaRC's propagation by short paths), so
+// a still view converges to every bounce. A second ray landing within a voxel of the hit reads no
+// cell (a cell would feed itself). A ray that leaves the scene brings back the environment map in its
+// direction (black without one). Cosine sampling makes the mean of those radiances the diffuse
+// irradiance over pi.
 //
 // Every sample hashes (render seed, frame index since the reset, pixel, ray, dimension), so
 // the accumulation converges and repeats exactly after a reset.
@@ -29,6 +37,7 @@ import shared.layout;
 import rt.alpha_test;
 import material.openpbr;
 import rt.smoke_proxy;
+import rt.radiance_cache;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] Texture2D<float4> gPosition;   // xyz world position, w metallic; (0,0,0,0) sky
@@ -42,6 +51,10 @@ import rt.smoke_proxy;
 [[vk::binding(9, 0)]] [[vk::image_format("r32ui")]] RWTexture2D<uint> guideOut;     // realtime
 [[vk::binding(10, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> refMean; // reference
 [[vk::binding(11, 0)]] StructuredBuffer<float> openpbrTables;                        // OpenPBR's energy tables
+// The radiance cache (render/rt/radiance_cache.hpp): read through `resolved`, added to through `accum`.
+[[vk::binding(12, 0)]] RWStructuredBuffer<uint> cacheKeys;
+[[vk::binding(13, 0)]] RWStructuredBuffer<uint4> cacheAccum;
+[[vk::binding(14, 0)]] RWStructuredBuffer<uint4> cacheResolved;
 [[vk::push_constant]] ConstantBuffer<GITracePush> pc;
 
 static const float kPi = 3.14159265;
@@ -234,9 +247,77 @@ float3 directAt(float3 p, float3 n, uint key, uint s)
     return lit * scale;
 }
 
+// The environment's radiance in direction `dir` (0 without one).
+float3 environment(float3 dir)
+{
+    if ((pc.flags.y & 1u) == 0u) return float3(0.0);
+    // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
+    // full-resolution texels.
+    const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith
+    return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w;   // times Environment.intensity
+}
+
+// The closest surface along a ray (alpha-tested, light emitters left out), committed in `q`.
+bool closestHit(inout RayQuery<RAY_FLAG_NONE> q, float3 origin, float3 dir)
+{
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.TMin = 0.001;
+    ray.Direction = dir;
+    ray.TMax = kRayLength;
+    q.TraceRayInline(scene, RAY_FLAG_NONE, kRayMaskScene, ray);   // light emitters: camera and mirror rays only
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            alphaHit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+// The light reaching surface `at` (geometric normal ng, facing the ray that found it) from everything
+// but the lights: one cosine ray, the cache's radiance and the emission where it lands, else the
+// environment.
+float3 indirectAt(float3 at, float3 ng, uint key, uint s)
+{
+    float3 t, b;
+    basis(ng, t, b);
+    const float u = rand01(key, s, 5u);
+    const float phi = kTwoPi * rand01(key, s, 6u);
+    const float r = sqrt(u);
+    const float3 dir = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + ng * sqrt(max(0.0, 1.0 - u)));
+    const float3 origin = at + ng * 0.05;
+    RayQuery<RAY_FLAG_NONE> q;
+    if (!closestHit(q, origin, dir)) return environment(dir);
+    const float3 hit = origin + dir * q.CommittedRayT();
+    const HitMaterial hm = hitMaterial(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                       q.CommittedTriangleBarycentrics());
+    float3 n = hitGeometricNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedObjectToWorld3x4());
+    if (dot(n, dir) > 0.0) n = -n;
+    float3 radiance = hm.emission;
+    const float voxel = cacheVoxelSizeAt(hit, pc.cameraPos.xyz);
+    if (q.CommittedRayT() >= voxel)
+    {
+        // Jittered within the voxel's face (Binder 2019), so no voxel shows as a block.
+        float3 jt, jb;
+        basis(n, jt, jb);
+        const float2 j = (float2(rand01(key, s, 7u), rand01(key, s, 8u)) - 0.5) * voxel;
+        float3 cached;
+        if (cacheLookup(cacheKeys, cacheResolved, cacheCell(hit + jt * j.x + jb * j.y, n, pc.cameraPos.xyz), cached))
+            radiance += cached;
+    }
+    return radiance;
+}
+
+// A pixel nearer the camera than this reads the cache but adds nothing to it: the first-person view
+// model is drawn 0.108-0.27 m from the eye (ecs/view_model.hpp), remapped, so its rays start where no
+// world surface is, and the player's capsule (0.3 m) keeps the world farther. Its samples would also
+// make the rest of the frame depend on whether the gun is drawn.
+static const float kCacheFeedNear = 0.3;
+
 // The radiance arriving at `origin` from direction `dir`; `escaped` is 1 when the ray left the
-// scene (it then brings back the environment).
-float3 incoming(float3 origin, float3 dir, uint key, uint s, out float escaped)
+// scene (it then brings back the environment). `feeds`: the hit's reflected light goes into the cache.
+float3 incoming(float3 origin, float3 dir, uint key, uint s, bool feeds, out float escaped)
 {
     escaped = 0.0;
     RayDesc ray;
@@ -270,16 +351,31 @@ float3 incoming(float3 origin, float3 dir, uint key, uint s, out float escaped)
         tables.data = openpbrTables;
         const float3 albedo = OpenPBRBase(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);
         const float3 at = origin + dir * q.CommittedRayT();
+        float3 ng = hitGeometricNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedObjectToWorld3x4());
+        if (dot(ng, dir) > 0.0) ng = -ng;
+        // What the hit reflects. A pixel's first ray computes it (its direct light, and everything
+        // else's through the cache) and adds it to the hit's cell; its other rays read their hit's
+        // cell, a voxel away or more, and compute it only where the cell has nothing yet.
+        float3 reflected;
+        bool cached = false;
+        if (s > 0u && q.CommittedRayT() >= cacheVoxelSizeAt(at, pc.cameraPos.xyz))
+            cached = cacheLookup(cacheKeys, cacheResolved, cacheCell(at, ng, pc.cameraPos.xyz), reflected);
+        if (!cached)
+        {
+            reflected = albedo * ((1.0 / kPi) * directAt(at, ng, key, s) + indirectAt(at, ng, key, s));
+            const uint slot = feeds ? cacheInsert(cacheKeys, cacheCell(at, ng, pc.cameraPos.xyz)) : ~0u;
+            if (slot != ~0u)
+            {
+                cacheAdd(cacheAccum, slot, reflected);
+                cacheCount(cacheAccum, slot);
+            }
+        }
         // What the hit emits is direct light when RT direct light samples emissive triangles (flags.y 2).
         const float3 emitted = (pc.flags.y & 2u) != 0u ? float3(0.0) : hm.emission;
-        return (albedo * (1.0 / kPi) * directAt(at, -dir, key, s) + emitted) * T;
+        return (reflected + emitted) * T;
     }
     escaped = 1.0;
-    if ((pc.flags.y & 1u) == 0u) return float3(0.0);
-    // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
-    // full-resolution texels.
-    const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith
-    return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w * T;   // times Environment.intensity
+    return environment(dir) * T;
 }
 
 [shader("compute")]
@@ -310,6 +406,7 @@ void trace(uint3 id : SV_DispatchThreadID)
     // Cosine-distributed directions, stratified in azimuth across the pixel's rays.
     const uint key = pixelHash(pixel);
     const uint rays = max(pc.seed.z, 1u);
+    const bool feeds = distance(p, pc.cameraPos.xyz) >= kCacheFeedNear;
     float3 sum = float3(0.0);
     float escapedSum = 0.0;
     for (uint s = 0u; s < rays; ++s)
@@ -319,7 +416,7 @@ void trace(uint3 id : SV_DispatchThreadID)
         const float r = sqrt(u);
         const float3 dir = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)));
         float escaped;
-        sum += incoming(origin, dir, key, s, escaped);
+        sum += incoming(origin, dir, key, s, feeds, escaped);
         escapedSum += escaped;
     }
     // The mean incoming radiance, and the environment's visibility: the share of the

@@ -140,6 +140,10 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint3
         OHAO_LOG(Error, render, "RTGI: failed to upload OpenPBR's energy tables");
         return false;
     }
+    if (!m_cache.create(device, physicalDevice, kCacheCapacity, kCacheMaxSamples)) {
+        OHAO_LOG(Error, render, "RTGI: failed to create its radiance cache");
+        return false;
+    }
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         m_lightCapacity[i] = shared::kGIWeighedLights;
         if (!rtc::createHostBuffer(device, physicalDevice, sizeof(shared::GILight) * m_lightCapacity[i],
@@ -213,6 +217,7 @@ bool RTGITechnique::createDescriptorResources() {
         layoutBinding(6, sampled), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLER),           // environment
         layoutBinding(8, storage), layoutBinding(9, storage), layoutBinding(10, storage),  // radiance, guide, mean
         layoutBinding(11, buffer),                                                         // OpenPBR's tables
+        layoutBinding(12, buffer), layoutBinding(13, buffer), layoutBinding(14, buffer),   // the radiance cache
     };
     const std::vector<VkDescriptorSetLayoutBinding> temporal = {
         layoutBinding(0, sampled), layoutBinding(1, sampled), layoutBinding(2, sampled),
@@ -240,7 +245,7 @@ bool RTGITechnique::createDescriptorResources() {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
         {sampled, (4 + 6 + 2 * 2 + 5) * MAX_FRAMES_IN_FLIGHT},
         {storage, (3 + 2 + 2 * 1 + 1) * MAX_FRAMES_IN_FLIGHT},
-        {buffer, 3 * MAX_FRAMES_IN_FLIGHT},
+        {buffer, 6 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1 * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -346,8 +351,10 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         rtc::transition(cmd, m_output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,
                         VK_ACCESS_SHADER_WRITE_BIT, true);
         // The running mean reads last frame's while the reference frames run unbroken; a new
-        // image holds none of them.
+        // image holds none of them. A run that starts again starts the cache again too: the same
+        // reference frames after any history.
         if (m_refMean.layout == VK_IMAGE_LAYOUT_UNDEFINED) m_refFrames = 0;
+        if (m_refFrames == 0) m_cache.clear();
         rtc::transition(cmd, m_refMean, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                         kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, m_refFrames == 0);
     } else {
@@ -380,7 +387,10 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     const VkDescriptorImageInfo guideInfo{VK_NULL_HANDLE, reference ? m_guideDummy.view : m_guide[m_cur].view, kGeneral};
     const VkDescriptorImageInfo meanInfo{VK_NULL_HANDLE, reference ? m_refMean.view : m_refDummy.view, kGeneral};
     const VkDescriptorBufferInfo tablesInfo{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet writes[12] = {
+    const VkDescriptorBufferInfo cacheInfo[3] = {{m_cache.keys(), 0, VK_WHOLE_SIZE},
+                                                 {m_cache.accum(), 0, VK_WHOLE_SIZE},
+                                                 {m_cache.resolved(), 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet writes[15] = {
         descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
         descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
@@ -389,6 +399,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
         descriptorWrite(set, 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
         descriptorWrite(set, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        descriptorWrite(set, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), descriptorWrite(set, 13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        descriptorWrite(set, 14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
     };
     writes[0].pNext = &asWrite;
     for (uint32_t i = 0; i < 3; ++i) writes[1 + i].pImageInfo = &gbuf[i];
@@ -400,7 +412,11 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     writes[9].pImageInfo = &guideInfo;
     writes[10].pImageInfo = &meanInfo;
     writes[11].pBufferInfo = &tablesInfo;
-    vkUpdateDescriptorSets(m_device, 12, writes, 0, nullptr);
+    for (uint32_t i = 0; i < 3; ++i) writes[12 + i].pBufferInfo = &cacheInfo[i];
+    vkUpdateDescriptorSets(m_device, 15, writes, 0, nullptr);
+
+    // The cache: last frame's work ordered before this frame's, emptied if a reset asked.
+    m_cache.recordBeginFrame(cmd);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
     const VkDescriptorSet traceSets[] = {set, input.alphaTables, input.textures};
@@ -413,6 +429,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     pc.cameraPos = f4(input.cameraPos, input.envIntensity);
     vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);
+    m_cache.recordResolve(cmd);   // this frame's samples blended in for the next frame's rays
     m_rendered = true;
     if (reference) ++m_refFrames;
 
@@ -527,6 +544,7 @@ GIOutput RTGITechnique::getOutput() const {
 void RTGITechnique::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
+    m_cache.destroy();
     for (VkPipeline* p : {&m_tracePipeline, &m_temporalPipeline, &m_atrousPipeline, &m_upsamplePipeline})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_traceLayout, &m_temporalLayout, &m_atrousLayout, &m_upsampleLayout})

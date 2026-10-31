@@ -14,8 +14,10 @@ Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the ref
 1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces, then the
 radiance cache) 2 within 3%, the same bits captured twice in one process (across processes the driver
 may build the BVH differently: a ray on a shared edge takes either triangle, its hit moves by an ulp,
-and since emissive triangles are lights (F3) that can change the cache's integer sums). Deferred: RT GI's one bounce (its rays bring back what the
-walls emit, rt/gi_trace.slang) gives 1.5, the path tracer's --bounces 0, within 2% (32 frames)
+and since emissive triangles are lights (F3) that can change the cache's integer sums). Deferred: RT GI with its radiance cache behind each
+hit (frontier F5a: every bounce, one more a frame) gives Le / (1 - rho), 2, within 3% once converged
+(256 frames: at this size a cell takes about one sample a frame, and each bounce waits on the one before;
+32 frames gave 0.937 of it); one bounce gave 1.5
 
   python tests/renderer/check_material.py   # exit 0 pass, 1 fail; last line the JSON summary
 """
@@ -39,7 +41,7 @@ CAM_D = 3.0
 SPHERE_R = 0.5
 FURNACE_TOLERANCE = 0.01
 BOX_TOLERANCE = 0.01
-BOX_DEFERRED_TOLERANCE = 0.02
+BOX_DEFERRED_TOLERANCE = 0.03
 BOX_CACHE_TOLERANCE = 0.03   # the radiance cache is a biased estimator: 256 frames reach 1.4% under 2
 
 
@@ -190,8 +192,8 @@ def closed_box(failures, results):
     if not same:
         failures.append("closed box, realtime captured twice: %s" % (err or "different images"))
     checks += 1
-    expected = le * (1 + rho)
-    img, err = capture("box_deferred", box_scene(rho, le), "deferred", ["--frames", "32"])
+    expected = le / (1 - rho)
+    img, err = capture("box_deferred", box_scene(rho, le), "deferred", ["--frames", "256"])
     if err:
         failures.append("closed box, deferred: %s" % err)
         return checks

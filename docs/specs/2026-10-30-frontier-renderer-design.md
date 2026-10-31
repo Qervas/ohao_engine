@@ -1,6 +1,6 @@
 # The frontier renderer: retiring the legacy
 
-**Status:** accepted (Frank, 2026-10-30: every ruling as recommended; F-R3 yes, add the DLSS SDK; F-R6 keep the fallback). Steps F0 to F4 are built (`docs/changes/2026-10-30-frontier-f0.md` to `2026-10-30-frontier-f4.md`; F4's cost misses four gated frame budgets, a ruling pending); F5 is next. F2 moved the constant ambient to F5 (with SSAO).
+**Status:** accepted (Frank, 2026-10-30: every ruling as recommended; F-R3 yes, add the DLSS SDK; F-R6 keep the fallback). Steps F0 to F4 are built (`docs/changes/2026-10-30-frontier-f0.md` to `2026-10-30-frontier-f4.md`; F4's cost misses four gated frame budgets, a ruling pending); F5 is in progress (F5a built, `docs/changes/2026-10-31-frontier-f5a.md`). F2 moved the constant ambient to F5 (with SSAO).
 Frank, 2026-10-30: "any old code prohibits our frontier pacing that we need to remove it or retire it".
 
 ## 1. Why

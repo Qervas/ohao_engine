@@ -25,6 +25,27 @@ import material.openpbr;
 static const uint kVertexFloats = 25u;
 static const uint kVertexUv = 9u;
 
+float3 vertexPosition(uint v)
+{
+    const uint b = v * kVertexFloats;
+    return float3(atVertices[b], atVertices[b + 1u], atVertices[b + 2u]);
+}
+
+// A committed hit's geometric normal in world space (the triangle's winding; unnormalised sides
+// cancel), from its mesh-local vertices through the instance's object-to-world transform.
+float3 hitGeometricNormal(uint slot, uint primitive, float3x4 objectToWorld)
+{
+    const uint stride = kInstanceGpuStride / 16u;
+    const uint4 mesh = atMeshes[asuint(atInstances[slot * stride + 8u]).x];
+    const uint base = mesh.y + primitive * 3u;
+    const float3 p0 = mul(objectToWorld, float4(vertexPosition(mesh.x + atIndices[base]), 1.0));
+    const float3 p1 = mul(objectToWorld, float4(vertexPosition(mesh.x + atIndices[base + 1u]), 1.0));
+    const float3 p2 = mul(objectToWorld, float4(vertexPosition(mesh.x + atIndices[base + 2u]), 1.0));
+    const float3 n = cross(p1 - p0, p2 - p0);
+    const float l = length(n);
+    return l > 0.0 ? n / l : float3(0.0, 1.0, 0.0);
+}
+
 float2 vertexUv(uint v)
 {
     const uint b = v * kVertexFloats + kVertexUv;

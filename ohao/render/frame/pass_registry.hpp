@@ -36,7 +36,7 @@ inline constexpr PassInfo kPasses[] = {
     {"di.trace", PassKind::RayTracing, "ReSTIR DI at the trace resolution: rtDirect.spatial neighbours' reservoirs, one shadow ray to the final point"},
     {"di.shade", PassKind::Compute, "ReSTIR DI: every pixel's diffuse and specular light from the trace pixels around it, through its own material"},
     {"di.denoise", PassKind::Compute, "ReSTIR DI's reprojected temporal accumulation and 3 a-trous iterations (realtime)"},
-    {"rt.gi", PassKind::RayTracing, "ray-traced one-bounce indirect light: render.settings rtGI, default half resolution, 2 rays a pixel (reference: full, 32)"},
+    {"rt.gi", PassKind::RayTracing, "ray-traced indirect light, every bounce through its radiance cache (and the cache's resolve): render.settings rtGI, default half resolution, 2 rays a pixel (reference: full, 32)"},
     {"rt.gi.denoise", PassKind::Compute, "RT GI's reprojected temporal accumulation, 2 a-trous iterations and joint-bilateral upsample (realtime)"},
     {"lighting", PassKind::Raster, "deferred lighting into the HDR image"},
     {"vfx.expand", PassKind::Compute, "every live effect particle in closed form from its record and age, lit at its centre (vfx/expand.slang)"},
