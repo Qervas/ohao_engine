@@ -774,14 +774,20 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   specular spreads only as far as the surface is rough. **Shade's speed is its occupancy**: 72
   registers (`OHAO_PIPELINE_STATS=1` logs every compute pipeline's; a ray query there cost 32 more,
   the view's table lookups hoisted 16), and it loops over its two draws, not the 4 trace pixels, or a
-  warp runs all four evaluations. **Z, not 1/M**: a combination counts the M of the inputs whose own
-  surface could have drawn the chosen point, its target above 0 and the point visible from it (a ray
-  a neighbour, Bitterli's Algorithm 6, and one from last frame's surface, another pick of the block):
-  1/M darkened penumbrae, more with every frame (0.89 of reference at 16 frames).
-  **Spatial output feeds temporal reuse, so outliers travel**: a boiling filter (RTXDI's) drops a
-  reservoir over 20x its 8x8 group's mean, after the temporal reuse and after the spatial, and an
-  occluded final point leaves the kept reservoir (weight 0); without them a dim light's point
-  carrying an occluded light's weight streaked a shadow 3x too bright. `check_direct_light.py` holds
+  warp runs all four evaluations. **Temporal reuse: Z, not 1/M**: it counts the M of the inputs whose
+  own surface could have drawn the chosen point, its target above 0 and the point visible from it (a
+  ray from last frame's surface, another pick of the block; Bitterli's Algorithm 6): 1/M darkened
+  penumbrae, more with every frame (0.89 of reference at 16 frames). **Spatial reuse: pairwise MIS**
+  (Bitterli 2022; RTXDI's default): each neighbour weighed against this pixel's reservoir alone by
+  the balance heuristic over `k x M x target x visibility` (a ray from the neighbour) against `M x
+  target`. **Spatial output feeds temporal reuse, so a bad weight travels**: under Z a neighbour's dim
+  point landing head-on kept its whole brightness ratio, and reuse fed it back frame after frame (a
+  wall 750x its light at frame 60); the boiling filter (RTXDI's: a reservoir over 20x its 8x8
+  group's mean dropped, after each reuse) that had to drop such points dropped legitimate ones too,
+  and the frame settled 2% dark. It stays for the outliers RIS itself makes (a dim light's point with
+  an occluded light's weight: specks on Cornell's back wall and the helmet's visor without it), and
+  drops little now. Pairwise MIS in the temporal reuse made the frame noisier (relative MSE 0.045
+  against 0.039): it stays Z. An occluded final point leaves the kept reservoir (weight 0). `check_direct_light.py` holds
   the realtime frame to reference quality on Sponza at night (`sponza_night.scene.json`, 37 lamps). Lighting leaves every light but flashes out of its loop when RT direct
   light ran (`LightGpu.params.w`: 1 casts shadows, 0 not, -1 a flash); without ray queries, or
   `rtDirect.enabled` off, the loop lights everything and CSM shadows a casting sun. **castShadows

@@ -10,9 +10,10 @@ lamp shadows, the dim gallery lit from far away. The lamps' own spheres (radianc
                 relative MSE, mean((a - r)^2 / (r^2 + 0.01)), under REL_MSE_MAX
 
 What it guards: a bias that grows with the frames (temporal reuse's Z), outliers that reuse spreads
-(the boiling filter, the shade bound), a denoiser that darkens (SVGF's stop, symmetric). F4's full
-resolution frame measured 0.883 at frame 1 and 0.964 at frame 30; the half-resolution frame 0.996 and
-0.984 (docs/changes/2026-10-31-frontier-f4b.md).
+(spatial reuse's pairwise MIS, the boiling filter, the shade bound), a denoiser that darkens (SVGF's stop, symmetric). F4's
+full resolution frame measured 0.883 at frame 1 and 0.964 at frame 30; the half-resolution frame 0.974
+and 0.983 under 1/Z (docs/changes/2026-10-31-frontier-f4b.md), 0.982 and 0.988 with spatial reuse's
+pairwise MIS (docs/changes/2026-10-31-di-pairwise.md).
 
 Writes build/direct_light/: each capture's PNG and PFM, and sheet.png (realtime frame 1 | frame 30 |
 reference | |frame 30 - reference| / reference).

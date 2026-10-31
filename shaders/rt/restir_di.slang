@@ -33,14 +33,36 @@
 //          soften it. Reference quality reuses nothing and keeps the running mean of the frames
 //          since the last reset: an unbiased estimate that converges.
 //
-// Combinations stream (each reservoir weighed by its point's target at this pixel) and normalise by
-// Z, the M of the inputs whose own surface could have drawn the chosen point: its target there above
-// 0 and the point visible from it (Bitterli et al.'s Algorithm 6 with its visibility rays, RTXDI's
-// ray-traced bias correction). 1/M counts a neighbour that sees the far side of a sphere light or is
-// in shadow, and darkens a penumbra more with every frame that reuses it. Temporal reuse's last-frame
-// surface is another pick of the block, so it gets a ray of its own too (without it a still view
-// darkened 2% over 60 frames). Every number is a hash of (seed, frame since the reset, pixel, pass): no atomics, no order,
-// so a frame repeats bit for bit.
+// Combinations stream, each reservoir weighed by its point's target at this pixel.
+//
+// Temporal reuse normalises by Z, the M of the inputs whose own surface could have drawn the chosen
+// point: its target there above 0 and the point visible from it (Bitterli et al.'s Algorithm 6 with
+// its visibility ray, RTXDI's ray-traced bias correction). 1/M counts a last-frame surface in shadow,
+// and darkens a penumbra more with every frame. Last frame's surface is another pick of the block, so
+// it gets a ray of its own (without it a still view darkened 2% over 60 frames).
+//
+// Spatial reuse is pairwise MIS (Bitterli 2022, thesis section 5.8; RTXDI's default): this pixel's
+// reservoir is the canonical input c, each of the k neighbours i is weighed against it alone by the
+// balance heuristic over confidences,
+//   m_i(x) = (1/k) a_i(x) / (a_i(x) + b(x)),   m_c(x) = (1/k) sum_i b(x) / (a_i(x) + b(x)),
+//   a_i(x) = k x M_i x p_i(x) x V_i(x),   b(x) = M_c x p_c(x),
+// which sum to 1 at every x and give inputs alike shares in proportion to their M (k M_i: each pair
+// stands for one of the k; without it this pixel kept half the weight against two neighbours and the
+// frame was noisier). Each input streams in with m(x) p_c(x) W, and W = wsum / p_c(x). A neighbour
+// never gives more than a_i / (k b) of this pixel's own weight, however much brighter its point is
+// here than where it was drawn; under 1/Z that ratio was unbounded: a neighbour's dim point landing
+// head-on here kept it, temporal reuse fed it back to the neighbours frame after frame (a wall at
+// Sponza's edge 750x its light at frame 60), and the boiling filter (below) that had to catch such
+// points dropped legitimate ones too: the frame settled 2% dark. V_i is a ray from the neighbour's surface to c's point (a
+// neighbour in shadow, or seeing a sphere light's far side, cannot have drawn it); its own point is
+// visible from it (the reservoirs initial keeps are), and b leaves V out: a point this pixel does not
+// see shades nothing here (the final ray). Temporal reuse stays 1/Z: pairwise there gave this frame's
+// 8 candidates more weight wherever last frame's pick of the block saw the point less well, and the
+// frame was noisier (Sponza at night: relative MSE 0.045 against 0.039), with nothing to gain: last
+// frame's reservoir is this pixel's own, its point drawn for a surface beside this one.
+//
+// Every number is a hash of (seed, frame since the reset, pixel, pass): no atomics, no order, so a
+// frame repeats bit for bit.
 import shared.layout;
 import material.openpbr;
 import includes.lighting.gbuffer_material;
@@ -294,7 +316,12 @@ struct Combiner
 
     [mutating] void add(uint l, float3 p, float W, float m, float pHatHere, float u)
     {
-        const float w = pHatHere * W * m;
+        addWeighted(l, p, pHatHere * W * m, m, pHatHere, u);
+    }
+
+    // An input whose resampling weight w is given (pairwise MIS's m(x) p(x) W), standing for m candidates.
+    [mutating] void addWeighted(uint l, float3 p, float w, float m, float pHatHere, float u)
+    {
         M += m;
         if (!(w > 0.0)) return;
         wsum += w;
@@ -306,7 +333,7 @@ struct Combiner
         }
     }
 
-    // `Z`: the M that counts (see the header); M for the candidates of one pixel.
+    // `Z`: M for the candidates of one pixel; 1 when the inputs' weights carry their MIS weights.
     Reservoir result(float Z)
     {
         Reservoir r;
@@ -399,6 +426,20 @@ bool couldDraw(Surf s, uint light, float3 y)
     return arriveFrom(light, y, origin, L, dist, le, g) && unoccluded(origin, L, dist);
 }
 
+// Pairwise MIS's balance between neighbour i (a = k M_i p_i V_i at a point) and the canonical input
+// (b = M_c p_c there): i's share, 0 when neither could have drawn it.
+float pairwise(float a, float b)
+{
+    return a + b > 0.0 ? a / (a + b) : 0.0;
+}
+
+// a_i at point (light, y) for neighbour i: Mi (k x its M) x its target there, if the point is visible
+// from its surface.
+float confidenceAt(Surf si, float Mi, uint light, float3 y)
+{
+    return couldDraw(si, light, y) ? Mi * target(si, light, y) : 0.0;
+}
+
 // ---- the trace image ------------------------------------------------------------------------
 
 uint2 traceExtent() { return pc.trace.xy; }
@@ -418,8 +459,10 @@ uint2 framePixelOf(uint2 t)
 // The boiling filter (RTXDI's), after the temporal reuse and after the spatial: a reservoir whose
 // estimate (its point's target x W) is over kBoilingFactor x the mean of its 8x8 group's non-zero
 // ones is dropped. In a shadow, RIS against an unshadowed target sometimes keeps a dim light's point
-// with the occluded light's weight, and spatial reuse can make one from a neighbour's: unbiased, but
-// temporal reuse holds such an outlier for many frames and the denoiser spreads it into a blob.
+// with the occluded light's weight: unbiased, but temporal reuse holds such an outlier for many
+// frames and the denoiser spreads it into a blob (Cornell's back wall, the helmet's visor, without
+// it). It drops so little now that spatial reuse cannot make outliers (pairwise MIS, the header):
+// under 1/Z it caught those too, and the frame settled 2% dark.
 // Every thread of the group must call it (two barriers).
 static const float kBoilingFactor = 20.0;
 groupshared float gEstimate[64];
@@ -542,12 +585,10 @@ void initial(uint3 id : SV_DispatchThreadID, uint li : SV_GroupIndex)
 Reservoir spatialReservoir(uint2 q, Surf s, bool reference)
 {
     Rng rng = rngOf(q, 1u);
-    Reservoir own = load(midA, midB, q);
-    Combiner c = emptyCombiner();
-    c.add(own.light, own.y, own.W, own.M, target(s, own.light, own.y), rng.next());
-    // The neighbours combined, for Z.
+    const Reservoir own = load(midA, midB, q);
+    // The neighbours on this surface, with the random number each streams in with.
     int2 used[kDIMaxSpatial];
-    float usedM[kDIMaxSpatial];
+    float usedU[kDIMaxSpatial];
     uint usedCount = 0u;
     if (!reference)
     {
@@ -562,26 +603,33 @@ Reservoir spatialReservoir(uint2 q, Surf s, bool reference)
             const float u = rng.next();
             if (any(n < 0) || any(n >= int2(traceExtent())) || all(n == int2(q))) continue;
             if (!sameSurface(s, loadSurf(surfA, surfB, uint2(n)))) continue;
-            const Reservoir r = load(midA, midB, uint2(n));
-            c.add(r.light, r.y, r.W, r.M, target(s, r.light, r.y), u);
             used[usedCount] = n;
-            usedM[usedCount] = r.M;
+            usedU[usedCount] = u;
             ++usedCount;
         }
     }
+    // Pairwise MIS (the header): own canonical, each neighbour weighed against it alone; one ray a
+    // neighbour, from its surface to own's point.
+    Combiner c = emptyCombiner();
+    const float po = target(s, own.light, own.y);
+    const float bo = own.M * po;
+    float mo = usedCount == 0u ? 1.0 : 0.0;
+    const float invK = usedCount == 0u ? 1.0 : 1.0 / float(usedCount);
+    for (uint k = 0u; k < usedCount; ++k)
+    {
+        const Surf sn = loadSurf(surfA, surfB, uint2(used[k]));
+        const Reservoir r = load(midA, midB, uint2(used[k]));
+        const float kM = float(usedCount) * r.M;
+        if (po > 0.0) mo += invK * (1.0 - pairwise(confidenceAt(sn, kM, own.light, own.y), bo));
+        const float pn = target(s, r.light, r.y);
+        const float mn = pn > 0.0 && r.W > 0.0 ? invK * pairwise(kM * target(sn, r.light, r.y), own.M * pn) : 0.0;
+        c.addWeighted(r.light, r.y, mn * pn * r.W, r.M, pn, usedU[k]);
+    }
+    c.addWeighted(own.light, own.y, mo * po * own.W, own.M, po, rng.next());
     // The final ray: the chosen point's visibility here.
     float v = 0.0;
     if (c.light != kNoLight) v = visibilityOf(s, c.light, c.y, rng);
-    // Z: this pixel's M when it sees the point (else nothing is shaded), and each neighbour's when it
-    // could have drawn it: one more ray a neighbour, only when the point is lit here.
-    float Z = c.M;
-    if (usedCount > 0u && v > 0.0)
-    {
-        Z = own.M;
-        for (uint k = 0u; k < usedCount; ++k)
-            if (couldDraw(loadSurf(surfA, surfB, uint2(used[k])), c.light, c.y)) Z += usedM[k];
-    }
-    Reservoir r = c.result(Z);
+    Reservoir r = c.result(1.0);
     // An occluded point leaves the kept reservoir (visibility reuse at the end): it shades nothing,
     // and next frame's temporal reuse and its neighbours' spatial reuse never draw it again.
     if (!(v > 0.0))
