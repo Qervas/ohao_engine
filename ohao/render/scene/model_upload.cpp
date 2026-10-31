@@ -135,6 +135,17 @@ std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const
             if (i < model.materialSpecularWeight.size()) mats[i].specularWeight = model.materialSpecularWeight[i];
             if (i < model.materialSpecularColor.size()) mats[i].specularColor = model.materialSpecularColor[i];
             if (i < model.materialEmissionColor.size()) mats[i].emissionColor = model.materialEmissionColor[i];
+            if (i < model.materialCoatWeight.size() && model.materialCoatWeight[i] > 0.0f) {
+                mats[i].coatWeight = model.materialCoatWeight[i];
+                mats[i].coatRoughness = model.materialCoatRoughness[i];
+                mats[i].coatIor = 1.5f;        // glTF's clearcoat: IOR 1.5, no darkening
+                mats[i].coatDarkening = 0.0f;
+            }
+            if (i < model.materialFuzzColor.size() && glm::any(glm::greaterThan(model.materialFuzzColor[i], glm::vec3(0.0f)))) {
+                mats[i].fuzzWeight = 1.0f;
+                mats[i].fuzzColor = model.materialFuzzColor[i];
+                mats[i].fuzzRoughness = model.materialFuzzRoughness[i];
+            }
         }
         uploadTextures(textures, model, mats);
         // An emissive texture emits at KHR_materials_emissive_strength (1 without it).

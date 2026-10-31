@@ -394,6 +394,10 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     model->materialSpecularColor.resize(numMats, glm::vec3(1.0f));
     model->materialEmissionColor.resize(numMats, glm::vec3(1.0f));
     model->materialEmissionStrength.resize(numMats, 1.0f);
+    model->materialCoatWeight.resize(numMats, 0.0f);
+    model->materialCoatRoughness.resize(numMats, 0.0f);
+    model->materialFuzzColor.resize(numMats, glm::vec3(0.0f));
+    model->materialFuzzRoughness.resize(numMats, 0.0f);
     model->materialTextureIndex.resize(numMats, -1);
     model->materialNormalTexIndex.resize(numMats, -1);
     model->materialRoughMetalTexIndex.resize(numMats, -1);
@@ -450,6 +454,17 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
             model->materialEmissionColor[m] = glm::vec3(e.r, e.g, e.b);
         if (float strength = 1.0f; mat->Get(AI_MATKEY_EMISSIVE_INTENSITY, strength) == aiReturn_SUCCESS)
             model->materialEmissionStrength[m] = strength;
+        // KHR_materials_clearcoat and _sheen (Assimp sets them only when the extension is there).
+        if (float coat = 0.0f; mat->Get(AI_MATKEY_CLEARCOAT_FACTOR, coat) == aiReturn_SUCCESS) {
+            model->materialCoatWeight[m] = coat;
+            if (float r = 0.0f; mat->Get(AI_MATKEY_CLEARCOAT_ROUGHNESS_FACTOR, r) == aiReturn_SUCCESS)
+                model->materialCoatRoughness[m] = r;
+        }
+        if (aiColor3D sheen(0.0f, 0.0f, 0.0f); mat->Get(AI_MATKEY_SHEEN_COLOR_FACTOR, sheen) == aiReturn_SUCCESS) {
+            model->materialFuzzColor[m] = glm::vec3(sheen.r, sheen.g, sheen.b);
+            if (float r = 0.0f; mat->Get(AI_MATKEY_SHEEN_ROUGHNESS_FACTOR, r) == aiReturn_SUCCESS)
+                model->materialFuzzRoughness[m] = r;
+        }
 
         // Textures
         model->materialTextureIndex[m] = loadAssimpTexture(scene, mat,

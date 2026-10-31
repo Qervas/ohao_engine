@@ -119,6 +119,8 @@ void PrimitiveMeshGenerator::generateSphere(Model& model, float radius, int sect
             vertex.normal = {x, y, z};
             vertex.color = {1.0f, 1.0f, 1.0f};
             vertex.texCoord = {float(j) / sectors, float(i) / stacks};
+            // Along the parallel (increasing theta): what an anisotropic material stretches along.
+            vertex.tangent = {-std::sin(theta), 0.0f, std::cos(theta), 1.0f};
             model.vertices.push_back(vertex);
         }
     }

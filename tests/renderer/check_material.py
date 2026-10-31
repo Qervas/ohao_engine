@@ -119,6 +119,14 @@ FURNACE = [
     ("dielectric_ior3_r06", {"base_color": [1, 1, 1], "specular_roughness": 0.6, "specular_ior": 3.0}),
     ("metal_r03", {"base_color": [1, 1, 1], "base_metalness": 1.0, "specular_roughness": 0.3}),
     ("metal_r1", {"base_color": [1, 1, 1], "base_metalness": 1.0, "specular_roughness": 1.0}),
+    # OpenPBR step 2: a clear coat over a dielectric and over a metal, fuzz over a dielectric, an
+    # anisotropic metal (docs/plans/2026-10-31-openpbr-step2.md, T3 and T4).
+    ("coat_dielectric", {"base_color": [1, 1, 1], "coat_weight": 1.0, "coat_roughness": 0.1}),
+    ("coat_metal_r05", {"base_color": [1, 1, 1], "base_metalness": 1.0, "specular_roughness": 0.5,
+                        "coat_weight": 1.0, "coat_roughness": 0.3}),
+    ("fuzz_dielectric", {"base_color": [1, 1, 1], "fuzz_weight": 1.0, "fuzz_roughness": 0.5}),
+    ("aniso_metal", {"base_color": [1, 1, 1], "base_metalness": 1.0, "specular_roughness": 0.4,
+                     "specular_roughness_anisotropy": 0.7}),
 ]
 
 

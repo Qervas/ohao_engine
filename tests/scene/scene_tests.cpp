@@ -2349,8 +2349,8 @@ static void sp5_t02_khr_lights_and_cameras() {
     CHECK(s.nodes[5].camera == -1, "an orthographic camera is not a camera here");
     const auto has = [&](const char* k) { return std::find(s.unsupported.begin(), s.unsupported.end(), k) != s.unsupported.end(); };
     CHECK(s.unsupported.size() == 4 && has("skins") && has("animations") && has("orthographic cameras") &&
-              has("KHR_materials_clearcoat"),
-          "unsupported content is listed once per kind");
+              has("KHR_materials_volume") && !has("KHR_materials_clearcoat"),
+          "unsupported content is listed once per kind (a material extension OpenPBR shades is not)");
 }
 
 static void sp5_t02_draco_is_refused() {

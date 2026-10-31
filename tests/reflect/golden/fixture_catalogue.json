@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "03f55c63a2d1e929",
+  "schemaHash": "0ba7bd47328e7604",
   "units": [
     "m",
     "m/s",
@@ -141,7 +141,7 @@
     },
     {
       "code": "W_LEVEL_UNSUPPORTED",
-      "meaning": "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, orthographic cameras)."
+      "meaning": "Warning: level content OHAO ignores (skins, animations, morph targets, orthographic cameras, KHR_materials_* but ior, specular, emissive_strength, clearcoat and sheen)."
     },
     {
       "code": "W_LEVEL_DYNAMIC_MESH",

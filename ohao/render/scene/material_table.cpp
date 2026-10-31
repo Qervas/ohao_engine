@@ -45,6 +45,11 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
         d.specularColor.r, d.specularColor.g, d.specularColor.b, d.specularWeight,
         d.specularIor, d.diffuseRoughness, d.baseWeight, bits(d.specularTex),
         d.emissionColor.r, d.emissionColor.g, d.emissionColor.b, bits(d.specularColorTex),
+        d.coatColor.r, d.coatColor.g, d.coatColor.b, d.coatWeight,
+        d.coatRoughness, d.coatAnisotropy, d.coatIor, d.coatDarkening,
+        d.fuzzColor.r, d.fuzzColor.g, d.fuzzColor.b, d.fuzzWeight,
+        d.fuzzRoughness, d.specularAnisotropy, d.tangentRotation, 0.0f,
+        bits(d.coatTex), bits(d.coatRoughnessTex), bits(d.fuzzColorTex), bits(d.fuzzRoughnessTex),
     };
 }
 

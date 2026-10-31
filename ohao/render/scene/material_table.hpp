@@ -8,14 +8,15 @@
 
 namespace ohao::render {
 
-// Material table: a fixed-capacity device-local array of 112-byte packs (the
+// Material table: a fixed-capacity device-local array of 192-byte packs (the
 // MaterialGpuPack layout, gpu::shared::kMaterialRows rows: emissive strength in row 2 .y,
-// subsurface in row 2 .z, alpha in row 3, OpenPBR's specular and base in rows 4-6). Index 0 is the default material. Writes are
+// subsurface in row 2 .z, alpha in row 3, OpenPBR's specular and base in rows 4-6, its coat, fuzz
+// and anisotropy in rows 7-11). Index 0 is the default material. Writes are
 // staged through the frame slot's staging buffer.
 class MaterialTable {
 public:
     static constexpr uint32_t kCapacity = 4096;
-    using Pack = std::array<float, 28>;
+    using Pack = std::array<float, 48>;
     static_assert(sizeof(Pack) == layout::MaterialGpuPack::kBytes);
 
     [[nodiscard]] bool initialize(GpuAllocator& allocator);   // registers MaterialDesc{} as index 0

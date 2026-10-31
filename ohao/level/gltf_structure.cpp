@@ -1,5 +1,6 @@
 #include "level/gltf_structure.hpp"
 
+#include <algorithm>
 #include <simdjson.h>
 
 #include <cmath>
@@ -149,7 +150,13 @@ Result<GltfStructure, GltfError> readGltfStructure(std::span<const uint8_t> file
             if (ext == "KHR_draco_mesh_compression" || ext == "EXT_meshopt_compression")
                 return R::err(GltfError{"E_LEVEL_UNSUPPORTED", {},
                                         std::string(ext) + ": compressed meshes are not supported; export without compression"});
-            if (ext.substr(0, 14) == "KHR_materials_") addUnsupported(s, std::string(ext));
+            // The material extensions the model loader maps onto OpenPBR (docs/specs/2026-10-29-openpbr-materials-design.md,
+            // section 4); any other is listed.
+            static constexpr std::string_view kShaded[] = {"KHR_materials_emissive_strength", "KHR_materials_ior",
+                                                           "KHR_materials_specular", "KHR_materials_clearcoat",
+                                                           "KHR_materials_sheen"};
+            if (ext.substr(0, 14) == "KHR_materials_" && std::find(std::begin(kShaded), std::end(kShaded), ext) == std::end(kShaded))
+                addUnsupported(s, std::string(ext));
         }
     }
     for (const char* kind : {"skins", "animations"}) {

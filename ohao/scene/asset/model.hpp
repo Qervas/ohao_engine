@@ -101,6 +101,13 @@ public:
     std::vector<glm::vec3> materialSpecularColor;
     std::vector<glm::vec3> materialEmissionColor;
     std::vector<float> materialEmissionStrength;
+    // OpenPBR step 2 from KHR_materials_clearcoat (coat_weight, coat_roughness; glTF's coat has
+    // IOR 1.5 and no darkening) and KHR_materials_sheen (fuzz_color, fuzz_roughness; fuzz_weight 1
+    // where the colour is not black). Their factors; the textures are a known gap.
+    std::vector<float> materialCoatWeight;
+    std::vector<float> materialCoatRoughness;
+    std::vector<glm::vec3> materialFuzzColor;
+    std::vector<float> materialFuzzRoughness;
 
     // Per-material texture data (RGBA pixels, decoded from GLTF images)
     struct TextureData {

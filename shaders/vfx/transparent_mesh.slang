@@ -10,6 +10,7 @@
 import shared.layout;
 import includes.lighting.clustered_lights;
 import material.openpbr;
+import material.material_layers;
 
 // The bindless table at its size (BindlessTextureManager's 4096): Slang decorates an unsized
 // resource array with an ArrayStride that spirv-val rejects (VUID-StandaloneSpirv-None-10684).
@@ -75,6 +76,11 @@ float sunVisibility(float3 p, float3 n)
 }
 
 [shader("fragment")]
+struct TransparentTextures : IMaterialTextures
+{
+    float4 sample(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].Sample(uv); }
+};
+
 FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
 {
     const uint m = materialOf(i.instance, i.materialSlot);
@@ -136,7 +142,7 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const float3 P = i.worldPos;
     const float3 V = normalize(pc.camera.xyz - P);
     const float viewDepth = -mul(pc.view, float4(P, 1.0)).z;
-    MaterialInputs mi;
+    MaterialInputs mi = defaultMaterialInputs();
     mi.baseColor = albedo;
     mi.baseWeight = row5.z;
     mi.baseMetalness = metallic;
@@ -145,7 +151,19 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     mi.specularColor = specularColor;
     mi.specularRoughness = roughness;
     mi.specularIor = row5.x;
-    const Surface surface = makeSurface(P, N, V, mi);
+    const uint lr = m * kMaterialRows + kLayerRowFirst;
+    TransparentTextures tex;
+    applyLayerRows(mi, matRows[lr], matRows[lr + 1u], matRows[lr + 2u], matRows[lr + 3u], matRows[lr + 4u], i.uv, tex);
+    float3 tangent = float3(0.0);
+    if (mi.specularRoughnessAnisotropy > 0.0 || (mi.coatWeight > 0.0 && mi.coatRoughnessAnisotropy > 0.0))
+    {
+        const float3 tp = i.tangent.xyz - N * dot(N, i.tangent.xyz);
+        float3 b2;
+        if (dot(tp, tp) > 1e-12) tangent = normalize(tp);
+        else normalBasis(N, tangent, b2);
+        tangent = rotatedTangent(N, tangent, matRows[lr + 3u].z);
+    }
+    const Surface surface = makeSurface(P, N, V, mi, tangent);
     OpenPBRTables tables;
     tables.data = openpbrTables;
     const bool clustered = (pc.config.y & 1u) != 0u;

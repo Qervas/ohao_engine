@@ -10,6 +10,7 @@
 // import rt.alpha_test;
 import shared.layout;
 import material.openpbr;
+import material.material_layers;
 
 [[vk::binding(0, 1)]] StructuredBuffer<float4> atInstances;   // kInstanceGpuStride / 16 a slot
 [[vk::binding(1, 1)]] StructuredBuffer<uint> atMaterialRefs;
@@ -92,6 +93,11 @@ float4 sampleAt(uint index, float2 uv)
     return atTextures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0);
 }
 
+struct HitTextures : IMaterialTextures
+{
+    float4 sample(uint index, float2 uv) { return sampleAt(index, uv); }
+};
+
 HitMaterial hitMaterial(uint slot, uint primitive, float2 bary)
 {
     const uint stride = kInstanceGpuStride / 16u;
@@ -106,6 +112,7 @@ HitMaterial hitMaterial(uint slot, uint primitive, float2 bary)
     const float2 uv = vertexUv(mesh.x + atIndices[base]) * (1.0 - bary.x - bary.y) +
                       vertexUv(mesh.x + atIndices[base + 1u]) * bary.x + vertexUv(mesh.x + atIndices[base + 2u]) * bary.y;
     HitMaterial h;
+    h.inputs = defaultMaterialInputs();
     h.inputs.baseColor = row0.rgb;
     if (asuint(row0.w) < 4096u) h.inputs.baseColor *= sampleAt(asuint(row0.w), uv).rgb;
     float roughness = row1.x, metalness = row1.y;
@@ -126,5 +133,9 @@ HitMaterial hitMaterial(uint slot, uint primitive, float2 bary)
     h.inputs.specularIor = row5.x;
     h.emission = row6.rgb * row2.y;
     if (asuint(row1.w) < 4096u) h.emission *= sampleAt(asuint(row1.w), uv).rgb;
+    HitTextures tex;
+    const uint r = m + kLayerRowFirst;
+    applyLayerRows(h.inputs, atMaterials[r], atMaterials[r + 1u], atMaterials[r + 2u], atMaterials[r + 3u],
+                   atMaterials[r + 4u], uv, tex);
     return h;
 }

@@ -22,18 +22,23 @@ namespace layout {
 inline constexpr std::size_t kLightDataBytes       = 128;
 inline constexpr std::size_t kGPULightBytes        = 80;  // 5 * vec4
 inline constexpr std::size_t kPTPushConstantsBytes = 256;
-inline constexpr std::size_t kMaterialVec4s        = 7;   // gpu::shared::kMaterialRows
+inline constexpr std::size_t kMaterialVec4s        = 12;  // gpu::shared::kMaterialRows
 inline constexpr std::size_t kMaterialBytes        = kMaterialVec4s * sizeof(glm::vec4);
 
 // ─── Material SSBO packing (render::MaterialTable; core/gbuffer.slang, rt/path_tracer.slang) ─
 //
-// matColors[matID * 7 + 0] = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
-// matColors[matID * 7 + 1] = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
-// matColors[matID * 7 + 2] = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
-// matColors[matID * 7 + 3] = vec4(alphaMode, alphaCutoff, opacity, baseColorAlpha)
-// matColors[matID * 7 + 4] = vec4(specularColor.rgb, specularWeight)                 (OpenPBR)
-// matColors[matID * 7 + 5] = vec4(specularIor, diffuseRoughness, baseWeight, specularTexIdx)
-// matColors[matID * 7 + 6] = vec4(emissionColor.rgb, specularColorTexIdx)
+// matColors[matID * 12 + 0]  = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
+// matColors[matID * 12 + 1]  = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
+// matColors[matID * 12 + 2]  = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
+// matColors[matID * 12 + 3]  = vec4(alphaMode, alphaCutoff, opacity, baseColorAlpha)
+// matColors[matID * 12 + 4]  = vec4(specularColor.rgb, specularWeight)                 (OpenPBR)
+// matColors[matID * 12 + 5]  = vec4(specularIor, diffuseRoughness, baseWeight, specularTexIdx)
+// matColors[matID * 12 + 6]  = vec4(emissionColor.rgb, specularColorTexIdx)
+// matColors[matID * 12 + 7]  = vec4(coatColor.rgb, coatWeight)                         (OpenPBR step 2)
+// matColors[matID * 12 + 8]  = vec4(coatRoughness, coatAnisotropy, coatIor, coatDarkening)
+// matColors[matID * 12 + 9]  = vec4(fuzzColor.rgb, fuzzWeight)
+// matColors[matID * 12 + 10] = vec4(fuzzRoughness, specularAnisotropy, tangentRotation, 0)
+// matColors[matID * 12 + 11] = vec4(coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex)
 
 struct MaterialGpuPack {
     static constexpr std::size_t kSlots     = kMaterialVec4s;
@@ -47,6 +52,11 @@ struct MaterialGpuPack {
     static constexpr int kSpecularSlot  = 4;
     static constexpr int kOpenPBRSlot   = 5;
     static constexpr int kEmissionSlot  = 6;
+    static constexpr int kCoatSlot      = 7;
+    static constexpr int kCoatRoughSlot = 8;
+    static constexpr int kFuzzSlot      = 9;
+    static constexpr int kLayerSlot     = 10;
+    static constexpr int kLayerTexSlot  = 11;
 
     /// Byte offset of material `id` in the SSBO.
     [[nodiscard]] static constexpr std::size_t byteOffset(uint32_t materialId) noexcept {
@@ -59,9 +69,9 @@ struct MaterialGpuPack {
     }
 };
 
-static_assert(MaterialGpuPack::kBytes == 112, "material pack is 7 * 16 bytes");
-static_assert(MaterialGpuPack::byteOffset(2) == 224);
-static_assert(MaterialGpuPack::vec4Count(4) == 28);
+static_assert(MaterialGpuPack::kBytes == 192, "material pack is 12 * 16 bytes");
+static_assert(MaterialGpuPack::byteOffset(2) == 384);
+static_assert(MaterialGpuPack::vec4Count(4) == 48);
 
 template<GpuPod T>
 [[nodiscard]] consteval std::size_t gpu_sizeof() noexcept {

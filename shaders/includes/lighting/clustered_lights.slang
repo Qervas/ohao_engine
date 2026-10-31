@@ -1,6 +1,6 @@
 // The clustered light loop of the deferred frame and the forward passes (core/deferred_lighting.slang,
 // vfx/transparent_mesh.slang, vfx/expand.slang): the froxel lists, each light's attenuation, and the
-// surface's response through OpenPBR's base (material/openpbr.slang), the BSDF the path tracer
+// surface's response through OpenPBR (material/openpbr.slang's OpenPBRSurface), the BSDF the path tracer
 // samples. A sphere light's specular is its sphere's (the representative point, the GGX lobe widened
 // by its angular size) and its diffuse is the centre's; a rectangle's diffuse is its exact
 // irradiance and its specular the representative point's.
@@ -15,7 +15,7 @@ static const float kPi = 3.14159265359;
 static const float kInvPi = 0.31830988618;
 static const float kEpsilon = 1e-6;
 
-// A shaded point: its frame (z the shading normal) and its BSDF.
+// A shaded point: its frame (z the shading normal; x an anisotropic material's tangent) and its BSDF.
 struct Surface
 {
     float3 position;
@@ -23,27 +23,36 @@ struct Surface
     float3 view;      // toward the viewer
     float3 t, b;
     float3 wo;        // the view in the local frame
-    OpenPBRBase bsdf;
+    OpenPBRSurface bsdf;
 
     float3 toLocal(float3 v) { return float3(dot(v, t), dot(v, b), dot(v, normal)); }
 };
 
-Surface makeSurface(float3 position, float3 normal, float3 view, MaterialInputs m)
+// `tangent`: an anisotropic material's (unit, in the plane of the normal), else 0 (any frame).
+Surface makeSurface(float3 position, float3 normal, float3 view, MaterialInputs m, float3 tangent = float3(0.0))
 {
     Surface s;
     s.position = position;
     s.normal = normalize(normal);
     s.view = normalize(view);
-    const float sign = s.normal.z >= 0.0 ? 1.0 : -1.0;   // Duff et al. 2017
-    const float a = -1.0 / (sign + s.normal.z);
-    const float c = s.normal.x * s.normal.y * a;
-    s.t = float3(1.0 + sign * s.normal.x * s.normal.x * a, sign * c, -sign * s.normal.x);
-    s.b = float3(c, sign + s.normal.y * s.normal.y * a, -s.normal.y);
+    if (dot(tangent, tangent) > 0.0)
+    {
+        s.t = tangent;
+        s.b = cross(s.normal, tangent);
+    }
+    else
+    {
+        const float sign = s.normal.z >= 0.0 ? 1.0 : -1.0;   // Duff et al. 2017
+        const float a = -1.0 / (sign + s.normal.z);
+        const float c = s.normal.x * s.normal.y * a;
+        s.t = float3(1.0 + sign * s.normal.x * s.normal.x * a, sign * c, -sign * s.normal.x);
+        s.b = float3(c, sign + s.normal.y * s.normal.y * a, -s.normal.y);
+    }
     // A view below the shading normal (a normal map tilting away) is taken at the horizon.
     float3 wo = s.toLocal(s.view);
     wo.z = max(wo.z, 1e-4);
     s.wo = normalize(wo);
-    s.bsdf = OpenPBRBase(m);
+    s.bsdf = OpenPBRSurface(m);
     return s;
 }
 
@@ -62,10 +71,10 @@ float3 evaluateSphere(Surface s, float3 toLight, float radius, float3 radiance, 
     const float3 R = reflect(-s.view, s.normal);
     const float3 centerToRay = dot(toLight, R) * R - toLight;
     const float3 closest = toLight + centerToRay * clamp(radius / max(length(centerToRay), kEpsilon), 0.0, 1.0);
-    const float aSphere = clamp(s.bsdf.alpha + radius / (2.0 * length(toLight)), 0.0, 1.0);
+    const float da = radius / (2.0 * length(toLight));
     float3 specular, diffuse, unused;
     s.bsdf.evalLobes(s.wo, s.toLocal(L), t, unused, diffuse);
-    s.bsdf.withRoughness(sqrt(aSphere)).evalLobes(s.wo, s.toLocal(normalize(closest)), t, specular, unused);
+    s.bsdf.widened(da).evalLobes(s.wo, s.toLocal(normalize(closest)), t, specular, unused);
     return (specular + diffuse) * radiance;
 }
 
@@ -116,8 +125,7 @@ float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, O
     if (cosLight > 0.0)
     {
         const float rEq = sqrt(area * cosLight / kPi);
-        const float aRect = clamp(s.bsdf.alpha + rEq / (2.0 * dist), 0.0, 1.0);
-        s.bsdf.withRoughness(sqrt(aRect)).evalLobes(s.wo, s.toLocal(specL), t, specular, unused);
+        s.bsdf.widened(rEq / (2.0 * dist)).evalLobes(s.wo, s.toLocal(specL), t, specular, unused);
         specular *= area * cosLight / (dist * dist);
     }
     return (specular + diffuse) * Le;

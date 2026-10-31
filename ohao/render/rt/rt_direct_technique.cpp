@@ -140,6 +140,7 @@ bool RTDirectTechnique::createDescriptorResources() {
     sample.push_back(layoutBinding(42, buffer));
     sample.push_back(layoutBinding(43, sampled));
     sample.push_back(layoutBinding(44, buffer));
+    sample.push_back(layoutBinding(45, sampled));   // the G-buffer's OpenPBR layers
     std::vector<VkDescriptorBindingFlags> flags(sample.size(), 0);
     flags[12] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;   // a frame without textures writes none
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
@@ -162,7 +163,7 @@ bool RTDirectTechnique::createDescriptorResources() {
 
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT},
-        {sampled, (7 + 1 * 4) * MAX_FRAMES_IN_FLIGHT},
+        {sampled, (8 + 1 * 4) * MAX_FRAMES_IN_FLIGHT},
         {storage, (15 + 12 * 4) * MAX_FRAMES_IN_FLIGHT},
         {buffer, 5 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_textureCapacity * MAX_FRAMES_IN_FLIGHT},
@@ -227,6 +228,7 @@ void RTDirectTechnique::writeSampleSet(const DirectInput& input) {
     const VkDescriptorBufferInfo emissiveLights{input.emissive->lightBuffer(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo emissiveRanges{input.emissive->rangeBuffer(m_slot), 0, VK_WHOLE_SIZE};
     const VkDescriptorImageInfo power{VK_NULL_HANDLE, input.emissive->powerView(), kGeneral};
+    const VkDescriptorImageInfo layers{VK_NULL_HANDLE, input.layersBuffer, kReadOnly};
     const VkImageView mean[2] = {reference ? m_meanDiffuse.view : m_meanDummy.view,
                                  reference ? m_meanSpecular.view : m_meanDummy.view};
     // 8-9 last frame's reservoirs, 13-16 this frame's, 17-20 the light, 21-24 the surfaces (this
@@ -258,6 +260,9 @@ void RTDirectTechnique::writeSampleSet(const DirectInput& input) {
     w = descriptorWrite(set, 43, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     w.pImageInfo = &power;
     writes.push_back(w);
+    w = descriptorWrite(set, 45, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    w.pImageInfo = &layers;
+    writes.push_back(w);
     for (const auto& [binding, view] : storageViews) images.push_back({VK_NULL_HANDLE, view, kGeneral});
     for (size_t i = 0; i < std::size(storageViews); ++i) {
         w = descriptorWrite(set, storageViews[i].first, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
@@ -278,7 +283,8 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
     m_rendered = false;
     if (!m_initial || input.tlas == VK_NULL_HANDLE || input.alphaTables == VK_NULL_HANDLE ||
         input.textures == VK_NULL_HANDLE || input.lightData == VK_NULL_HANDLE || input.materials == VK_NULL_HANDLE ||
-        !input.emissive || input.frameSlot >= MAX_FRAMES_IN_FLIGHT || input.velocityBuffer == VK_NULL_HANDLE)
+        !input.emissive || input.frameSlot >= MAX_FRAMES_IN_FLIGHT || input.velocityBuffer == VK_NULL_HANDLE ||
+        input.layersBuffer == VK_NULL_HANDLE)
         return;
     const bool reference = input.quality == RenderQuality::Reference;
     if (reference && !ensureReferenceImages()) return;

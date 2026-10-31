@@ -137,6 +137,8 @@ void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, 
     clearValues[kEmissive].color = {{0.0f, 0.0f, 0.0f, 0.0f}};   // Emitted radiance
     clearValues[kSpecular].color = {{0.0f, 0.0f, 0.0f, 0.0f}};   // OpenPBR's specular
     clearValues[kOpenPBR].color = {{0.0f, 0.0f, 0.0f, 0.0f}};    // OpenPBR's base
+    clearValues[kLayers].color.uint32[0] = 0u;                     // OpenPBR's layers: none
+    clearValues[kLayers].color.uint32[1] = 0u;
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -454,7 +456,8 @@ bool GBufferPass::createGBuffer() {
         {VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT},
         {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
-        {VK_FORMAT_R8G8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT}
+        {VK_FORMAT_R8G8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
+        {VK_FORMAT_R32G32_UINT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT}
     }};
 
     for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
@@ -536,6 +539,7 @@ bool GBufferPass::createRenderPass() {
         VK_FORMAT_R16G16B16A16_SFLOAT,   // emitted radiance
         VK_FORMAT_R8G8B8A8_UNORM,        // OpenPBR's specular: specular_color, specular_weight / 1.5
         VK_FORMAT_R8G8_UNORM,            // OpenPBR's base: base_diffuse_roughness, (specular_ior - 1) / 2.55
+        VK_FORMAT_R32G32_UINT,           // OpenPBR's layers: material index, anisotropy and its angle; coat, fuzz
     };
     const auto make = [&](bool late, VkRenderPass& out) {
         std::array<VkAttachmentDescription, GBUFFER_COUNT> attachments{};
@@ -556,13 +560,14 @@ bool GBufferPass::createRenderPass() {
                                  : between;
         }
 
-        // The fragment shader's outputs 0-3 are attachments 0-3, outputs 4-6 the emissive, specular
-        // and OpenPBR ones (past the depth attachment)
+        // The fragment shader's outputs 0-3 are attachments 0-3, outputs 4-7 the emissive, specular,
+        // OpenPBR and layers ones (past the depth attachment)
         std::array<VkAttachmentReference, GBUFFER_COUNT - 1> colorRefs{};
         for (uint32_t i = 0; i < 4; ++i) colorRefs[i] = {i, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         colorRefs[4] = {kEmissive, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         colorRefs[5] = {kSpecular, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         colorRefs[6] = {kOpenPBR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        colorRefs[7] = {kLayers, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         const VkAttachmentReference depthRef{kDepth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
         VkSubpassDescription subpass{};

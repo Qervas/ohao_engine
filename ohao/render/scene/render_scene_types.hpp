@@ -92,6 +92,24 @@ struct MaterialDesc {
     float alphaCutoff{0.5f};
     float opacity{1.0f};
     float baseAlpha{1.0f};
+    // OpenPBR step 2 (table rows 7-11, shaders/material/material_layers.slang): the coat, the fuzz,
+    // specular anisotropy and the tangent's rotation (turns); glTF's KHR_materials_clearcoat and
+    // _sheen textures.
+    float specularAnisotropy{0.0f};
+    float coatWeight{0.0f};
+    glm::vec3 coatColor{1.0f};
+    float coatRoughness{0.0f};
+    float coatAnisotropy{0.0f};
+    float coatIor{1.6f};
+    float coatDarkening{1.0f};
+    float fuzzWeight{0.0f};
+    glm::vec3 fuzzColor{1.0f};
+    float fuzzRoughness{0.5f};
+    float tangentRotation{0.0f};
+    uint32_t coatTex{kNoTexture};            // R: coat_weight
+    uint32_t coatRoughnessTex{kNoTexture};   // G: coat_roughness
+    uint32_t fuzzColorTex{kNoTexture};       // RGB: fuzz_color (sRGB)
+    uint32_t fuzzRoughnessTex{kNoTexture};   // A: fuzz_roughness
 };
 
 struct InstanceDesc {

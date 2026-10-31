@@ -16,10 +16,15 @@
 //                                                                         R8G8B8A8_UNORM
 //   6  OpenPBR's base_diffuse_roughness, (specular_ior - 1) / 2.55 (1.5 is code 50 exactly)
 //                                                                         R8G8_UNORM
+//   7  OpenPBR's layers (material/material_layers.slang packLayers): the material's index, the
+//      anisotropy and its tangent's angle; the coat's and the fuzz's weight and roughness
+//                                                                         R32G32_UINT
 // A fragment of a subsurface material flags its 16x16 tile for the SSS pass (postprocess/sss.slang).
 import shared.layout;
 import includes.scene.scene_data;
 import includes.scene.gbuffer_vertex;
+import material.openpbr;
+import material.material_layers;
 
 // Set 0: the bindless textures (at their size: an unsized array gets an ArrayStride spirv-val rejects).
 [[vk::binding(0, 0)]] Sampler2D textures[4096];
@@ -87,6 +92,7 @@ struct GBufferOut
     float4 emissive : SV_Target4;
     float4 specular : SV_Target5;
     float2 openPBR : SV_Target6;
+    uint2 layers : SV_Target7;
 };
 
 // Flags `tile` with `bit` and, the first time, appends it to the list whose count is header word
@@ -131,6 +137,22 @@ float2 encodeNormalOctahedron(float3 n)
 float4 sampleTexture(uint index, float2 uv)
 {
     return textures[NonUniformResourceIndex(index)].Sample(uv);
+}
+
+struct GBufferTextures : IMaterialTextures
+{
+    float4 sample(uint index, float2 uv) { return sampleTexture(index, uv); }
+};
+
+// The octahedral decode lighting applies to target 1 (includes/lighting/gbuffer_material.slang).
+float3 decodeOctahedron(float2 e)
+{
+    const float2 f = e * 2.0 - 1.0;
+    float3 n = float3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    const float t = saturate(-n.z);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
 }
 
 // The material's G-buffer values at this fragment; `masked` discards below the cutoff.
@@ -263,6 +285,28 @@ GBufferOut shade(GVertex v, bool frontFacing, float4 fragCoord, bool masked)
     if (specularColorTexIdx < 4096u) specularColor *= sampleTexture(specularColorTexIdx, v.texCoord).rgb;
     o.specular = float4(clamp(specularColor, 0.0, 1.0), clamp(specularWeight / 1.5, 0.0, 1.0));
     o.openPBR = float2(clamp(row5.y, 0.0, 1.0), clamp((row5.x - 1.0) / 2.55, 0.0, 1.0));
+
+    // OpenPBR's layers. The tangent's angle is taken in the basis of the normal lighting decodes
+    // (target 1 holds it at half precision), so both read the same direction.
+    const uint lr = m * kMaterialRows + kLayerRowFirst;
+    MaterialInputs layers = defaultMaterialInputs();
+    GBufferTextures tex;
+    applyLayerRows(layers, matRows[lr], matRows[lr + 1u], matRows[lr + 2u], matRows[lr + 3u], matRows[lr + 4u],
+                   v.texCoord, tex);
+    const float3 Nd = decodeOctahedron(encodedNormal);
+    float3 T = float3(0.0);
+    if (layers.specularRoughnessAnisotropy > 0.0 || (layers.coatWeight > 0.0 && layers.coatRoughnessAnisotropy > 0.0))
+    {
+        const float3 tp = v.tangent.xyz - Nd * dot(Nd, v.tangent.xyz);
+        if (dot(tp, tp) > 1e-12) T = normalize(tp);
+        else
+        {
+            float3 b2;
+            normalBasis(Nd, T, b2);
+        }
+        T = rotatedTangent(Nd, T, matRows[lr + 3u].z);
+    }
+    o.layers = packLayers(m, layers, Nd, T);
     return o;
 }
 

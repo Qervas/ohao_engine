@@ -255,9 +255,10 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 15> imageInfos{};
-    std::array<VkWriteDescriptorSet, 19> writes{};
+    std::array<VkDescriptorImageInfo, 16> imageInfos{};
+    std::array<VkWriteDescriptorSet, 21> writes{};
     VkDescriptorBufferInfo tablesInfo{};
+    VkDescriptorBufferInfo materialsInfo{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
     VkDescriptorBufferInfo clusterInfo{};
@@ -377,6 +378,19 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     writes[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[17].descriptorCount = 1;
     writes[17].pBufferInfo = &tablesInfo;
+    // OpenPBR's layers (binding 23, the G-buffer's uint target) and the material table they index
+    // (binding 24)
+    const VkImageView layers = m_gbufferPass->getLayersView();
+    imageWrite(19, 23, 15, layers != VK_NULL_HANDLE ? layers : fallbackView, m_gbufferSampler);
+    materialsInfo.buffer = m_materialBuffer != VK_NULL_HANDLE ? m_materialBuffer : m_dummyBuffer;
+    materialsInfo.offset = 0;
+    materialsInfo.range = VK_WHOLE_SIZE;
+    writes[20].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[20].dstSet = set;
+    writes[20].dstBinding = 24;
+    writes[20].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[20].descriptorCount = 1;
+    writes[20].pBufferInfo = &materialsInfo;
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -526,6 +540,7 @@ bool DeferredLightingPass::createDescriptors() {
         {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {22, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {23, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
     };
     std::array<VkDescriptorSetLayoutBinding, std::size(kBindings)> bindings{};
     for (std::size_t i = 0; i < bindings.size(); ++i) {
@@ -544,14 +559,15 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 15 image samplers, 1 UBO (cascade data), 3 SSBOs (lights, froxels, OpenPBR's tables)
+    // Descriptor pool — 16 image samplers, 1 UBO (cascade data), 4 SSBOs (lights, froxels, OpenPBR's
+    // tables, the materials)
     std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 15 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[0].descriptorCount = 16 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[2].descriptorCount = 3 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[2].descriptorCount = 4 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

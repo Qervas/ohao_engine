@@ -35,6 +35,7 @@ struct DirectInput {
     VkImageView albedoBuffer;      // GBuffer2: albedo, AO
     VkImageView specularBuffer;    // the G-buffer's specular_color, specular_weight / 1.5
     VkImageView openpbrBuffer;     // the G-buffer's base_diffuse_roughness, IOR
+    VkImageView layersBuffer;      // the G-buffer's OpenPBR layers (RG32_UINT)
     VkImageView velocityBuffer;    // GBuffer3: UV motion
     uint32_t width = 0;
     uint32_t height = 0;

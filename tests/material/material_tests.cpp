@@ -16,6 +16,19 @@
 //   t1_white_furnace       a white dielectric (IOR 1.5 and 3) over white EON and a white metal
 //                          reflect what they receive, within 1%, at any roughness and view up to
 //                          85 degrees
+//
+// Step 2 (docs/plans/2026-10-31-openpbr-step2.md, T1): the coat, the fuzz and anisotropy.
+//
+//   t2_defaults            the coat's, the fuzz's and anisotropy's defaults are OpenPBR 1.1.1's
+//   t2_reciprocity         the anisotropic GGX lobe and the coat's lobe are symmetric in (wo, wi)
+//   t2_sampling_chi2       t1_sampling_chi2 over coated, fuzzy, anisotropic and layered materials
+//   t2_albedo              t1_albedo over the same
+//   t2_white_furnace       a white coat (darkening off and on) over a white dielectric and a white
+//                          metal, and white fuzz over a white dielectric, within 1% at any
+//                          roughness and view up to 85 degrees
+//   t2_aniso_furnace       a white anisotropic metal (0.5, 0.9) seen along and across the tangent
+//                          (2^20 samples): within 1% to 60 degrees, 5% at 85, at roughness 0.01 to
+//                          0.6 (past that alpha_t leaves GGX's tables at alpha 1, a known gap)
 #include "openpbr_cpu.hpp"
 #include "render/material/openpbr_tables.hpp"
 #include "common/harness.hpp"
@@ -80,10 +93,14 @@ std::array<double, 3> meanWeight(const Material& m, Float3 wo, unsigned n, uint3
 }
 
 std::string describe(const Material& m, float mu) {
-    char buf[160];
-    std::snprintf(buf, sizeof buf, "metal %.2g rough %.2g diffRough %.2g weight %.2g ior %.2g color %.2g mu %.2g",
-                  m.baseMetalness, m.specularRoughness, m.baseDiffuseRoughness, m.specularWeight, m.specularIor,
-                  m.baseColor[0], mu);
+    char buf[320];
+    std::snprintf(buf, sizeof buf,
+                  "metal %.2g rough %.2g aniso %.2g diffRough %.2g weight %.2g ior %.2g color %.2g coat %.2g/%.2g/%.2g "
+                  "ior %.2g color %.2g dark %.2g fuzz %.2g/%.2g color %.2g mu %.2g",
+                  m.baseMetalness, m.specularRoughness, m.specularRoughnessAnisotropy, m.baseDiffuseRoughness,
+                  m.specularWeight, m.specularIor, m.baseColor[0], m.coatWeight, m.coatRoughness,
+                  m.coatRoughnessAnisotropy, m.coatIor, m.coatColor[0], m.coatDarkening, m.fuzzWeight, m.fuzzRoughness,
+                  m.fuzzColor[0], mu);
     return buf;
 }
 
@@ -156,6 +173,7 @@ double chi2Tail(double x, double dof) {
 struct Case {
     Material m;
     float mu;
+    double albedoTol{0.005};   // albedo() against the integral of eval()
 };
 
 std::vector<Case> lobeCases() {
@@ -185,11 +203,66 @@ std::vector<Case> lobeCases() {
     return cases;
 }
 
-void t1_sampling_chi2() {
+// Coated, fuzzy, anisotropic and layered materials (step 2).
+std::vector<Case> layeredCases() {
+    std::vector<Case> cases;
+    for (float mu : {0.95f, 0.5f, 0.15f}) {
+        Material car;   // a car paint: a smooth coat over a rough metal
+        car.baseMetalness = 1.0f;
+        car.baseColor = {0.1f, 0.25f, 0.8f};
+        car.specularRoughness = 0.4f;
+        car.coatWeight = 1.0f;
+        car.coatRoughness = 0.25f;   // the grid's 6 x 6 points a bin cannot integrate a sharper peak
+        // At 81 degrees the coat's EssD (16 points of mu) reads 0.54% low: 1% for coats at grazing.
+        cases.push_back({car, mu, mu < 0.2f ? 0.01 : 0.005});
+        Material lacquer;   // a tinted, half-rough, partial coat over a dielectric
+        lacquer.baseColor = {0.6f, 0.35f, 0.15f};
+        lacquer.coatWeight = 0.7f;
+        lacquer.coatRoughness = 0.3f;
+        lacquer.coatColor = {0.9f, 0.7f, 0.4f};
+        lacquer.coatIor = 1.5f;
+        // A coloured coat's absorption is exp-weighted along wi; albedo() takes it along the
+        // diffuse's mean path (Jensen's gap): 1%.
+        cases.push_back({lacquer, mu, 0.01});
+        // A dark base's albedo is mostly its 4% specular, whose table (EssD, step 1) reads 0.8% off at
+        // mu 0.95 there: the base alone shows it, so the fuzz over it is held to 1% too.
+        Material dark;
+        dark.baseColor = {0.3f, 0.02f, 0.05f};
+        cases.push_back({dark, mu, 0.01});
+        Material velvet;
+        velvet.baseColor = {0.3f, 0.02f, 0.05f};
+        velvet.fuzzWeight = 1.0f;
+        velvet.fuzzColor = {0.9f, 0.2f, 0.3f};
+        velvet.fuzzRoughness = 0.5f;
+        cases.push_back({velvet, mu, 0.01});
+        Material silk = velvet;
+        silk.fuzzRoughness = 0.15f;
+        cases.push_back({silk, mu, 0.01});
+        Material brushed;
+        brushed.baseMetalness = 1.0f;
+        brushed.baseColor = {0.9f, 0.9f, 0.88f};
+        brushed.specularRoughness = 0.4f;
+        brushed.specularRoughnessAnisotropy = 0.6f;   // narrower: past the grid's 6 x 6 points a bin
+        // An anisotropic lobe's albedos read the isotropic tables at AnisoRough, whose E1 is exact; the
+        // Fresnel-weighted terms beside it are not: a coloured anisotropic metal reads up to 1.9% high at
+        // 60 degrees (a known gap; white ones, the furnace, are exact).
+        // Past 60 degrees the gap grows (20% for this metal at 81, 46% for an anisotropic coat alone):
+        // anisotropic lobes are held to 60 until their Fresnel-weighted tables exist.
+        if (mu >= 0.5f) cases.push_back({brushed, mu, 0.02});
+        Material all = car;   // everything at once, the coat anisotropic too
+        all.specularRoughnessAnisotropy = 0.5f;
+        all.coatRoughness = 0.4f;   // the grid's 6 x 6 points a bin hold alpha >= ~0.09 each way
+        all.coatRoughnessAnisotropy = 0.5f;
+        all.fuzzWeight = 0.5f;
+        all.fuzzRoughness = 0.3f;
+        if (mu >= 0.5f) cases.push_back({all, mu, 0.04});   // the gap above, in the base and the coat both: 3.8% at 60 degrees
+    }
+    return cases;
+}
+
+void samplingChi2(const std::vector<Case>& cases, uint32_t seed) {
     constexpr unsigned kTheta = 32, kPhi = 64, kSub = 6, kN = 1u << 20;
-    const std::vector<Case> cases = lobeCases();
     const double threshold = 1.0 - std::pow(1.0 - 0.01, 1.0 / cases.size());   // Sidak
-    uint32_t seed = 11u;
     for (const Case& c : cases) {
         // Expected counts: the pdf integrated over each bin (cos theta uniform bins, phi bins).
         std::vector<Item> grid;
@@ -273,18 +346,116 @@ void t1_sampling_chi2() {
     }
 }
 
-void t1_albedo() {
-    uint32_t seed = 23u;
-    for (const Case& c : lobeCases()) {
+void t1_sampling_chi2() { samplingChi2(lobeCases(), 11u); }
+
+void albedoMatchesIntegral(const std::vector<Case>& cases, uint32_t seed, unsigned samples) {
+    for (const Case& c : cases) {
         const Item a = one(Op::Albedo, c.m, view(c.mu), {});
-        const auto mc = meanWeight(c.m, view(c.mu), 1u << 18, seed++);
+        const auto mc = meanWeight(c.m, view(c.mu), samples, seed++);
         for (int ch = 0; ch < 3; ++ch) {
             const double rel = std::abs(a.r0[ch] - mc[ch]) / std::max(mc[ch], 1e-3);
-            if (!(rel <= 0.005))
+            if (!(rel <= c.albedoTol))
                 std::printf("\n    albedo %.5f vs integral %.5f: %s", a.r0[ch], mc[ch], describe(c.m, c.mu).c_str());
-            CHECK(rel <= 0.005, ("albedo() is not the integral of eval(): " + describe(c.m, c.mu)).c_str());
+            CHECK(rel <= c.albedoTol, ("albedo() is not the integral of eval(): " + describe(c.m, c.mu)).c_str());
         }
     }
+}
+
+void t1_albedo() { albedoMatchesIntegral(lobeCases(), 23u, 1u << 18); }
+
+void t2_defaults() {
+    const Material m;
+    CHECK(m.coatWeight == 0.0f && m.coatColor[0] == 1.0f && m.coatRoughness == 0.0f, "coat weight, colour, roughness");
+    CHECK(m.coatRoughnessAnisotropy == 0.0f && m.coatIor == 1.6f && m.coatDarkening == 1.0f, "coat anisotropy, ior, darkening");
+    CHECK(m.fuzzWeight == 0.0f && m.fuzzColor[0] == 1.0f && m.fuzzRoughness == 0.5f, "fuzz");
+    CHECK(m.specularRoughnessAnisotropy == 0.0f, "specular_roughness_anisotropy 0");
+}
+
+void t2_reciprocity() {
+    uint32_t seed = 9u;
+    for (int k = 0; k < 2000; ++k) {
+        Material m;
+        m.specularRoughness = 0.05f + 0.95f * rnd(seed);
+        m.specularRoughnessAnisotropy = rnd(seed);
+        m.coatRoughness = 0.05f + 0.95f * rnd(seed);
+        m.coatRoughnessAnisotropy = rnd(seed);
+        m.coatIor = 1.0f + 2.0f * rnd(seed);
+        auto dir = [&] {
+            const float mu = 0.02f + 0.98f * rnd(seed), phi = 6.2831853f * rnd(seed);
+            const float s = std::sqrt(1.0f - mu * mu);
+            return Float3{s * std::cos(phi), s * std::sin(phi), mu};
+        };
+        const Float3 a = dir(), b = dir();
+        const Item ab = one(Op::Lobes, m, a, b), ba = one(Op::Lobes, m, b, a);
+        CHECK(std::abs(ab.r0[0] - ba.r0[0]) <= 1e-4f * std::max(1.0f, std::abs(ab.r0[0])), "anisotropic GGX is not reciprocal");
+        CHECK(std::abs(ab.r1[1] - ba.r1[1]) <= 1e-4f * std::max(1.0f, std::abs(ab.r1[1])), "the coat's lobe is not reciprocal");
+    }
+}
+
+void t2_sampling_chi2() { samplingChi2(layeredCases(), 13u); }
+
+void t2_albedo() { albedoMatchesIntegral(layeredCases(), 29u, 1u << 19); }
+
+void t2_white_furnace() {
+    uint32_t seed = 37u;
+    for (float rough : {0.01f, 0.3f, 0.6f, 1.0f})
+        for (float deg : {0.0f, 30.0f, 60.0f, 85.0f}) {
+            const float mu = std::cos(deg * static_cast<float>(kPi) / 180.0f);
+            Material white;
+            white.baseColor = {1.0f, 1.0f, 1.0f};
+            std::vector<Material> ms;
+            for (float dark : {0.0f, 1.0f})
+                for (float metal : {0.0f, 1.0f}) {
+                    Material c = white;
+                    c.baseMetalness = metal;
+                    c.coatWeight = 1.0f;
+                    c.coatRoughness = rough;
+                    c.coatDarkening = dark;
+                    ms.push_back(c);
+                }
+            Material half = white;   // half a coat
+            half.coatWeight = 0.5f;
+            half.coatRoughness = rough;
+            ms.push_back(half);
+            Material fuzz = white;
+            fuzz.fuzzWeight = 1.0f;
+            fuzz.fuzzRoughness = std::max(rough, 0.05f);
+            ms.push_back(fuzz);
+            for (const Material& m : ms) {
+                const Item a = one(Op::Albedo, m, view(mu), {});
+                const auto mc = meanWeight(m, view(mu), 1u << 18, seed++);
+                if (!(std::abs(a.r0[0] - 1.0f) <= 0.01f && std::abs(mc[0] - 1.0) <= 0.01))
+                    std::printf("\n    albedo %.5f integral %.5f: %s", a.r0[0], mc[0], describe(m, mu).c_str());
+                CHECK(std::abs(a.r0[0] - 1.0f) <= 0.01f, ("albedo() is not 1: " + describe(m, mu)).c_str());
+                CHECK(std::abs(mc[0] - 1.0) <= 0.01, ("the integral of eval() is not 1: " + describe(m, mu)).c_str());
+            }
+        }
+}
+
+void t2_aniso_furnace() {
+    uint32_t seed = 41u;
+    for (float aniso : {0.5f, 0.9f})
+        for (float rough : {0.01f, 0.3f, 0.6f})
+            for (float deg : {0.0f, 60.0f, 85.0f})
+                for (float phi : {0.0f, 1.570796f}) {
+                    const float mu = std::cos(deg * static_cast<float>(kPi) / 180.0f);
+                    const float s = std::sqrt(1.0f - mu * mu);
+                    const Float3 wo{s * std::cos(phi), s * std::sin(phi), mu};
+                    Material m;
+                    m.baseColor = {1.0f, 1.0f, 1.0f};
+                    m.baseMetalness = 1.0f;
+                    m.specularRoughness = rough;
+                    m.specularRoughnessAnisotropy = aniso;
+                    // At 85 degrees across the grain the isotropic compensation leaves up to 4.2% (roughness
+                    // 0.6, anisotropy 0.9; a 4x finer AnisoRough left it), a known gap.
+                    const double tol = deg > 60.0f ? 0.05 : 0.01;
+                    const Item a = one(Op::Albedo, m, wo, {});
+                    const auto mc = meanWeight(m, wo, 1u << 20, seed++);
+                    if (!(std::abs(a.r0[0] - 1.0f) <= 0.01f && std::abs(mc[0] - 1.0) <= tol))
+                        std::printf("\n    albedo %.5f integral %.5f phi %.2f: %s", a.r0[0], mc[0], phi, describe(m, mu).c_str());
+                    CHECK(std::abs(a.r0[0] - 1.0f) <= 0.01f, ("albedo() is not 1: " + describe(m, mu)).c_str());
+                    CHECK(std::abs(mc[0] - 1.0) <= tol, ("the integral of eval() is not 1: " + describe(m, mu)).c_str());
+                }
 }
 
 void t1_white_furnace() {
@@ -315,7 +486,7 @@ void t1_white_furnace() {
 } // namespace
 
 int main() {
-    std::printf("material_tests (OpenPBR's base on the CPU)\n");
+    std::printf("material_tests (OpenPBR on the CPU)\n");
     RUN(t1_defaults);
     RUN(t1_fresnel);
     RUN(t1_weight_zero);
@@ -324,5 +495,11 @@ int main() {
     RUN(t1_sampling_chi2);
     RUN(t1_albedo);
     RUN(t1_white_furnace);
+    RUN(t2_defaults);
+    RUN(t2_reciprocity);
+    RUN(t2_sampling_chi2);
+    RUN(t2_albedo);
+    RUN(t2_white_furnace);
+    RUN(t2_aniso_furnace);
     return ohao::test::finish("material_tests");
 }

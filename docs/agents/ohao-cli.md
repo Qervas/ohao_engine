@@ -134,7 +134,7 @@ one output line; every line runs, and the exit code is the worst one seen.
 $ printf '%s\n' '{"method":"world.snapshot","params":{"name":"base"}}' '{"method":"world.step","params":{"frames":30,"dt":0.0333333}}' '{"method":"world.query","params":{"names":["MetalSphere 2"],"fields":["/Transform/rotation"]}}' '{"method":"world.restore","params":{"name":"base"}}' > build/doc_tmp/spin.jsonl
 $ build/Release/ohao run build/doc_tmp/edited.scene.json --script build/doc_tmp/spin.jsonl
 {"method":"scene.load","result":{"entities":22}}
-{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4736}}
+{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":5216}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"world.query","result":{"entities":[{"id":"910a2dec89025cc1","Transform":{"rotation":[0,0.25881878,0,0.96592593]}}],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":1,"frame":0}}
@@ -483,7 +483,7 @@ $ build/Release/ohao.exe schema audio-bank -o build/doc_tmp/audio_bank.schema.js
 | `W_UNKNOWN_COMPONENT` | Warning: an unknown component close to a known name, kept but probably a typo. |
 | `W_UNSAVEABLE_MESH` | Warning: a mesh made in code, with no MeshSource, is not saved. |
 | `W_LEVEL_EXTRAS` | Warning: an unknown lower-case key in a level node's extras (another tool's property). |
-| `W_LEVEL_UNSUPPORTED` | Warning: level content OHAO ignores (skins, animations, morph targets, `KHR_materials_*`, orthographic cameras). |
+| `W_LEVEL_UNSUPPORTED` | Warning: level content OHAO ignores (skins, animations, morph targets, orthographic cameras, `KHR_materials_*` but ior, specular, emissive_strength, clearcoat and sheen). |
 | `W_LEVEL_DYNAMIC_MESH` | Warning: a dynamic body with a `Mesh` collider; it is built as the mesh's convex hull. |
 | `W_COLLIDER_NO_MESH` | Warning: a collider with no size on an entity whose mesh is missing or did not load; no collider. |
 | `W_COLLIDER_SCALE` | Warning: a sphere or capsule collider under a non-uniform scale (axes over 1% apart); it takes the largest axis. |

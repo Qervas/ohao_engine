@@ -66,6 +66,7 @@ import rt.radiance_cache;
 // The reflection: realtime the trace's (rgb radiance, a roughness), reference the output it averages into.
 [[vk::binding(15, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> specOut;
 [[vk::binding(16, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> specRefMean;   // reference
+[[vk::binding(17, 0)]] Texture2D<uint2> gLayers;     // OpenPBR's layers (material/material_layers.slang packLayers)
 [[vk::push_constant]] ConstantBuffer<GITracePush> pc;
 
 static const float kPi = 3.14159265;
@@ -361,7 +362,7 @@ float3 incoming(float3 origin, float3 dir, uint key, uint s, bool feeds, out flo
                                            q.CommittedTriangleBarycentrics());
         OpenPBRTables tables;
         tables.data = openpbrTables;
-        const float3 albedo = OpenPBRBase(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);
+        const float3 albedo = OpenPBRSurface(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);
         const float3 at = origin + dir * q.CommittedRayT();
         float3 ng = hitGeometricNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedObjectToWorld3x4());
         if (dot(ng, dir) > 0.0) ng = -ng;
@@ -442,7 +443,11 @@ void trace(uint3 id : SV_DispatchThreadID)
 
     // The reflection: a direction from the GGX lobe toward the viewer (one below the horizon, which
     // the bounded VNDF rarely draws, is mirrored).
-    const float rough = clamp(gNormal.Load(int3(full, 0)).b, 0.01, 1.0);
+    // Under a coat the ray follows the coat's lobe, the sharp one the eye reads (ruling O8); the base's
+    // specular beneath reuses its radiance.
+    const uint2 layers = gLayers.Load(int3(full, 0));
+    const float rough = (layers.y & 255u) != 0u ? clamp(float((layers.y >> 8u) & 255u) / 255.0, 0.01, 1.0)
+                                                 : clamp(gNormal.Load(int3(full, 0)).b, 0.01, 1.0);
     const float3 V = normalize(pc.cameraPos.xyz - p);
     const float3 wo = normalize(float3(dot(V, t), dot(V, b), max(dot(V, n), 1e-4)));
     const float3 m = ggxSampleBounded(wo, rough * rough, float2(rand01(key, kReflectionRay, 0u), rand01(key, kReflectionRay, 1u)));

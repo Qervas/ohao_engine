@@ -182,6 +182,20 @@ void writeFields(const Material& v, const Material* omit, FieldSink& out) {
         }
     }
     if (!omit || !same(v.geometryOpacity, omit->geometryOpacity)) t.f32("\"geometry_opacity\"", v.geometryOpacity);
+    if (!omit || !same(v.specularRoughnessAnisotropy, omit->specularRoughnessAnisotropy))
+        t.f32("\"specular_roughness_anisotropy\"", v.specularRoughnessAnisotropy);
+    if (!omit || !same(v.coatWeight, omit->coatWeight)) t.f32("\"coat_weight\"", v.coatWeight);
+    if (!omit || !same(v.coatColor, omit->coatColor)) vec3(t, "\"coat_color\"", v.coatColor);
+    if (!omit || !same(v.coatRoughness, omit->coatRoughness)) t.f32("\"coat_roughness\"", v.coatRoughness);
+    if (!omit || !same(v.coatRoughnessAnisotropy, omit->coatRoughnessAnisotropy))
+        t.f32("\"coat_roughness_anisotropy\"", v.coatRoughnessAnisotropy);
+    if (!omit || !same(v.coatIor, omit->coatIor)) t.f32("\"coat_ior\"", v.coatIor);
+    if (!omit || !same(v.coatDarkening, omit->coatDarkening)) t.f32("\"coat_darkening\"", v.coatDarkening);
+    if (!omit || !same(v.fuzzWeight, omit->fuzzWeight)) t.f32("\"fuzz_weight\"", v.fuzzWeight);
+    if (!omit || !same(v.fuzzColor, omit->fuzzColor)) vec3(t, "\"fuzz_color\"", v.fuzzColor);
+    if (!omit || !same(v.fuzzRoughness, omit->fuzzRoughness)) t.f32("\"fuzz_roughness\"", v.fuzzRoughness);
+    if (!omit || !same(v.geometryTangentRotation, omit->geometryTangentRotation))
+        t.f32("\"geometry_tangent_rotation\"", v.geometryTangentRotation);
 }
 
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out) {

@@ -93,6 +93,17 @@ render::MaterialDesc describe(const Material& o) {
     d.subsurface = o.subsurfaceWeight;
     d.alphaMode = static_cast<render::AlphaMode>(o.alphaMode);
     d.opacity = o.geometryOpacity;
+    d.specularAnisotropy = o.specularRoughnessAnisotropy;
+    d.coatWeight = o.coatWeight;
+    d.coatColor = o.coatColor;
+    d.coatRoughness = o.coatRoughness;
+    d.coatAnisotropy = o.coatRoughnessAnisotropy;
+    d.coatIor = o.coatIor;
+    d.coatDarkening = o.coatDarkening;
+    d.fuzzWeight = o.fuzzWeight;
+    d.fuzzColor = o.fuzzColor;
+    d.fuzzRoughness = o.fuzzRoughness;
+    d.tangentRotation = o.geometryTangentRotation;
     return d;
 }
 
@@ -226,7 +237,11 @@ private:
                                 d.baseWeight, d.diffuseRoughness, d.specularWeight, d.specularColor.r,
                                 d.specularColor.g, d.specularColor.b, d.specularIor, d.emissiveStrength,
                                 d.emissionColor.r, d.emissionColor.g, d.emissionColor.b, d.subsurface,
-                                static_cast<float>(d.alphaMode), d.opacity};
+                                static_cast<float>(d.alphaMode), d.opacity, d.specularAnisotropy, d.coatWeight,
+                                d.coatColor.r, d.coatColor.g, d.coatColor.b, d.coatRoughness, d.coatAnisotropy,
+                                d.coatIor, d.coatDarkening, d.fuzzWeight, d.fuzzColor.r, d.fuzzColor.g,
+                                d.fuzzColor.b, d.fuzzRoughness, d.tangentRotation};
+        static_assert(std::size(values) == std::tuple_size_v<MaterialKey>, "a key holds every value");
         MaterialKey key{};
         for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);
         if (const auto it = m_materials.find(key); it != m_materials.end()) return it->second;
@@ -271,7 +286,7 @@ private:
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
-    using MaterialKey = std::array<uint32_t, 19>;
+    using MaterialKey = std::array<uint32_t, 34>;   // material()'s values, one each
     std::map<MaterialKey, render::MaterialHandle> m_materials;
     std::vector<entt::entity> m_sourceGone, m_overrideGone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;

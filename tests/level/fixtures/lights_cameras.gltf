@@ -1,6 +1,6 @@
 {
   "asset": { "version": "2.0" },
-  "extensionsUsed": ["KHR_lights_punctual", "KHR_materials_clearcoat"],
+  "extensionsUsed": ["KHR_lights_punctual", "KHR_materials_clearcoat", "KHR_materials_volume"],
   "extensions": {
     "KHR_lights_punctual": {
       "lights": [

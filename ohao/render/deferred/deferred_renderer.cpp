@@ -258,6 +258,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_lightingPass) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
+        m_lightingPass->setMaterials(m_renderScene ? m_renderScene->materialBuffer() : VK_NULL_HANDLE);
         m_lightingPass->setLights(m_lightClusters ? m_lightClusters->lightBuffer(frameIndex) : VK_NULL_HANDLE,
                                   m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u);
     }
@@ -379,6 +380,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 di.albedoBuffer = m_gbufferPass->getAlbedoView();
                 di.specularBuffer = m_gbufferPass->getSpecularView();
                 di.openpbrBuffer = m_gbufferPass->getOpenPBRView();
+                di.layersBuffer = m_gbufferPass->getLayersView();
                 di.velocityBuffer = m_gbufferPass->getVelocityView();
                 di.width = m_width;
                 di.height = m_height;
@@ -435,6 +437,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.positionBuffer = m_gbufferPass->getPositionView();
                 gi.normalBuffer = m_gbufferPass->getNormalView();
                 gi.albedoBuffer = m_gbufferPass->getAlbedoView();
+                gi.layersBuffer = m_gbufferPass->getLayersView();
                 gi.velocityBuffer = m_gbufferPass->getVelocityView();
                 gi.cameraPos = m_cameraPos;
                 gi.width = m_width;

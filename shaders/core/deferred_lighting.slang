@@ -35,6 +35,8 @@ import includes.lighting.gbuffer_material;
 [[vk::binding(18, 0)]] Sampler2D gBufferSpecular;   // specular_color, specular_weight / 1.5
 [[vk::binding(19, 0)]] Sampler2D gBufferOpenPBR;    // base_diffuse_roughness, (specular_ior - 1) / 2.55
 [[vk::binding(20, 0)]] StructuredBuffer<float> openpbrTables;
+[[vk::binding(23, 0)]] Sampler2D<uint2> gBufferLayers;  // OpenPBR's layers (material/material_layers.slang packLayers)
+[[vk::binding(24, 0)]] StructuredBuffer<float4> layerMaterials;   // the material table: the layers' rows
 
 struct CascadeData
 {
@@ -140,10 +142,11 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     weather.wetness = pc.wetness;
     weather.snowCover = pc.snowCover;
     weather.frostCover = pc.frostCover;
-    const MaterialInputs mi = gbufferMaterial(g0, g1, g2, spec, pbr, N, weather);
+    MaterialInputs mi = gbufferMaterial(g0, g1, g2, spec, pbr, N, weather);
+    const float3 tangent = gbufferLayers(mi, gBufferLayers.Load(int3(int2(fragCoord.xy), 0)), layerMaterials, N);
     const float roughness = mi.specularRoughness;
     const float3 V = normalize(pc.cameraPos - P);
-    const Surface s = makeSurface(P, N, V, mi);
+    const Surface s = makeSurface(P, N, V, mi, tangent);
     OpenPBRTables tables;
     tables.data = openpbrTables;
 
@@ -180,7 +183,23 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     if (rtGI)
     {
         // RT GI's reflection ray: what the lobe sees, traced (the environment where it escapes).
-        ambient += giReflection.SampleLevel(uv, 0.0).rgb * specularWeight;
+        const float3 reflection = giReflection.SampleLevel(uv, 0.0).rgb;
+        const float coatShare = s.bsdf.coatAlbedo(s.wo, tables);
+        if (coatShare > 0.0)
+        {
+            // Under a coat the ray follows the coat's lobe (ruling O8). The base's own specular is
+            // rougher: it takes the incoming radiance RT GI's cosine rays measured, toward the coat's
+            // ray as the two roughnesses meet (a rough metal under a smooth coat showed the coat's
+            // mirror image in its own colour).
+            const float3 coatWeight = coatShare * specularOcclusion(NdotV, ao, mi.coatRoughness);
+            const float3 baseWeight = max(specularWeight - coatShare * specularOcclusion(NdotV, ao, roughness), float3(0.0));
+            const float3 baseIncoming = lerp(reflection, gi.rgb, saturate((roughness - mi.coatRoughness) * 2.0));
+            ambient += reflection * coatWeight + baseIncoming * baseWeight;
+        }
+        else
+        {
+            ambient += reflection * specularWeight;
+        }
     }
     else if (ibl)
     {
@@ -188,8 +207,20 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
         const float3 prefiltered = pc.envIntensity *
             envPrefiltered.SampleLevel(equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;
         const float3 irradiance = pc.envIntensity * envIrradiance.SampleLevel(equirectUV(s.normal), 0.0).rgb;   // over pi
-        // Without ray tracing the split sum: the environment, unoccluded but by the material's AO.
-        ambient += prefiltered * specularWeight + diffuseAlbedo * irradiance * ao;
+        // Without ray tracing the split sum: the environment, unoccluded but by the material's AO;
+        // a coat's share at its own roughness.
+        float3 reflected = prefiltered * specularWeight;
+        const float coatShare = s.bsdf.coatAlbedo(s.wo, tables);
+        if (coatShare > 0.0)
+        {
+            const float coatRough = mi.coatRoughness;
+            const float3 coatPrefiltered = pc.envIntensity *
+                envPrefiltered.SampleLevel(equirectUV(R), coatRough * float(kEnvPrefilterLevels - 1u)).rgb;
+            const float3 coatWeight = coatShare * specularOcclusion(NdotV, ao, coatRough);
+            reflected = prefiltered * max(specularWeight - coatShare * specularOcclusion(NdotV, ao, roughness), float3(0.0))
+                      + coatPrefiltered * coatWeight;
+        }
+        ambient += reflected + diffuseAlbedo * irradiance * ao;
     }
 
     o.color = float4(ambient + Lo + emitted.rgb, 1.0);

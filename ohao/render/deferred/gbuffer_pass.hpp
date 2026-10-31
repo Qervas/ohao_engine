@@ -59,6 +59,7 @@ public:
     // OpenPBR's per-pixel inputs beyond albedo, roughness and metalness (core/deferred_lighting.slang).
     [[nodiscard]] VkImageView getSpecularView() const { return m_gbuffer[kSpecular].view; }
     [[nodiscard]] VkImageView getOpenPBRView() const { return m_gbuffer[kOpenPBR].view; }
+    [[nodiscard]] VkImageView getLayersView() const { return m_gbuffer[kLayers].view; }
 
     // VkImage handles for render graph import
     [[nodiscard]] VkImage getPositionImage() const { return m_gbuffer[0].image; }
@@ -129,11 +130,12 @@ private:
     // attachment), emissive (5, the fragment shader's output 4), OpenPBR's specular (6, output 5:
     // specular_color, specular_weight / 1.5) and base (7, output 6: base_diffuse_roughness,
     // (specular_ior - 1) / 2.55)
-    static constexpr uint32_t GBUFFER_COUNT = 8;
+    static constexpr uint32_t GBUFFER_COUNT = 9;
     static constexpr uint32_t kDepth = 4;
     static constexpr uint32_t kEmissive = 5;
     static constexpr uint32_t kSpecular = 6;
     static constexpr uint32_t kOpenPBR = 7;
+    static constexpr uint32_t kLayers = 8;   // OpenPBR's layers (material/material_layers.slang packLayers), RG32_UINT
     std::array<RenderTarget, GBUFFER_COUNT> m_gbuffer;
 
     // The early render pass clears and leaves the targets for the late one (depth readable by

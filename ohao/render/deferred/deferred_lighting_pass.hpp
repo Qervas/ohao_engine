@@ -55,6 +55,8 @@ public:
         m_lightBuffer = lightBuffer;
         m_lightCount = count;
     }
+    // The material table (binding 24): OpenPBR's layer rows of each pixel's material.
+    void setMaterials(VkBuffer materials) { m_materialBuffer = materials; }
     // The froxel lists (binding 16) and the slice mapping they were built with; a null buffer
     // makes every pixel sum every light.
     void setClusters(VkBuffer clusters, float sliceScale, float sliceBias) {
@@ -113,6 +115,7 @@ private:
     VkBuffer m_lightBuffer{VK_NULL_HANDLE};
     uint32_t m_lightCount{0};
     VkBuffer m_clusterBuffer{VK_NULL_HANDLE};
+    VkBuffer m_materialBuffer{VK_NULL_HANDLE};
     VkImageView m_shadowMapView{VK_NULL_HANDLE};
     VkSampler m_shadowSampler{VK_NULL_HANDLE};
     VkImageView m_irradianceView{VK_NULL_HANDLE};

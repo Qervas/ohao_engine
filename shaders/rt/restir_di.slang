@@ -78,6 +78,7 @@ import rt.smoke_proxy;
 [[vk::binding(5, 0)]] Texture2D<float4> gOpenPBR;    // base_diffuse_roughness, (specular_ior - 1) / 2.55
 [[vk::binding(6, 0)]] Texture2D<float2> gVelocity;   // UV motion: current minus previous
 [[vk::binding(7, 0)]] StructuredBuffer<float> openpbrTables;
+[[vk::binding(45, 0)]] Texture2D<uint2> gLayers;     // OpenPBR's layers (material/material_layers.slang)
 // Reservoirs (the trace image's size), two RGBA32F images each: A (the point, the light as bits), B (W,
 // M; spatial's output: z the point's target at its trace pixel, the bound of what it may shade).
 [[vk::binding(8, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> prevA;   // last frame's, after reuse
@@ -142,7 +143,7 @@ struct Pixel
     float3 normal;
     float3 t, b;
     float3 wo;
-    OpenPBRBase bsdf;
+    OpenPBRSurface bsdf;
     bool valid;      // a surface (not the sky, not a light's emitter mesh)
 };
 
@@ -160,10 +161,19 @@ Pixel pixelAt(uint2 q)
     w.wetness = pc.weather.x;
     w.snowCover = pc.weather.y;
     w.frostCover = pc.weather.z;
-    const MaterialInputs mi = gbufferMaterial(g0, g1, gAlbedo.Load(int3(q, 0)), gSpecular.Load(int3(q, 0)),
-                                              gOpenPBR.Load(int3(q, 0)).rg, s.normal, w);
-    s.bsdf = OpenPBRBase(mi);
-    basisOf(s.normal, s.t, s.b);
+    MaterialInputs mi = gbufferMaterial(g0, g1, gAlbedo.Load(int3(q, 0)), gSpecular.Load(int3(q, 0)),
+                                        gOpenPBR.Load(int3(q, 0)).rg, s.normal, w);
+    const float3 tangent = gbufferLayers(mi, gLayers.Load(int3(q, 0)), materials, s.normal);
+    s.bsdf = OpenPBRSurface(mi);
+    if (dot(tangent, tangent) > 0.0)
+    {
+        s.t = tangent;
+        s.b = cross(s.normal, tangent);
+    }
+    else
+    {
+        basisOf(s.normal, s.t, s.b);
+    }
     // A view below the shading normal (a normal map tilting away) is taken at the horizon.
     float3 wo = toLocalFrame(normalize(pc.cameraPos.xyz - s.position), s);
     wo.z = max(wo.z, 1e-4);
@@ -209,11 +219,11 @@ Surf surfOf(Pixel s)
     f.position = s.position;
     f.dist = s.valid ? max(distance(s.position, pc.cameraPos.xyz), 1e-6) : 0.0;
     f.normal = s.normal;
-    f.alpha = s.bsdf.alpha;
-    const float dielectricF0 = ((s.bsdf.eta - 1.0) / (s.bsdf.eta + 1.0)) * ((s.bsdf.eta - 1.0) / (s.bsdf.eta + 1.0));
-    f.kd = luminance(s.bsdf.rho) * (1.0 - s.bsdf.metalness);
-    f.ks = lerp(dielectricF0 * luminance(s.bsdf.specColor), luminance(s.bsdf.metalF0) * s.bsdf.metalWeight,
-                s.bsdf.metalness);
+    const OpenPBRBase b = s.bsdf.base;
+    f.alpha = b.alpha;
+    const float dielectricF0 = ((b.eta - 1.0) / (b.eta + 1.0)) * ((b.eta - 1.0) / (b.eta + 1.0));
+    f.kd = luminance(b.rho) * (1.0 - b.metalness);
+    f.ks = lerp(dielectricF0 * luminance(b.specColor), luminance(b.metalF0) * b.metalWeight, b.metalness);
     return f;
 }
 

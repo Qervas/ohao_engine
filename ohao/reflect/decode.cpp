@@ -130,8 +130,8 @@ constexpr std::array<ErrorCodeInfo, 49> kCodes = {{
     {"W_UNKNOWN_COMPONENT", "Warning: an unknown component close to a known name. It is kept, but may be a typo."},
     {"W_UNSAVEABLE_MESH", "Warning: an entity renders a mesh with no MeshSource (made in code); it is saved without it."},
     {"W_LEVEL_EXTRAS", "Warning: an unknown lower-case key in a level node's extras (another tool's property); ignored."},
-    {"W_LEVEL_UNSUPPORTED", "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, "
-                            "orthographic cameras)."},
+    {"W_LEVEL_UNSUPPORTED", "Warning: level content OHAO ignores (skins, animations, morph targets, orthographic "
+                            "cameras, KHR_materials_* but ior, specular, emissive_strength, clearcoat and sheen)."},
     {"W_LEVEL_DYNAMIC_MESH", "Warning: a dynamic body's mesh collider; it is built as the mesh's convex hull, since "
                              "triangle meshes do not simulate."},
     {"W_COLLIDER_NO_MESH", "Warning: a collider with no size on an entity whose mesh is missing or did not load; it "

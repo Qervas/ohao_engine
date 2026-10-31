@@ -35,6 +35,7 @@ struct GIInput {
     VkImageView positionBuffer;    // GBuffer0: world position, metallic
     VkImageView normalBuffer;      // GBuffer1: octahedral normal
     VkImageView albedoBuffer;      // GBuffer2: albedo (the output's diffuse albedo)
+    VkImageView layersBuffer = VK_NULL_HANDLE;   // the G-buffer's OpenPBR layers (RG32_UINT): the coat's roughness
     VkImageView velocityBuffer = VK_NULL_HANDLE;   // GBuffer3: UV motion, the temporal reprojection
     glm::vec3 cameraPos{0.0f};
     uint32_t width;

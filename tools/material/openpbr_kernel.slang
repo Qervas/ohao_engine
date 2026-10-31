@@ -2,7 +2,7 @@
 // tools/material/openpbr_tables (the energy tables) and tests/material/material_tests (the module's
 // tests) call it, so they run the module's own code. Outside shaders/: never compiled to SPIR-V.
 //
-// One item is 8 float4s of `io`:
+// One item is 12 float4s of `io`:
 //   0  x the op
 //   1  base_color.rgb, base_weight
 //   2  base_metalness, base_diffuse_roughness, specular_weight, specular_roughness
@@ -11,7 +11,12 @@
 //   5  wi.xyz, or the random numbers u.xyz
 //   6  the result
 //   7  the result's second half
+//   8  coat_weight, coat_roughness, coat_roughness_anisotropy, coat_ior
+//   9  coat_color.rgb, coat_darkening
+//   10 fuzz_color.rgb, fuzz_weight
+//   11 fuzz_roughness, specular_roughness_anisotropy
 // Ops:
+// Ops 0-3 are the whole surface (OpenPBRSurface: fuzz over coat over the base).
 //   0 eval      6.rgb = BSDF x cos
 //   1 sample    6 = (wi, pdf), 7 = (weight, lobe)
 //   2 pdf       6.x
@@ -21,7 +26,11 @@
 //               material's specular_roughness squared, unclamped)
 //   5 fresnel   6.x = the exact dielectric Fresnel at cosine wo.x, eta wo.y
 //   6 lobes     the lobes alone, without the cosine, for reciprocity: 6.x GGX single scatter,
-//               6.yzw EON at rho = base_color, 7.x the multiple-scattering lobe
+//               (anisotropic when the material is), 6.yzw EON at rho = base_color, 7.x the
+//               multiple-scattering lobe, 7.y the coat's lobe
+//   7 aniso     an anisotropic bounded-VNDF sample's single-scatter weight for u.xy at the full wo
+//               (the material's specular_roughness and specular_roughness_anisotropy), F = 1; 0
+//               below the horizon
 import material.openpbr;
 
 RWStructuredBuffer<float4> io;
@@ -31,7 +40,7 @@ StructuredBuffer<float> tables;
 [numthreads(1, 1, 1)]
 void run(uint3 id : SV_DispatchThreadID)
 {
-    const uint b = id.x * 8u;
+    const uint b = id.x * 12u;
     const uint op = uint(io[b].x + 0.5);
     MaterialInputs mi;
     mi.baseColor = io[b + 1u].xyz;
@@ -42,29 +51,40 @@ void run(uint3 id : SV_DispatchThreadID)
     mi.specularRoughness = io[b + 2u].w;
     mi.specularColor = io[b + 3u].xyz;
     mi.specularIor = io[b + 3u].w;
+    mi.coatWeight = io[b + 8u].x;
+    mi.coatRoughness = io[b + 8u].y;
+    mi.coatRoughnessAnisotropy = io[b + 8u].z;
+    mi.coatIor = io[b + 8u].w;
+    mi.coatColor = io[b + 9u].xyz;
+    mi.coatDarkening = io[b + 9u].w;
+    mi.fuzzColor = io[b + 10u].xyz;
+    mi.fuzzWeight = io[b + 10u].w;
+    mi.fuzzRoughness = io[b + 11u].x;
+    mi.specularRoughnessAnisotropy = io[b + 11u].y;
     const float3 wo = io[b + 4u].xyz;
     const float3 v = io[b + 5u].xyz;
     OpenPBRTables t;
     t.data = tables;
     const OpenPBRBase base = OpenPBRBase(mi);
+    const OpenPBRSurface surface = OpenPBRSurface(mi);
     float4 r0 = float4(0.0), r1 = float4(0.0);
     if (op == 0u)
     {
-        r0.xyz = base.eval(wo, v, t);
+        r0.xyz = surface.eval(wo, v, t);
     }
     else if (op == 1u)
     {
-        const BsdfSample s = base.sample(wo, v, t);
+        const BsdfSample s = surface.sample(wo, v, t);
         r0 = float4(s.wi, s.pdf);
         r1 = float4(s.weight, float(s.lobe));
     }
     else if (op == 2u)
     {
-        r0.x = base.pdf(wo, v, t);
+        r0.x = surface.pdf(wo, v, t);
     }
     else if (op == 3u)
     {
-        r0.xyz = base.albedo(wo, t);
+        r0.xyz = surface.albedo(wo, t);
     }
     else if (op == 4u)
     {
@@ -81,15 +101,26 @@ void run(uint3 id : SV_DispatchThreadID)
             r0 = float4(w, w * m5, w * c * m5 * m1, w * fresnelDielectric(c, v.z));
         }
     }
+    else if (op == 7u)
+    {
+        const float2 a = ggxAnisoAlpha(mi.specularRoughness, mi.specularRoughnessAnisotropy);
+        const float3 wi = reflect(-wo, ggxSampleBoundedAniso(wo, a, v.xy));
+        if (wi.z > 0.0)
+        {
+            const float pdf = ggxPdfBoundedAniso(wo, wi, a);
+            r0.x = pdf > 0.0 ? ggxSingleAniso(wo, wi, a) / pdf : 0.0;
+        }
+    }
     else if (op == 5u)
     {
         r0.x = fresnelDielectric(wo.x, wo.y);
     }
     else if (op == 6u)
     {
-        r0.x = ggxSingle(wo, v, base.alpha * base.alpha) / v.z;
+        r0.x = (base.anisotropy > 0.0 ? ggxSingleAniso(wo, v, base.alphaXY) : ggxSingle(wo, v, base.alpha * base.alpha)) / v.z;
         r0.yzw = eonEval(mi.baseColor, mi.baseDiffuseRoughness, v, wo);
         r1.x = base.msLobe(wo, v, t) / v.z;
+        r1.y = surface.coat.eval(wo, v, t) / v.z;
     }
     io[b + 6u] = r0;
     io[b + 7u] = r1;

@@ -2,7 +2,9 @@
 // G-buffer's targets, with the weather (wetness, snow, frost, mud) applied. The lighting pass
 // (core/deferred_lighting.slang) and the direct light's resampling (rt/restir_di.slang) both read
 // it, so the light a reservoir aims for is the light lighting shades.
+import shared.layout;
 import material.openpbr;
+import material.material_layers;
 
 struct Weather
 {
@@ -19,6 +21,16 @@ float3 decodeNormalOctahedron(float2 e)
     n.x += n.x >= 0.0 ? -t : t;
     n.y += n.y >= 0.0 ? -t : t;
     return normalize(n);
+}
+
+// OpenPBR's layers from the G-buffer's layers target and the pixel's material's rows 7-10 (`rows` the
+// material table): into mi, and the anisotropic lobes' tangent (decoded from N), 0 when none.
+float3 gbufferLayers(inout MaterialInputs mi, uint2 layers, StructuredBuffer<float4> rows, float3 N)
+{
+    if (layers.y == 0u && ((layers.x >> 12u) & 255u) == 0u) return float3(0.0);   // no coat, fuzz or anisotropy
+    const uint r = layersMaterial(layers) * kMaterialRows + kLayerRowFirst;
+    const float3 T = unpackLayers(layers, mi, rows[r], rows[r + 1u], rows[r + 2u], rows[r + 3u], N);
+    return mi.specularRoughnessAnisotropy > 0.0 || (mi.coatWeight > 0.0 && mi.coatRoughnessAnisotropy > 0.0) ? T : float3(0.0);
 }
 
 // g0 (position, metallic), g1 (normal, roughness), g2 (albedo, AO), spec (specular_color,
@@ -56,7 +68,7 @@ MaterialInputs gbufferMaterial(float4 g0, float4 g1, float4 g2, float4 spec, flo
         metallic = lerp(metallic, 0.10, f * 0.40);
     }
 
-    MaterialInputs mi;
+    MaterialInputs mi = defaultMaterialInputs();
     mi.baseColor = albedo;   // base_weight is folded in by the G-buffer
     mi.baseWeight = 1.0;
     mi.baseMetalness = metallic;

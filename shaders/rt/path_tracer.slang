@@ -28,6 +28,7 @@
 // OIDN's albedo and normal (6, 7), NRD's and DLSS's guides (19-26).
 import shared.layout;
 import material.openpbr;
+import material.material_layers;
 import sampling.sobol;
 import rt.radiance_cache;
 import rt.lights;
@@ -106,6 +107,9 @@ struct PathPayload
     float diffuseRoughness;
     float specularRoughness;
     float specularIor;
+    uint material;         // the hit's material: its layer rows (material/material_layers.slang) at uv
+    float2 uv;
+    float3 tangent;        // an anisotropic material's tangent (rotated, in the plane of normal); else 0
     float pad;
 };
 
@@ -237,9 +241,14 @@ bool visible(float3 origin, float3 dir, float dist)
     return (p.flags & kHit) == 0u;
 }
 
+struct PathTextures : IMaterialTextures
+{
+    float4 sample(uint index, float2 uv) { return sampleTex(index, uv); }
+};
+
 MaterialInputs inputsOf(PathPayload p)
 {
-    MaterialInputs m;
+    MaterialInputs m = defaultMaterialInputs();
     m.baseColor = p.baseColor;
     m.baseWeight = p.baseWeight;
     m.baseMetalness = p.metalness;
@@ -248,7 +257,24 @@ MaterialInputs inputsOf(PathPayload p)
     m.specularColor = p.specularColor;
     m.specularRoughness = p.specularRoughness;
     m.specularIor = p.specularIor;
+    const uint r = p.material * kMaterialRows + kLayerRowFirst;
+    PathTextures tex;
+    applyLayerRows(m, materials[r], materials[r + 1u], materials[r + 2u], materials[r + 3u], materials[r + 4u], p.uv, tex);
     return m;
+}
+
+// The shading frame: an anisotropic material's tangent, else any basis of n.
+void frameOf(PathPayload p, out float3 t, out float3 b)
+{
+    if (dot(p.tangent, p.tangent) > 0.0)
+    {
+        t = p.tangent;
+        b = cross(p.normal, t);
+    }
+    else
+    {
+        basisOf(p.normal, t, b);
+    }
 }
 
 float4 nrdPackNormalRoughness(float3 n, float roughness)
@@ -424,9 +450,10 @@ void raygen()
         // The surface.
         const float3 n = hit.normal;
         float3 t, b;
-        basisOf(n, t, b);
+        frameOf(hit, t, b);
         const float3 wo = toLocal(-dir, t, b, n);
-        const OpenPBRBase base = OpenPBRBase(inputsOf(hit));
+        const MaterialInputs mi = inputsOf(hit);
+        const OpenPBRSurface base = OpenPBRSurface(mi);
         if (depth == 0u)
         {
             firstRough = clamp(hit.specularRoughness, 0.01, 1.0);
@@ -437,7 +464,7 @@ void raygen()
                 albedoAOV[pixel] = float4(a, 1.0);
                 normalAOV[pixel] = (flags & kFlagDLSSRR) != 0u ? float4(n, hit.specularRoughness) : float4(n * 0.5 + 0.5, 1.0);
             }
-            diffAlbedo = base.rho * (1.0 - base.metalness);
+            diffAlbedo = base.base.rho * (1.0 - base.base.metalness);
             specColor = max(a - diffAlbedo, float3(0.0));
             const float k = blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0;
             diffuseAlbedoAOV[pixel] = lerp(diffuseAlbedoAOV[pixel], float4(diffAlbedo, 1.0), k);
@@ -498,7 +525,7 @@ void raygen()
         if (dot(next, hit.geoNormal) <= 0.0) break;
         if (depth == 0u) firstLobe = s.lobe;
         lastLobe = s.lobe;
-        lastRough = hit.specularRoughness;
+        lastRough = s.lobe == 2u ? mi.coatRoughness : s.lobe == 3u ? 1.0 : hit.specularRoughness;
         throughput *= s.weight;
         lastPdf = s.pdf;
         origin = p;
@@ -630,9 +657,9 @@ void cacheUpdate()
 
         const float3 n = hit.normal;
         float3 t, b;
-        basisOf(n, t, b);
+        frameOf(hit, t, b);
         const float3 wo = toLocal(-dir, t, b, n);
-        const OpenPBRBase base = OpenPBRBase(inputsOf(hit));
+        const OpenPBRSurface base = OpenPBRSurface(inputsOf(hit));
         const float3 p = hit.position + hit.geoNormal * 1e-3;
 
         rng.group(1u + 3u * depth);
@@ -808,6 +835,24 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
     payload.specularRoughness = saturate(roughness);
     payload.specularIor = row5.x;
     payload.emission = emission;
+    payload.material = c.material;
+    payload.uv = uv;
+    // Anisotropy's tangent: the vertex tangents' (as a normal map reads them), else any in the plane
+    // of n, turned by geometry_tangent_rotation.
+    payload.tangent = float3(0.0);
+    const float4 row10 = materials[m + 10u];
+    if (row10.y > 0.0 || (materials[m + 7u].w > 0.0 && materials[m + 8u].y > 0.0))
+    {
+        const float4 tObj = float4(vertexF3(c.v0, 13u), vertexFloat(c.v0, 16u)) * w +
+                            float4(vertexF3(c.v1, 13u), vertexFloat(c.v1, 16u)) * bary.x +
+                            float4(vertexF3(c.v2, 13u), vertexFloat(c.v2, 16u)) * bary.y;
+        const float3 tw = mul((float3x3)ObjectToWorld3x4(), tObj.xyz);
+        const float3 sn = payload.normal;
+        float3 T, B;
+        if (dot(tw, tw) > 1e-12 && dot(tw - sn * dot(sn, tw), tw - sn * dot(sn, tw)) > 1e-12) T = normalize(tw - sn * dot(sn, tw));
+        else basisOf(sn, T, B);
+        payload.tangent = rotatedTangent(sn, T, row10.z);
+    }
 }
 
 [shader("anyhit")]

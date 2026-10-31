@@ -139,6 +139,18 @@ struct Material {
     float subsurfaceWeight{0.0f};       // subsurface_weight: 0 none; > 0 the screen-space blur's strength (skin, wax)
     MaterialAlpha alphaMode{MaterialAlpha::Opaque};   // alpha_mode
     float geometryOpacity{1.0f};        // geometry_opacity: coverage (Blend's factor; Mask cuts below 0.5)
+    // OpenPBR step 2: the coat, the fuzz and specular anisotropy.
+    float specularRoughnessAnisotropy{0.0f};   // specular_roughness_anisotropy
+    float coatWeight{0.0f};             // coat_weight
+    glm::vec3 coatColor{1.0f};          // coat_color
+    float coatRoughness{0.0f};          // coat_roughness
+    float coatRoughnessAnisotropy{0.0f};   // coat_roughness_anisotropy
+    float coatIor{1.6f};                // coat_ior
+    float coatDarkening{1.0f};          // coat_darkening
+    float fuzzWeight{0.0f};             // fuzz_weight
+    glm::vec3 fuzzColor{1.0f};          // fuzz_color
+    float fuzzRoughness{0.5f};          // fuzz_roughness
+    float geometryTangentRotation{0.0f};   // geometry_tangent_rotation (turns; ruling O9)
 };
 
 // Instantiate's bookkeeping: tagged when MeshSource/Material change; the error

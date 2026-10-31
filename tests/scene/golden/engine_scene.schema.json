@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 24198b31ce44ec81. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 21e010456c0177b4. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -650,6 +650,75 @@
           "description": "Coverage: Blend's blend factor, Mask's test (cut below 0.5)",
           "default": 1,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "specular_roughness_anisotropy": {
+          "description": "Stretches the specular lobe along the tangent (brushed metal): 0 = isotropic",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "coat_weight": {
+          "description": "A clear coat's coverage (car paint, varnish): 0 = none",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "coat_color": {
+          "description": "The coat's transmittance at normal incidence, there and back: tints what is under it",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "coat_roughness": {
+          "description": "The coat's GGX roughness",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "coat_roughness_anisotropy": {
+          "description": "Stretches the coat's lobe along the tangent",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "coat_ior": {
+          "description": "The coat's index of refraction",
+          "default": 1.6,
+          "allOf": [{ "type": "number", "minimum": 1, "maximum": 3 }]
+        },
+        "coat_darkening": {
+          "description": "How much light the coat reflects back down darkens and saturates the base: 1 = physical, 0 = none",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "fuzz_weight": {
+          "description": "A fuzz layer's coverage (velvet, dust, peach skin): 0 = none",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "fuzz_color": {
+          "description": "The fuzz's colour",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "fuzz_roughness": {
+          "description": "The fuzz's roughness: low is a sheen at grazing angles (satin), high a soft haze (velvet)",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "geometry_tangent_rotation": {
+          "description": "Turns the mesh's tangent about the normal, in turns: the direction anisotropy stretches along",
+          "default": 0,
+          "allOf": [{ "type": "number" }]
         }
       },
       "additionalProperties": false
