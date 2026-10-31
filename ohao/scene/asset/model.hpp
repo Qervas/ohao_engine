@@ -103,7 +103,8 @@ public:
     std::vector<float> materialEmissionStrength;
     // OpenPBR step 2 from KHR_materials_clearcoat (coat_weight, coat_roughness; glTF's coat has
     // IOR 1.5 and no darkening) and KHR_materials_sheen (fuzz_color, fuzz_roughness; fuzz_weight 1
-    // where the colour is not black). Their factors; the textures are a known gap.
+    // where the colour is not black): their factors here, their textures below. The coat's normal
+    // texture is not read (the coat shares the base's normal).
     std::vector<float> materialCoatWeight;
     std::vector<float> materialCoatRoughness;
     std::vector<glm::vec3> materialFuzzColor;
@@ -120,6 +121,18 @@ public:
     std::vector<TextureData> roughMetalTextures;
     std::vector<TextureData> emissiveTextures;
     std::vector<TextureData> occlusionTextures;
+    // KHR_materials_clearcoat's clearcoatTexture (R: coat_weight) and clearcoatRoughnessTexture
+    // (G: coat_roughness); KHR_materials_sheen's sheenColorTexture (RGB, sRGB: fuzz_color) and
+    // sheenRoughnessTexture (A: fuzz_roughness). Each an index into its list, -1 none; one image
+    // packing two of them is decoded and uploaded once per use.
+    std::vector<TextureData> coatTextures;
+    std::vector<TextureData> coatRoughnessTextures;
+    std::vector<TextureData> fuzzColorTextures;
+    std::vector<TextureData> fuzzRoughnessTextures;
+    std::vector<int> materialCoatTexIndex;
+    std::vector<int> materialCoatRoughnessTexIndex;
+    std::vector<int> materialFuzzColorTexIndex;
+    std::vector<int> materialFuzzRoughnessTexIndex;
     std::vector<int> materialTextureIndex;
     std::vector<int> materialNormalTexIndex;
     std::vector<int> materialRoughMetalTexIndex;

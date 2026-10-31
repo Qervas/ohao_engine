@@ -265,13 +265,13 @@ std::shared_ptr<Model> ModelLoader::loadFBX(std::string_view path) {
 // === Assimp Loader (GLB, GLTF, Collada, etc.) ===
 
 // Load texture from Assimp material (embedded or file)
+// The material's `index`-th texture of `type` (glTF's extensions number theirs: clearcoat's
+// roughness texture is CLEARCOAT 1, sheen's SHEEN 1), decoded to RGBA8 into `textures`.
 static int loadAssimpTexture(const aiScene* scene, const aiMaterial* mat,
                               aiTextureType type, std::string_view modelDir,
-                              std::vector<Model::TextureData>& textures) {
-    if (mat->GetTextureCount(type) == 0) return -1;
-
+                              std::vector<Model::TextureData>& textures, unsigned index = 0) {
     aiString texPath;
-    mat->GetTexture(type, 0, &texPath);
+    if (mat->GetTexture(type, index, &texPath) != aiReturn_SUCCESS) return -1;
     std::string pathStr = texPath.C_Str();
     const std::string dir{modelDir};
 
@@ -403,6 +403,10 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     model->materialRoughMetalTexIndex.resize(numMats, -1);
     model->materialEmissiveTexIndex.resize(numMats, -1);
     model->materialOcclusionTexIndex.resize(numMats, -1);
+    model->materialCoatTexIndex.resize(numMats, -1);
+    model->materialCoatRoughnessTexIndex.resize(numMats, -1);
+    model->materialFuzzColorTexIndex.resize(numMats, -1);
+    model->materialFuzzRoughnessTexIndex.resize(numMats, -1);
 
     for (unsigned m = 0; m < numMats; m++) {
         const aiMaterial* mat = scene->mMaterials[usedMaterials[m]];
@@ -459,11 +463,19 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
             model->materialCoatWeight[m] = coat;
             if (float r = 0.0f; mat->Get(AI_MATKEY_CLEARCOAT_ROUGHNESS_FACTOR, r) == aiReturn_SUCCESS)
                 model->materialCoatRoughness[m] = r;
+            model->materialCoatTexIndex[m] =
+                loadAssimpTexture(scene, mat, aiTextureType_CLEARCOAT, modelDir, model->coatTextures, 0);
+            model->materialCoatRoughnessTexIndex[m] =
+                loadAssimpTexture(scene, mat, aiTextureType_CLEARCOAT, modelDir, model->coatRoughnessTextures, 1);
         }
         if (aiColor3D sheen(0.0f, 0.0f, 0.0f); mat->Get(AI_MATKEY_SHEEN_COLOR_FACTOR, sheen) == aiReturn_SUCCESS) {
             model->materialFuzzColor[m] = glm::vec3(sheen.r, sheen.g, sheen.b);
             if (float r = 0.0f; mat->Get(AI_MATKEY_SHEEN_ROUGHNESS_FACTOR, r) == aiReturn_SUCCESS)
                 model->materialFuzzRoughness[m] = r;
+            model->materialFuzzColorTexIndex[m] =
+                loadAssimpTexture(scene, mat, aiTextureType_SHEEN, modelDir, model->fuzzColorTextures, 0);
+            model->materialFuzzRoughnessTexIndex[m] =
+                loadAssimpTexture(scene, mat, aiTextureType_SHEEN, modelDir, model->fuzzRoughnessTextures, 1);
         }
 
         // Textures

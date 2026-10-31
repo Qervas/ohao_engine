@@ -168,8 +168,10 @@ reads 1.9999, 1.7500 and 1.5000 (offline), 1.9720 (realtime) and 1.9656 (deferre
   about 0.84 at anisotropy 0.9, 0.67 at 0.5), the lobe leaves GGX's table range and loses energy. The worst measured
   was roughness 1, anisotropy 0.9, 85° across the grain: 0.67.
 - **Deferred colour textures (O6):** the deferred frame sees no coat- or fuzz-colour textures, nor a coat normal; it
-  takes the colours from the table. The path tracer sees them. KHR clearcoat and sheen textures are not imported yet;
-  only their factors are.
+  takes the colours from the table. The path tracer sees them. glTF's clearcoat and sheen textures are imported
+  (`clearcoatTexture`, `clearcoatRoughnessTexture`, `sheenColorTexture`, `sheenRoughnessTexture`: `scene_tests`
+  `sp17_t2_gltf_layer_textures` on `tests/assets/layers_textures.gltf`); `clearcoatNormalTexture` is not (the coat
+  shares the base's normal), and an image packing two of them is uploaded once per use.
 - **RT GI's reflection:**
   - Under a smooth coat it shows the floor's per-ray noise (a mirror's reflection of a surface lit by one shadow ray a
     hit). Step 1's mirrors have it too; the coat makes it visible.

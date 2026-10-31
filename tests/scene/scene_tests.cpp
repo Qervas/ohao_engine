@@ -1984,6 +1984,43 @@ static void t21_edited_files_are_judged_identically() {
     CHECK(edits == 3000, "all edits checked");
 }
 
+// ---- glTF layer textures (OpenPBR step 2, KHR_materials_clearcoat and _sheen) --------------
+
+// tests/assets/layers_textures.gltf (tests/assets/make_layers_textures.py): a material with the
+// clearcoat's and sheen's factors and all four of their textures, each image a 2x2 PNG of its own
+// colour, so each list must hold the image its glTF slot names.
+static void sp17_t2_gltf_layer_textures() {
+    const auto model = ModelLoader::load((fs::path(OHAO_SOURCE_DIR) / "tests" / "assets" / "layers_textures.gltf").string());
+    CHECK(model != nullptr, "the file loads");
+    // Assimp adds its default material beside the file's: find the coated one.
+    const auto it = std::find_if(model->materialCoatWeight.begin(), model->materialCoatWeight.end(),
+                                 [](float w) { return w > 0.0f; });
+    CHECK(it != model->materialCoatWeight.end(), "a coated material");
+    const auto m = static_cast<std::size_t>(it - model->materialCoatWeight.begin());
+    CHECK(std::abs(model->materialCoatWeight[m] - 0.8f) < 1e-6f && std::abs(model->materialCoatRoughness[m] - 0.5f) < 1e-6f,
+          "the clearcoat's factors");
+    CHECK(std::abs(model->materialFuzzRoughness[m] - 0.6f) < 1e-6f, "the sheen's roughness factor");
+    struct Slot { const std::vector<int>& index; const std::vector<Model::TextureData>& pool; std::array<uint8_t, 4> rgba; const char* what; };
+    const Slot slots[] = {
+        {model->materialCoatTexIndex, model->coatTextures, {200, 10, 20, 255}, "clearcoatTexture"},
+        {model->materialCoatRoughnessTexIndex, model->coatRoughnessTextures, {30, 150, 40, 255}, "clearcoatRoughnessTexture"},
+        {model->materialFuzzColorTexIndex, model->fuzzColorTextures, {250, 60, 70, 255}, "sheenColorTexture"},
+        {model->materialFuzzRoughnessTexIndex, model->fuzzRoughnessTextures, {5, 6, 7, 120}, "sheenRoughnessTexture"},
+    };
+    for (const Slot& s : slots) {
+        CHECK(s.index.size() > m && s.index[m] >= 0 && s.index[m] < static_cast<int>(s.pool.size()), s.what);
+        const auto& td = s.pool[static_cast<std::size_t>(s.index[m])];
+        CHECK(td.width == 2 && td.height == 2 && td.pixels.size() == 16, s.what);
+        CHECK(std::equal(s.rgba.begin(), s.rgba.end(), td.pixels.begin()), s.what);
+    }
+    // A material without the extensions has none.
+    const auto plain = ModelLoader::load((fs::path(OHAO_SOURCE_DIR) / "tests" / "assets" / "node_transforms.gltf").string());
+    CHECK(plain && !plain->materialCoatTexIndex.empty() &&
+              std::all_of(plain->materialCoatTexIndex.begin(), plain->materialCoatTexIndex.end(), [](int i) { return i == -1; }) &&
+              std::all_of(plain->materialFuzzColorTexIndex.begin(), plain->materialFuzzColorTexIndex.end(), [](int i) { return i == -1; }),
+          "no extension, no texture");
+}
+
 // ---- glTF node transforms (sub-project 2b, test 4) ----------------------------------------
 
 // tests/assets/node_transforms.gltf: one triangle (0,0,0) (1,0,0) (0,1,0), normal +Z, wound
@@ -2773,6 +2810,7 @@ int main(int argc, char** argv) {
     RUN(t21_numbers_are_judged_identically);
     RUN(t21_edited_files_are_judged_identically);
     RUN(sp2b_t04_gltf_node_transforms_reach_vertices_normals_and_winding);
+    RUN(sp17_t2_gltf_layer_textures);
     RUN(sp2b_t04_damaged_helmet_stands_upright);
     RUN(sp2b_t07_meshlets_cover_primitives_within_limits_and_bounds);
     RUN(sp2b_t07_meshlets_fill_limits_and_are_deterministic);

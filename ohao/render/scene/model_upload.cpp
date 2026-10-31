@@ -91,6 +91,15 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
            BindlessTextureType::Roughness, false, &MaterialDesc::occlusionTex);
     for (std::size_t mi = 0; mi < std::min(model.materialOcclusionTexIndex.size(), mats.size()); ++mi)
         if (model.materialOcclusionTexIndex[mi] == Model::kOcclusionIsRoughMetal) mats[mi].occlusionTex = mats[mi].roughMetalTex;
+    // KHR_materials_clearcoat's and _sheen's (material/material_layers.slang, row 11).
+    upload(model.materialCoatTexIndex, model.coatTextures, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Roughness,
+           false, &MaterialDesc::coatTex);
+    upload(model.materialCoatRoughnessTexIndex, model.coatRoughnessTextures, VK_FORMAT_R8G8B8A8_UNORM,
+           BindlessTextureType::Roughness, false, &MaterialDesc::coatRoughnessTex);
+    upload(model.materialFuzzColorTexIndex, model.fuzzColorTextures, VK_FORMAT_R8G8B8A8_SRGB,
+           BindlessTextureType::Albedo, false, &MaterialDesc::fuzzColorTex);
+    upload(model.materialFuzzRoughnessTexIndex, model.fuzzRoughnessTextures, VK_FORMAT_R8G8B8A8_UNORM,
+           BindlessTextureType::Roughness, false, &MaterialDesc::fuzzRoughnessTex);
     if (loaded > 0) tm->updateDescriptorSet();
 }
 
