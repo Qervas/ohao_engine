@@ -25,7 +25,7 @@ inline constexpr std::size_t kPTPushConstantsBytes = 256;
 inline constexpr std::size_t kMaterialVec4s        = 7;   // gpu::shared::kMaterialRows
 inline constexpr std::size_t kMaterialBytes        = kMaterialVec4s * sizeof(glm::vec4);
 
-// ─── Material SSBO packing (render::MaterialTable; gbuffer.frag, rt/path_tracer.slang) ─
+// ─── Material SSBO packing (render::MaterialTable; core/gbuffer.slang, rt/path_tracer.slang) ─
 //
 // matColors[matID * 7 + 0] = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
 // matColors[matID * 7 + 1] = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)

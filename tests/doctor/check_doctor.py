@@ -6,10 +6,10 @@
 
 Last line is a JSON summary; exit 0 = pass.
   t5_* a fake shader tree (temp directory) with one missing and one stale SPIR-V is
-  reported exactly; a SPIR-V is stale when an #include of its source (quoted, relative to
-  the including file, or <...> from the include roots), transitively, is newer; an
-  unresolved include is named; --cpu-only creates no device and lists no device check;
-  every check has the documented shape; the real tree passes.
+  reported exactly; a SPIR-V is stale when a module its source imports (beside it, or from
+  the shader root), transitively, is newer; an unresolved import is named; --cpu-only creates
+  no device and lists no device check; every check has the documented shape; the real tree
+  passes.
   s6_* (sub-project 2b, step 6) Slang: a .slang file with [shader(...)] entry points is a
   source, one SPIR-V per entry (<file>.spv for one, <file>.<entry>.spv for several), a file
   without one is a module; an imported module newer than the SPIR-V makes it stale; an
@@ -24,8 +24,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe" if os.name == "nt" else "ohao")
 DEVICE_CHECKS = {"vulkan.instance", "vulkan.device", "vulkan.rt", "vulkan.validation", "gpu.wedged"}
-CPU_CHECKS = ["shaders.complete", "shaders.fresh", "assets.present", "tools.glslc", "tools.slangc", "tools.cmake",
-              "python.deps"]
+CPU_CHECKS = ["shaders.complete", "shaders.fresh", "assets.present", "tools.slangc", "tools.cmake", "python.deps"]
 
 passed, failed, failures = 0, 0, []
 
@@ -63,19 +62,23 @@ def write(path, text, mtime):
 T0 = 1_700_000_000   # sources at T0, SPIR-V at T0 + 100 unless a case says otherwise
 
 
+ENTRY = '[shader("compute")]\n[numthreads(1, 1, 1)]\nvoid main(uint3 id : SV_DispatchThreadID) {}\n'
+
+
 def fake_tree(tmp):
-    """shaders/a.vert includes <common.glsl> (in includes/), which includes "detail.glsl";
-    shaders/sub/b.frag includes "inc.glsl" (beside it); shaders/c.comp has no SPIR-V."""
+    """shaders/a.slang imports lib.common (from the root), which imports lib.detail;
+    shaders/sub/b.slang imports inc (beside it); shaders/c.slang has no SPIR-V;
+    lib/not_a_stage.slang is a module (no entry point)."""
     sh, spv = os.path.join(tmp, "shaders"), os.path.join(tmp, "spv")
-    write(os.path.join(sh, "a.vert"), '#version 460\n#include <common.glsl>\nvoid main() {}\n', T0)
-    write(os.path.join(sh, "includes", "common.glsl"), '#include "detail.glsl"\n', T0)
-    write(os.path.join(sh, "includes", "detail.glsl"), '// detail\n', T0)
-    write(os.path.join(sh, "sub", "b.frag"), '#version 460\n  #include "inc.glsl"\nvoid main() {}\n', T0)
-    write(os.path.join(sh, "sub", "inc.glsl"), '// inc\n', T0)
-    write(os.path.join(sh, "c.comp"), '#version 460\nvoid main() {}\n', T0)
-    write(os.path.join(sh, "includes", "not_a_stage.glsl"), '// never compiled alone\n', T0)
-    write(os.path.join(spv, "a.vert.spv"), "spv", T0 + 100)
-    write(os.path.join(spv, "sub_b.frag.spv"), "spv", T0 + 100)
+    write(os.path.join(sh, "a.slang"), 'import lib.common;\n' + ENTRY, T0)
+    write(os.path.join(sh, "lib", "common.slang"), 'import lib.detail;\n', T0)
+    write(os.path.join(sh, "lib", "detail.slang"), '// detail\n', T0)
+    write(os.path.join(sh, "sub", "b.slang"), '  import inc;\n' + ENTRY, T0)
+    write(os.path.join(sh, "sub", "inc.slang"), '// inc\n', T0)
+    write(os.path.join(sh, "c.slang"), ENTRY, T0)
+    write(os.path.join(sh, "lib", "not_a_stage.slang"), '// never compiled alone\n', T0)
+    write(os.path.join(spv, "a.slang.spv"), "spv", T0 + 100)
+    write(os.path.join(spv, "sub_b.slang.spv"), "spv", T0 + 100)
     return sh, spv
 
 
@@ -89,50 +92,50 @@ def t5_a_missing_spirv_is_named():
         rc, res, checks = tree_doctor(tmp, sh, spv)
         c = checks["shaders.complete"]
         assert c["ok"] is False and c["level"] == "error", f"shaders.complete fails: {c}"
-        assert "1 of 3 SPIR-V missing" in c["detail"] and "c.comp.spv" in c["detail"], f"names c.comp.spv: {c['detail']}"
-        assert "a.vert.spv" not in c["detail"] and "sub_b.frag.spv" not in c["detail"], "and only it"
-        assert "not_a_stage" not in c["detail"], "a .glsl include is not a stage source"
+        assert "1 of 3 SPIR-V missing" in c["detail"] and "c.slang.spv" in c["detail"], f"names c.slang.spv: {c['detail']}"
+        assert "a.slang.spv" not in c["detail"] and "sub_b.slang.spv" not in c["detail"], "and only it"
+        assert "not_a_stage" not in c["detail"], "a module is not a source"
         assert rc == 1 and res["ok"] is False, f"an error-level failure: exit 1 (got {rc})"
         assert c.get("fix"), "a failing check says how to fix it"
 
 
-def t5_fresh_spirv_passes_and_a_newer_include_makes_it_stale():
+def t5_fresh_spirv_passes_and_a_newer_import_makes_it_stale():
     with tempfile.TemporaryDirectory() as tmp:
         sh, spv = fake_tree(tmp)
         _, _, checks = tree_doctor(tmp, sh, spv)
         assert checks["shaders.fresh"]["ok"] is True, f"everything older than its SPIR-V: fresh ({checks['shaders.fresh']})"
-        os.utime(os.path.join(sh, "sub", "inc.glsl"), (T0 + 200, T0 + 200))   # a quoted include beside b.frag
+        os.utime(os.path.join(sh, "sub", "inc.slang"), (T0 + 200, T0 + 200))   # a module beside b.slang
         _, _, checks = tree_doctor(tmp, sh, spv)
         f = checks["shaders.fresh"]
-        assert f["ok"] is False and "sub_b.frag.spv" in f["detail"] and "a.vert.spv" not in f["detail"], \
-            f"exactly sub_b.frag.spv is stale: {f['detail']}"
+        assert f["ok"] is False and "sub_b.slang.spv" in f["detail"] and "a.slang.spv" not in f["detail"], \
+            f"exactly sub_b.slang.spv is stale: {f['detail']}"
 
 
-def t5_staleness_follows_includes_transitively():
+def t5_staleness_follows_imports_transitively():
     with tempfile.TemporaryDirectory() as tmp:
         sh, spv = fake_tree(tmp)
-        os.utime(os.path.join(sh, "includes", "detail.glsl"), (T0 + 200, T0 + 200))   # a.vert -> <common> -> "detail"
+        os.utime(os.path.join(sh, "lib", "detail.slang"), (T0 + 200, T0 + 200))   # a -> lib.common -> lib.detail
         _, _, checks = tree_doctor(tmp, sh, spv)
         f = checks["shaders.fresh"]
-        assert f["ok"] is False and "a.vert.spv" in f["detail"] and "sub_b.frag.spv" not in f["detail"], \
-            f"exactly a.vert.spv is stale, through two includes: {f['detail']}"
+        assert f["ok"] is False and "a.slang.spv" in f["detail"] and "sub_b.slang.spv" not in f["detail"], \
+            f"exactly a.slang.spv is stale, through two imports: {f['detail']}"
 
 
 def t5_a_newer_source_is_stale():
     with tempfile.TemporaryDirectory() as tmp:
         sh, spv = fake_tree(tmp)
-        os.utime(os.path.join(sh, "a.vert"), (T0 + 200, T0 + 200))
+        os.utime(os.path.join(sh, "a.slang"), (T0 + 200, T0 + 200))
         _, _, checks = tree_doctor(tmp, sh, spv)
-        assert "a.vert.spv" in checks["shaders.fresh"]["detail"], f"{checks['shaders.fresh']}"
+        assert "a.slang.spv" in checks["shaders.fresh"]["detail"], f"{checks['shaders.fresh']}"
 
 
-def t5_an_unresolved_include_is_named():
+def t5_an_unresolved_import_is_named():
     with tempfile.TemporaryDirectory() as tmp:
         sh, spv = fake_tree(tmp)
-        write(os.path.join(sh, "sub", "b.frag"), '#version 460\n#include "inc.glsl"\n#include "gone.glsl"\n', T0)
+        write(os.path.join(sh, "sub", "b.slang"), 'import inc;\nimport gone;\n' + ENTRY, T0)
         _, _, checks = tree_doctor(tmp, sh, spv)
         f = checks["shaders.fresh"]
-        assert "gone.glsl" in f["detail"] and "sub/b.frag" in f["detail"], f"names the include and its file: {f['detail']}"
+        assert "gone.slang" in f["detail"] and "sub/b.slang" in f["detail"], f"names the import and its file: {f['detail']}"
 
 
 def t5_cpu_only_lists_no_device_check_and_every_check_has_its_shape():
@@ -238,9 +241,9 @@ def main():
     elif gpu:
         tests = [t5_device_checks_pass_on_this_machine]
     else:
-        tests = [t5_a_missing_spirv_is_named, t5_fresh_spirv_passes_and_a_newer_include_makes_it_stale,
-                 t5_staleness_follows_includes_transitively, t5_a_newer_source_is_stale,
-                 t5_an_unresolved_include_is_named, t5_cpu_only_lists_no_device_check_and_every_check_has_its_shape,
+        tests = [t5_a_missing_spirv_is_named, t5_fresh_spirv_passes_and_a_newer_import_makes_it_stale,
+                 t5_staleness_follows_imports_transitively, t5_a_newer_source_is_stale,
+                 t5_an_unresolved_import_is_named, t5_cpu_only_lists_no_device_check_and_every_check_has_its_shape,
                  t5_the_real_tree_passes_cpu_only, s6_slang_sources_are_files_with_entry_points_named_per_entry,
                  s6_an_imported_module_newer_than_the_spirv_makes_it_stale, s6_an_unresolved_import_is_named,
                  s6_tools_slangc_is_found_at_the_pinned_version]

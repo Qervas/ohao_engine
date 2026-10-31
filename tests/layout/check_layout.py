@@ -4,11 +4,10 @@
     python tests/layout/check_layout.py
 
 Last line is a JSON summary; exit 0 = pass.
-  s6_* shaders/shared/layout.json's generated files (layout.slang, layout.glsl,
-  ohao/gpu/shared_layout.hpp) are current; an edit to layout.json is caught by --check;
-  structs follow std430 (offsets and sizes, asserted in the header); a 3-vector, a
-  non-scalar constant and a duplicate name are refused; the generated GLSL and Slang compile
-  (glslc, slangc) and agree with the header on a sample struct.
+  s6_* shaders/shared/layout.json's generated files (layout.slang, ohao/gpu/shared_layout.hpp)
+  are current; an edit to layout.json is caught by --check; structs follow std430 (offsets and
+  sizes, asserted in the header); a 3-vector, a non-scalar constant and a duplicate name are
+  refused; the generated Slang compiles (slangc) on a sample struct.
 """
 import json
 import os
@@ -49,7 +48,7 @@ def generate(spec, tmp):
     path = os.path.join(tmp, "layout.json")
     with open(path, "w") as f:
         json.dump(spec, f)
-    out = {k: os.path.join(tmp, f"layout.{k}") for k in ("slang", "glsl", "hpp")}
+    out = {k: os.path.join(tmp, f"layout.{k}") for k in ("slang", "hpp")}
     args = ["--layout", path] + [x for k, v in out.items() for x in (f"--{k}", v)]
     return gen_layout.main(args), out, args
 
@@ -101,8 +100,7 @@ def compile_ok(cmd):
     return r.returncode == 0, (r.stdout + r.stderr)[-600:]
 
 
-def s6_the_generated_glsl_and_slang_compile():
-    glslc = shutil.which("glslc")
+def s6_the_generated_slang_compiles():
     slangc = None
     for d in sorted(os.listdir("C:/VulkanSDK"), reverse=True) if os.path.isdir("C:/VulkanSDK") else []:
         cand = os.path.join("C:/VulkanSDK", d, "Bin", "slangc.exe")
@@ -110,22 +108,15 @@ def s6_the_generated_glsl_and_slang_compile():
             slangc = cand
             break
     slangc = slangc or shutil.which("slangc")
-    assert glslc and slangc, f"glslc ({glslc}) and slangc ({slangc}) found"
+    assert slangc, "slangc found"
     with tempfile.TemporaryDirectory() as tmp:
         shared = os.path.join(tmp, "shared")
         os.makedirs(shared)
         spec_path = os.path.join(tmp, "layout.json")
         with open(spec_path, "w") as f:
             json.dump(SAMPLE, f)
-        assert gen_layout.main(["--layout", spec_path, "--slang", os.path.join(shared, "layout.slang"), "--glsl",
-                                os.path.join(shared, "layout.glsl"), "--hpp", os.path.join(tmp, "layout.hpp")]) == 0
-        comp = os.path.join(tmp, "t.comp")
-        with open(comp, "w") as f:
-            f.write('#version 460\n#include "shared/layout.glsl"\nlayout(local_size_x = 1) in;\n'
-                    'layout(std430, binding = 0) buffer B { Sample s; uint n; };\n'
-                    'void main() { n = kN + uint(kScale * 2.0) + s.a; }\n')
-        ok, log = compile_ok([glslc, "--target-env=vulkan1.3", "-I", tmp, comp, "-o", os.path.join(tmp, "t.spv")])
-        assert ok, f"the GLSL compiles: {log}"
+        assert gen_layout.main(["--layout", spec_path, "--slang", os.path.join(shared, "layout.slang"), "--hpp",
+                                os.path.join(tmp, "layout.hpp")]) == 0
         sl = os.path.join(tmp, "t.slang")
         with open(sl, "w") as f:
             f.write('import shared.layout;\nRWStructuredBuffer<Sample> s;\nRWStructuredBuffer<uint> n;\n'
@@ -140,7 +131,7 @@ def main():
     print("check_layout (shaders/shared/layout.json)")
     for fn in (s6_the_generated_files_are_current, s6_an_edit_to_layout_json_is_caught,
                s6_structs_follow_std430_and_the_header_asserts_it, s6_a_bad_layout_is_refused,
-               s6_the_generated_glsl_and_slang_compile):
+               s6_the_generated_slang_compiles):
         run(fn)
     print(f"Results: {passed}/{passed + failed} passed")
     print(json.dumps({"suite": "check_layout", "passed": passed, "failed": failed, "failures": failures},

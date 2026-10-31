@@ -5,7 +5,7 @@
 // new-joe-kuo-6.21201 direction numbers, direct-bit-expansion formulation.
 //
 // Used for:
-//   - Unit testing the GLSL Sobol sampler (shader mirrors this math exactly)
+//   - Unit testing the Slang Sobol sampler (shader mirrors this math exactly)
 //   - Generating the constant table committed as
 //     the tables rt/path_tracer.slang's sampler reads (frontier F1 T2)
 //

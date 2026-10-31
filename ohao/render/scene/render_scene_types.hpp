@@ -139,7 +139,7 @@ struct LightDesc {
 // direct light lights every light but flashes, shadowed; without it CSM shadows a casting sun).
 inline constexpr float kShadowNever = -1.0f;
 
-// std430, matches shaders/includes/scene/scene_data.glsl
+// std430, matches shaders/includes/scene/scene_data.slang
 struct InstanceGpu {
     glm::mat4 world;
     glm::mat4 prevWorld;

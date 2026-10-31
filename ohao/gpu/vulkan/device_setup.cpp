@@ -405,9 +405,9 @@ bool VulkanRenderer::createLogicalDevice() {
     // GPU culling's draws: vkCmdDrawIndexedIndirectCount (the count from the GPU)
     features12.drawIndirectCount = VK_TRUE;
 
-    // Vulkan 1.3 features. glslc lowers `discard` to OpDemoteToHelperInvocation for
-    // SPIR-V 1.6, so shaders using discard (deferred lighting, sky, particles,
-    // and the rest) need this enabled. It is mandatory on every Vulkan 1.3 device.
+    // Vulkan 1.3 features. slangc lowers `discard` to OpDemoteToHelperInvocation for
+    // SPIR-V 1.6, so shaders using discard (the G-buffer's alpha-tested materials, the
+    // effects) need this enabled. It is mandatory on every Vulkan 1.3 device.
     VkPhysicalDeviceVulkan13Features features13{};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.pNext = &features12;

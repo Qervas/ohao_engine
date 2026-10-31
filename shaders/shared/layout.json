@@ -2,7 +2,7 @@
   "_comment": [
     "Constants and structs shared by C++ and shaders, one source for both (sub-project 2b",
     "spec, \"Slang\"). python tools/gen_layout.py writes shaders/shared/layout.slang,",
-    "shaders/shared/layout.glsl and ohao/gpu/shared_layout.hpp from this file; never edit",
+    "ohao/gpu/shared_layout.hpp from this file; never edit",
     "those by hand. Struct layouts are std430 (push constants and storage buffers): the",
     "header carries alignas and a static_assert per field offset, so a C++ struct cannot",
     "drift from the shader's. Types: uint, int, float, uint2/int2/float2, uint4/int4/float4,",

@@ -430,30 +430,28 @@ its output. Deferred passes live in `ohao/render/deferred/`; `SSSPass` is the co
 model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), the post
 stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
 
-1. **The shader** under `shaders/<area>/<name>.<stage>` (`.comp`, `.vert`, `.frag`,
-   `.rgen`, … — the glob in `shaders/CMakeLists.txt`). The next build picks it up and
-   compiles it with `glslc --target-env=vulkan1.3 -I shaders -I shaders/includes`; the
-   SPIR-V is named by flattening the path: `core/gbuffer.frag` →
-   `core_gbuffer.frag.spv`. Include shared code by its path under `shaders/`
-   (`#include "includes/scene/scene_data.glsl"`); every `.spv` is rebuilt when any file under
-   `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
+1. **The shader**, Slang, under `shaders/<area>/<name>.slang` (the glob in
+   `shaders/CMakeLists.txt`; every shader is Slang, there is no GLSL). The next build picks
+   it up and compiles each entry point with `slangc -target spirv -profile spirv_1_6
+   -matrix-layout-column-major -I shaders`: an entry point is a function under a
+   `[shader("stage")]` attribute line (further `[...]` attribute lines may follow), and it
+   keeps its name in the SPIR-V (pass it as `pName`). One entry gives `<flattened path>.spv`
+   (`bench/gpu_calibrate.slang` → `bench_gpu_calibrate.slang.spv`), several
+   `<flattened path>.<entry>.spv` (`core/gbuffer.slang` → `core_gbuffer.slang.opaque.spv`); a
+   `.slang` without an entry is a module (`import includes.scene.scene_data;`). Every SPIR-V is
+   rebuilt when any `.slang` changes, and `ohao doctor`'s `shaders.fresh` follows imports
    transitively. Fullscreen raster passes reuse `postprocess/fullscreen.slang` (no vertex
-   input, `vkCmdDraw(cmd, 3, 1, 0, 0)`). **New shaders are Slang** (`.slang`; GLSL only
-   for a pass not being rewritten): an entry point is a function under a
-   `[shader("compute")]` attribute line (further `[...]` attribute lines may follow), and
-   it keeps its name in the SPIR-V (pass it as `pName`). `slangc -target spirv -profile
-   spirv_1_6 -matrix-layout-column-major -I shaders` builds one SPIR-V per entry:
-   `bench/gpu_calibrate.slang` (one entry) → `bench_gpu_calibrate.slang.spv`, a file with
-   several entries → `<flattened>.<entry>.spv`; a `.slang` without an entry is a module
-   (`import shared.layout;`). Constants and structs C++ shares with a shader go in
-   `shaders/shared/layout.json`, then `python tools/gen_layout.py` writes
-   `shaders/shared/layout.slang`, `layout.glsl` and `ohao/gpu/shared_layout.hpp` (std430,
-   every offset asserted); `check_layout` fails while they are out of date.
+   input, `vkCmdDraw(cmd, 3, 1, 0, 0)`); a vertex shader reading firstInstance or firstVertex
+   uses `SV_VulkanInstanceID`/`SV_VulkanVertexID` (HLSL's `SV_InstanceID` leaves the base out).
+   Constants and structs C++ shares with a shader go in `shaders/shared/layout.json`, then
+   `python tools/gen_layout.py` writes `shaders/shared/layout.slang` and
+   `ohao/gpu/shared_layout.hpp` (std430, every offset asserted); `check_layout` fails while
+   they are out of date.
 2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
    (set `m_device`/`m_physicalDevice`, then create everything; return false on any
    failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base
    helpers (`createSampler`, `safeDestroy`; `createRenderTarget`, `transitionImage` for
-   GLSL-era passes) or, for a Slang compute pass, `rtc::createImage`, `rtc::transition` and
+   raster passes) or, for a Slang compute pass, `rtc::createImage`, `rtc::transition` and
    `rtc::createComputePipeline(device, spvName, entry, setLayout, pushBytes, …)` (it loads
    the SPIR-V by its flattened name). Push constants stay within 128 bytes, the size every
    device guarantees. The destructor calls `cleanup()`.

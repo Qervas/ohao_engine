@@ -7,11 +7,10 @@
 //   vulkan.device      a physical device with Vulkan 1.3 (name, driver, API version)
 //   vulkan.rt          ray tracing pipeline + acceleration structures (warn: RT modes need them)
 //   vulkan.validation  VK_LAYER_KHRONOS_validation available (warn: the validation gates need it)
-//   shaders.complete   every stage source under shaders/ has its SPIR-V (a .slang file one
-//                      per [shader(...)] entry point)
-//   shaders.fresh      no SPIR-V older than its source or any file it #includes or imports
+//   shaders.complete   every .slang file with [shader(...)] entry points has its SPIR-V, one per
+//                      entry point (a file without one is a module)
+//   shaders.fresh      no SPIR-V older than its source or any module it imports
 //   assets.present     every asset the checked-in scenes (assets/scenes) reference exists
-//   tools.glslc        glslc on PATH or in the Vulkan SDK
 //   tools.slangc       slangc in the Vulkan SDK or on PATH (error when missing); a version other
 //                      than shaders/slangc.version's fails as a warning (other SPIR-V)
 //   tools.cmake        the cmake on PATH is not conda's (warn)
@@ -59,11 +58,9 @@ struct Check {
 // a .slang with several entry points gives one "<flattened>.<entry>.spv" per entry.
 [[nodiscard]] std::vector<std::string> spirvNames(const std::filesystem::path& shaderDir,
                                                   const std::filesystem::path& source);
-// The newest modification time of `source` and every file it #includes or (Slang) imports,
-// transitively. #include resolves as glslc does with -I<shaderDir> -I<shaderDir>/includes
-// ("x": the including file's directory first); `import a.b;` as slangc does with
-// -I<shaderDir>: a/b.slang beside the importing file, then under shaderDir. Dependencies
-// that resolve nowhere are listed in `unresolved`.
+// The newest modification time of `source` and every module it imports, transitively.
+// `import a.b;` resolves as slangc does with -I<shaderDir>: a/b.slang beside the importing file,
+// then under shaderDir. Imports that resolve nowhere are listed in `unresolved`.
 [[nodiscard]] std::filesystem::file_time_type newestInput(const std::filesystem::path& shaderDir,
                                                           const std::filesystem::path& source,
                                                           std::vector<std::string>* unresolved = nullptr);

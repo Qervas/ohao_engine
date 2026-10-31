@@ -1,7 +1,7 @@
 #pragma once
 // Clustered lighting (sub-project 2b spec, "Clustered lighting"): the raster light table on the
 // GPU and every froxel's light list, rebuilt each frame by lights.cluster
-// (shaders/compute/light_cluster.slang); core/deferred_lighting.frag sums a pixel's froxel's
+// (shaders/compute/light_cluster.slang); core/deferred_lighting.slang sums a pixel's froxel's
 // lights.
 //
 // The light table is one host-visible storage buffer per frame slot (LightGpu records): the

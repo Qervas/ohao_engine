@@ -5,7 +5,7 @@
 
 namespace ohao {
 
-// GPU-side light data — must match GLSL struct exactly
+// GPU-side light data — must match the shaders' struct exactly (rt/lights.slang)
 // 5 vec4s = 80 bytes per light, std430 layout
 struct GPULight {
     glm::vec4 positionAndType;    // xyz=position, w=type (0=sphere,1=dir,2=spot,3=area)

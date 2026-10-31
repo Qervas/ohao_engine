@@ -11,7 +11,7 @@
 //                the objects in order, each with its own blend state; coverage into an R8
 //                transparency mask (MAX) that TAA lowers its history weight under
 // Particles are drawn with the jittered projection the G-buffer used, soft against its depth;
-// blended meshes reuse core/gbuffer.vert and are shaded per pixel by vfx/transparent_mesh.slang
+// blended meshes reuse core/gbuffer.slang's vertexMain and are shaded per pixel by vfx/transparent_mesh.slang
 // (the forward copy of the deferred light loop). Nothing here reads a clock, a frame counter or the
 // frame-in-flight slot's history: the same records, camera and alpha give the same image.
 
@@ -51,7 +51,7 @@ public:
     VfxRenderer& operator=(const VfxRenderer&) = delete;
 
     // `textures`: the bindless set's layout; `gbufferScene`: GBufferPass's scene set layout (set 1 of
-    // core/gbuffer.vert). False when a pipeline cannot be made (the frame then draws no effects).
+    // core/gbuffer.slang's vertexMain). False when a pipeline cannot be made (the frame then draws no effects).
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkDescriptorSetLayout textures,
                                   VkDescriptorSetLayout gbufferScene);
     void cleanup();

@@ -2,7 +2,7 @@
 // scramble acts on the most-significant bits (as Owen intended), applies
 // a well-mixed hash, then reverses back.
 //
-// Must remain in sync with the GLSL port in
+// Must remain in sync with the Slang port in
 // rt/path_tracer.slang's sampler (frontier F1 T2).
 
 #include "render/rt/owen_scramble.hpp"
