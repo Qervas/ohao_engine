@@ -207,7 +207,6 @@ struct RenderSettings {
     RtDirectSettings rtDirect;
     RtGISettings rtGI;
     bool ssao{false};
-    bool ssr{true};
     bool sss{true};
     GeometryPath geometry{GeometryPath::automatic};
     bool occlusionCulling{true};

@@ -8,13 +8,11 @@
 //               shadowed by the CSM;
 //   indirect    diffuse: RT GI's incoming radiance, else the environment's irradiance, else the
 //               constant ambient, times the diffuse's directional albedo beneath the specular layer
-//               (EON's, scaled by what the specular lets through); specular: the split sum, the
-//               prefiltered environment (and GI's radiance where the rays hit) times the specular
-//               lobes' own directional albedo (OpenPBR's energy tables, not a fitted DFG);
+//               (EON's, scaled by what the specular lets through); specular: RT GI's reflection (one
+//               ray a pixel from the GGX lobe, frontier F5b), else the prefiltered environment (the
+//               split sum), times the specular lobes' own directional albedo (OpenPBR's energy
+//               tables, not a fitted DFG);
 //   emission    the G-buffer's emitted radiance, unlit.
-//
-// Beside the lit image it writes the environment/GI specular it added (E) and its weight (W), which
-// SSR's resolve replaces where its trace hits (postprocess/ssr_resolve.slang).
 import shared.layout;
 import material.openpbr;
 import includes.lighting.clustered_lights;
@@ -28,6 +26,7 @@ import includes.lighting.gbuffer_material;
 [[vk::binding(7, 0)]] Sampler2D envIrradiance;      // the environment's irradiance over pi
 [[vk::binding(10, 0)]] Sampler2D ssaoTexture;       // half resolution: (ao, distance from the camera)
 [[vk::binding(11, 0)]] Sampler2D ssgiTexture;       // RT GI: mean incoming radiance, the environment's visibility
+[[vk::binding(22, 0)]] Sampler2D giReflection;      // RT GI's reflection: the radiance over the GGX lobe (frontier F5b)
 [[vk::binding(12, 0)]] ConstantBuffer<CascadeData> cascades;
 [[vk::binding(14, 0)]] Sampler2D directDiffuse;    // RT direct light's diffuse, over the diffuse albedo
 [[vk::binding(21, 0)]] Sampler2D directSpecular;   // and its specular, over the specular albedo
@@ -70,8 +69,6 @@ struct LightingPush
 struct LightingOut
 {
     float4 color : SV_Target0;
-    float4 envSpecular : SV_Target1;      // E: the environment/GI specular added
-    float4 specularWeight : SV_Target2;   // W: its weight (split sum x specular occlusion)
 };
 
 float4 mulColumns(float4 c[4], float4 v) { return c[0] * v.x + c[1] * v.y + c[2] * v.z + c[3] * v.w; }
@@ -134,8 +131,6 @@ float shadowCSM(float3 p, float viewDepth)
 LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
 {
     LightingOut o;
-    o.envSpecular = float4(0.0);
-    o.specularWeight = float4(0.0);
     const float4 g0 = gBuffer0.SampleLevel(uv, 0.0);
     const float4 g1 = gBuffer1.SampleLevel(uv, 0.0);
     const float4 g2 = gBuffer2.SampleLevel(uv, 0.0);
@@ -154,7 +149,7 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
         return o;
     }
 
-    // A light's emitter mesh (emissive alpha 1): its radiance alone; with E = W = 0 SSR leaves it.
+    // A light's emitter mesh (emissive alpha 1): its radiance alone.
     const float4 emitted = gBufferEmissive.SampleLevel(uv, 0.0);
     if (emitted.a > 0.5)
     {
@@ -208,31 +203,28 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
     if (rtGI) ambient += gi.rgb * diffuseAlbedo * ao;
     else if (!ibl) ambient += pc.ambientIntensity * diffuseAlbedo * ao * ssao;
 
-    // The reflection's weight, here and for SSR's resolve: the specular albedo times the share of the
-    // reflection that survives the occlusion RT GI's rays do not resolve (ao, SSAO) through specular
-    // occlusion (the reflection is a narrower cone than the hemisphere they measure).
+    // The reflection's weight: the specular albedo times the share of the
+    // reflection that survives the occlusion the rays do not resolve through specular occlusion (the
+    // reflection is a narrower cone than the hemisphere they measure): the material's AO, and SSAO
+    // only without RT GI (whose reflection ray sees occluders).
     const float NdotV = s.wo.z;
-    const float occlusion = ao * ssao;
+    const float occlusion = rtGI ? ao : ao * ssao;
     const float3 specularWeight = specularAlbedo * specularOcclusion(NdotV, occlusion, roughness);
-    float3 envSpecular = float3(0.0);
-    if (ibl)
+    if (rtGI)
+    {
+        // RT GI's reflection ray: what the lobe sees, traced (the environment where it escapes).
+        ambient += giReflection.SampleLevel(uv, 0.0).rgb * specularWeight;
+    }
+    else if (ibl)
     {
         const float3 R = reflect(-V, s.normal);
         const float3 prefiltered = pc.envIntensity *
             envPrefiltered.SampleLevel(equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;
         const float3 irradiance = pc.envIntensity * envIrradiance.SampleLevel(equirectUV(s.normal), 0.0).rgb;   // over pi
-        // What arrives: the environment where it is visible and, with RT GI, what its rays that hit
-        // something brought back (the incoming radiance less the escaped share's environment) for
-        // the rest. Without RT GI the environment is taken as unoccluded.
-        const float3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, float3(0.0)) : float3(0.0));
-        envSpecular = incoming * specularWeight;
-        ambient += envSpecular;
-        // RT GI's escaped rays bring the environment back, occluded: without them, its irradiance.
-        if (!rtGI) ambient += diffuseAlbedo * irradiance * occlusion;
+        // Without ray tracing the split sum: the environment, unoccluded but by AO and SSAO.
+        ambient += prefiltered * specularWeight + diffuseAlbedo * irradiance * occlusion;
     }
 
     o.color = float4(ambient + Lo + emitted.rgb, 1.0);
-    o.envSpecular = float4(envSpecular, 0.0);
-    o.specularWeight = float4(specularWeight, 0.0);
     return o;
 }

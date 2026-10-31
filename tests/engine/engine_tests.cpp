@@ -1368,14 +1368,13 @@ static void runOrphanedEntryPointTests() {
         auto check = [&](uint32_t w, uint32_t h, const char* when) {
             auto same = [&](VkExtent2D e) { return e.width == w && e.height == h; };
             if (d->getSSSPass()) EXPECT(same(d->getSSSPass()->extent()), when);
-            if (d->getSSRPass()) EXPECT(same(d->getSSRPass()->extent()), when);
         };
         if (d) {
             renderer.render();
-            check(320, 180, "SSS/SSR targets match the extent after initialize");
+            check(320, 180, "SSS targets match the extent after initialize");
             renderer.resize(2560, 1440);   // larger than any built-in default
             renderer.render();
-            check(2560, 1440, "SSS/SSR/RT shadow targets follow a resize upward");
+            check(2560, 1440, "SSS targets follow a resize upward");
         }
         TEST_PASS();
     }
@@ -1726,7 +1725,6 @@ static std::vector<uint8_t> emitterFrame(float halfSize, bool bloom) {
         r.setRenderMode(ohao::RenderMode::Deferred);
         auto settings = r.renderSettings();
         settings.rtGI = false;
-        settings.ssr = false;
         r.setRenderSettings(settings);
         auto* pp = r.getDeferredRenderer()->getPostProcessing();
         pp->setBloomEnabled(bloom);
@@ -2786,7 +2784,7 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
     const auto& b = d.readBack;
     EXPECT(b.quality == ohao::RenderQuality::Realtime && b.rtDirect && b.rtDirectCandidates == 8 && !b.rtDirectFullResolution &&
                b.rtDirectSpatial == 2 && b.rtGI &&
-               !b.rtGIFullResolution && b.rtGIRays == 2 && !b.ssao && b.ssr && b.sss &&
+               !b.rtGIFullResolution && b.rtGIRays == 2 && !b.ssao && b.sss &&
                b.geometry == ohao::GpuCulling::Geometry::Auto && b.occlusionCulling && b.csmCascades == 4 &&
                b.csmSize == 2048 && b.ev100 == defaults.ev100 && b.tonemap == defaults.tonemap,
            "the defaults read back unchanged");
@@ -2818,7 +2816,7 @@ static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
 }
 
 static void sp2b_t14_switches_turn_their_passes_off() {
-    TEST_BEGIN("sp2b_t14: ssr, sss, ssao, rtGI and rtDirect switch their passes; the frame still renders");
+    TEST_BEGIN("sp2b_t14: sss, ssao, rtGI and rtDirect switch their passes; the frame still renders");
     const SettingsRun on = settingsRun({});
     if (!on.ok) {
         std::cout << "(no Vulkan device -- skipped) ";
@@ -2826,15 +2824,14 @@ static void sp2b_t14_switches_turn_their_passes_off() {
         return;
     }
     ohao::VulkanRenderer::RenderSettings s;
-    s.ssr = false;
     s.sss = false;
     s.rtGI = false;
     s.rtDirect = false;
     const SettingsRun off = settingsRun(s);
     s.ssao = true;
     const SettingsRun ssao = settingsRun(s);
-    EXPECT(ran(on, "ssr") && ran(on, "sss") && !ran(on, "ssao"), "the defaults run ssr and sss, not ssao");
-    EXPECT(!ran(off, "ssr") && !ran(off, "sss"), "ssr and sss off: neither runs");
+    EXPECT(ran(on, "sss") && !ran(on, "ssao"), "the defaults run sss, not ssao");
+    EXPECT(!ran(off, "sss"), "sss off: it does not run");
     EXPECT(!ran(off, "rt.gi") && !ran(off, "rt.gi.denoise") && !ran(off, "di.sample") && !ran(off, "di.trace") && !ran(off, "di.shade"),
            "rtGI and rtDirect off: none of their passes");
     EXPECT(ran(off, "csm"), "rtDirect off: the CSM fallback draws the sun's shadow");

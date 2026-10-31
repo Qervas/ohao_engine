@@ -222,7 +222,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("rtDirect", &RenderSettings::rtDirect).doc("RT direct light")
         .field("rtGI", &RenderSettings::rtGI).doc("RT GI")
         .field("ssao", &RenderSettings::ssao).doc("Screen-space ambient occlusion")
-        .field("ssr", &RenderSettings::ssr).doc("Screen-space reflections")
         .field("sss", &RenderSettings::sss).doc("Subsurface scattering")
         .field("geometry", &RenderSettings::geometry).doc("G-buffer geometry path")
         .field("occlusionCulling", &RenderSettings::occlusionCulling).doc("The late pass's Hi-Z occlusion test")

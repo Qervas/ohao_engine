@@ -243,7 +243,6 @@ lighting            RT direct light (or the froxel list + CSM) + IBL + GI into t
 vfx.expand          the effect records' particles in closed form, lit at their centres (sub-project 12)
 vfx.sort            each alpha batch's particles back to front (integer keys)
 sss                 subsurface blur on classified tiles   [sss]
-ssr                 half-res trace; resolve replaces env specular in place   [ssr]
 transparent         blended meshes and effects back to front over the lit image, soft against
                     depth, each with its blend state; coverage into the mask TAA reads
 post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; ev100, tonemap]  (bloom by energy: 0.04 of the frame)
@@ -428,7 +427,7 @@ $ build/Release/rpc_tests.exe > /dev/null
 Followed once in sub-project 4, step 11, with a throwaway compute pass (the mean
 luminance of each 8x8 tile of the lit HDR image): it built, ran validation-clean through
 a resize and teardown, left every golden exact, and was then removed, since nothing read
-its output. Deferred passes live in `ohao/render/deferred/`; `SSRPass` is the compute
+its output. Deferred passes live in `ohao/render/deferred/`; `SSSPass` is the compute
 model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), the post
 stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
 
@@ -473,8 +472,8 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    refreshed in `importGraphTextures`.)
 5. **Wire it into `DeferredRenderer`** (`deferred_renderer.{hpp,cpp}`): a
    `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
-   and `reset()` on failure, as SSR does); record it in `render()` at its place in the
-   frame (after lighting: sky, vfx.expand, vfx.sort, SSS, SSR, transparent, post, gizmo) inside
+   and `reset()` on failure, as SSS does); record it in `render()` at its place in the
+   frame (after lighting: sky, vfx.expand, vfx.sort, SSS, transparent, post, gizmo) inside
    `timerBegin("name") … timerEnd()`; resize it in `onResize`, and hand it again any view
    of another pass that a resize recreates. A pass left at its creation size is invisible
    to validation and wrong on screen. A graph pass is timed under its `addPass` name.
@@ -534,7 +533,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-41 passes registered; budget names matching none: []
+40 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 

@@ -15,8 +15,9 @@
 //
 // The output is the incoming radiance over the cosine lobe (rgb, the receiver's albedo not
 // applied) and the environment's visibility (a, the share of the rays that left the scene):
-// lighting adds rgb times the diffuse albedo and AO to the ambient term, and lights the
-// specular IBL with the environment where it is visible and with the bounce light elsewhere.
+// lighting adds rgb times the diffuse albedo and AO to the ambient term. Beside it the reflection
+// (frontier F5b): one ray a pixel from the GGX lobe, denoised by the same chain (its a-trous spread by
+// roughness), which lighting weighs by the specular albedo.
 
 #include "render_technique.hpp"
 #include "render/material/openpbr_tables_buffer.hpp"
@@ -88,6 +89,8 @@ private:
     // Every half-resolution image of the realtime chain, created in GENERAL on first use
     // after init or a resize.
     void prepareHalfImages(VkCommandBuffer cmd);
+    // One denoising chain: `chain` 0 the diffuse (into m_output), 1 the reflection (into m_specOutput).
+    void denoiseChain(VkCommandBuffer cmd, uint32_t chain);
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -99,10 +102,14 @@ private:
     // and last frame's), the first a-trous output.
     Image m_noisy{}, m_atrous{};
     std::array<Image, 2> m_guide{}, m_fast{}, m_slow{};
+    // The reflection's chain (frontier F5b): the same images, the guide shared.
+    Image m_specNoisy{}, m_specAtrous{};
+    std::array<Image, 2> m_specFast{}, m_specSlow{};
     bool m_halfReady = false;
     // Full resolution: the output lighting reads, and (reference, created on first use) the
     // running mean in 32-bit floats.
     Image m_output{}, m_refMean{};
+    Image m_specOutput{}, m_specRefMean{};
     // 1x1 stand-ins bound where a quality does not use a binding, and for a missing
     // environment map.
     Image m_guideDummy{}, m_refDummy{}, m_envDummy{};
@@ -145,11 +152,12 @@ private:
     VkDescriptorSetLayout m_alphaTablesLayout = VK_NULL_HANDLE, m_texturesLayout = VK_NULL_HANDLE;   // setAlphaLayouts
     VkDescriptorSetLayout m_atrousSetLayout = VK_NULL_HANDLE, m_upsampleSetLayout = VK_NULL_HANDLE;
 
-    // One set of each per frame in flight (written at record time); the a-trous pass has two
-    // a frame, one per iteration.
+    // One set of each per frame in flight (written at record time), the denoiser's per chain (0 the
+    // diffuse, 1 the reflection); the a-trous pass has two a chain, one per iteration.
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_traceSets{}, m_temporalSets{}, m_upsampleSets{};
-    std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> m_atrousSets{};
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_traceSets{};
+    std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> m_temporalSets{}, m_upsampleSets{};
+    std::array<std::array<std::array<VkDescriptorSet, 2>, 2>, MAX_FRAMES_IN_FLIGHT> m_atrousSets{};
 };
 
 static_assert(GITechniqueLike<RTGITechnique>);

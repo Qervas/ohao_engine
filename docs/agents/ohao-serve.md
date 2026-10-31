@@ -405,7 +405,7 @@ in a window, after the first capture headless.
 
 `render_settings` reads the knobs that decide what a frame runs, and `set` changes them:
 `quality`, `rtDirect {enabled, candidates 1–32, spatial 0–8, resolution half | full}`, `rtGI {enabled, resolution half | full,
-rays 1–32}`, `ssao`, `ssr`, `sss`, `geometry` (`auto`, `meshlets`, `instances`),
+rays 1–32}`, `ssao`, `sss`, `geometry` (`auto`, `meshlets`, `instances`),
 `occlusionCulling`, `csm {cascades 1–4, size 512–4096}`, `ev100`, `tonemap`. A `set` merges (what
 it leaves out keeps its value), is checked against the limits before anything applies
 (`E_RANGE` with the member's path), and counts as a change. The defaults are the frame the
@@ -422,12 +422,12 @@ $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath(
 
 To see what a knob costs, set it, capture with `timings`, and compare against the same
 capture before. `docs/agents/examples/measure_frame.py` is that loop in 40 lines of stdlib
-Python: SSR off, a 640x360 capture with timings, `render.stats` for the same frame.
+Python: SSS off, a 640x360 capture with timings, `render.stats` for the same frame.
 
 ```console
 $ python docs/agents/examples/measure_frame.py   # gpu
-exit 0 | ssr False | gpu named: True
-passes: scene.upload ... readback | ssr ran: False
+exit 0 | sss False | gpu named: True
+passes: scene.upload ... readback | sss ran: False
 capture gpuMs == render.stats gpuMs: True | passes sum within it: True
 ```
 

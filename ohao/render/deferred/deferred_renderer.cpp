@@ -88,16 +88,6 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         m_sssPass.reset();
     }
 
-    // Initialize SSR pass
-    m_ssrPass = std::make_unique<SSRPass>();
-    if (m_ssrPass->initialize(device, physicalDevice)) {
-        m_ssrPass->setGBufferPass(m_gbufferPass.get());
-        OHAO_LOG(Debug, render, "DeferredRenderer: SSRPass OK");
-    } else {
-        OHAO_LOG(Warn, render, "DeferredRenderer: SSRPass failed (non-fatal)");
-        m_ssrPass.reset();
-    }
-
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
     if (!m_postProcessing->initialize(device, physicalDevice)) {
@@ -460,7 +450,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // denoiser. Lighting reads it at binding 11.
     const auto giToLighting = [&]() {
         if (m_lightingPass && m_rtGI->rendered())
-            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, VK_NULL_HANDLE);
+            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, m_rtGI->getOutput().reflectionView,
+                                           VK_NULL_HANDLE);
     };
     const bool giTraced = m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass;
     if (giTraced) {
@@ -531,7 +522,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // (CSM for the sun) and has no indirect light.
     if (m_lightingPass) {
         m_lightingPass->setDirectLight(VK_NULL_HANDLE, VK_NULL_HANDLE);
-        m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
+        m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
 
     // The frame's culling state (the draw table bound, a stale history cleared), before the
@@ -601,22 +592,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         timerEnd();
     }
 
-    // 4.8. SSR — screen-space reflections on glossy surfaces: traced at half resolution, then
-    // resolved into the lit image in place, replacing the environment's reflection where the
-    // trace hit (before bloom and TAA, which see the reflections like any lit pixel).
-    if (m_ssrPass && m_ssrWanted && litOutput) {
-        timerBegin("ssr");
-        m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
-        m_ssrPass->setLitScene(m_lightingPass->getOutputImage(), litOutput, m_lightingPass->envSpecularView(),
-                               m_lightingPass->specularWeightView());
-        m_ssrPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
-
     // 4.9. transparent — the blended surfaces and the effects over the lit image, back to front,
     // each with its own blend state, against the G-buffer's depth (sub-project 12); their
-    // coverage goes to a mask TAA lowers its history weight under. After SSR, so a reflection
-    // never shows what stands in front of the mirror; before bloom, so it glows.
+    // coverage goes to a mask TAA lowers its history weight under. Before bloom, so it glows.
     if (vfxOn && m_vfx->hasObjects()) {
         timerBegin("transparent");
         m_vfx->drawTransparent(cmd, frameIndex, *m_renderScene, vfxLighting, texturesSet,
@@ -692,7 +670,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_rtDirect) m_rtDirect->resize(width, height);
     if (m_rtGI) m_rtGI->resize(width, height);
     if (m_sssPass) m_sssPass->onResize(width, height);
-    if (m_ssrPass) m_ssrPass->onResize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);

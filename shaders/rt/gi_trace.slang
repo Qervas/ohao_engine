@@ -31,6 +31,14 @@
 // direction (black without one). Cosine sampling makes the mean of those radiances the diffuse
 // irradiance over pi.
 //
+// The reflection (frontier F5b): one more ray a pixel, its direction drawn from the GGX lobe of the
+// surface's roughness (bounded VNDF, Eto and Tokuyoshi 2023), brings back what it meets as the
+// diffuse rays do (a surface's reflected light, the cache's past the first ray, its emission unless
+// RT direct light samples it, else the environment). Its mean over the lobe is the radiance the
+// split sum prefiltered from the environment, now traced: lighting weighs it by OpenPBR's specular
+// albedo. Written beside the diffuse with the roughness in alpha (realtime: specOut, denoised by
+// roughness; reference: the running mean in specRefMean).
+//
 // Every sample hashes (render seed, frame index since the reset, pixel, ray, dimension), so
 // the accumulation converges and repeats exactly after a reset.
 import shared.layout;
@@ -55,11 +63,15 @@ import rt.radiance_cache;
 [[vk::binding(12, 0)]] RWStructuredBuffer<uint> cacheKeys;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint4> cacheAccum;
 [[vk::binding(14, 0)]] RWStructuredBuffer<uint4> cacheResolved;
+// The reflection: realtime the trace's (rgb radiance, a roughness), reference the output it averages into.
+[[vk::binding(15, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> specOut;
+[[vk::binding(16, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> specRefMean;   // reference
 [[vk::push_constant]] ConstantBuffer<GITracePush> pc;
 
 static const float kPi = 3.14159265;
 static const float kTwoPi = 6.2831853;
 static const float kRayLength = 100.0;
+static const uint kReflectionRay = 64u;   // the reflection's ray index for its random numbers (past any diffuse ray's)
 
 uint pcg(uint v)
 {
@@ -392,7 +404,12 @@ void trace(uint3 id : SV_DispatchThreadID)
     if (all(position == float4(0.0)) || position.w < 0.0)   // sky, or a light's emitter mesh: no indirect light
     {
         radianceOut[pixel] = float4(0.0);
-        if (reference) refMean[pixel] = float4(0.0);
+        specOut[pixel] = float4(0.0);
+        if (reference)
+        {
+            refMean[pixel] = float4(0.0);
+            specRefMean[pixel] = float4(0.0);
+        }
         else guideOut[pixel] = 0u;
         return;
     }
@@ -420,8 +437,20 @@ void trace(uint3 id : SV_DispatchThreadID)
         escapedSum += escaped;
     }
     // The mean incoming radiance, and the environment's visibility: the share of the
-    // cosine-weighted rays that left the scene (lighting occludes the specular IBL by it).
+    // cosine-weighted rays that left the scene.
     const float4 mean = float4(sum / float(rays), escapedSum / float(rays));
+
+    // The reflection: a direction from the GGX lobe toward the viewer (one below the horizon, which
+    // the bounded VNDF rarely draws, is mirrored).
+    const float rough = clamp(gNormal.Load(int3(full, 0)).b, 0.01, 1.0);
+    const float3 V = normalize(pc.cameraPos.xyz - p);
+    const float3 wo = normalize(float3(dot(V, t), dot(V, b), max(dot(V, n), 1e-4)));
+    const float3 m = ggxSampleBounded(wo, rough * rough, float2(rand01(key, kReflectionRay, 0u), rand01(key, kReflectionRay, 1u)));
+    float3 wi = reflect(-wo, m);
+    if (wi.z <= 0.0) wi = float3(-wo.x, -wo.y, wo.z);
+    float specEscaped;
+    const float3 reflection = incoming(origin, normalize(t * wi.x + b * wi.y + n * wi.z), key, kReflectionRay, feeds,
+                                       specEscaped);
 
     if (reference)
     {
@@ -430,13 +459,18 @@ void trace(uint3 id : SV_DispatchThreadID)
         // stale or undefined is read.
         const uint k = pc.flags.z;
         const float4 prev = k == 0u ? float4(0.0) : refMean[pixel];
-        const float4 m = prev + (mean - prev) / (float(k) + 1.0);
-        refMean[pixel] = m;
-        radianceOut[pixel] = m;
+        const float4 rm = prev + (mean - prev) / (float(k) + 1.0);
+        refMean[pixel] = rm;
+        radianceOut[pixel] = rm;
+        const float4 sp = k == 0u ? float4(0.0) : specRefMean[pixel];
+        const float4 sm = sp + (float4(reflection, rough) - sp) / (float(k) + 1.0);
+        specRefMean[pixel] = sm;
+        specOut[pixel] = sm;
         return;
     }
 
     radianceOut[pixel] = mean;
+    specOut[pixel] = float4(reflection, rough);
     // The denoiser's guide, as RT shadows pack theirs: the distance from the camera
     // (bfloat16, never 0 on a surface) and the octahedral normal (8 + 8 bits). 0 is sky.
     const uint dist = max(asuint(distance(p, pc.cameraPos.xyz)) >> 16u, 1u);

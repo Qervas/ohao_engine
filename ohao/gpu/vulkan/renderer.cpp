@@ -377,7 +377,6 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
     d.setRTGIEnabled(s.rtGI);
     if (s.rtGIFullResolution != d.rtGIFullResolution() || s.rtGIRays != d.rtGIRays())
         d.setRTGIRealtime(s.rtGIFullResolution, s.rtGIRays);
-    d.setSSREnabled(s.ssr);
     d.setSSSEnabled(s.sss);
     d.setDecalsDrawn(s.vfxDecals);
     d.setSmokeInGi(s.vfxSmokeInGi);
@@ -414,7 +413,6 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     s.rtGI = d.rtGIEnabled();
     s.rtGIFullResolution = d.rtGIFullResolution();
     s.rtGIRays = d.rtGIRays();
-    s.ssr = d.ssrEnabled();
     s.sss = d.sssEnabled();
     s.vfxDecals = d.decalsDrawn();
     s.vfxSmokeInGi = d.smokeInGi();

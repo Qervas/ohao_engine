@@ -274,7 +274,6 @@ public:
         bool rtGIFullResolution{false};  // realtime: the trace at the frame's size, not half
         uint32_t rtGIRays{2};            // realtime: rays a pixel (1-32)
         bool ssao{false};
-        bool ssr{true};
         bool sss{true};
         GpuCulling::Geometry geometry{GpuCulling::Geometry::Auto};
         bool occlusionCulling{true};

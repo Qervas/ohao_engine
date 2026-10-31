@@ -16,7 +16,7 @@
 //   t32_capture_any_history   a capture at step N after 0, 7 and 200 frames rendered is the same image:
 //                             effects are a function of the step.
 //   t32_forward_parity        a plane shaded by the forward pass (BLEND, opacity 1) equals the deferred
-//                             plane within 1 LSB, RT shadows, RT GI, SSR, SSAO and post off.
+//                             plane within 1 LSB, RT shadows, RT GI, SSAO and post off.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "common/materials.hpp"
@@ -566,7 +566,6 @@ void t32_forward_parity() {
         VulkanRenderer::RenderSettings s = r.renderSettings();
         s.rtDirect = false;
         s.rtGI = false;
-        s.ssr = false;
         s.ssao = false;
         s.sss = false;
         r.setRenderSettings(s);

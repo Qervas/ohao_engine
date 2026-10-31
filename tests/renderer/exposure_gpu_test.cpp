@@ -117,19 +117,21 @@ void autoExposureMetersAndDoubles() {
     s.autoExposure = true;
     renderer->setRenderSettings(s);
 
-    const std::optional<float> ev1 = h.meter(150);
+    const std::optional<float> ev1 = h.meter(300);   // settled, as below
     check(ev1.has_value() && std::isfinite(*ev1), "Cornell is metered");
     if (ev1) std::printf("  Cornell meters at EV100 %.4f\n", *ev1);
 
     auto& reg = h.world.registry();
     for (auto e : reg.view<ecs::Light>()) reg.patch<ecs::Light>(e, [](ecs::Light& l) { l.intensity *= 2.0f; });
-    const std::optional<float> ev2 = h.meter(150);
+    // 300 frames: the metering converges in 120, RT GI's bounces through its radiance cache (frontier
+    // F5a) a bounce at a time, and the identities below hold only for the settled frame.
+    const std::optional<float> ev2 = h.meter(300);
     if (ev1 && ev2) std::printf("  every light doubled: EV100 %.4f (%+.4f)\n", *ev2, *ev2 - *ev1);
     check(ev1 && ev2 && std::abs(*ev2 - *ev1 - 1.0f) < 0.01f, "every light doubled: one EV more, within 0.01");
 
     s.exposureCompensation = 1.0f;
     renderer->setRenderSettings(s);
-    const std::optional<float> ev3 = h.meter(150);
+    const std::optional<float> ev3 = h.meter(300);
     if (ev2 && ev3) std::printf("  +1 EV compensation: EV100 %.4f (%+.4f)\n", *ev3, *ev3 - *ev2);
     check(ev2 && ev3 && std::abs(*ev3 - *ev2 + 1.0f) < 0.01f, "a compensation of +1 EV meters one EV less");
 

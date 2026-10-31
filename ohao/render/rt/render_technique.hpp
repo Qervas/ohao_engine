@@ -67,6 +67,7 @@ struct GIInput {
 struct GIOutput {
     VkImage indirectLight;         // RGBA16F, full resolution: rgb incoming radiance (no albedo), a the environment's visibility
     VkImageView indirectLightView;
+    VkImageView reflectionView;    // RGBA16F, full resolution: rgb the radiance over the GGX lobe (no albedo), a roughness
 };
 
 class IGITechnique {

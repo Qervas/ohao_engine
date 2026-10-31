@@ -1,7 +1,7 @@
 """Measure a frame through ohao serve: settings, a capture with timings, render.stats.
 
 A stdlib-only client of the native protocol (one JSON-RPC request per line). It loads
-Cornell headless, turns SSR off, captures one 640x360 deferred frame with its per-pass
+Cornell headless, turns SSS off, captures one 640x360 deferred frame with its per-pass
 timings, and checks render.stats for that frame agrees. Run from the repo root:
     python docs/agents/examples/measure_frame.py
 """
@@ -26,13 +26,13 @@ def call(method, params=None):
     return reply["result"]
 
 
-settings = call("render.settings", {"set": {"ssr": False}})
+settings = call("render.settings", {"set": {"sss": False}})
 shot = call("render.capture", {"inline": True, "maxSize": 64, "width": 640, "height": 360, "timings": True})
 stats = call("render.stats", {"frames": 1})
 gpu = call("engine.info").get("gpu", {})
 p.stdin.close()
 names = [t[0] for t in shot["timings"]]
-print("exit", p.wait(), "| ssr", settings["ssr"], "| gpu named:", bool(gpu.get("name")))
-print("passes:", names[0], "...", names[-1], "| ssr ran:", "ssr" in names)
+print("exit", p.wait(), "| sss", settings["sss"], "| gpu named:", bool(gpu.get("name")))
+print("passes:", names[0], "...", names[-1], "| sss ran:", "sss" in names)
 print("capture gpuMs == render.stats gpuMs:", shot["gpuMs"] == stats["gpuMs"], "| passes sum within it:",
       sum(t[1] for t in shot["timings"]) <= shot["gpuMs"] * 1.05 + 0.01)

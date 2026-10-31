@@ -13,6 +13,9 @@
 //           the environment's visibility, accumulated as its radiance is.
 // atrous    Twice (steps 1 and 2), at half resolution: a 5x5 B3-spline a-trous kernel over
 //           the long accumulation (radiance and visibility), edge-stopped by depth and normal.
+//           The reflection (frontier F5b, params.w 1) runs the same chain with its roughness in
+//           alpha: its kernel spreads only as far as the surface is rough (none below 0.05, all
+//           from 0.4), so a mirror keeps its reflection sharp.
 // upsample  To full resolution, joint-bilateral: the 4 nearest half-resolution samples
 //           weighted bilinearly and by how well their depth and normal match the pixel's.
 //           Lighting multiplies the radiance by the diffuse albedo and occludes the specular
@@ -193,6 +196,7 @@ void atrous(uint3 id : SV_DispatchThreadID)
     // 80 degrees at 720p) keeps its neighbours.
     const float invTol = 1.0 / (0.03 * gc.w * float(step));
     const float kH[3] = {0.375, 0.25, 0.0625};   // B3 spline: centre, 1, 2
+    const float spread = pc.params.w == 1u ? smoothstep(0.05, 0.4, aInput.Load(int3(pixel, 0)).a) : 1.0;
     float4 sum = float4(0.0);
     float wsum = 0.0;
     [unroll]
@@ -217,6 +221,7 @@ void atrous(uint3 id : SV_DispatchThreadID)
                     const float nd4 = nd2 * nd2;
                     w *= nd4 * nd4 * nd4 * nd4;   // cos^16
                 }
+                w *= spread;
             }
             sum += w * aInput.Load(int3(q, 0));
             wsum += w;

@@ -201,7 +201,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   idles nothing and a capture after it is the same from any frame slot; the GPU preview is
   the CPU box filter's bytes and is all a preview request copies), the render settings
   (`sp2b_t14_*`: a fresh renderer starts at the defaults and reads back what was set; the
-  SSR, SSS, SSAO, RT GI and RT direct light switches drop their passes; GI resolution and rays
+  SSS, SSAO, RT GI and RT direct light switches drop their passes; GI resolution and rays
   reach the trace; CSM cascades and size rebuild the map), the HUD (`sp7_hud_*`: a capture
   with a HUD list differs from one without only inside the listed rectangles, and an empty
   list leaves the frame byte for byte). `ecs_tests`: world, hierarchy, transforms and the render extract
@@ -493,16 +493,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   material row 2, w), never from a metallicRoughness map's R channel, which glTF leaves
   unused (reading it blacked out MetalRoughSpheres and had kept DamagedHelmet out of all
   ambient light). A packed ORM image is uploaded once and serves both.
-- The deferred frame's environment light is split-sum IBL from `EnvPrefilter`'s images
-  (`render/deferred/env_prefilter.*`, built at environment upload: GGX-prefiltered into
-  `kEnvPrefilterLevels` mips read at `roughness * (levels - 1)`, and irradiance), times the
-  environment's intensity. RT GI's output is raw incoming radiance (no albedo) with the
-  environment's visibility (escaped rays) in alpha: specular weights the prefiltered
-  environment by it and takes GI's radiance for the rest, so a closed room does not
-  mirror the sky; AO and SSAO occlude specular through `specularOcclusion`. The path
-  tracer's environment keeps one mip and is untouched. RT GI's half-resolution noise
-  shows as low-frequency blotches on flat walls; compare a metal against the path tracer
-  before trusting its look.
+- **Specular indirect light is RT GI's reflection** (frontier F5b): one more ray a pixel, its
+  direction from the GGX lobe of the surface's roughness (bounded VNDF), shaded as GI's diffuse rays
+  are (a hit's light, the cache, the environment on a miss), denoised by GI's chain with its a-trous
+  spread by roughness (a mirror stays sharp), weighed in lighting by OpenPBR's specular albedo and
+  the material's AO through `specularOcclusion`. Without ray tracing (the fallback) it is the split
+  sum: `EnvPrefilter`'s images (`render/deferred/env_prefilter.*`, built at environment upload:
+  GGX-prefiltered into `kEnvPrefilterLevels` mips read at `roughness * (levels - 1)`, and
+  irradiance), times the environment's intensity, occluded by AO and SSAO. There is no SSR: the
+  reflection ray sees what the screen cannot. RT GI's half-resolution noise shows as low-frequency
+  blotches on flat walls; compare a metal against the path tracer before trusting its look.
 - **A directional light stands for the sun.** While the scene has one
   (`RenderScene::hasDirectionalLight`), the HDRI is uploaded with its sun painted out
   (`render/rt/env_sun.hpp`: the peak's connected texels over 64 x the median sky, if the peak is
@@ -525,12 +525,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   level 0, the source, into sky pixels; without one they are black), as the path tracer's missing
   camera rays show it. `check_env_orientation.py` renders a scene with no
   light and checks the sky band in all three captures.
-- Reflected light is counted once. Lighting writes, beside the lit image, the
-  environment/GI specular it added (`envSpecular`, E) and its weight (`specularWeight`,
-  W: split sum times specular occlusion, computed for every pixel, environment or not);
-  SSR's resolve (`postprocess/ssr_resolve.slang`) rewrites the lit image in place,
-  `lit += W·(c·L) − c·E`, before bloom and TAA. A new reflection source must go through
-  E/W, never be added on top in post.
+- Reflected light is counted once: RT direct light reflects the lights (and emissive triangles),
+  RT GI's reflection everything else (its rays skip lights' emitter meshes and drop what a hit
+  emits when RT direct light samples it). A new reflection source must fit that split, never be
+  added on top in post.
 - Indirect diffuse light has one source per frame: RT GI's rays, else the environment's
   irradiance, else (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment) the
   constant ambient (`ambientIntensity`, 0.35; `setAmbientIntensity` overrides it). With RT GI the constant does nothing; RT GI carries every
@@ -722,7 +720,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   shadow or GI ray hits it (else the light would shadow itself or be counted twice); no CSM cascade draws it
   (`kDrawEmitter`); the
   G-buffer marks it with emissive alpha 1 and metallic −1, so lighting outputs its radiance
-  alone, SSR treats it as a miss and RT direct light and GI skip it as sky. A new trace passes
+  alone, and RT direct light and GI skip it as sky. A new trace passes
   `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
   emitter pixel is to it. `setLightEmitters(false)` turns the meshes off (the lights stay).
   A mesh moves with its light and writes motion vectors as any mesh does: the extract passes
@@ -730,8 +728,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   emitter's prevWorld is that times its world (identity, so prevWorld = world, when still).
   Mirrors reflect it: in deferred a point or spot light's specular is its sphere's
   (`LightGpu.params.z` = the mesh's radius, `evaluateSphere`: the representative point,
-  the lobe widened to `a + r/(2d)`), on screen or off, SSR or not; SSR treats an emitter pixel
-  as a miss, the analytic reflection stands in. A spot's mesh shines toward the camera by
+  the lobe widened to `a + r/(2d)`), on screen or off. A spot's mesh shines toward the camera by
   its cone (`RenderScene::setViewerPosition`, each frame): dark from outside it, in both
   renderers; its reflection uses the same per-frame value in the path tracer.
   Bloom is by energy (frontier F2 T4): no threshold, no clamp. The frame goes into the pyramid
@@ -1184,7 +1181,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     lights through its froxel (every light when it is off screen), one shadow ray to the first
     directional light, RT GI's radiance at its pixel, else the environment's irradiance, else the
     constant ambient. `vfx.sort` orders each alpha batch (<= `kVfxSortMax`) back to front by integer
-    keys (distance bits, slot). `transparent` (after `ssr`, before `post.bloom`) draws every blended
+    keys (distance bits, slot). `transparent` (after `sss`, before `post.bloom`) draws every blended
     mesh and effect batch back to front, ordered on the host by distance, then kind, then id, each
     with its own blend state (additive, alpha, premultiplied), with the G-buffer's jittered
     projection, soft against its depth, writing coverage to an R8 mask TAA lowers its history weight
@@ -1207,7 +1204,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     so a scene without smoke is bit-identical. A sphere is
     the emitter's pose plus up to 0.6 R of offset: a cloud placed on a wall plane is half outside it.
   - **Decals are raster only** (no RT decal); tracers and particles are sorted back to front by integer
-    keys (distance bits, then id); the transparent pass runs after SSR, so SSR never sees a particle.
+    keys (distance bits, then id).
   - **A GPU test that loads a level must install what the CLI installs** (`level::installLevels`, then
     `installPhysics`, as `tools/ohao/main.cpp` does). Without it the blockout is never expanded, the
     scene has no instances, `scene.upload` builds no TLAS, and RT direct light and RT GI silently do not run

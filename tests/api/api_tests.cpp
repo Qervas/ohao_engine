@@ -255,16 +255,16 @@ static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
     const Reply read(s.call("render.settings"));
     CHECK(read.ok() && read.json("/result/quality") == R"("realtime")" && read.json("/result/rtGI/rays") == "2" &&
               read.json("/result/rtGI/resolution") == R"("half")" && read.json("/result/geometry") == R"("auto")" &&
-              read.json("/result/csm/size") == "2048" && read.json("/result/ssr") == "true",
+              read.json("/result/csm/size") == "2048" && read.json("/result/sss") == "true",
           "a read returns every setting, the budgeted defaults");
     CHECK(s.changeCount() == changes && host.settingsSet == 0, "a read changes nothing");
 
-    const Reply set(s.call("render.settings", R"({"set":{"rtGI":{"rays":8},"ssr":false,"quality":"reference"}})"));
+    const Reply set(s.call("render.settings", R"({"set":{"rtGI":{"rays":8},"sss":false,"quality":"reference"}})"));
     CHECK(set.ok() && host.settingsSet == 1 && host.settings->rtGI.rays == 8 && host.settings->rtGI.enabled &&
-              host.settings->rtGI.resolution == api::TraceResolution::half && !host.settings->ssr &&
-              host.settings->sss && host.settings->quality == api::Quality::reference,
+              host.settings->rtGI.resolution == api::TraceResolution::half && !host.settings->sss &&
+              !host.settings->ssao && host.settings->quality == api::Quality::reference,
           "a set changes the members given, nested ones too; the rest keep their value");
-    CHECK(set.json("/result/rtGI/rays") == "8" && set.json("/result/ssr") == "false", "and answers the settings now in effect");
+    CHECK(set.json("/result/rtGI/rays") == "8" && set.json("/result/sss") == "false", "and answers the settings now in effect");
     CHECK(s.changeCount() == changes + 1, "a set counts as a change (a lockstep window redraws)");
 
     changes = s.changeCount();

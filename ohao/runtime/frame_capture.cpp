@@ -329,7 +329,6 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
     s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::TraceResolution::full : api::TraceResolution::half,
               static_cast<int32_t>(r.rtGIRays)};
     s.ssao = r.ssao;
-    s.ssr = r.ssr;
     s.sss = r.sss;
     s.geometry = r.geometry == GpuCulling::Geometry::Meshlets    ? api::GeometryPath::meshlets
                  : r.geometry == GpuCulling::Geometry::Instances ? api::GeometryPath::instances
@@ -355,7 +354,6 @@ void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s)
     r.rtGIFullResolution = s.rtGI.resolution == api::TraceResolution::full;
     r.rtGIRays = static_cast<uint32_t>(std::clamp(s.rtGI.rays, 1, 32));
     r.ssao = s.ssao;
-    r.ssr = s.ssr;
     r.sss = s.sss;
     r.geometry = s.geometry == api::GeometryPath::meshlets    ? GpuCulling::Geometry::Meshlets
                  : s.geometry == api::GeometryPath::instances ? GpuCulling::Geometry::Instances

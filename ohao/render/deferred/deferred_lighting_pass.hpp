@@ -31,7 +31,8 @@ public:
     void clearPerFrameInputs();
     void setShadowMap(VkImageView shadowMap, VkSampler shadowSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
-    void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
+    // RT GI's diffuse (binding 11) and its reflection (binding 22, frontier F5b); both or neither.
+    void setSSGITexture(VkImageView ssgi, VkImageView reflection, VkSampler ssgiSampler);
     // RT direct light's demodulated diffuse and specular (render/rt/rt_direct_technique.hpp):
     // lighting multiplies them by the albedos and leaves every light but flashes out of its loop.
     // Null: none this frame (the loop lights everything; CSM, if bound, shadows the sun).
@@ -49,11 +50,6 @@ public:
     [[nodiscard]] VkImageView getOutputView() const { return m_hdrOutput.view; }
     [[nodiscard]] VkImage getOutputImage() const { return m_hdrOutput.image; }
     [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
-    // Beside the lit image, for SSR's resolve (RGBA16F, full resolution, SHADER_READ_ONLY after
-    // the pass): the environment/RT GI specular each pixel added, and its weight (the split
-    // sum times specular occlusion). 0 for sky.
-    [[nodiscard]] VkImageView envSpecularView() const { return m_envSpecular.view; }
-    [[nodiscard]] VkImageView specularWeightView() const { return m_specularWeight.view; }
 
     // The light table (LightGpu records, binding 5), its light count and the ambient intensity
     // (the fallback fill of a frame with neither RT GI nor an environment).
@@ -95,10 +91,8 @@ private:
     // G-Buffer reference
     GBufferPass* m_gbufferPass{nullptr};
 
-    // The three color attachments: the lit HDR image, the environment's specular and its weight
+    // The color attachment: the lit HDR image
     RenderTarget m_hdrOutput;
-    RenderTarget m_envSpecular;
-    RenderTarget m_specularWeight;
 
     // Render pass and framebuffer
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
@@ -130,6 +124,7 @@ private:
     VkImageView m_ssaoView{VK_NULL_HANDLE};
     VkSampler m_ssaoSampler{VK_NULL_HANDLE};
     VkImageView m_ssgiView{VK_NULL_HANDLE};
+    VkImageView m_giReflectionView{VK_NULL_HANDLE};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
     VkImageView m_directDiffuseView{VK_NULL_HANDLE};

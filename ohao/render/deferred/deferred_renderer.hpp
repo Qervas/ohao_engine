@@ -11,7 +11,6 @@
 #include "render/hud/hud_pass.hpp"
 #include "render/vfx/vfx_renderer.hpp"
 #include "render/vfx/decal_pass.hpp"
-#include "ssr_pass.hpp"
 #include "sss_pass.hpp"
 #include "render/rt/rt_direct_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
@@ -92,16 +91,13 @@ public:
     }
 
     // render.settings switches (between frames). RT GI on or off (off: no indirect light), its
-    // realtime trace at half or full resolution and its rays a pixel (1-32); SSR and SSS on or
-    // off; the CSM fallback's cascades (1-4) and size (512-4096; a new size rebuilds the map).
+    // realtime trace at half or full resolution and its rays a pixel (1-32); SSS on or off; the CSM fallback's cascades (1-4) and size (512-4096; a new size rebuilds the map).
     void setRTGIEnabled(bool on) noexcept { m_rtgiWanted = on; }
     [[nodiscard]] bool rtGIEnabled() const noexcept { return m_rtgiWanted; }
     [[nodiscard]] bool rtGIAvailable() const noexcept { return m_useRTGI && m_rtGI != nullptr; }
     void setRTGIRealtime(bool fullResolution, uint32_t rays);
     [[nodiscard]] bool rtGIFullResolution() const noexcept { return m_giFull; }
     [[nodiscard]] uint32_t rtGIRays() const noexcept { return m_giRays; }
-    void setSSREnabled(bool on) noexcept { m_ssrWanted = on; }
-    [[nodiscard]] bool ssrEnabled() const noexcept { return m_ssrWanted; }
     void setSSSEnabled(bool on) noexcept { m_sssWanted = on; }
     [[nodiscard]] bool sssEnabled() const noexcept { return m_sssWanted; }
     void configureCSM(uint32_t cascades, uint32_t size);
@@ -139,7 +135,6 @@ public:
     // GPU culling: its settings (frustum, occlusion) and, for tests, its captured lists.
     [[nodiscard]] GpuCulling* culling() noexcept { return m_culling.get(); }
     [[nodiscard]] const SSSPass* getSSSPass() const { return m_sssPass.get(); }
-    [[nodiscard]] const SSRPass* getSSRPass() const { return m_ssrPass.get(); }
     [[nodiscard]] const RTDirectTechnique* rtDirect() const { return m_rtDirect.get(); }
 
     // Times every pass render() records, by its render/frame/pass_registry.hpp name (the
@@ -194,7 +189,7 @@ public:
     // True when the final image is the post stack's RGBA8 output; false when it is the
     // lighting pass's RGBA16F HDR image (tonemapping off), which a byte copy cannot read back.
     [[nodiscard]] bool finalOutputIsRGBA8() const;
-    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents, SSR) before post.
+    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post.
     [[nodiscard]] VkImage getLitImage() const;
 
     // Get SSAO output for deferred lighting
@@ -232,12 +227,10 @@ private:
     bool m_rtgiWanted{true};
     bool m_giFull{false};
     uint32_t m_giRays{2};
-    bool m_ssrWanted{true};
     bool m_sssWanted{true};
     VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
     float m_envIntensity{1.0f};              // setEnvMap: Environment.intensity
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
-    std::unique_ptr<SSRPass> m_ssrPass;
     std::unique_ptr<SSSPass> m_sssPass;
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
     std::unique_ptr<GizmoPass> m_gizmoPass;

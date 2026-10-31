@@ -182,27 +182,32 @@ bool RTGITechnique::createScreenImages() {
     const auto half = [&](Image& img, VkFormat format) {
         return rtc::createImage(m_device, m_physicalDevice, img, format, kUsage, m_halfWidth, m_halfHeight);
     };
-    bool ok = half(m_noisy, kRadianceFormat) && half(m_atrous, kRadianceFormat);
+    bool ok = half(m_noisy, kRadianceFormat) && half(m_atrous, kRadianceFormat) && half(m_specNoisy, kRadianceFormat) &&
+              half(m_specAtrous, kRadianceFormat);
     for (uint32_t i = 0; i < 2 && ok; ++i)
-        ok = half(m_guide[i], kGuideFormat) && half(m_fast[i], kRadianceFormat) && half(m_slow[i], kRadianceFormat);
-    ok = ok && rtc::createImage(m_device, m_physicalDevice, m_output, kRadianceFormat, kUsage, m_width, m_height);
+        ok = half(m_guide[i], kGuideFormat) && half(m_fast[i], kRadianceFormat) && half(m_slow[i], kRadianceFormat) &&
+             half(m_specFast[i], kRadianceFormat) && half(m_specSlow[i], kRadianceFormat);
+    ok = ok && rtc::createImage(m_device, m_physicalDevice, m_output, kRadianceFormat, kUsage, m_width, m_height) &&
+         rtc::createImage(m_device, m_physicalDevice, m_specOutput, kRadianceFormat, kUsage, m_width, m_height);
     m_halfReady = false;
     m_historyValid = false;
     return ok;
 }
 
 void RTGITechnique::destroyScreenImages() {
-    for (Image* img : {&m_noisy, &m_atrous, &m_output, &m_refMean}) rtc::destroyImage(m_device, *img);
-    for (uint32_t i = 0; i < 2; ++i) {
-        rtc::destroyImage(m_device, m_guide[i]);
-        rtc::destroyImage(m_device, m_fast[i]);
-        rtc::destroyImage(m_device, m_slow[i]);
-    }
+    for (Image* img : {&m_noisy, &m_atrous, &m_output, &m_refMean, &m_specNoisy, &m_specAtrous, &m_specOutput,
+                       &m_specRefMean})
+        rtc::destroyImage(m_device, *img);
+    for (uint32_t i = 0; i < 2; ++i)
+        for (Image* img : {&m_guide[i], &m_fast[i], &m_slow[i], &m_specFast[i], &m_specSlow[i]})
+            rtc::destroyImage(m_device, *img);
 }
 
 bool RTGITechnique::ensureReferenceImage() {
-    return m_refMean.image ||
-           rtc::createImage(m_device, m_physicalDevice, m_refMean, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, m_width, m_height);
+    return (m_refMean.image ||
+            rtc::createImage(m_device, m_physicalDevice, m_refMean, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, m_width, m_height)) &&
+           (m_specRefMean.image || rtc::createImage(m_device, m_physicalDevice, m_specRefMean, kRefFormat,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT, m_width, m_height));
 }
 
 bool RTGITechnique::createDescriptorResources() {
@@ -218,6 +223,7 @@ bool RTGITechnique::createDescriptorResources() {
         layoutBinding(8, storage), layoutBinding(9, storage), layoutBinding(10, storage),  // radiance, guide, mean
         layoutBinding(11, buffer),                                                         // OpenPBR's tables
         layoutBinding(12, buffer), layoutBinding(13, buffer), layoutBinding(14, buffer),   // the radiance cache
+        layoutBinding(15, storage), layoutBinding(16, storage),                            // the reflection, its mean
     };
     const std::vector<VkDescriptorSetLayoutBinding> temporal = {
         layoutBinding(0, sampled), layoutBinding(1, sampled), layoutBinding(2, sampled),
@@ -240,17 +246,17 @@ bool RTGITechnique::createDescriptorResources() {
         if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
     }
 
-    // Per frame slot: trace, temporal, 2 a-trous, upsample.
+    // Per frame slot: trace, and per chain temporal, 2 a-trous, upsample.
     const VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
-        {sampled, (4 + 6 + 2 * 2 + 5) * MAX_FRAMES_IN_FLIGHT},
-        {storage, (3 + 2 + 2 * 1 + 1) * MAX_FRAMES_IN_FLIGHT},
+        {sampled, (4 + 2 * (6 + 2 * 2 + 5)) * MAX_FRAMES_IN_FLIGHT},
+        {storage, (5 + 2 * (2 + 2 * 1 + 1)) * MAX_FRAMES_IN_FLIGHT},
         {buffer, 6 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1 * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 5 * MAX_FRAMES_IN_FLIGHT;
+    poolInfo.maxSets = 9 * MAX_FRAMES_IN_FLIGHT;
     poolInfo.poolSizeCount = 5;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) return false;
@@ -264,10 +270,11 @@ bool RTGITechnique::createDescriptorResources() {
         return vkAllocateDescriptorSets(m_device, &ai, out) == VK_SUCCESS;
     };
     for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
-        if (!allocate(m_traceSetLayout, &m_traceSets[s]) || !allocate(m_temporalSetLayout, &m_temporalSets[s]) ||
-            !allocate(m_atrousSetLayout, &m_atrousSets[s][0]) || !allocate(m_atrousSetLayout, &m_atrousSets[s][1]) ||
-            !allocate(m_upsampleSetLayout, &m_upsampleSets[s]))
-            return false;
+        if (!allocate(m_traceSetLayout, &m_traceSets[s])) return false;
+        for (uint32_t c = 0; c < 2; ++c)
+            if (!allocate(m_temporalSetLayout, &m_temporalSets[s][c]) || !allocate(m_atrousSetLayout, &m_atrousSets[s][c][0]) ||
+                !allocate(m_atrousSetLayout, &m_atrousSets[s][c][1]) || !allocate(m_upsampleSetLayout, &m_upsampleSets[s][c]))
+                return false;
     }
     return true;
 }
@@ -287,7 +294,8 @@ bool RTGITechnique::createPipelines() {
 
 void RTGITechnique::prepareHalfImages(VkCommandBuffer cmd) {
     if (m_halfReady) return;
-    for (Image* img : {&m_noisy, &m_atrous, &m_guide[0], &m_guide[1], &m_fast[0], &m_fast[1], &m_slow[0], &m_slow[1]})
+    for (Image* img : {&m_noisy, &m_atrous, &m_guide[0], &m_guide[1], &m_fast[0], &m_fast[1], &m_slow[0], &m_slow[1],
+                       &m_specNoisy, &m_specAtrous, &m_specFast[0], &m_specFast[1], &m_specSlow[0], &m_specSlow[1]})
         rtc::transition(cmd, *img, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute,
                         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, true);
     m_halfReady = true;
@@ -348,15 +356,17 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         m_historyValid = false;
         m_traceExtent = {m_width, m_height};
         m_rays = shared::kGIReferenceRays;
-        rtc::transition(cmd, m_output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,
-                        VK_ACCESS_SHADER_WRITE_BIT, true);
+        for (Image* img : {&m_output, &m_specOutput})
+            rtc::transition(cmd, *img, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,
+                            VK_ACCESS_SHADER_WRITE_BIT, true);
         // The running mean reads last frame's while the reference frames run unbroken; a new
         // image holds none of them. A run that starts again starts the cache again too: the same
         // reference frames after any history.
         if (m_refMean.layout == VK_IMAGE_LAYOUT_UNDEFINED) m_refFrames = 0;
         if (m_refFrames == 0) m_cache.clear();
-        rtc::transition(cmd, m_refMean, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                        kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, m_refFrames == 0);
+        for (Image* img : {&m_refMean, &m_specRefMean})
+            rtc::transition(cmd, *img, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                            kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, m_refFrames == 0);
     } else {
         m_refFrames = 0;   // a realtime frame breaks the reference run
         m_cur ^= 1u;
@@ -387,10 +397,12 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     const VkDescriptorImageInfo guideInfo{VK_NULL_HANDLE, reference ? m_guideDummy.view : m_guide[m_cur].view, kGeneral};
     const VkDescriptorImageInfo meanInfo{VK_NULL_HANDLE, reference ? m_refMean.view : m_refDummy.view, kGeneral};
     const VkDescriptorBufferInfo tablesInfo{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorImageInfo specInfo{VK_NULL_HANDLE, reference ? m_specOutput.view : m_specNoisy.view, kGeneral};
+    const VkDescriptorImageInfo specMeanInfo{VK_NULL_HANDLE, reference ? m_specRefMean.view : m_refDummy.view, kGeneral};
     const VkDescriptorBufferInfo cacheInfo[3] = {{m_cache.keys(), 0, VK_WHOLE_SIZE},
                                                  {m_cache.accum(), 0, VK_WHOLE_SIZE},
                                                  {m_cache.resolved(), 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet writes[15] = {
+    VkWriteDescriptorSet writes[17] = {
         descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
         descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
@@ -401,6 +413,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         descriptorWrite(set, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
         descriptorWrite(set, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), descriptorWrite(set, 13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
         descriptorWrite(set, 14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        descriptorWrite(set, 15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), descriptorWrite(set, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
     };
     writes[0].pNext = &asWrite;
     for (uint32_t i = 0; i < 3; ++i) writes[1 + i].pImageInfo = &gbuf[i];
@@ -413,7 +426,9 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     writes[10].pImageInfo = &meanInfo;
     writes[11].pBufferInfo = &tablesInfo;
     for (uint32_t i = 0; i < 3; ++i) writes[12 + i].pBufferInfo = &cacheInfo[i];
-    vkUpdateDescriptorSets(m_device, 15, writes, 0, nullptr);
+    writes[15].pImageInfo = &specInfo;
+    writes[16].pImageInfo = &specMeanInfo;
+    vkUpdateDescriptorSets(m_device, 17, writes, 0, nullptr);
 
     // The cache: last frame's work ordered before this frame's, emptied if a reset asked.
     m_cache.recordBeginFrame(cmd);
@@ -434,8 +449,9 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     if (reference) ++m_refFrames;
 
     if (reference) {
-        rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment,
-                        VK_ACCESS_SHADER_READ_BIT, false);
+        for (Image* img : {&m_output, &m_specOutput})
+            rtc::transition(cmd, *img, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment,
+                            VK_ACCESS_SHADER_READ_BIT, false);
     } else {
         barrier(cmd, kCompute);   // the denoiser reads the trace
     }
@@ -443,12 +459,24 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
 void RTGITechnique::denoise(VkCommandBuffer cmd) {
     if (!denoises()) return;
+    denoiseChain(cmd, 0);
+    denoiseChain(cmd, 1);
+    m_historyValid = true;
+}
+
+void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
+    const bool spec = chain == 1u;
+    Image& noisy = spec ? m_specNoisy : m_noisy;
+    Image& atrous = spec ? m_specAtrous : m_atrous;
+    Image& output = spec ? m_specOutput : m_output;
+    const auto& fast = spec ? m_specFast : m_fast;
+    const auto& slow = spec ? m_specSlow : m_slow;
     const uint32_t prev = m_cur ^ 1u;
     constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     shared::GIDenoisePush pc{};
     pc.extent = u4(m_halfWidth, m_halfHeight, m_width, m_height);
-    pc.params = u4(m_historyValid ? 1u : 0u, 1u, m_shift, 0u);
+    pc.params = u4(m_historyValid ? 1u : 0u, 1u, m_shift, spec ? 1u : 0u);
     pc.cameraPos = f4(m_cameraPos, 0.0f);
 
     // Writes `views` (binding first + i; the last one storage) into `set` and dispatches.
@@ -474,12 +502,12 @@ void RTGITechnique::denoise(VkCommandBuffer cmd) {
 
     // Temporal: two outputs, so its set is written by hand.
     {
-        const VkDescriptorSet set = m_temporalSets[m_slot];
+        const VkDescriptorSet set = m_temporalSets[m_slot][chain];
         const VkDescriptorImageInfo infos[8] = {
-            {VK_NULL_HANDLE, m_noisy.view, kGeneral},       {VK_NULL_HANDLE, m_guide[m_cur].view, kGeneral},
+            {VK_NULL_HANDLE, noisy.view, kGeneral},         {VK_NULL_HANDLE, m_guide[m_cur].view, kGeneral},
             {VK_NULL_HANDLE, m_guide[prev].view, kGeneral}, {VK_NULL_HANDLE, m_velocityView, kReadOnly},
-            {VK_NULL_HANDLE, m_fast[prev].view, kGeneral},  {VK_NULL_HANDLE, m_slow[prev].view, kGeneral},
-            {VK_NULL_HANDLE, m_fast[m_cur].view, kGeneral}, {VK_NULL_HANDLE, m_slow[m_cur].view, kGeneral},
+            {VK_NULL_HANDLE, fast[prev].view, kGeneral},    {VK_NULL_HANDLE, slow[prev].view, kGeneral},
+            {VK_NULL_HANDLE, fast[m_cur].view, kGeneral},   {VK_NULL_HANDLE, slow[m_cur].view, kGeneral},
         };
         VkWriteDescriptorSet writes[8];
         for (uint32_t i = 0; i < 8; ++i) {
@@ -498,24 +526,23 @@ void RTGITechnique::denoise(VkCommandBuffer cmd) {
     // Two a-trous iterations over the long accumulation: steps 1 then 2. The second writes
     // over the trace's radiance, which nothing reads any more.
     const uint32_t gx = (m_halfWidth + 7) / 8, gy = (m_halfHeight + 7) / 8;
-    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][0], 8,
-        {{m_slow[m_cur].view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_atrous.view, kGeneral}}, gx, gy);
+    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][0], 8,
+        {{slow[m_cur].view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {atrous.view, kGeneral}}, gx, gy);
     barrier(cmd, kCompute);
     pc.params[1] = 2u;
-    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][1], 8,
-        {{m_atrous.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_noisy.view, kGeneral}}, gx, gy);
+    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][1], 8,
+        {{atrous.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {noisy.view, kGeneral}}, gx, gy);
     barrier(cmd, kCompute);
 
     // The joint-bilateral upsample into the output lighting reads.
-    rtc::transition(cmd, m_output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,
+    rtc::transition(cmd, output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,
                     true);
-    run(m_upsamplePipeline, m_upsampleLayout, m_upsampleSets[m_slot], 11,
-        {{m_noisy.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_positionView, kReadOnly},
-         {m_normalView, kReadOnly}, {m_albedoView, kReadOnly}, {m_output.view, kGeneral}},
+    run(m_upsamplePipeline, m_upsampleLayout, m_upsampleSets[m_slot][chain], 11,
+        {{noisy.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_positionView, kReadOnly},
+         {m_normalView, kReadOnly}, {m_albedoView, kReadOnly}, {output.view, kGeneral}},
         (m_width + 7) / 8, (m_height + 7) / 8);
-    rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment, VK_ACCESS_SHADER_READ_BIT,
+    rtc::transition(cmd, output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment, VK_ACCESS_SHADER_READ_BIT,
                     false);
-    m_historyValid = true;
 }
 
 void RTGITechnique::resize(uint32_t width, uint32_t height) {
@@ -538,7 +565,7 @@ void RTGITechnique::setRealtime(bool fullResolution, uint32_t rays) {
 }
 
 GIOutput RTGITechnique::getOutput() const {
-    return {m_output.image, m_output.view};
+    return {m_output.image, m_output.view, m_specOutput.view};
 }
 
 void RTGITechnique::destroy() {

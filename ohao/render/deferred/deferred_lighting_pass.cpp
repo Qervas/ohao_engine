@@ -125,8 +125,8 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_dummyImageTransitioned = true;
     }
 
-    // Begin render pass (the lit image, the environment's specular, its weight)
-    std::array<VkClearValue, 3> clearValues{};
+    // Begin render pass (the lit image)
+    std::array<VkClearValue, 1> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
     VkRenderPassBeginInfo renderPassInfo{};
@@ -221,8 +221,9 @@ void DeferredLightingPass::setSSAOTexture(VkImageView ssao, VkSampler ssaoSample
     m_ssaoSampler = ssaoSampler;
 }
 
-void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler) {
-    m_ssgiView = ssgi;
+void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkImageView reflection, VkSampler ssgiSampler) {
+    m_ssgiView = ssgi != VK_NULL_HANDLE && reflection != VK_NULL_HANDLE ? ssgi : VK_NULL_HANDLE;
+    m_giReflectionView = m_ssgiView != VK_NULL_HANDLE ? reflection : VK_NULL_HANDLE;
     m_ssgiSampler = ssgiSampler;
 }
 
@@ -243,6 +244,7 @@ void DeferredLightingPass::clearPerFrameInputs() {
     m_ssaoView = VK_NULL_HANDLE;
     m_ssaoSampler = VK_NULL_HANDLE;
     m_ssgiView = VK_NULL_HANDLE;
+    m_giReflectionView = VK_NULL_HANDLE;
     m_ssgiSampler = VK_NULL_HANDLE;
     m_directDiffuseView = VK_NULL_HANDLE;
     m_directSpecularView = VK_NULL_HANDLE;
@@ -261,8 +263,8 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 15> imageInfos{};
-    std::array<VkWriteDescriptorSet, 19> writes{};
+    std::array<VkDescriptorImageInfo, 16> imageInfos{};
+    std::array<VkWriteDescriptorSet, 20> writes{};
     VkDescriptorBufferInfo tablesInfo{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
@@ -365,6 +367,9 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     // RT direct light's diffuse and specular (bindings 14, 21), or the stand-in (flag bit 5 stays clear)
     imageWrite(11, 14, 9, m_directDiffuseView != VK_NULL_HANDLE ? m_directDiffuseView : fallbackView, m_gbufferSampler);
     imageWrite(18, 21, 14, m_directSpecularView != VK_NULL_HANDLE ? m_directSpecularView : fallbackView, m_gbufferSampler);
+    // RT GI's reflection (binding 22), with the diffuse's sampler
+    imageWrite(19, 22, 15, m_giReflectionView != VK_NULL_HANDLE ? m_giReflectionView : fallbackView,
+               m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler);
     imageWrite(12, 15, 10, m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView, iblSampler);
     // The G-buffer's emitted radiance (binding 17)
     const VkImageView emissive = m_gbufferPass->getEmissiveView();
@@ -441,23 +446,18 @@ bool DeferredLightingPass::createOutputImages() {
     return createTarget(m_hdrOutput,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT |   // final image when post-processing is off: readback copy / swapchain blit
-                            VK_IMAGE_USAGE_STORAGE_BIT) &&      // SSS blurs skin tiles and SSR resolves in place
-           createTarget(m_envSpecular, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) &&
-           createTarget(m_specularWeight, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                            VK_IMAGE_USAGE_STORAGE_BIT);        // SSS blurs skin tiles in place
 }
 
 void DeferredLightingPass::destroyOutputImages() {
     m_hdrOutput.destroy(m_device);
-    m_envSpecular.destroy(m_device);
-    m_specularWeight.destroy(m_device);
 }
 
 bool DeferredLightingPass::createRenderPass() {
-    // Three RGBA16F color attachments, each cleared, stored and left for shader reads: the lit
-    // image, the environment's specular and its weight (the shader's outputs 0, 1, 2).
-    std::array<VkAttachmentDescription, 3> attachments{};
-    std::array<VkAttachmentReference, 3> colorRefs{};
-    for (uint32_t i = 0; i < 3; ++i) {
+    // The lit image: one RGBA16F color attachment, cleared, stored and left for shader reads.
+    std::array<VkAttachmentDescription, 1> attachments{};
+    std::array<VkAttachmentReference, 1> colorRefs{};
+    for (uint32_t i = 0; i < 1; ++i) {
         VkAttachmentDescription& colorAttachment = attachments[i];
         colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -500,7 +500,7 @@ bool DeferredLightingPass::createFramebuffer() {
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = m_renderPass;
-    const std::array<VkImageView, 3> views = {m_hdrOutput.view, m_envSpecular.view, m_specularWeight.view};
+    const std::array<VkImageView, 1> views = {m_hdrOutput.view};
     framebufferInfo.attachmentCount = static_cast<uint32_t>(views.size());
     framebufferInfo.pAttachments = views.data();
     framebufferInfo.width = m_width;
@@ -520,6 +520,7 @@ bool DeferredLightingPass::createDescriptors() {
     // 11: SSGI texture
     // 12: CascadeData UBO
     // 14, 21: RT direct light's diffuse and specular
+    // 22: RT GI's reflection
     // 15: The GGX-prefiltered environment (EnvPrefilter, kEnvPrefilterLevels mips)
     // 16: The froxel light lists (SSBO, lights.cluster)
     // 17: The G-buffer's emitted radiance
@@ -535,7 +536,7 @@ bool DeferredLightingPass::createDescriptors() {
         {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-        {21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {22, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
     };
     std::array<VkDescriptorSetLayoutBinding, std::size(kBindings)> bindings{};
     for (std::size_t i = 0; i < bindings.size(); ++i) {
@@ -557,7 +558,7 @@ bool DeferredLightingPass::createDescriptors() {
     // Descriptor pool — 15 image samplers, 1 UBO (cascade data), 3 SSBOs (lights, froxels, OpenPBR's tables)
     std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 15 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[0].descriptorCount = 16 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -626,8 +627,8 @@ bool DeferredLightingPass::createPipeline() {
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // One unblended write per attachment: the lit image, the environment's specular, its weight
-    std::array<VkPipelineColorBlendAttachmentState, 3> colorBlendAttachments{};
+    // One unblended write: the lit image
+    std::array<VkPipelineColorBlendAttachmentState, 1> colorBlendAttachments{};
     for (VkPipelineColorBlendAttachmentState& colorBlendAttachment : colorBlendAttachments) {
         colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
