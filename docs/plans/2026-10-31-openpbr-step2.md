@@ -4,7 +4,7 @@
 `docs/changes/2026-10-29-openpbr-step1.md`. The frontier renderer (F0–F6) is done, so every consumer of the module is
 Slang: the path tracer (both profiles), deferred lighting, the clustered loop the forward pass shares, RT direct light's
 shading, RT GI's hits and its reflection.
-**Status:** T1–T4 and T6 built (2026-10-31): `docs/changes/2026-10-31-openpbr-step2.md`; T5 (LTC area lights) moves to its own step. Frank: "openpbr yes, go on". Rulings O6–O9 (below) accepted by Frank on 2026-10-31 ("all four").
+**Status:** T1–T4 and T6 built (2026-10-31): `docs/changes/2026-10-31-openpbr-step2.md`; T5 (LTC area lights) built 2026-11-01 after step 4 (the change record's section 8). Frank: "openpbr yes, go on". Rulings O6–O9 (below) accepted by Frank on 2026-10-31 ("all four").
 
 **Goal:** OpenPBR Surface 1.1.1's coat, fuzz and specular anisotropy in the module, the path tracer as a correct
 estimator of them, and the deferred frame shading them, held by the same closed forms as step 1. `KHR_materials_clearcoat`,

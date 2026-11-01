@@ -42,6 +42,9 @@
 //               wo.z (nm), over a base of normal-incidence reflectance v.xyz
 //   10 ior      6.x = dispersedIor(wo.x, wo.y, wo.z, v.x)
 //   11 vdh      6.rgb = subsurfaceSingleScatter(wo)
+//   12 ltc      6.x = the fitted LTC's density at direction v for the view wo and specular_roughness
+//   13 quad     6.x = ltcQuad at the view wo and specular_roughness over the quad z = v.z, x and y from
+//               coat_weight, coat_roughness (lower corner) to v.x, v.y (upper)
 import material.openpbr;
 
 RWStructuredBuffer<float4> io;
@@ -171,6 +174,21 @@ void run(uint3 id : SV_DispatchThreadID)
     else if (op == 11u)
     {
         r0.xyz = subsurfaceSingleScatter(wo);
+    }
+    else if (op == 12u)
+    {
+        const float4 m = t.Ltc(wo.z, mi.specularRoughness);
+        const float3x3 minv = float3x3(m.x, 0.0, m.y, 0.0, 1.0, 0.0, m.z, 0.0, m.w);
+        const float3 o = mul(minv, v);
+        const float l = length(o);
+        const float detInv = abs(determinant(minv));
+        r0.x = o.z > 0.0 ? (o.z / l) / kPbrPi * detInv / (l * l * l) : 0.0;
+    }
+    else if (op == 13u)
+    {
+        const float4 m = t.Ltc(wo.z, mi.specularRoughness);
+        const float x0 = io[b + 8u].x, y0 = io[b + 8u].y;
+        r0.x = ltcQuad(m, float3(x0, y0, v.z), float3(v.x, y0, v.z), float3(v.x, v.y, v.z), float3(x0, v.y, v.z));
     }
     else if (op == 6u)
     {

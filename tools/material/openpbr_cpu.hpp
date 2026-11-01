@@ -12,7 +12,7 @@ namespace ohao::material {
 
 enum class Op : uint32_t {
     Eval = 0, Sample = 1, Pdf = 2, Albedo = 3, Tables = 4, Fresnel = 5, Lobes = 6, Aniso = 7, Glass = 8, Film = 9, Ior = 10,
-    VanDeHulst = 11
+    VanDeHulst = 11, LtcDensity = 12, LtcQuad = 13
 };
 
 using Float3 = std::array<float, 3>;

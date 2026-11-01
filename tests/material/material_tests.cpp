@@ -53,6 +53,13 @@
 //                          sampled with pdf(), a white one within 1% of white
 //   t4_walked              walked (lobe 5, the path tracer's): what enters is 1 - the specular's albedo, white
 //                          within 1% when the walk returns all of it, and pdf() leaves the walk out
+//
+// Area lights by linearly transformed cosines (OpenPBR step 2, T5):
+//
+//   t5_ltc_normalized      the fitted LTC's density integrates to 1 over the sphere
+//   t5_ltc_fit             it stays near the normalized GGX lobe it was fitted to: their L1 distance
+//   t5_ltc_quad            ltcQuad (the horizon clip, the edge integral) is the density's integral over a
+//                          quad, against Monte Carlo: small and large, crossing the horizon
 #include "openpbr_cpu.hpp"
 #include "render/material/openpbr_tables.hpp"
 #include "common/harness.hpp"
@@ -752,6 +759,117 @@ void t4_walked() {
 }
 
 
+// ---- area lights by linearly transformed cosines ------------------------------------------------
+
+Float3 uniformSphere(uint32_t& seed) {
+    const float z = 1.0f - 2.0f * rnd(seed), phi = 6.2831853f * rnd(seed);
+    const float r = std::sqrt(std::max(0.0f, 1.0f - z * z));
+    return {r * std::cos(phi), r * std::sin(phi), z};
+}
+
+std::vector<double> ltcDensities(const Material& m, Float3 wo, const std::vector<Float3>& dirs) {
+    std::vector<Item> items(dirs.size());
+    for (size_t k = 0; k < dirs.size(); ++k) {
+        items[k].op = Op::LtcDensity;
+        items[k].material = m;
+        items[k].wo = wo;
+        items[k].v = dirs[k];
+    }
+    ohao::material::run(items, kTables);
+    std::vector<double> d(items.size());
+    for (size_t k = 0; k < items.size(); ++k) d[k] = items[k].r0[0];
+    return d;
+}
+
+void t5_ltc_normalized() {
+    uint32_t seed = 81u;
+    for (float rough : {0.3f, 0.6f, 1.0f})   // uniform directions resolve no narrower lobe
+        for (float mu : {1.0f, 0.7f, 0.3f}) {
+            Material m;
+            m.specularRoughness = rough;
+            std::vector<Float3> dirs(1u << 20);
+            for (Float3& d : dirs) d = uniformSphere(seed);
+            const auto dens = ltcDensities(m, view(mu), dirs);
+            double sum = 0.0;
+            for (double v : dens) sum += v;
+            const double integral = sum * 4.0 * kPi / dirs.size();
+            if (!(std::abs(integral - 1.0) <= 0.02)) std::printf("\n    ltc integral %.4f rough %.2f mu %.2f", integral, rough, mu);
+            CHECK(std::abs(integral - 1.0) <= 0.02, "the LTC's density integrates to 1");
+        }
+}
+
+void t5_ltc_fit() {
+    uint32_t seed = 83u;
+    double worst = 0.0;
+    for (float rough : {0.2f, 0.4f, 0.7f, 1.0f})
+        for (float mu : {1.0f, 0.7f, 0.4f}) {
+            Material m;
+            m.specularRoughness = rough;
+            std::vector<Float3> dirs(1u << 18);
+            for (Float3& d : dirs) {
+                d = uniformSphere(seed);
+                d[2] = std::abs(d[2]);   // the upper hemisphere, pdf 1 / (2 pi)
+            }
+            const auto dens = ltcDensities(m, view(mu), dirs);
+            std::vector<Item> lobes(dirs.size());
+            for (size_t k = 0; k < dirs.size(); ++k) {
+                lobes[k].op = Op::Lobes;
+                lobes[k].material = m;
+                lobes[k].wo = view(mu);
+                lobes[k].v = dirs[k];
+            }
+            ohao::material::run(lobes, kTables);
+            double e = 0.0;
+            for (size_t k = 0; k < dirs.size(); ++k) e += lobes[k].r0[0] * dirs[k][2];
+            e *= 2.0 * kPi / dirs.size();   // the lobe's albedo, F = 1
+            double l1 = 0.0;
+            for (size_t k = 0; k < dirs.size(); ++k) l1 += std::abs(dens[k] - lobes[k].r0[0] * dirs[k][2] / e);
+            l1 *= 2.0 * kPi / dirs.size();
+            worst = std::max(worst, l1);
+            if (!(l1 <= 0.25)) std::printf("\n    ltc L1 %.3f rough %.2f mu %.2f", l1, rough, mu);
+            CHECK(l1 <= 0.25, "the LTC stays near the GGX lobe it was fitted to");
+        }
+    std::printf(" [worst L1 %.3f]", worst);
+}
+
+void t5_ltc_quad() {
+    struct Q { float x0, y0, x1, y1, z; };
+    // (No quad reaching the horizon all round: clipped, it makes an edge between opposite points,
+    // where the edge integral's theta / sin(theta) has no precision left; no light makes one.)
+    const Q quads[] = {{-3.0f, -3.0f, 3.0f, 3.0f, 1.0f},   // a wide quad overhead
+                       {-0.3f, -0.2f, 0.4f, 0.5f, 1.0f},   // a small quad overhead
+                       {0.5f, -1.0f, 3.0f, 1.0f, 1.0f},    // toward the reflection
+                       {-2.0f, -2.0f, 2.0f, 2.0f, 0.05f}}; // almost in the plane
+    uint32_t seed = 89u;
+    for (float rough : {0.3f, 0.7f})
+        for (float mu : {1.0f, 0.5f})
+            for (const Q& q : quads) {
+                Material m;
+                m.specularRoughness = rough;
+                m.coatWeight = q.x0;   // the quad's lower corner rides in the coat's fields (op 13)
+                m.coatRoughness = q.y0;
+                const Item a = one(Op::LtcQuad, m, view(mu), {q.x1, q.y1, q.z});
+                // Monte Carlo: the density over the directions that meet the quad.
+                std::vector<Float3> dirs(1u << 20);
+                for (Float3& d : dirs) d = uniformSphere(seed);
+                Material plain;
+                plain.specularRoughness = rough;
+                const auto dens = ltcDensities(plain, view(mu), dirs);
+                double sum = 0.0;
+                for (size_t k = 0; k < dirs.size(); ++k) {
+                    const Float3& d = dirs[k];
+                    if (!(d[2] > 0.0f)) continue;
+                    const double t = q.z / d[2], x = d[0] * t, y = d[1] * t;
+                    if (x >= q.x0 && x <= q.x1 && y >= q.y0 && y <= q.y1) sum += dens[k];
+                }
+                const double mc = sum * 4.0 * kPi / dirs.size();
+                const bool ok = std::abs(a.r0[0] - mc) <= 0.01 + 0.02 * mc;
+                if (!ok) std::printf("\n    quad %.4f mc %.4f rough %.2f mu %.2f z %.2f", a.r0[0], mc, rough, mu, q.z);
+                CHECK(ok, "ltcQuad is the LTC's integral over the quad");
+            }
+}
+
+
 int main(int argc, char** argv) {
     std::printf("material_tests (OpenPBR on the CPU)\n");
     // material_tests [NAME]: only the test NAME (t2_albedo); every test without one.
@@ -782,5 +900,8 @@ int main(int argc, char** argv) {
     RUN_ONE(t4_van_de_hulst);
     RUN_ONE(t4_local);
     RUN_ONE(t4_walked);
+    RUN_ONE(t5_ltc_normalized);
+    RUN_ONE(t5_ltc_fit);
+    RUN_ONE(t5_ltc_quad);
     return ohao::test::finish("material_tests");
 }

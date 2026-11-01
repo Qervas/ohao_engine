@@ -20,6 +20,10 @@
 //   EssDIn      the same grid: the reflection's leaving it (relative IOR 1 / n; total internal
 //               reflection included)
 //   EssTIn      the same grid: the refraction's leaving it
+//   Ltc         [rough][u][4], 32 x 32, u = sqrt(1 - mu): the linearly transformed cosine fitted to
+//               GGX single scatter (F = 1) at alpha = rough^2 (rough held at 0.05 and above), as the
+//               normalized inverse matrix (Heitz, Dupuy, Hill & Neubelt 2016): rows (a, 0, b),
+//               (0, 1, 0), (c, 0, d) in the frame of the normal and the view's tangent
 //   AnisoS56    [aniso][rough][mu][phi][2], AnisoRough's grid: the anisotropic lobe's S5 and S6
 //               (single scatter weighted by (1 - c)^5 and c (1 - c)^6), interleaved. With E1 at
 //               AnisoRough they make an F82 metal's albedo exact; a dielectric's is corrected by
@@ -94,6 +98,250 @@ std::array<double, 4> integrate(float mu, float rough, float eta, unsigned n) {
         for (int c = 0; c < 4; ++c) sum[c] += it.r0[c];
     for (double& v : sum) v /= n;
     return sum;
+}
+
+// ---- linearly transformed cosines (Heitz, Dupuy, Hill & Neubelt 2016) ----------------------
+// Our own fit, after the paper's: for each roughness and view, the matrix M whose transform of the
+// clamped cosine best matches GGX single scatter (F = 1), normalized, by Nelder-Mead on the
+// paper's error (the cubed difference, sampled from both distributions). GGX is written here as
+// the module writes it (height-correlated G2, the same D).
+
+constexpr unsigned kLtcN = 32;
+constexpr double kPi = 3.14159265358979323846;
+
+struct V3 {
+    double x, y, z;
+};
+V3 operator+(V3 a, V3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+V3 operator*(V3 a, double k) { return {a.x * k, a.y * k, a.z * k}; }
+double dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+V3 cross(V3 a, V3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+V3 normalized(V3 a) { return a * (1.0 / std::sqrt(dot(a, a))); }
+
+struct M3 {
+    double m[3][3];
+};
+V3 mul(const M3& a, V3 v) {
+    return {a.m[0][0] * v.x + a.m[0][1] * v.y + a.m[0][2] * v.z, a.m[1][0] * v.x + a.m[1][1] * v.y + a.m[1][2] * v.z,
+            a.m[2][0] * v.x + a.m[2][1] * v.y + a.m[2][2] * v.z};
+}
+M3 mul(const M3& a, const M3& b) {
+    M3 r{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k) r.m[i][j] += a.m[i][k] * b.m[k][j];
+    return r;
+}
+double det(const M3& a) {
+    const auto& m = a.m;
+    return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+           m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+}
+M3 inverse(const M3& a) {
+    const auto& m = a.m;
+    const double d = det(a);
+    M3 r{};
+    r.m[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d;
+    r.m[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d;
+    r.m[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d;
+    r.m[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d;
+    r.m[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d;
+    r.m[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d;
+    r.m[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d;
+    r.m[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d;
+    r.m[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d;
+    return r;
+}
+
+double ggxD(V3 h, double a2) {
+    const double d = h.x * h.x + h.y * h.y + h.z * h.z * a2;
+    return a2 / (kPi * d * d);
+}
+double ggxLambda(double mu, double a2) { return 0.5 * (std::sqrt(1.0 + a2 * (1.0 - mu * mu) / (mu * mu)) - 1.0); }
+// f cos(wi), F = 1 (the module's ggxSingle).
+double ggxSingle(V3 wo, V3 wi, double a2) {
+    if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
+    const V3 h = normalized(wo + wi);
+    return ggxD(h, a2) / (1.0 + ggxLambda(wo.z, a2) + ggxLambda(wi.z, a2)) / (4.0 * wo.z);
+}
+// Heitz 2018's visible normals, reflected; and the reflected direction's density.
+V3 ggxSample(V3 wo, double alpha, double u1, double u2) {
+    const V3 vh = normalized({alpha * wo.x, alpha * wo.y, wo.z});
+    const double l2 = vh.x * vh.x + vh.y * vh.y;
+    const V3 t1 = l2 > 0.0 ? V3{-vh.y, vh.x, 0.0} * (1.0 / std::sqrt(l2)) : V3{1.0, 0.0, 0.0};
+    const V3 t2 = cross(vh, t1);
+    const double r = std::sqrt(u1), phi = 2.0 * kPi * u2;
+    const double p1 = r * std::cos(phi);
+    double p2 = r * std::sin(phi);
+    const double sh = 0.5 * (1.0 + vh.z);
+    p2 = (1.0 - sh) * std::sqrt(std::max(0.0, 1.0 - p1 * p1)) + sh * p2;
+    const V3 nh = t1 * p1 + t2 * p2 + vh * std::sqrt(std::max(0.0, 1.0 - p1 * p1 - p2 * p2));
+    const V3 h = normalized({alpha * nh.x, alpha * nh.y, std::max(0.0, nh.z)});
+    return h * (2.0 * dot(wo, h)) + wo * -1.0;
+}
+double ggxPdf(V3 wo, V3 wi, double a2) {
+    if (wi.z <= 0.0) return 0.0;
+    const V3 h = normalized(wo + wi);
+    return ggxD(h, a2) / (1.0 + ggxLambda(wo.z, a2)) / (4.0 * wo.z);
+}
+
+struct Ltc {
+    double m11 = 1.0, m22 = 1.0, m13 = 0.0;
+    V3 X{1, 0, 0}, Y{0, 1, 0}, Z{0, 0, 1};
+    M3 M{}, inv{};
+    double invDet = 1.0;
+    void update() {
+        const M3 r{{{X.x, Y.x, Z.x}, {X.y, Y.y, Z.y}, {X.z, Y.z, Z.z}}};
+        const M3 sc{{{m11, 0.0, m13}, {0.0, m22, 0.0}, {0.0, 0.0, 1.0}}};
+        M = mul(r, sc);
+        inv = inverse(M);
+        invDet = std::abs(det(inv));
+    }
+    double eval(V3 L) const {
+        const V3 o = mul(inv, L);
+        const double l = std::sqrt(dot(o, o));
+        const double dz = o.z / l;
+        return dz > 0.0 ? dz / kPi * invDet / (l * l * l) : 0.0;
+    }
+    V3 sample(double u1, double u2) const {
+        const double r = std::sqrt(u1), phi = 2.0 * kPi * u2;
+        return normalized(mul(M, V3{r * std::cos(phi), r * std::sin(phi), std::sqrt(std::max(0.0, 1.0 - u1))}));
+    }
+};
+
+// The paper's error: the cubed difference against the normalized lobe, from both distributions.
+double ltcError(const Ltc& l, V3 V, double alpha, double norm) {
+    constexpr unsigned n = 24;
+    const double a2 = alpha * alpha;
+    double sum = 0.0;
+    for (unsigned i = 0; i < n; ++i)
+        for (unsigned j = 0; j < n; ++j) {
+            const double u1 = (i + 0.5) / n, u2 = (j + 0.5) / n;
+            {
+                const V3 L = l.sample(u1, u2);
+                const double pl = l.eval(L), fb = ggxSingle(V, L, a2) / norm, pb = ggxPdf(V, L, a2);
+                if (pl + pb > 0.0) sum += std::pow(std::abs(fb - pl), 3.0) / (pl + pb);
+            }
+            {
+                const V3 L = ggxSample(V, alpha, u1, u2);
+                if (L.z <= 0.0) continue;
+                const double pl = l.eval(L), fb = ggxSingle(V, L, a2) / norm, pb = ggxPdf(V, L, a2);
+                if (pl + pb > 0.0) sum += std::pow(std::abs(fb - pl), 3.0) / (pl + pb);
+            }
+        }
+    return sum / (2.0 * n * n);
+}
+
+// Nelder-Mead over (m11, m22, m13).
+void ltcFit(Ltc& l, V3 V, double alpha, double norm) {
+    double pts[4][3];
+    double val[4];
+    const double start[3] = {l.m11, l.m22, l.m13};
+    auto f = [&](const double* p) {
+        Ltc t = l;
+        t.m11 = std::max(p[0], 1e-5);
+        t.m22 = std::max(p[1], 1e-5);
+        t.m13 = p[2];
+        t.update();
+        return ltcError(t, V, alpha, norm);
+    };
+    for (int k = 0; k < 4; ++k) {
+        for (int d = 0; d < 3; ++d) pts[k][d] = start[d];
+        if (k > 0) pts[k][k - 1] += (k - 1 < 2 ? std::max(0.05, 0.1 * start[k - 1]) : 0.05);
+        val[k] = f(pts[k]);
+    }
+    for (int iter = 0; iter < 120; ++iter) {
+        int order[4] = {0, 1, 2, 3};
+        std::sort(order, order + 4, [&](int a, int b) { return val[a] < val[b]; });
+        const int best = order[0], worst = order[3], second = order[2];
+        if (std::abs(val[worst] - val[best]) < 1e-9 * std::max(1.0, val[best])) break;
+        double c[3] = {0, 0, 0};
+        for (int k = 0; k < 4; ++k)
+            if (k != worst)
+                for (int d = 0; d < 3; ++d) c[d] += pts[k][d] / 3.0;
+        double r[3], e[3], q[3];
+        for (int d = 0; d < 3; ++d) r[d] = c[d] + (c[d] - pts[worst][d]);
+        const double fr = f(r);
+        if (fr < val[best]) {
+            for (int d = 0; d < 3; ++d) e[d] = c[d] + 2.0 * (c[d] - pts[worst][d]);
+            const double fe = f(e);
+            if (fe < fr) {
+                for (int d = 0; d < 3; ++d) pts[worst][d] = e[d];
+                val[worst] = fe;
+            } else {
+                for (int d = 0; d < 3; ++d) pts[worst][d] = r[d];
+                val[worst] = fr;
+            }
+        } else if (fr < val[second]) {
+            for (int d = 0; d < 3; ++d) pts[worst][d] = r[d];
+            val[worst] = fr;
+        } else {
+            for (int d = 0; d < 3; ++d) q[d] = c[d] + 0.5 * (pts[worst][d] - c[d]);
+            const double fq = f(q);
+            if (fq < val[worst]) {
+                for (int d = 0; d < 3; ++d) pts[worst][d] = q[d];
+                val[worst] = fq;
+            } else {
+                for (int k = 0; k < 4; ++k)
+                    if (k != best) {
+                        for (int d = 0; d < 3; ++d) pts[k][d] = pts[best][d] + 0.5 * (pts[k][d] - pts[best][d]);
+                        val[k] = f(pts[k]);
+                    }
+            }
+        }
+    }
+    int best = 0;
+    for (int k = 1; k < 4; ++k)
+        if (val[k] < val[best]) best = k;
+    l.m11 = std::max(pts[best][0], 1e-5);
+    l.m22 = std::max(pts[best][1], 1e-5);
+    l.m13 = pts[best][2];
+    l.update();
+}
+
+std::vector<float> fitLtc() {
+    std::vector<float> table(kLtcN * kLtcN * 4);
+    for (unsigned j = 0; j < kLtcN; ++j) {
+        const double u = static_cast<double>(j) / (kLtcN - 1);
+        const double mu = std::max(1.0 - u * u, 1e-3);
+        const V3 V{std::sqrt(1.0 - mu * mu), 0.0, mu};
+        Ltc l;
+        for (int i = static_cast<int>(kLtcN) - 1; i >= 0; --i) {
+            const double rough = std::max(static_cast<double>(i) / (kLtcN - 1), 0.05);
+            const double alpha = rough * rough;
+            // The lobe's normalization and mean direction (its symmetry plane is y = 0).
+            double norm = 0.0;
+            V3 avg{0, 0, 0};
+            constexpr unsigned n = 64;
+            for (unsigned a = 0; a < n; ++a)
+                for (unsigned b = 0; b < n; ++b) {
+                    const V3 L = ggxSample(V, alpha, (a + 0.5) / n, (b + 0.5) / n);
+                    if (L.z <= 0.0) continue;
+                    const double w = ggxSingle(V, L, alpha * alpha) / ggxPdf(V, L, alpha * alpha);
+                    norm += w;
+                    avg = avg + L * w;
+                }
+            norm /= n * n;
+            avg.y = 0.0;
+            avg = normalized(avg);
+            l.Z = avg;
+            l.Y = {0, 1, 0};
+            l.X = cross(l.Y, l.Z);
+            if (i == static_cast<int>(kLtcN) - 1) {   // the roughest: an isotropic start
+                l.m11 = l.m22 = std::max(alpha, 1e-3);
+                l.m13 = 0.0;
+            }
+            l.update();
+            ltcFit(l, V, alpha, norm);
+            const double s = l.inv.m[1][1];
+            float* out = &table[(static_cast<unsigned>(i) * kLtcN + j) * 4];
+            out[0] = static_cast<float>(l.inv.m[0][0] / s);
+            out[1] = static_cast<float>(l.inv.m[0][2] / s);
+            out[2] = static_cast<float>(l.inv.m[2][0] / s);
+            out[3] = static_cast<float>(l.inv.m[2][2] / s);
+        }
+    }
+    return table;
 }
 
 std::vector<float> build() {
@@ -262,8 +510,9 @@ std::vector<float> build() {
                 essTIn[i] = static_cast<float>(glass(muAt(m, kDMu), gridAt(r, kDRough), 1.0f / n));
                 essDIn[i] = static_cast<float>(integrate(muAt(m, kDMu), gridAt(r, kDRough), 1.0f / n, kDielSamples)[3]);
             }
+    std::vector<float> ltc = fitLtc();
     for (const auto* t : {&e1, &s5, &s6, &e1Avg, &favg, &essD, &essDLow, &anisoRough, &anisoE1Avg, &anisoS56, &essT,
-                          &essDIn, &essTIn})
+                          &essDIn, &essTIn, &ltc})
         all.insert(all.end(), t->begin(), t->end());
     return all;
 }

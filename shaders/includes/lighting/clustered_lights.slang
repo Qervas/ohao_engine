@@ -116,23 +116,21 @@ float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, O
     float3 specular = float3(0.0), diffuse, unused;
     s.bsdf.evalLobes(s.wo, s.toLocal(Lj), t, unused, diffuse);
     diffuse *= E / max(dot(s.normal, Lj), kEpsilon);
-    // Specular: the representative point's direction, times the solid angle the rectangle covers.
-    const float3 R = reflect(-s.view, s.normal);
-    const float rn = dot(R, n);
-    float3 onPlane = center;
-    if (rn < -1e-4) onPlane = P + R * (dot(center - P, n) / rn);
-    const float3 d = onPlane - corner;
-    const float3 rep = corner + clamp(dot(d, e1) / dot(e1, e1), 0.0, 1.0) * e1
-                              + clamp(dot(d, e2) / dot(e2, e2), 0.0, 1.0) * e2 - P;
-    const float dist = length(rep);
-    const float3 specL = rep / dist;
-    const float cosLight = dot(-specL, n);
-    if (cosLight > 0.0)
-    {
-        const float rEq = sqrt(area * cosLight / kPi);
-        s.bsdf.widened(rEq / (2.0 * dist)).evalLobes(s.wo, s.toLocal(specL), t, specular, unused);
-        specular *= area * cosLight / (dist * dist);
-    }
+    // Specular by linearly transformed cosines (Heitz et al. 2016): the fraction of each specular lobe
+    // the rectangle covers (OpenPBRTables.Ltc at the view and the lobe's roughness, ltcQuad), times
+    // that lobe's directional albedo: the base's at its roughness, the coat's at its own.
+    const float3 T1 = normalize(s.view - s.normal * dot(s.view, s.normal));
+    const float3 T2 = cross(s.normal, T1);
+    const float3 c0 = corner - P, c1 = corner + e1 - P, c2 = corner + e1 + e2 - P, c3 = corner + e2 - P;
+    const float3 q0 = float3(dot(c0, T1), dot(c0, T2), dot(c0, s.normal));
+    const float3 q1 = float3(dot(c1, T1), dot(c1, T2), dot(c1, s.normal));
+    const float3 q2 = float3(dot(c2, T1), dot(c2, T2), dot(c2, s.normal));
+    const float3 q3 = float3(dot(c3, T1), dot(c3, T2), dot(c3, s.normal));
+    const float mu = saturate(s.wo.z);
+    const float coatShare = s.bsdf.coatAlbedo(s.wo, t);
+    const float3 baseShare = max(s.bsdf.specularAlbedo(s.wo, t) - coatShare, float3(0.0));
+    specular = baseShare * ltcQuad(t.Ltc(mu, s.bsdf.base.rough), q0, q1, q2, q3);
+    if (coatShare > 0.0) specular += coatShare * ltcQuad(t.Ltc(mu, s.bsdf.coat.rough), q0, q1, q2, q3);
     return (specular + diffuse) * Le;
 }
 

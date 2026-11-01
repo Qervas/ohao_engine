@@ -60,7 +60,11 @@ static const uint kPbrOffEssT = kPbrOffAnisoS56 + 2u * kPbrAnisoA * kPbrAnisoRou
 static const uint kPbrGlassEta = 32u;
 static const uint kPbrOffEssDIn = kPbrOffEssT + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
 static const uint kPbrOffEssTIn = kPbrOffEssDIn + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
-static const uint kPbrTableFloats = kPbrOffEssTIn + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
+// Area lights by linearly transformed cosines (Heitz, Dupuy, Hill & Neubelt 2016): [rough][u][4], u
+// = sqrt(1 - mu), the normalized inverse matrix fitted to GGX single scatter (F = 1).
+static const uint kPbrLtcN = 32u;
+static const uint kPbrOffLtc = kPbrOffEssTIn + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
+static const uint kPbrTableFloats = kPbrOffLtc + kPbrLtcN * kPbrLtcN * 4u;
 // EssDLow's eta axis: 1 + kPbrLowEtaSpan g^2 over the grid g, below which EssD is read from it (a
 // base under a coat sees an IOR near 1, where grazing Fresnel changes fastest).
 static const float kPbrLowEtaSpan = 0.3;
@@ -152,6 +156,26 @@ struct OpenPBRTables
     float EssT(float mu, float rough, float n) { return glass(kPbrOffEssT, mu, rough, n); }
     float EssDIn(float mu, float rough, float n) { return glass(kPbrOffEssDIn, mu, rough, n); }
     float EssTIn(float mu, float rough, float n) { return glass(kPbrOffEssTIn, mu, rough, n); }
+
+    // The LTC's inverse matrix (a, b, c, d: rows (a, 0, b), (0, 1, 0), (c, 0, d)) at the view's
+    // cosine mu and the lobe's roughness, bilinear.
+    float4 Ltc(float mu, float rough)
+    {
+        uint iu, ir;
+        float fu, fr;
+        pbrGridCoord(sqrt(saturate(1.0 - mu)), kPbrLtcN, iu, fu);
+        pbrGridCoord(rough, kPbrLtcN, ir, fr);
+        float4 v[2];
+        [unroll]
+        for (uint k = 0u; k < 2u; ++k)
+        {
+            const uint r0 = kPbrOffLtc + ((ir + k) * kPbrLtcN + iu) * 4u;
+            const float4 a = float4(data[r0], data[r0 + 1u], data[r0 + 2u], data[r0 + 3u]);
+            const float4 b = float4(data[r0 + 4u], data[r0 + 5u], data[r0 + 6u], data[r0 + 7u]);
+            v[k] = lerp(a, b, fu);
+        }
+        return lerp(v[0], v[1], fr);
+    }
 
     // The isotropic roughness whose E1 is an anisotropic GGX lobe's single-scatter albedo seen
     // from w (OpenPBR's alpha mapping of (rough, aniso)), quadrilinear: every table is read at it.
@@ -360,6 +384,69 @@ float ggxPdfBoundedAniso(float3 wo, float3 wi, float2 alpha)
         return ndf / (2.0 * (k * wo.z + t));
     }
     return ndf * (t - wo.z) / (2.0 * len2);
+}
+
+// ---- area lights by linearly transformed cosines ---------------------------------------------
+// Heitz, Dupuy, Hill & Neubelt 2016 (the polygon clipped to the horizon) with Heitz's 2017 edge
+// integral. ltcQuad: the clamped cosine's integral over a quad whose corners are given in a frame
+// (z the normal), after the LTC's inverse matrix m (OpenPBRTables.Ltc): the fraction of a GGX lobe
+// the quad covers. A white quad over the whole upper hemisphere gives 1.
+
+float3 ltcEdge(float3 v1, float3 v2)
+{
+    const float x = dot(v1, v2);
+    const float y = abs(x);
+    const float a = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+    const float b = 3.4175940 + (4.1616724 + y) * y;
+    const float v = a / b;
+    const float ts = x > 0.0 ? v : 0.5 * rsqrt(max(1.0 - x * x, 1e-7)) - v;
+    return cross(v1, v2) * ts;
+}
+
+// The polygon L[0..3] clipped to z >= 0, in place; its corner count (0, 3, 4 or 5).
+uint ltcClip(inout float3 L[5])
+{
+    uint config = 0u;
+    if (L[0].z > 0.0) config += 1u;
+    if (L[1].z > 0.0) config += 2u;
+    if (L[2].z > 0.0) config += 4u;
+    if (L[3].z > 0.0) config += 8u;
+    uint n = 0u;
+    if (config == 1u) { n = 3u; L[1] = -L[1].z * L[0] + L[0].z * L[1]; L[2] = -L[3].z * L[0] + L[0].z * L[3]; }
+    else if (config == 2u) { n = 3u; L[0] = -L[0].z * L[1] + L[1].z * L[0]; L[2] = -L[2].z * L[1] + L[1].z * L[2]; }
+    else if (config == 3u) { n = 4u; L[2] = -L[2].z * L[1] + L[1].z * L[2]; L[3] = -L[3].z * L[0] + L[0].z * L[3]; }
+    else if (config == 4u) { n = 3u; L[0] = -L[3].z * L[2] + L[2].z * L[3]; L[1] = -L[1].z * L[2] + L[2].z * L[1]; }
+    else if (config == 6u) { n = 4u; L[0] = -L[0].z * L[1] + L[1].z * L[0]; L[3] = -L[3].z * L[2] + L[2].z * L[3]; }
+    else if (config == 7u) { n = 5u; L[4] = -L[3].z * L[0] + L[0].z * L[3]; L[3] = -L[3].z * L[2] + L[2].z * L[3]; }
+    else if (config == 8u) { n = 3u; L[0] = -L[0].z * L[3] + L[3].z * L[0]; L[1] = -L[2].z * L[3] + L[3].z * L[2]; L[2] = L[3]; }
+    else if (config == 9u) { n = 4u; L[1] = -L[1].z * L[0] + L[0].z * L[1]; L[2] = -L[2].z * L[3] + L[3].z * L[2]; }
+    else if (config == 11u) { n = 5u; L[4] = L[3]; L[3] = -L[2].z * L[3] + L[3].z * L[2]; L[2] = -L[2].z * L[1] + L[1].z * L[2]; }
+    else if (config == 12u) { n = 4u; L[1] = -L[1].z * L[2] + L[2].z * L[1]; L[0] = -L[0].z * L[3] + L[3].z * L[0]; }
+    else if (config == 13u) { n = 5u; L[4] = L[3]; L[3] = L[2]; L[2] = -L[1].z * L[2] + L[2].z * L[1]; L[1] = -L[1].z * L[0] + L[0].z * L[1]; }
+    else if (config == 14u) { n = 5u; L[4] = -L[0].z * L[3] + L[3].z * L[0]; L[0] = -L[0].z * L[1] + L[1].z * L[0]; }
+    else if (config == 15u) { n = 4u; }
+    if (n == 3u) L[3] = L[0];
+    if (n == 4u) L[4] = L[0];
+    return n;
+}
+
+float ltcQuad(float4 m, float3 q0, float3 q1, float3 q2, float3 q3)
+{
+    const float3x3 minv = float3x3(m.x, 0.0, m.y, 0.0, 1.0, 0.0, m.z, 0.0, m.w);
+    float3 L[5];
+    L[0] = mul(minv, q0);
+    L[1] = mul(minv, q1);
+    L[2] = mul(minv, q2);
+    L[3] = mul(minv, q3);
+    L[4] = L[0];
+    const uint n = ltcClip(L);
+    if (n == 0u) return 0.0;
+    [unroll]
+    for (uint k = 0u; k < 5u; ++k) L[k] = normalize(L[k]);
+    float sum = ltcEdge(L[0], L[1]).z + ltcEdge(L[1], L[2]).z + ltcEdge(L[2], L[3]).z;
+    if (n >= 4u) sum += ltcEdge(L[3], L[4]).z;
+    if (n == 5u) sum += ltcEdge(L[4], L[0]).z;
+    return abs(sum);   // ltcEdge's fit holds the 1 / (2 pi)
 }
 
 // ---- refraction (step 3) ---------------------------------------------------------------------

@@ -150,7 +150,7 @@ reads 1.9999, 1.7500 and 1.5000 (offline), 1.9720 (realtime) and 1.9656 (deferre
 
 ## 6. Known gaps
 
-- **T5, LTC area lights:** not built. Rectangles keep the representative point per lobe.
+- **T5, LTC area lights:** built after step 4 (section 8).
 - **An anisotropic dielectric's albedo.** Before AnisoS56 a coloured anisotropic metal read 20% high at 81° and an
   anisotropic coat alone 46% (0.278 against 0.191). With it, against the integral of `eval()` at 4M samples, at 18°,
   60° and 81° along and across the tangent: white and gold metals within 0.42%, the coat alone 0.93%, everything
@@ -187,3 +187,24 @@ python tests/renderer/check_material.py
 python tests/golden/render_golden.py tests/golden/manifest.json --only cli_materials_step2_deferred
 build/Release/ohao run assets/scenes/materials_step2.scene.json --render out.png --mode rt_offline --spp 256 --denoise none --ev100 0
 ```
+
+## 8. T5, area lights by linearly transformed cosines (2026-11-01)
+
+- **The fit** (`tools/material/openpbr_tables.cpp`, `fitLtc`): Heitz, Dupuy, Hill & Neubelt 2016, our own code. For 32
+  roughnesses (held at 0.05 and above) and 32 views (`u = sqrt(1 - mu)`), the matrix M = R diag-shear(m11, m22, m13), R
+  the frame of the GGX lobe's mean direction, whose transformed clamped cosine best matches GGX single scatter (F = 1,
+  height-correlated, as the module writes it), by Nelder–Mead on the paper's cubed-difference error sampled from both
+  distributions; each fit starts from its rougher neighbour. The normalized inverse matrix joins the energy tables (`Ltc`,
+  4,096 floats; 89,280 in all; every earlier table unchanged byte for byte).
+- **The evaluation** (`material/openpbr.slang` `ltcQuad`): the quad in the frame of the normal and the view's tangent,
+  through the inverse matrix, clipped to the horizon (the paper's 16 cases), its edges integrated by Heitz 2017's fitted
+  `IntegrateEdgeVec` (which holds the 1 / (2 pi)). `evaluateRect` takes the base's specular albedo times the quad's
+  fraction of its lobe, and the coat's at the coat's roughness. Anisotropy is ignored there.
+- **Where it shows:** only where RT direct light does not light a rectangle: the fallback without ray queries, the
+  transparent pass and lit particles. The glass goldens' smooth spheres now reflect the area light as a rectangle
+  (re-captured with a note).
+- **Tests:** `material_tests` `t5_ltc_normalized`, `t5_ltc_fit` (worst L1 against the normalized lobe 0.223),
+  `t5_ltc_quad`; `check_analytic` 16/16.
+- **Known gaps:** spheres keep the representative point (no sphere LTC); a quad clipped into an edge between opposite
+  horizon points loses precision in the edge integral (no light makes one); the fit is 32 x 32.
+
