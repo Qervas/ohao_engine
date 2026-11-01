@@ -131,7 +131,7 @@ private:
     [[nodiscard]] bool ensureHostBuffer(rtc::HostBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes,
                                         VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     void writeExpandSet(uint32_t slot, const Lighting& lighting);
-    void writeForwardSet(uint32_t slot, const Lighting& lighting);
+    void writeForwardSet(uint32_t slot, const Lighting& lighting, const render::RenderScene& scene);
     void destroySizeResources();
 
     VkDevice m_device{VK_NULL_HANDLE};

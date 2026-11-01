@@ -2,8 +2,8 @@
 
 **Spec:** `docs/specs/2026-10-29-openpbr-materials-design.md` (section 8, step 4); plan
 `docs/plans/2026-11-01-openpbr-step4.md`, tasks T1–T4.
-**Status:** built (T1–T4). Rulings O15–O18 are provisional until Frank rules on them. O17 is built in part: the
-specular is spread with the diffuse.
+**Status:** built (T1–T4). Rulings O15–O18 are provisional until Frank rules on them. O17 is built in full since: the
+SSS pass spreads the diffuse alone (`docs/changes/2026-11-01-openpbr-gaps.md`).
 
 ## 1. Summary
 
@@ -64,6 +64,9 @@ the pixel's world-space free path. A white subsurface sphere reflects what it re
 - **Goldens:** 42 of 42; the three subsurface goldens are new; no other golden moved.
 
 ## 6. Known gaps
+
+Closed since (`docs/changes/2026-11-01-openpbr-gaps.md`): the walk's colour noise (spectral MIS), the specular blur, the
+white volumes' energy loss (the walk leaves at its step cap; roulette no longer cuts white walks).
 
 - **The path tracer's subsurface is noisy in colour:** a walk lights one channel at three times its weight.
 - **The deferred spread blurs the specular** and does not carry light through thin parts (an ear lit from behind).

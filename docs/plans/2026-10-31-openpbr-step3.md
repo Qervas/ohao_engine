@@ -3,7 +3,8 @@
 **Spec:** `docs/specs/2026-10-29-openpbr-materials-design.md`, section 8, step 3 ("furnace with transmission; a glass
 scene against the path tracer").
 **Status:** T1–T5 built (2026-11-01): `docs/changes/2026-11-01-openpbr-step3.md`. Frank: "continue ... until all done,
-all renderer work done" (autopilot). Rulings O10–O14 (below) are provisional until he rules; O14 is not built.
+all renderer work done" (autopilot). Rulings O10–O14 (below) are provisional until he rules; O14 built since
+(`docs/changes/2026-11-01-openpbr-gaps.md`).
 
 **Goal:** OpenPBR Surface 1.1.1's dielectric transmission in the module (rough refraction, the thin-walled slab), the
 volume's absorption, the thin film's iridescence and dispersion; the path tracer a correct estimator of them; the

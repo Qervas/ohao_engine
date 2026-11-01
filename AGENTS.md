@@ -568,23 +568,44 @@ deferred, reference, path traced); two the transparency scene,
   index (ruling O6), so lighting, RT direct light and RT GI bind the table and that target. There
   is no room for another target: what a later lobe needs goes into the table or a visibility buffer
   (ruling O3).
-- **Glass** (OpenPBR step 3, `docs/changes/2026-11-01-openpbr-step3.md`): `transmission_weight` refracts the dielectric's
-  share under its specular (`OpenPBRBase.evalTransmission`, lobe 4; white glass passes all of it), from either side of a
-  solid (the path tracer shades a back-face hit, `kHitBack`, in its outward frame) or straight through a thin wall;
-  material rows 12-14 (`applyTransmissionRows`; `kMaterialRows` is 15). **A transmissive material reads as Blend on the
-  host** (`MaterialTable::alphaMode`): the transparent pass draws it over a copy of the lit frame
-  (`VfxRenderer::copyRefraction`, one screen-space refraction layer), and RT rays pass it dithered by its transmittance
-  (`rt/alpha_test.slang`). In the path tracer a ray that crossed a surface counts what it meets in full, not by MIS (light
-  sampling only looks above the surface), and a solid's inside absorbs by `transmission_color` at `transmission_depth`.
-  **The light loop takes no light from below a surface** (`evaluateLight`): through glass it is in the refracted frame.
-  **Orient a transparent pixel's normal by `cross(ddx(P), ddy(P))`, never `SV_IsFrontFace`**: the generated sphere is wound
-  inside out.
+- **Glass** (OpenPBR step 3, `docs/changes/2026-11-01-openpbr-step3.md`, gaps closed in
+  `docs/changes/2026-11-01-openpbr-gaps.md`): `transmission_weight` refracts the dielectric's share under its specular
+  (`OpenPBRBase.evalTransmission`, lobe 4; white glass passes all of it), from either side of a solid (the path tracer
+  shades a back-face hit, `kHitBack`, in its outward frame) or straight through a thin wall; material rows 12-14
+  (`applyTransmissionRows`; `kMaterialRows` is 15). **A transmissive material reads as Blend on the host**
+  (`MaterialTable::alphaMode`), so its TLAS instance carries `kTlasMaskTransparent` alone: **every path tracer ray but the
+  camera's traces `kPathMask` (`kRayMaskScene | kTlasMaskTransparent`)**, or bounce and shadow rays pass glass unseen (one
+  refraction, no lens, no shadow). `kHitBack` is the ray running along the interpolated vertex normal (the geometric
+  winding only without normals: the generated sphere is wound inside out, and every entry into a ball shaded as an exit).
+  **Glass has its own bounce budget** (`kCrossings`, 8: refractions and reflections inside a solid, beyond `bounces`; the
+  realtime profile's 2 bounces ended paths inside a ball). In the path tracer a ray that crossed a surface counts what it
+  meets in full, not by MIS (light sampling only looks above the surface), and a solid's inside absorbs by
+  `transmission_color` at `transmission_depth`. **Panes pass shadow rays** (ruling O14, `paneMaterial`: thin-walled,
+  transmissive, roughness at most `kPaneRough` 0.05): `anyHit` ignores one on a shadow ray and flags it, `visible()` then
+  walks the panes along the ray multiplying their `transmissionAlbedo` into `shadowT`, which every light sample
+  multiplies; a bounce through a pane is a null crossing for MIS (`misOrigin`, `lastPdf` kept). The radiance cache is
+  never read at glass. **Deferred glass is traced** (`vfx/transparent_mesh.slang`): the fragment refracts into the
+  solid, finds its own instance's far side with a ray query (`glassExit`, committing only its own non-opaque triangles;
+  total internal reflection up to `kGlassBounces` 4), refracts out, finds the opaque surface the ray meets, projects it
+  and reads the lit frame's copy there (the prefiltered environment on a miss), spread over a disc by each interface's
+  turn (`alpha (1 - 1/eta)` in, `alpha (eta - 1)` out) times the distance after it; Beer-Lambert over the length inside; a
+  solid's far-side fragments are discarded (the pass draws both faces). Other RT rays pass glass dithered by its
+  transmittance (`rt/alpha_test.slang`). **The light loop takes no light from below a surface** (`evaluateLight`):
+  through glass it is in the refracted frame. **Orient a transparent pixel's normal by `cross(ddx(P), ddy(P))`, never
+  `SV_IsFrontFace`.**
 - **Subsurface** (OpenPBR step 4, `docs/changes/2026-11-01-openpbr-step4.md`): `subsurface_weight` takes the dielectric's
   diffuse slot. **The path tracer walks it** (`walkSubsurface`, lobe 5, `MaterialInputs.subsurfaceLocal` false in
-  `inputsOf`): one channel a walk, weighed by 3 (the channels' mean density lost energy), at most 1024 steps. **Every
-  other reader shades a local diffuse lobe** in `subsurface_color` (the default), and the deferred frame's SSS pass
-  spreads it by Burley's profile at the pixel's free path, read from material rows 15-16 through the layers target
-  (`kMaterialRows` is 17). The SSS pass's tiles are still flagged by the G-buffer normal's w (minus the weight).
+  `inputsOf`): each step's channel is drawn in proportion to the walk's throughput (spectral MIS, Cycles' scheme: the
+  scatter weight `albedo sigmaT tr / dot(p, sigmaT tr)`, the exit's `tr / dot(p, tr)`), roulette only once the largest
+  weight is under 1 (a white walk is never cut), rays from TMin 0 (`traceWalk`: a step must not pass the boundary
+  unseen), at most `kWalkSteps` 1024 steps, then out along its direction. The exit is a Lambertian vertex: light and the
+  environment are sampled there by MIS. **Every other reader shades a local diffuse lobe** in `subsurface_color` (the
+  default), and the deferred frame's SSS pass spreads it by Burley's profile at the pixel's free path, read from material
+  rows 15-16 through the layers target (`kMaterialRows` is 17). **The SSS pass blurs the diffuse alone:** lighting writes
+  a second target for subsurface pixels (`SV_Target1`, `R32G32B32A32_UINT`: the diffuse irradiance as fp16, a mask, the
+  diffuse albedo, `packSubsurfaceDiffuse` in `clustered_lights.slang`), the horizontal pass blurs that irradiance, the
+  vertical one adds `albedo x (blurred - own)` to the lit pixel, so the specular stays sharp. The tiles are still flagged
+  by the G-buffer normal's w (minus the weight).
 - **A `[shader(...)]` attribute must sit directly above its entry function.** CMake finds entry points by parsing; an
   attribute above anything else (a struct) once left a shader with no build rule and its old SPIR-V in use for a whole step,
   unnoticed by `ohao doctor`. The configure step now fails when a file's attributes and parsed entries differ.
@@ -709,7 +730,7 @@ deferred, reference, path traced); two the transparency scene,
   shaders bind it either way). The realtime closed box reaches its closed form within 3%
   (`check_material`); realtime Cornell is within 0.3% of the reference. Push constants are shared by
   the bind points: anything recorded between pushing the trace's constants and tracing that pushes
-  its own (the resolve) must push the trace's again. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
+  its own (the resolve) must push the trace's again. A bounce ray (`kPathMask | kTlasMaskEmitter`) that meets a light's emitter mesh
   weighs it by the light's index in `InstanceGpu.emitterLight.w`; a light without a mesh (a
   point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
   full weight. `--bounces N`

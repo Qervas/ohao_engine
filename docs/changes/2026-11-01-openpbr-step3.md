@@ -3,7 +3,7 @@
 **Spec:** `docs/specs/2026-10-29-openpbr-materials-design.md` (section 8, step 3); plan
 `docs/plans/2026-10-31-openpbr-step3.md`, tasks T1–T5.
 **Status:** built (T1–T5). Rulings O10–O14 are provisional until Frank rules on them; O14 (thin-walled windows passing the
-path tracer's shadow rays) is not built.
+path tracer's shadow rays) is built since, with the gaps below that are closed: `docs/changes/2026-11-01-openpbr-gaps.md`.
 
 ## 1. Summary
 
@@ -111,6 +111,9 @@ since step 2, and it shaded a generated sphere's front from behind.
 - **`vfx_gpu_test`:** 44/44.
 
 ## 6. Known gaps
+
+Closed since (`docs/changes/2026-11-01-openpbr-gaps.md`): deferred refraction is traced through the solid; the path
+tracer's shadow rays pass panes (O14). The path tracer's bounce and shadow rays had not met glass at all (a mask).
 
 - **Deferred refraction is one screen-space offset:** a solid glass ball does not invert what is behind it as the path
   tracer's does; glass behind glass, and effects drawn after the copy, are not seen through glass.

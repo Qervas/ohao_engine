@@ -1,8 +1,8 @@
 # OpenPBR step 4: subsurface scattering
 
 **Spec:** `docs/specs/2026-10-29-openpbr-materials-design.md`, section 8, step 4 ("skin and marble against the path tracer").
-**Status:** T1–T4 built (2026-11-01): `docs/changes/2026-11-01-openpbr-step4.md` (the SSS pass spreads the specular too:
-the separate diffuse image is not built). Frank: "continue ... until all done, all renderer work done" (autopilot).
+**Status:** T1–T4 built (2026-11-01): `docs/changes/2026-11-01-openpbr-step4.md`; the separate diffuse
+image built since (`docs/changes/2026-11-01-openpbr-gaps.md`). Frank: "continue ... until all done, all renderer work done" (autopilot).
 Rulings O15–O18 (below) are provisional until he rules.
 
 **Goal:** OpenPBR Surface 1.1.1's subsurface in the module, a random walk in the path tracer, and a diffusion profile in

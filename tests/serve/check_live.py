@@ -359,9 +359,13 @@ def test_path_tracer_window():
                                    "width": size[0], "height": size[1]})
     hr = h.call("render.capture", {"path": hout + "/realtime.png", "mode": "rt_realtime", "spp": 8,
                                    "width": size[0], "height": size[1]})
-    check(h.close() == 0 and result(ho) is not None and result(hr) is not None and
-          (result(hhash) or {}).get("hash") == (result(hashed) or {}).get("hash"),
-          "the headless host reaches the same world and captures")
+    code = h.close()
+    same = (result(hhash) or {}).get("hash") == (result(hashed) or {}).get("hash")
+    # Each part named, so an intermittent miss says which (2026-11-01: one gate run missed here once).
+    check(code == 0 and result(ho) is not None and result(hr) is not None and same,
+          "the headless host reaches the same world and captures (exit %s, offline %s, realtime %s, hash %s)" %
+          (code, "ok" if result(ho) is not None else ho, "ok" if result(hr) is not None else hr,
+           "same" if same else "%s vs %s" % ((result(hhash) or {}).get("hash"), (result(hashed) or {}).get("hash"))))
     # The floor: the driver builds a window's BVHs and a headless host's differently, so a ray exactly
     # on a shared triangle edge may take either triangle. The realtime tracer's pixel moves by 1 LSB.
     # The reference (rt/path_tracer.slang) tests a path against the hit triangle's geometric normal,

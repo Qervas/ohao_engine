@@ -226,12 +226,15 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
         rtc::layoutBinding(0, kStorage, kDraw), rtc::layoutBinding(1, kStorage, kDraw),
         rtc::layoutBinding(2, kStorage, kDraw), rtc::layoutBinding(3, kSampled, kDraw),
     }};
-    const std::array<VkDescriptorSetLayoutBinding, 9> forward{{
+    const std::array<VkDescriptorSetLayoutBinding, 12> forward{{
         rtc::layoutBinding(0, kStorage, kFrag), rtc::layoutBinding(1, kStorage, kFrag),
         rtc::layoutBinding(2, kSampled, kFrag), rtc::layoutBinding(3, kSampled, kFrag),
         rtc::layoutBinding(4, kSampler, kFrag), rtc::layoutBinding(5, kTlas, kFrag),
         rtc::layoutBinding(6, kSampled, kFrag), rtc::layoutBinding(7, kStorage, kFrag),   // 7: OpenPBR's tables
         rtc::layoutBinding(8, kSampled, kFrag),                                           // 8: the refraction source
+        // 9-11: the scene's meshes, indices and vertices (glass finds its far side's normal)
+        rtc::layoutBinding(9, kStorage, kFrag), rtc::layoutBinding(10, kStorage, kFrag),
+        rtc::layoutBinding(11, kStorage, kFrag),
     }};
     m_expandLayout = makeLayout(m_device, expand, 6);
     m_sortLayout = makeLayout(m_device, sort);
@@ -241,7 +244,7 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
 
     constexpr uint32_t n = MAX_FRAMES_IN_FLIGHT;
     const std::array<VkDescriptorPoolSize, 4> sizes{{
-        {kStorage, 15 * n}, {kSampled, 7 * n}, {kSampler, 2 * n}, {kTlas, 2 * n},
+        {kStorage, 18 * n}, {kSampled, 7 * n}, {kSampler, 2 * n}, {kTlas, 2 * n},
     }};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -725,9 +728,14 @@ void VfxRenderer::writeExpandSet(uint32_t slot, const Lighting& lighting) {
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
 
-void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting) {
+void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting, const render::RenderScene& scene) {
     Slot& s = m_slots[slot];
     const VkBuffer dummy = m_dummyBuffer.buffer;
+    const std::array<VkDescriptorBufferInfo, 3> geometry{{
+        {scene.meshTable() ? scene.meshTable() : dummy, 0, VK_WHOLE_SIZE},
+        {scene.indexArena() ? scene.indexArena() : dummy, 0, VK_WHOLE_SIZE},
+        {scene.vertexArena() ? scene.vertexArena() : dummy, 0, VK_WHOLE_SIZE},
+    }};
     const std::array<VkDescriptorBufferInfo, 2> buffers{{
         {lighting.lights ? lighting.lights : dummy, 0, VK_WHOLE_SIZE},
         {lighting.clusters ? lighting.clusters : dummy, 0, VK_WHOLE_SIZE},
@@ -767,6 +775,10 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting) {
     w.back().pBufferInfo = &tables;
     w.push_back(rtc::descriptorWrite(s.forwardSet, 8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
     w.back().pImageInfo = &refraction;
+    for (uint32_t i = 0; i < geometry.size(); ++i) {
+        w.push_back(rtc::descriptorWrite(s.forwardSet, 9 + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        w.back().pBufferInfo = &geometry[i];
+    }
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
 
@@ -923,7 +935,7 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
     }
     if (meshes) {
         copyRefraction(cmd);
-        writeForwardSet(slot, lighting);
+        writeForwardSet(slot, lighting, scene);
     }
 
     std::array<VkClearValue, 3> clears{};
