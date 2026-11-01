@@ -6,9 +6,9 @@
 //     instances) adds what it hits or misses: emission, a light's emitter, the environment;
 //   - at every vertex, next-event estimation: one light chosen uniformly (a sphere by its cone of
 //     directions, a rectangle by its area, a sun by its direction) and one environment direction
-//     by the map's CDF, each behind a shadow ray (kRayMaskScene) and weighted against BSDF
+//     by the map's CDF, each behind a shadow ray (kPathMask) and weighted against BSDF
 //     sampling by the power heuristic;
-//   - the BSDF samples the next direction (material/openpbr.slang); a bounce ray (kRayMaskScene
+//   - the BSDF samples the next direction (material/openpbr.slang); a bounce ray (kPathMask
 //     and the light emitters) that meets a light's emitter or leaves the scene adds its radiance
 //     weighted against the light or environment sampling that could have found it, so every
 //     light is counted once at any roughness (the old near-mirror rule is gone);
@@ -87,7 +87,15 @@ static const uint kNoTex = 0xFFFFFFFFu;
 static const uint kHit = 1u;
 static const uint kHitEmitter = 2u;
 static const uint kHitEmissive = 4u;   // an emissive triangle light (payload.light its index)
-static const uint kHitBack = 8u;       // the ray met the triangle's back (from inside a closed mesh)
+static const uint kHitBack = 8u;       // the ray leaves a closed mesh (met from inside: along its outward normal)
+// The path tracer's shadow and bounce rays: the scene and the blended instances (kTlasMaskTransparent:
+// glass, panes), which the hybrid frame's rays leave out but a path must meet (anyHit decides a
+// blended surface stochastically; glass is shaded). Without them a ray inside a glass ball never met
+// its far side, refracting once: the lens was too weak, and glass cast no shadow.
+static const uint kPathMask = kRayMaskScene | kTlasMaskTransparent;
+static const uint kCrossings = 16u;    // glass events (refractions, reflections inside) beyond the bounces
+static const uint kShadowRay = 16u;    // visible()'s ray: anyHit lets a pane through (paneMaterial)
+static const uint kPaneSeen = 32u;     // ... and says it did
 
 // What a ray brings back: a surface's place and its OpenPBR inputs (resolved from its material
 // and textures by the closest hit), a light's emitter (its light), or nothing (a miss).
@@ -209,6 +217,20 @@ float3 sampleEnv(inout Sampler rng, out float pdf)
     return float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
 }
 
+// sampleEnv from four uniforms of another stream (the subsurface walk's exit).
+float3 sampleEnvAt(float4 r, out float pdf)
+{
+    const uint W = pc.control.w, H = uint(pc.tuning.y);
+    const uint y = searchCdf(0u, H, r.x);
+    const uint x = searchCdf(H + y * W, W, r.y);
+    const float u = (float(x) + r.z) / float(W);
+    const float v = (float(y) + r.w) / float(H);
+    const float phi = (u - 0.5) * kTwoPi;
+    const float theta = v * kPi;
+    pdf = envDensity(x, y, theta);
+    return float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+}
+
 // The flags a ray traces with: opaque unless some instance has an alpha material.
 uint traceFlags() { return alphaRays() ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE; }
 
@@ -227,8 +249,44 @@ PathPayload trace(float3 origin, float3 dir, uint mask, float tMax)
     return p;
 }
 
+// A walk's step (walkSubsurface): from a point inside a volume, not on a surface, so from distance
+// 0. A 1e-4 start let a step from a scattering event within 0.1 mm of the surface step through it
+// unseen and the walk escape (a dense white volume lost 1.4%).
+PathPayload traceWalk(float3 origin, float3 dir, float tMax)
+{
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = 0.0;
+    ray.TMax = tMax;
+    PathPayload p;
+    p.flags = 0u;
+    TraceRay(scene, traceFlags(), kRayMaskScene, 0, 0, 0, ray, p);
+    return p;
+}
+
+// A pane (ruling O14): a thin-walled transmissive surface smooth enough to pass light straight through
+// (specular_roughness at most kPaneRough, by its constants, as anyHit and the path both read them).
+// Shadow rays pass panes, tinted by what each transmits; a bounce ray that refracts through one keeps
+// the last vertex's density for MIS (a null crossing), so light through a window is light sampled and
+// BSDF sampled once each. Rougher thin walls and solids still block shadow rays: their light arrives by
+// bounce rays alone, in full.
+static const float kPaneRough = 0.05;
+
+bool paneMaterial(uint material)
+{
+    const uint m = material * kMaterialRows;
+    const float4 r1 = materials[m + 1u], r12 = materials[m + kTransmissionRowFirst];
+    const float4 r13 = materials[m + kTransmissionRowFirst + 1u];
+    return r12.w > 0.0 && r13.y > 0.5 && r1.y < 1.0 && r1.x <= kPaneRough;
+}
+
+// What a shadow ray's last visible() carried through panes (1 without any).
+static float3 shadowT = float3(1.0);
+
 bool visible(float3 origin, float3 dir, float dist)
 {
+    shadowT = float3(1.0);
     if (dist <= 0.0) return false;
     RayDesc ray;
     ray.Origin = origin;
@@ -236,10 +294,29 @@ bool visible(float3 origin, float3 dir, float dist)
     ray.TMin = 1e-4;
     ray.TMax = dist;
     PathPayload p;
-    p.flags = kHit;   // the closest hit is skipped: only the miss shader clears it
+    p.flags = kHit | kShadowRay;   // the closest hit is skipped: only the miss shader clears kHit
     TraceRay(scene, traceFlags() | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-             kRayMaskScene, 0, 0, 0, ray, p);
-    return (p.flags & kHit) == 0u;
+             kPathMask, 0, 0, 0, ray, p);
+    if ((p.flags & kHit) != 0u) return false;
+    if ((p.flags & kPaneSeen) == 0u) return true;
+    // Through panes: each one's straight transmission at the ray's angle, nearest first.
+    OpenPBRTables tables;
+    tables.data = openpbrTables;
+    float3 o = origin;
+    float left = dist;
+    for (uint k = 0u; k < 8u; ++k)
+    {
+        const PathPayload h = trace(o, dir, kPathMask, left);
+        if ((h.flags & kHit) == 0u) return any(shadowT > 0.0);
+        if (!paneMaterial(h.material)) break;
+        const float c = clamp(abs(dot(dir, h.geoNormal)), 1e-4, 1.0);
+        shadowT *= OpenPBRSurface(inputsOf(h)).transmissionAlbedo(float3(sqrt(1.0 - c * c), 0.0, c), tables);
+        left -= h.t;
+        o = h.position;
+        if (left <= 1e-4 || !any(shadowT > 0.0)) break;
+    }
+    shadowT = float3(0.0);
+    return false;
 }
 
 struct PathTextures : IMaterialTextures
@@ -271,12 +348,16 @@ MaterialInputs inputsOf(PathPayload p)
 // ---- the subsurface walk (OpenPBR step 4) --------------------------------------------------
 // Chiang, Kutz & Burley 2016: light enters (lobe 5) and walks the volume under the surface,
 // sigma_t = 1 / (subsurface_radius x subsurface_radius_scale), its single-scatter albedo from
-// subsurface_color by van de Hulst's inversion, Henyey-Greenstein scattering. A walk follows one
-// channel, chosen uniformly and weighed by 3 (the others 0): the three channels' mean density
-// (spectral MIS) let skin's red and blue free paths, 4x apart, multiply their weight ratios over
-// hundreds of steps into a tail a frame never sampled (a white 2 cm volume read 0.93).
-// Meeting the surface is leaving it (ruling O16). Its own PCG stream: a walk takes
-// up to kWalkSteps steps, more than any Sobol group holds.
+// subsurface_color by van de Hulst's inversion, Henyey-Greenstein scattering. Every walk carries all
+// three channels (spectral MIS): each step draws its distance on a channel chosen in proportion to
+// the walk's throughput, and each channel is weighed by its own density over the mixture's
+// (Cycles' scheme). With that choice the channels' summed throughput never grows (a scattering
+// multiplies it by at most the largest single-scatter albedo, leaving by exactly 1), so skin's
+// free paths, 4x apart, cannot build the long tail that uniform choice did. A walk that reaches
+// kWalkSteps leaves along its direction at the surface it meets (a dense near-white volume would
+// otherwise lose the energy of its longest walks: the exit point is biased, the energy is not).
+// Meeting the surface is leaving it (ruling O16). Its own PCG stream: a walk takes up to
+// kWalkSteps steps, more than any Sobol group holds.
 static const uint kWalkSteps = 1024u;
 
 struct WalkRng
@@ -306,47 +387,67 @@ float3 sampleHG(float3 d, float g, float u1, float u2)
     return normalize(tt * (sinT * cos(phi)) + bb * (sinT * sin(phi)) + d * c);
 }
 
+// Leaving at a surface hit h (met from inside): pos just outside it, dir cosine-weighted about the
+// outward shading normal.
+void walkExit(PathPayload h, inout float3 pos, inout float3 dir, out float3 shade, inout WalkRng rng)
+{
+    const float3 out = -h.geoNormal;   // geoNormal faces the ray, which came from inside
+    shade = dot(h.normal, out) > 0.0 ? h.normal : -h.normal;
+    float3 tt, bb;
+    basisOf(shade, tt, bb);
+    const float u1 = rng.next(), u2 = rng.next();
+    const float r = sqrt(u1), phi = 2.0 * kPi * u2;
+    dir = normalize(tt * (r * cos(phi)) + bb * (r * sin(phi)) + shade * sqrt(max(1.0 - u1, 0.0)));
+    if (dot(dir, out) <= 0.0) dir = out;
+    pos = h.position + out * 1e-3;
+}
+
 // From just under the surface at pos, along dir (into the volume): true when the walk leaves,
 // with pos the exit point, dir the way out (cosine-weighted about the outward normal) and weight
-// what it carries.
-bool walkSubsurface(inout float3 pos, inout float3 dir, out float3 weight, float3 sigmaT, float3 albedo, float g,
-                    inout WalkRng rng)
+// what it carries per channel; exitN the exit's outward shading normal.
+bool walkSubsurface(inout float3 pos, inout float3 dir, out float3 weight, out float3 exitN, float3 sigmaT, float3 albedo,
+                    float g, inout WalkRng rng)
 {
-    const float uc = rng.next();
-    const uint c = uc < 1.0 / 3.0 ? 0u : uc < 2.0 / 3.0 ? 1u : 2u;
-    const float st = sigmaT[c], a = albedo[c];
-    weight = float3(c == 0u ? 3.0 : 0.0, c == 1u ? 3.0 : 0.0, c == 2u ? 3.0 : 0.0);
-    float w = 1.0;
+    weight = float3(1.0);
+    exitN = float3(0.0, 1.0, 0.0);
     for (uint k = 0u; k < kWalkSteps; ++k)
     {
-        const float dist = -log(max(1.0 - rng.next(), 1e-7)) / st;
-        const PathPayload h = trace(pos, dir, kRayMaskScene, dist);
+        // The channel by throughput: p_j = w_j / sum w.
+        const float sw = weight.r + weight.g + weight.b;
+        const float3 pj = weight / sw;
+        const float uc = rng.next();
+        const uint c = uc < pj.r ? 0u : uc < pj.r + pj.g ? 1u : 2u;
+        const float dist = -log(max(1.0 - rng.next(), 1e-7)) / sigmaT[c];
+        const PathPayload h = traceWalk(pos, dir, dist);
         if ((h.flags & kHit) != 0u)
         {
-            weight *= w;   // out: no event before the surface, as the distance was drawn
-            const float3 out = -h.geoNormal;   // geoNormal faces the ray, which came from inside
-            const float3 shade = dot(h.normal, out) > 0.0 ? h.normal : -h.normal;
-            float3 tt, bb;
-            basisOf(shade, tt, bb);
-            const float u1 = rng.next(), u2 = rng.next();
-            const float r = sqrt(u1), phi = 2.0 * kPi * u2;
-            dir = normalize(tt * (r * cos(phi)) + bb * (r * sin(phi)) + shade * sqrt(max(1.0 - u1, 0.0)));
-            if (dot(dir, out) <= 0.0) dir = out;
-            pos = h.position + out * 1e-3;
+            // Out: no event before the surface, each channel's transmittance over the mixture's.
+            const float t = length(h.position - pos);
+            const float3 tr = exp(-sigmaT * t);
+            weight *= tr / max(dot(pj, tr), 1e-30);
+            walkExit(h, pos, dir, exitN, rng);
             return true;
         }
-        // A scattering event at dist: the single-scatter albedo (sigma_s over sigma_t).
-        w *= a;
+        // A scattering event at dist: sigma_s T over the mixture's density sum_j p_j sigma_t,j T_j.
+        const float3 tr = exp(-sigmaT * dist);
+        weight *= albedo * sigmaT * tr / max(dot(pj, sigmaT * tr), 1e-30);
         pos += dir * dist;
         dir = sampleHG(dir, g, rng.next(), rng.next());
-        if (k >= 8u)
+        // Russian roulette only once the walk has lost weight (absorbed): a white walk is never
+        // cut short (a 1% cut a step kept a 500-step walk once in 150, at 150 times its weight,
+        // which 16 samples a pixel never see: a dense white volume read 0.94).
+        const float q = max(weight.r, max(weight.g, weight.b));
+        if (q < 1.0)
         {
-            const float q = min(w, 0.99);
             if (rng.next() >= q) return false;
-            w /= q;
+            weight /= q;
         }
     }
-    return false;
+    // The cap: leave along dir where it meets the surface.
+    const PathPayload h = traceWalk(pos, dir, 1.0e4);
+    if ((h.flags & kHit) == 0u) return false;
+    walkExit(h, pos, dir, exitN, rng);
+    return true;
 }
 
 // Dispersion (OpenPBR step 3, ruling O12): a path's first dispersive refraction draws one of RGB at
@@ -421,6 +522,7 @@ void raygen()
     float3 diffuseOut = float3(0.0), specularOut = float3(0.0);
     float3 throughput = float3(1.0);
     float lastPdf = 0.0;   // the BSDF density the last bounce ray was drawn with (0: the camera ray)
+    float3 misOrigin = origin;   // the vertex that density is at (a pane's null crossing keeps it)
     uint firstLobe = 0u;   // the primary hit's sampled lobe (NRD's split): 0 specular, 1 diffuse
     float firstHitT = -1.0, secondHitT = -1.0;
     float viewZ = 1e30, firstRough = 1.0;
@@ -432,10 +534,11 @@ void raygen()
     bool insideVolume = false;
     float3 sigmaA = float3(0.0);
     int channel = -1;          // dispersion's wavelength once drawn (0 R, 1 G, 2 B)
+    uint crossings = 0u;       // glass events so far: they do not count as bounces
 
     for (uint depth = 0u; ; ++depth)
     {
-        const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);
+        const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kPathMask | kTlasMaskEmitter), 1.0e4);
         if (insideVolume) throughput *= exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
         float3 add = float3(0.0);
         bool stop = false;
@@ -458,14 +561,14 @@ void raygen()
             else
             {
                 float lightPdf;
-                const float3 le = emitterRadiance(hit.light, origin, hit.position, hit.geoNormal, dir, lightPdf);
+                const float3 le = emitterRadiance(hit.light, misOrigin, hit.position, hit.geoNormal, dir, lightPdf);
                 add = throughput * le * powerHeuristic(lastPdf, lightPdf);
             }
             stop = true;
         }
         else
         {
-            add = throughput * hit.emission * emissiveHitWeight(hit, origin, lastPdf, depth);   // weighed against light sampling
+            add = throughput * hit.emission * emissiveHitWeight(hit, misOrigin, lastPdf, depth);   // weighed against light sampling
         }
         if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;
         radiance += add;
@@ -520,7 +623,10 @@ void raygen()
         // lobe that drew it spreads over the voxel (a diffuse one, or roughness^2 x length >= voxel:
         // a sharp reflection keeps tracing). The query point is jittered within the voxel's face
         // (Binder 2019) so no voxel shows as a block.
-        if (!stop && depth > 0u && (flags & kFlagCache) != 0u)
+        // Never at glass: the cache's update paths stop where a surface refracts, so a cell there
+        // would hold its reflection alone.
+        if (!stop && depth > 0u && (flags & kFlagCache) != 0u &&
+            !(materials[hit.material * kMaterialRows + kTransmissionRowFirst].w > 0.0))
         {
             const float voxel = cacheVoxelSizeAt(hit.position, camPos);
             if (hit.t >= voxel && (lastLobe == 1u || lastRough * lastRough * hit.t >= voxel))
@@ -541,7 +647,11 @@ void raygen()
                 }
             }
         }
-        if (stop || depth > bounces) break;
+        // Glass has its own budget (Cycles' transmission bounces): a ray through a ball crosses
+        // twice, and inside rough glass it reflects off the inner wall again and again; counted as
+        // bounces, the realtime profile's 2 ended it inside (the realtime furnace's rough glass rim
+        // read 0.62).
+        if (stop || depth - crossings > bounces || crossings > kCrossings) break;
 
         // The surface. A transmissive solid met from inside (a back face) is shaded in its outward
         // frame, so the module sees wo below it and refracts at 1 / eta.
@@ -608,10 +718,11 @@ void raygen()
                 // A sun is a delta (its radiance already over its choice); a light without an
                 // emitter mesh only light sampling finds: full weight.
                 const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
-                const float3 c = throughput * f * ls.radiance * w;
+                const float3 le = ls.radiance * shadowT * w;
+                const float3 c = throughput * f * le;
                 radiance += c;
                 // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
-                if (depth == 0u) { diffuseOut += throughput * fd * ls.radiance * w; specularOut += throughput * fs * ls.radiance * w; }
+                if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
                 else if (firstLobe == 1u) diffuseOut += c;
                 else specularOut += c;
             }
@@ -627,7 +738,7 @@ void raygen()
             const float3 f = fs + fd;
             if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))
             {
-                const float3 le = envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;
+                const float3 le = envRadiance(L) * shadowT * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;
                 const float3 c = throughput * f * le;
                 radiance += c;
                 if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
@@ -652,15 +763,47 @@ void raygen()
             float3 pos = hit.position - hit.geoNormal * 1e-3;
             float3 wdir = toWorld(s.wi, t, b, n);
             if (dot(wdir, hit.geoNormal) >= 0.0) wdir = -hit.geoNormal;
-            float3 walked;
-            if (!walkSubsurface(pos, wdir, walked, sigmaT, subsurfaceSingleScatter(r15.rgb), clamp(r16.w, -0.95, 0.95), wr))
+            float3 walked, exitN;
+            if (!walkSubsurface(pos, wdir, walked, exitN, sigmaT, subsurfaceSingleScatter(r15.rgb),
+                                clamp(r16.w, -0.95, 0.95), wr))
                 break;
             if (depth == 0u) firstLobe = 1u;
             lastLobe = 1u;
             lastRough = 1.0;
             throughput *= s.weight * walked;
-            lastPdf = 1.0e18;
+            // The exit is a Lambertian vertex (ruling O16: f = 1 / pi, drawn by its cosine): light
+            // and the environment sampled there, weighed against that draw, which the next hit
+            // weighs the same way (a walk's exit that only found light by its own direction sparkled
+            // wherever the area light was small).
+            {
+                const float lu0 = wr.next(), lu1 = wr.next(), lu2 = wr.next();
+                const LightSample ls = sampleLight(pos, pos, lu0, lu1, lu2);
+                const float cl = dot(ls.L, exitN);
+                if (ls.valid && cl > 0.0 && visible(pos, ls.L, ls.dist))
+                {
+                    const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, cl * (1.0 / kPi)) : 1.0) / ls.pdf : 1.0;
+                    const float3 c = throughput * (cl * (1.0 / kPi)) * ls.radiance * shadowT * w;
+                    radiance += c;
+                    if (firstLobe == 1u) diffuseOut += c;
+                    else specularOut += c;
+                }
+                if (envSampled())
+                {
+                    float pdfL;
+                    const float3 L = sampleEnvAt(float4(wr.next(), wr.next(), wr.next(), wr.next()), pdfL);
+                    const float ce = dot(L, exitN);
+                    if (pdfL > 0.0 && ce > 0.0 && visible(pos, L, 1.0e4))
+                    {
+                        const float3 c = throughput * (ce * (1.0 / kPi)) * envRadiance(L) * shadowT * powerHeuristic(pdfL, ce * (1.0 / kPi)) / pdfL;
+                        radiance += c;
+                        if (firstLobe == 1u) diffuseOut += c;
+                        else specularOut += c;
+                    }
+                }
+            }
+            lastPdf = max(dot(wdir, exitN), 0.0) * (1.0 / kPi);
             origin = pos;
+            misOrigin = pos;
             dir = wdir;
             insideVolume = false;
             if (depth >= 2u)
@@ -681,10 +824,21 @@ void raygen()
         lastRough = s.lobe == 2u ? mi.coatRoughness : s.lobe == 3u ? 1.0 : hit.specularRoughness;
         throughput *= s.weight;
         // A ray that crossed the surface could not have been drawn by light sampling there (it
-        // samples above the surface only): what it meets counts in full, not by MIS (a huge pdf).
-        lastPdf = crosses ? 1.0e18 : s.pdf;
+        // samples above the surface only): what it meets counts in full, not by MIS (a huge pdf). A
+        // pane's crossing is null: the last vertex's light sampling saw through it, so its density
+        // and place stay (the camera's ray, which has none, counts in full).
+        if (crosses && mi.thinWalled && paneMaterial(hit.material))
+        {
+            if (lastPdf == 0.0) lastPdf = 1.0e18;
+        }
+        else
+        {
+            lastPdf = crosses ? 1.0e18 : s.pdf;
+            misOrigin = p;
+        }
         origin = p;
         dir = next;
+        if (crosses || fromInside) ++crossings;   // a refraction, or a reflection inside a solid
         if (crosses)
         {
             origin = hit.position - hit.geoNormal * 1e-3;
@@ -790,7 +944,7 @@ void cacheUpdate()
     uint count = 0u;
     for (uint depth = 0u; ; ++depth)
     {
-        const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskScene : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);
+        const PathPayload hit = trace(origin, dir, depth == 0u ? kPathMask : (kPathMask | kTlasMaskEmitter), 1.0e4);
         if ((hit.flags & kHit) == 0u)
         {
             if (depth > 0u)
@@ -842,7 +996,7 @@ void cacheUpdate()
             if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist))
             {
                 const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
-                cacheContribute(verts, count, throughput * f * ls.radiance * w);
+                cacheContribute(verts, count, throughput * f * ls.radiance * shadowT * w);
             }
         }
         if (envSampled())
@@ -853,7 +1007,7 @@ void cacheUpdate()
             const float3 wi = toLocal(L, t, b, n);
             const float3 f = base.eval(wo, wi, tables);
             if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))
-                cacheContribute(verts, count, throughput * f * envRadiance(L) * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
+                cacheContribute(verts, count, throughput * f * envRadiance(L) * shadowT * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
         }
 
         rng.group(3u + 3u * depth);
@@ -922,7 +1076,11 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
     if (!front) geo = -geo;
     if (dot(n, geo) < 0.0) n = -n;
     payload.geoNormal = geo;
-    if (!front) payload.flags |= kHitBack;
+    // From inside: the ray runs along the outward normal, the interpolated vertex normal's side (a
+    // winding is not the same across assets: the generated sphere's is inverted, which shaded every
+    // glass ball's entry as an exit, refracting the wrong way and absorbing outside it); a mesh
+    // without vertex normals by its winding.
+    if (dot(nObj, nObj) > 1e-8 ? dot(mul(nObj, w2o), dir) > 0.0 : !front) payload.flags |= kHitBack;
 
     if ((c.flags & kInstanceEmitter) != 0u)
     {
@@ -1030,6 +1188,12 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
 void anyHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes attr)
 {
     const Corners c = cornersOf(InstanceID(), PrimitiveIndex());
+    if ((payload.flags & kShadowRay) != 0u && paneMaterial(c.material))
+    {
+        payload.flags |= kPaneSeen;   // visible() works out what it lets through
+        IgnoreHit();
+        return;
+    }
     const uint m = c.material * kMaterialRows;
     const float4 row3 = materials[m + 3u];   // mode, cutoff, opacity, base alpha
     const uint mode = uint(row3.x + 0.5);
