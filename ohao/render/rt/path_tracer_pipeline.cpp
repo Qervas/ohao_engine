@@ -3,6 +3,7 @@
 // The file-local readFile() helper is relocated here since this TU is its only caller.
 
 #include "path_tracer.hpp"
+#include "pipeline_disk_cache.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -160,8 +161,12 @@ bool PathTracer::createRTPipeline() {
     pipelineInfo.maxPipelineRayRecursionDepth = 2;  // path tracing needs bounce recursion
     pipelineInfo.layout = m_pipelineLayout;
 
+    // Minutes cold: kept in a file so the next process (a headless host beside a window) loads it.
+    PipelineDiskCache cache;
+    cache.open(m_device, m_physicalDevice, "path_tracer");
     VkResult result = vkCreateRayTracingPipelinesKHR(
-        m_device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_rtPipeline);
+        m_device, VK_NULL_HANDLE, cache.handle(), 1, &pipelineInfo, nullptr, &m_rtPipeline);
+    if (result == VK_SUCCESS) cache.save();
 
     // Cleanup shader modules (no longer needed after pipeline creation)
     vkDestroyShaderModule(m_device, rgenModule, nullptr);
