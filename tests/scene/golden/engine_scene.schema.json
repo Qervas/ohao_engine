@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash ed5476b497ae0478. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 090832d4c694cdf6. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -637,7 +637,7 @@
           ]
         },
         "subsurface_weight": {
-          "description": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emission_luminance > 0.",
+          "description": "Subsurface scattering (skin, wax, marble): the share of the dielectric's diffuse that scatters under the surface; 0 = none",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         },
@@ -771,6 +771,40 @@
           "description": "The film's index of refraction",
           "default": 1.4,
           "allOf": [{ "type": "number", "minimum": 1, "maximum": 3 }]
+        },
+        "subsurface_color": {
+          "description": "The colour the scattering volume shows (its multiple-scattering albedo)",
+          "default": [0.8, 0.8, 0.8],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "subsurface_radius": {
+          "description": "The mean free path: how far light travels under the surface (skin ~0.01, marble ~0.05)",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "subsurface_radius_scale": {
+          "description": "subsurface_radius per channel (red travels furthest in skin)",
+          "default": [1, 0.5, 0.25],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "subsurface_scatter_anisotropy": {
+          "description": "The volume's Henyey-Greenstein anisotropy: > 0 forward, < 0 backward",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": -1, "maximum": 1 }]
         }
       },
       "additionalProperties": false

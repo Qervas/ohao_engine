@@ -266,6 +266,10 @@ void GBufferPass::resetSSSTiles(VkCommandBuffer cmd) {
                          &b, 0, nullptr);
 }
 
+VkBuffer GBufferPass::materialBuffer() const {
+    return m_renderScene ? m_renderScene->materialBuffer() : VK_NULL_HANDLE;
+}
+
 bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
     if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_sceneSets[frameIndex] == VK_NULL_HANDLE) return false;
     const VkBuffer instances = m_renderScene->instanceBuffer();

@@ -2,7 +2,7 @@
 // tools/material/openpbr_tables (the energy tables) and tests/material/material_tests (the module's
 // tests) call it, so they run the module's own code. Outside shaders/: never compiled to SPIR-V.
 //
-// One item is 14 float4s of `io`:
+// One item is 16 float4s of `io`:
 //   0  x the op
 //   1  base_color.rgb, base_weight
 //   2  base_metalness, base_diffuse_roughness, specular_weight, specular_roughness
@@ -17,6 +17,8 @@
 //   11 fuzz_roughness, specular_roughness_anisotropy
 //   12 transmission_color.rgb, transmission_weight
 //   13 geometry_thin_walled (0 or 1), thin_film_weight, thin_film_thickness, thin_film_ior
+//   14 subsurface_color.rgb, subsurface_weight
+//   15 x: 1 the subsurface walked (lobe 5), 0 local
 // Ops:
 // Ops 0-3 are the whole surface (OpenPBRSurface: fuzz over coat over the base).
 //   0 eval      6.rgb = BSDF x cos
@@ -39,6 +41,7 @@
 //   9 film      6.rgb = the thin film's Airy reflectance at cosine wo.x, film IOR wo.y, thickness
 //               wo.z (nm), over a base of normal-incidence reflectance v.xyz
 //   10 ior      6.x = dispersedIor(wo.x, wo.y, wo.z, v.x)
+//   11 vdh      6.rgb = subsurfaceSingleScatter(wo)
 import material.openpbr;
 
 RWStructuredBuffer<float4> io;
@@ -48,7 +51,7 @@ StructuredBuffer<float> tables;
 [numthreads(1, 1, 1)]
 void run(uint3 id : SV_DispatchThreadID)
 {
-    const uint b = id.x * 14u;
+    const uint b = id.x * 16u;
     const uint op = uint(io[b].x + 0.5);
     MaterialInputs mi;
     mi.baseColor = io[b + 1u].xyz;
@@ -75,6 +78,9 @@ void run(uint3 id : SV_DispatchThreadID)
     mi.thinFilmWeight = io[b + 13u].y;
     mi.thinFilmThickness = io[b + 13u].z;
     mi.thinFilmIor = io[b + 13u].w;
+    mi.subsurfaceColor = io[b + 14u].xyz;
+    mi.subsurfaceWeight = io[b + 14u].w;
+    mi.subsurfaceLocal = io[b + 15u].x < 0.5;
     const float3 wo = io[b + 4u].xyz;
     const float3 v = io[b + 5u].xyz;
     OpenPBRTables t;
@@ -161,6 +167,10 @@ void run(uint3 id : SV_DispatchThreadID)
     else if (op == 10u)
     {
         r0.x = dispersedIor(wo.x, wo.y, wo.z, v.x);
+    }
+    else if (op == 11u)
+    {
+        r0.xyz = subsurfaceSingleScatter(wo);
     }
     else if (op == 6u)
     {

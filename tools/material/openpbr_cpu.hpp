@@ -11,7 +11,8 @@
 namespace ohao::material {
 
 enum class Op : uint32_t {
-    Eval = 0, Sample = 1, Pdf = 2, Albedo = 3, Tables = 4, Fresnel = 5, Lobes = 6, Aniso = 7, Glass = 8, Film = 9, Ior = 10
+    Eval = 0, Sample = 1, Pdf = 2, Albedo = 3, Tables = 4, Fresnel = 5, Lobes = 6, Aniso = 7, Glass = 8, Film = 9, Ior = 10,
+    VanDeHulst = 11
 };
 
 using Float3 = std::array<float, 3>;
@@ -43,6 +44,9 @@ struct Material {
     float thinFilmWeight{0.0f};
     float thinFilmThickness{0.5f};   // micrometres
     float thinFilmIor{1.4f};
+    float subsurfaceWeight{0.0f};
+    Float3 subsurfaceColor{0.8f, 0.8f, 0.8f};
+    bool subsurfaceWalked{false};   // lobe 5 (the path tracer's walk) instead of the local lobe
 };
 
 // One call of the kernel: an op on a material at (wo, v), v being wi or the random numbers.

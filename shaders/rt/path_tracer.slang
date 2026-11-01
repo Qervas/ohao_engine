@@ -263,7 +263,90 @@ MaterialInputs inputsOf(PathPayload p)
     applyLayerRows(m, materials[r], materials[r + 1u], materials[r + 2u], materials[r + 3u], materials[r + 4u], p.uv, tex);
     const uint t = p.material * kMaterialRows + kTransmissionRowFirst;
     applyTransmissionRows(m, materials[t], materials[t + 1u], materials[t + 2u]);
+    applySubsurfaceRows(m, materials[p.material * kMaterialRows + 2u], materials[p.material * kMaterialRows + kSubsurfaceRowFirst]);
+    m.subsurfaceLocal = false;   // walked: lobe 5 (walkSubsurface)
     return m;
+}
+
+// ---- the subsurface walk (OpenPBR step 4) --------------------------------------------------
+// Chiang, Kutz & Burley 2016: light enters (lobe 5) and walks the volume under the surface,
+// sigma_t = 1 / (subsurface_radius x subsurface_radius_scale), its single-scatter albedo from
+// subsurface_color by van de Hulst's inversion, Henyey-Greenstein scattering. A walk follows one
+// channel, chosen uniformly and weighed by 3 (the others 0): the three channels' mean density
+// (spectral MIS) let skin's red and blue free paths, 4x apart, multiply their weight ratios over
+// hundreds of steps into a tail a frame never sampled (a white 2 cm volume read 0.93).
+// Meeting the surface is leaving it (ruling O16). Its own PCG stream: a walk takes
+// up to kWalkSteps steps, more than any Sobol group holds.
+static const uint kWalkSteps = 1024u;
+
+struct WalkRng
+{
+    uint state;
+    [mutating] float next()
+    {
+        state = pcg(state);
+        return float(state >> 8u) * (1.0 / 16777216.0);
+    }
+};
+
+// A direction about d by Henyey-Greenstein with anisotropy g.
+float3 sampleHG(float3 d, float g, float u1, float u2)
+{
+    float c;
+    if (abs(g) < 1e-3) c = 1.0 - 2.0 * u1;
+    else
+    {
+        const float s = (1.0 - g * g) / (1.0 - g + 2.0 * g * u1);
+        c = clamp((1.0 + g * g - s * s) / (2.0 * g), -1.0, 1.0);
+    }
+    const float sinT = sqrt(max(0.0, 1.0 - c * c));
+    const float phi = 2.0 * kPi * u2;
+    float3 tt, bb;
+    basisOf(d, tt, bb);
+    return normalize(tt * (sinT * cos(phi)) + bb * (sinT * sin(phi)) + d * c);
+}
+
+// From just under the surface at pos, along dir (into the volume): true when the walk leaves,
+// with pos the exit point, dir the way out (cosine-weighted about the outward normal) and weight
+// what it carries.
+bool walkSubsurface(inout float3 pos, inout float3 dir, out float3 weight, float3 sigmaT, float3 albedo, float g,
+                    inout WalkRng rng)
+{
+    const float uc = rng.next();
+    const uint c = uc < 1.0 / 3.0 ? 0u : uc < 2.0 / 3.0 ? 1u : 2u;
+    const float st = sigmaT[c], a = albedo[c];
+    weight = float3(c == 0u ? 3.0 : 0.0, c == 1u ? 3.0 : 0.0, c == 2u ? 3.0 : 0.0);
+    float w = 1.0;
+    for (uint k = 0u; k < kWalkSteps; ++k)
+    {
+        const float dist = -log(max(1.0 - rng.next(), 1e-7)) / st;
+        const PathPayload h = trace(pos, dir, kRayMaskScene, dist);
+        if ((h.flags & kHit) != 0u)
+        {
+            weight *= w;   // out: no event before the surface, as the distance was drawn
+            const float3 out = -h.geoNormal;   // geoNormal faces the ray, which came from inside
+            const float3 shade = dot(h.normal, out) > 0.0 ? h.normal : -h.normal;
+            float3 tt, bb;
+            basisOf(shade, tt, bb);
+            const float u1 = rng.next(), u2 = rng.next();
+            const float r = sqrt(u1), phi = 2.0 * kPi * u2;
+            dir = normalize(tt * (r * cos(phi)) + bb * (r * sin(phi)) + shade * sqrt(max(1.0 - u1, 0.0)));
+            if (dot(dir, out) <= 0.0) dir = out;
+            pos = h.position + out * 1e-3;
+            return true;
+        }
+        // A scattering event at dist: the single-scatter albedo (sigma_s over sigma_t).
+        w *= a;
+        pos += dir * dist;
+        dir = sampleHG(dir, g, rng.next(), rng.next());
+        if (k >= 8u)
+        {
+            const float q = min(w, 0.99);
+            if (rng.next() >= q) return false;
+            w /= q;
+        }
+    }
+    return false;
 }
 
 // Dispersion (OpenPBR step 3, ruling O12): a path's first dispersive refraction draws one of RGB at
@@ -557,6 +640,37 @@ void raygen()
         rng.group(3u + 3u * depth);
         const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
         if (!(s.pdf > 0.0)) break;
+        if (s.lobe == 5u)
+        {
+            // Into the volume: the walk decides where the light leaves, and the path goes on from
+            // there; what it meets counts in full (light sampling at the entry did not see it).
+            const uint mr = hit.material * kMaterialRows;
+            const float4 r15 = materials[mr + kSubsurfaceRowFirst], r16 = materials[mr + kSubsurfaceRowFirst + 1u];
+            const float3 sigmaT = 1.0 / max(r15.w * r16.rgb, float3(1e-5));
+            WalkRng wr;
+            wr.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ pcg(depth ^ 0xA511E9B3u))));
+            float3 pos = hit.position - hit.geoNormal * 1e-3;
+            float3 wdir = toWorld(s.wi, t, b, n);
+            if (dot(wdir, hit.geoNormal) >= 0.0) wdir = -hit.geoNormal;
+            float3 walked;
+            if (!walkSubsurface(pos, wdir, walked, sigmaT, subsurfaceSingleScatter(r15.rgb), clamp(r16.w, -0.95, 0.95), wr))
+                break;
+            if (depth == 0u) firstLobe = 1u;
+            lastLobe = 1u;
+            lastRough = 1.0;
+            throughput *= s.weight * walked;
+            lastPdf = 1.0e18;
+            origin = pos;
+            dir = wdir;
+            insideVolume = false;
+            if (depth >= 2u)
+            {
+                const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);
+                if (rng.next() >= q) break;
+                throughput /= q;
+            }
+            continue;
+        }
         const float3 next = toWorld(s.wi, t, b, n);
         // A refraction crosses the surface (hit.geoNormal faces the ray's side); anything else
         // below it ends the path.

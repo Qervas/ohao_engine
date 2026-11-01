@@ -133,6 +133,15 @@ FURNACE = [
     ("glass_r05", {"base_color": [1, 1, 1], "specular_roughness": 0.5, "transmission_weight": 1.0}),
     ("glass_thin", {"base_color": [1, 1, 1], "specular_roughness": 0.2, "transmission_weight": 1.0,
                     "geometry_thin_walled": True}),
+    # OpenPBR step 4: a white subsurface, a short and a long mean free path (the path tracer walks
+    # it; deferred shades its local lobe), docs/plans/2026-11-01-openpbr-step4.md T2. A white volume
+    # never absorbs, so a walk ends only by leaving: its step count's tail (~ N^-1/2) passes the
+    # walk's 1024-step cap for free paths under ~1/50 of the object (radius 0.02 with skin's scale,
+    # blue 5 mm in this 1 m sphere, read 0.986): the short case keeps blue at 1/40.
+    ("subsurface_short", {"base_color": [1, 1, 1], "specular_roughness": 0.4, "subsurface_weight": 1.0,
+                          "subsurface_color": [1, 1, 1], "subsurface_radius": 0.05}),
+    ("subsurface_long", {"base_color": [1, 1, 1], "specular_roughness": 0.4, "subsurface_weight": 1.0,
+                         "subsurface_color": [1, 1, 1], "subsurface_radius": 0.5, "subsurface_scatter_anisotropy": 0.5}),
 ]
 
 

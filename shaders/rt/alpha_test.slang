@@ -152,5 +152,6 @@ HitMaterial hitMaterial(uint slot, uint primitive, float2 bary)
                    atMaterials[r + 4u], uv, tex);
     const uint tr = m + kTransmissionRowFirst;
     applyTransmissionRows(h.inputs, atMaterials[tr], atMaterials[tr + 1u], atMaterials[tr + 2u]);
+    applySubsurfaceRows(h.inputs, atMaterials[m + 2u], atMaterials[m + kSubsurfaceRowFirst]);
     return h;
 }

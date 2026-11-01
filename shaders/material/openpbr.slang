@@ -728,6 +728,9 @@ struct MaterialInputs
     float thinFilmWeight;       // thin_film_weight
     float thinFilmThickness;    // thin_film_thickness (micrometres)
     float thinFilmIor;          // thin_film_ior
+    float subsurfaceWeight;     // subsurface_weight
+    float3 subsurfaceColor;     // subsurface_color
+    bool subsurfaceLocal;       // true: the subsurface as a local diffuse lobe; false: lobe 5, walked (the path tracer)
 };
 
 MaterialInputs defaultMaterialInputs()
@@ -757,7 +760,19 @@ MaterialInputs defaultMaterialInputs()
     m.thinFilmWeight = 0.0;
     m.thinFilmThickness = 0.5;
     m.thinFilmIor = 1.4;
+    m.subsurfaceWeight = 0.0;
+    m.subsurfaceColor = float3(0.8);
+    m.subsurfaceLocal = true;
     return m;
+}
+
+// Van de Hulst's inversion (Chiang, Kutz & Burley 2016): the single-scatter albedo whose volume's
+// multiple scattering shows albedo A (subsurface_color), per channel.
+float3 subsurfaceSingleScatter(float3 A)
+{
+    const float3 a = saturate(A);
+    const float3 k = 4.09712 + 4.20863 * a - sqrt(9.59217 + 41.6808 * a + 17.7126 * a * a);
+    return saturate(1.0 - k * k);
 }
 
 float pbrLuminance(float3 c)
@@ -766,7 +781,8 @@ float pbrLuminance(float3 c)
 }
 
 // What sample() returns: the direction, f cos / pdf, the pdf (0: no sample) and the lobe it
-// came from (0 the base's specular, 1 the diffuse, 2 the coat, 3 the fuzz, 4 the transmission).
+// came from (0 the base's specular, 1 the diffuse, 2 the coat, 3 the fuzz, 4 the transmission, 5 the
+// subsurface walked: wi points into the surface, weight is what enters, the volume decides the rest).
 struct BsdfSample
 {
     float3 wi;
@@ -797,6 +813,9 @@ struct OpenPBRBase
     float film;          // thin_film_weight
     float filmThickness; // nm
     float filmIor;
+    float sss;           // subsurface_weight: its share of the dielectric's diffuse slot
+    float3 sssColor;     // subsurface_color
+    bool sssLocal;       // the subsurface as a local diffuse lobe (else walked, lobe 5)
 
     __init(MaterialInputs m)
     {
@@ -820,7 +839,43 @@ struct OpenPBRBase
         film = saturate(m.thinFilmWeight);
         filmThickness = max(m.thinFilmThickness, 0.0) * 1000.0;
         filmIor = max(m.thinFilmIor, 1.0);
+        sss = saturate(m.subsurfaceWeight);
+        sssColor = saturate(m.subsurfaceColor);
+        sssLocal = m.subsurfaceLocal;
     }
+
+    // ---- subsurface (step 4) ----
+    // The dielectric's diffuse slot under the specular is lerp(diffuse, subsurface, S). Local: the
+    // subsurface is a diffuse lobe of albedo subsurface_color (EON at the base's diffuse roughness),
+    // which the deferred frame then spreads; walked (the path tracer): it is lobe 5.
+    bool walked() { return sss > 0.0 && metalness < 1.0 && !sssLocal; }
+
+    float3 slotEval(float3 wi, float3 wo)
+    {
+        if (!(sss > 0.0)) return eonEval(rho, diffRough, wi, wo);
+        const float3 d = (1.0 - sss) * eonEval(rho, diffRough, wi, wo);
+        return sssLocal ? d + sss * eonEval(sssColor, diffRough, wi, wo) : d;
+    }
+
+    float3 slotAlbedo(float mu)
+    {
+        if (!(sss > 0.0)) return eonAlbedo(rho, diffRough, mu);
+        const float3 d = (1.0 - sss) * eonAlbedo(rho, diffRough, mu);
+        return sssLocal ? d + sss * eonAlbedo(sssColor, diffRough, mu) : d;
+    }
+
+    // What enters the volume (walked): (1 - metalness)(1 - T) S (1 - the specular's albedo).
+    float subsurfaceShare(float3 wo, OpenPBRTables t)
+    {
+        if (!walked() || wo.z <= 0.0) return 0.0;
+        return (1.0 - metalness) * (1.0 - transmission) * sss * (1.0 - dielectricAlbedo(wo.z, t));
+    }
+
+    // Its expected return (the walk's colour is subsurface_color's), for choosing lobes.
+    float3 subsurfaceAlbedo(float3 wo, OpenPBRTables t) { return subsurfaceShare(wo, t) * sssColor; }
+
+    // The base samples its own lobes (glass, a walked subsurface): OpenPBRSurface delegates to it.
+    bool delegated() { return transmissive() || walked(); }
 
     // Light passes through this surface (some of its dielectric refracts).
     bool transmissive() { return transmission > 0.0 && metalness < 1.0; }
@@ -899,7 +954,7 @@ struct OpenPBRBase
                 specular += (1.0 - metalness) * specColor * spec;
             }
             diffuse = (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t))
-                    * eonEval(rho, diffRough, wi, wo) * wi.z;
+                    * slotEval(wi, wo) * wi.z;
         }
     }
 
@@ -983,7 +1038,7 @@ struct OpenPBRBase
 
     float pdfTransmissive(float3 wo, float3 wi, OpenPBRTables t)
     {
-        if (wo.z == 0.0 || wi.z == 0.0) return 0.0;
+        if (wo.z == 0.0 || wi.z == 0.0 || (wo.z < 0.0 && !transmissive())) return 0.0;
         if (!thinWalled && wo.z < 0.0)
         {
             const float3 o = flipZ(wo), i = flipZ(wi);
@@ -992,20 +1047,22 @@ struct OpenPBRBase
         }
         const float3 o = wo.z > 0.0 ? wo : flipZ(wo);
         const float3 i = wo.z > 0.0 ? wi : flipZ(wi);
-        const float3 s = transmissiveShares(o, t);
+        const float4 s = transmissiveShares(o, t);
         if (i.z > 0.0) return s.x * pdfSpecular(o, i) + s.y * eonPdf(o, i, diffRough);
         return s.z * (thinWalled ? pdfSpecular(o, flipZ(i)) : ggxRefractPdf(o, i, alphaXY, eta));
     }
 
-    // The chances of the reflection, the diffuse and the refraction from outside, by luminance.
-    float3 transmissiveShares(float3 wo, OpenPBRTables t)
+    // The chances of the reflection, the diffuse, the refraction and the walked subsurface from
+    // outside, by luminance. The walk's share is no density over directions: pdf() leaves it out.
+    float4 transmissiveShares(float3 wo, OpenPBRTables t)
     {
         const OpenPBRBase b = viewedFrom(wo, t);
         const float r = pbrLuminance(b.specularAlbedo(wo, t));
         const float d = pbrLuminance(b.diffuseAlbedo(wo, t));
         const float tr = pbrLuminance(b.transmissionAlbedo(wo, t));
-        const float total = r + d + tr;
-        return total > 0.0 ? float3(r, d, tr) / total : float3(0.0, 0.0, 1.0);
+        const float ss = pbrLuminance(b.subsurfaceAlbedo(wo, t));
+        const float total = r + d + tr + ss;
+        return total > 0.0 ? float4(r, d, tr, ss) / total : float4(1.0, 0.0, 0.0, 0.0);
     }
 
     BsdfSample sampleTransmissive(float3 wo, float3 u, OpenPBRTables t)
@@ -1015,7 +1072,7 @@ struct OpenPBRBase
         s.weight = float3(0.0);
         s.pdf = 0.0;
         s.lobe = 0u;
-        if (wo.z == 0.0) return s;
+        if (wo.z == 0.0 || (wo.z < 0.0 && !transmissive())) return s;
         const bool inside = !thinWalled && wo.z < 0.0;
         const bool flip = wo.z < 0.0;
         const float3 o = flip ? flipZ(wo) : wo;
@@ -1032,12 +1089,23 @@ struct OpenPBRBase
         }
         else
         {
-            const float3 p = transmissiveShares(o, t);
+            const float4 p = transmissiveShares(o, t);
             if (u.x < p.x) i = reflect(-o, sampleSpecular(o, u.yz));
             else if (u.x < p.x + p.y)
             {
                 i = eonSample(o, diffRough, u.y, u.z).xyz;
                 s.lobe = 1u;
+            }
+            else if (u.x < p.x + p.y + p.w)
+            {
+                // The subsurface: into the volume, cosine-weighted; what enters is the weight.
+                const float phi = 2.0 * kPbrPi * u.z;
+                const float r = sqrt(u.y);
+                s.wi = float3(r * cos(phi), r * sin(phi), -sqrt(max(1.0 - u.y, 0.0)));
+                s.lobe = 5u;
+                s.pdf = p.w;
+                s.weight = float3(subsurfaceShare(o, t) / p.w);
+                return s;
             }
             else
             {
@@ -1100,12 +1168,12 @@ struct OpenPBRBase
     float3 diffuseAlbedo(float3 wo, OpenPBRTables t)
     {
         if (wo.z <= 0.0) return float3(0.0);
-        return (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t)) * eonAlbedo(rho, diffRough, wo.z);
+        return (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t)) * slotAlbedo(wo.z);
     }
 
     float3 albedo(float3 wo, OpenPBRTables t)
     {
-        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t);
+        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t) + subsurfaceAlbedo(wo, t);
     }
 
     // The chance of sampling the specular lobe (GGX, the metal and the dielectric's together):
@@ -1114,7 +1182,7 @@ struct OpenPBRBase
     {
         const float ed = dielectricAlbedo(wo.z, t);
         const float spec = metalness * pbrLuminance(metalAlbedo(wo.z, t)) + (1.0 - metalness) * pbrLuminance(specColor) * ed;
-        const float diff = (1.0 - metalness) * (1.0 - transmission) * (1.0 - ed) * pbrLuminance(eonAlbedo(rho, diffRough, wo.z));
+        const float diff = (1.0 - metalness) * (1.0 - transmission) * (1.0 - ed) * pbrLuminance(slotAlbedo(wo.z));
         const float total = spec + diff;
         return total > 0.0 ? spec / total : 1.0;
     }
@@ -1132,7 +1200,7 @@ struct OpenPBRBase
 
     float pdf(float3 wo, float3 wi, OpenPBRTables t)
     {
-        if (transmissive()) return pdfTransmissive(wo, wi, t);
+        if (delegated()) return pdfTransmissive(wo, wi, t);
         if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
         const float ps = specularShare(wo, t);
         return ps * pdfSpecular(wo, wi) + (1.0 - ps) * eonPdf(wo, wi, diffRough);
@@ -1145,7 +1213,7 @@ struct OpenPBRBase
         s.weight = float3(0.0);
         s.pdf = 0.0;
         s.lobe = 0u;
-        if (transmissive()) return sampleTransmissive(wo, u, t);
+        if (delegated()) return sampleTransmissive(wo, u, t);
         if (wo.z <= 0.0) return s;
         const float ps = specularShare(wo, t);
         if (u.x < ps)
@@ -1439,7 +1507,15 @@ struct OpenPBRSurface
 
     float3 albedo(float3 wo, OpenPBRTables t)
     {
-        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t);
+        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t) + subsurfaceAlbedo(wo, t);
+    }
+
+    // A walked subsurface's expected return toward wo, through the layers.
+    float3 subsurfaceAlbedo(float3 wo, OpenPBRTables t)
+    {
+        const float3 a = baseAt(wo, t).subsurfaceAlbedo(wo, t);
+        if (!layered || wo.z <= 0.0) return a;
+        return baseScale(coatPathDiffuse(), wo, t) * a;
     }
 
     // The coat's part of specularAlbedo (the deferred frame's split sum reads it at the coat's
@@ -1483,7 +1559,7 @@ struct OpenPBRSurface
     float pdf(float3 wo, float3 wi, OpenPBRTables t)
     {
         if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).pdf(wo, wi, t);
-        if (base.transmissive()) return pdfLayeredTransmissive(wo, wi, t);
+        if (base.delegated()) return pdfLayeredTransmissive(wo, wi, t);
         if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
         return pdfOf(wo, wi, lobeShares(wo, t));
     }
@@ -1493,7 +1569,8 @@ struct OpenPBRSurface
     float3 layeredTransmissiveShares(float3 wo, OpenPBRTables t)
     {
         const float b = pbrLuminance(specularAlbedo(wo, t) - coatAlbedo(wo, t) + diffuseAlbedo(wo, t)
-                                     - fuzzWeight * fuzzColor * fuzz.albedo(wo.z) + transmissionAlbedo(wo, t));
+                                     - fuzzWeight * fuzzColor * fuzz.albedo(wo.z) + transmissionAlbedo(wo, t)
+                                     + subsurfaceAlbedo(wo, t));
         const float c = coatAlbedo(wo, t);
         const float f = fuzzWeight * pbrLuminance(fuzzColor) * fuzz.albedo(wo.z);
         const float total = max(b, 0.0) + c + f;
@@ -1518,7 +1595,7 @@ struct OpenPBRSurface
         s.pdf = 0.0;
         s.lobe = 0u;
         if (wo.z <= 0.0) return s;
-        if (base.transmissive())
+        if (base.delegated())
         {
             const float3 p = layeredTransmissiveShares(wo, t);
             if (u.x < p.x)
@@ -1527,6 +1604,12 @@ struct OpenPBRSurface
                 s.wi = b.wi;
                 s.lobe = b.lobe;
                 if (!(b.pdf > 0.0)) return s;
+                if (b.lobe == 5u)   // into the volume, through the coat and the fuzz as the diffuse goes
+                {
+                    s.pdf = b.pdf * p.x;
+                    s.weight = baseScale(coatPathDiffuse(), wo, t) * b.weight / max(p.x, 1e-6);
+                    return s;
+                }
             }
             else if (u.x < p.x + p.y)
             {

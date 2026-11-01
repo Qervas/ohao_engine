@@ -35,6 +35,9 @@ float3 gbufferLayers(inout MaterialInputs mi, uint2 layers, StructuredBuffer<flo
     mi.thinFilmWeight = film.x;
     mi.thinFilmThickness = film.y;
     mi.thinFilmIor = film.z;
+    // Subsurface (step 4): the local lobe in subsurface_color, which the SSS pass then spreads.
+    const uint mr = layersMaterial(layers) * kMaterialRows;
+    applySubsurfaceRows(mi, rows[mr + 2u], rows[mr + kSubsurfaceRowFirst]);
     return mi.specularRoughnessAnisotropy > 0.0 || (mi.coatWeight > 0.0 && mi.coatRoughnessAnisotropy > 0.0) ? T : float3(0.0);
 }
 

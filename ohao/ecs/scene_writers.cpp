@@ -212,6 +212,12 @@ void writeFields(const Material& v, const Material* omit, FieldSink& out) {
     if (!omit || !same(v.thinFilmThickness, omit->thinFilmThickness))
         t.f32("\"thin_film_thickness\"", v.thinFilmThickness);
     if (!omit || !same(v.thinFilmIor, omit->thinFilmIor)) t.f32("\"thin_film_ior\"", v.thinFilmIor);
+    if (!omit || !same(v.subsurfaceColor, omit->subsurfaceColor)) vec3(t, "\"subsurface_color\"", v.subsurfaceColor);
+    if (!omit || !same(v.subsurfaceRadius, omit->subsurfaceRadius)) t.f32("\"subsurface_radius\"", v.subsurfaceRadius);
+    if (!omit || !same(v.subsurfaceRadiusScale, omit->subsurfaceRadiusScale))
+        vec3(t, "\"subsurface_radius_scale\"", v.subsurfaceRadiusScale);
+    if (!omit || !same(v.subsurfaceScatterAnisotropy, omit->subsurfaceScatterAnisotropy))
+        t.f32("\"subsurface_scatter_anisotropy\"", v.subsurfaceScatterAnisotropy);
 }
 
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out) {

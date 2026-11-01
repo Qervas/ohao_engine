@@ -14,6 +14,8 @@
 //   row 13  transmission_depth, geometry_thin_walled, transmission_dispersion_scale,
 //           transmission_dispersion_abbe_number (the volume and dispersion: the path tracer's)
 //   row 14  thin_film_weight, thin_film_thickness, thin_film_ior, 0
+//   row 15  subsurface_color.rgb, subsurface_radius                            (step 4)
+//   row 16  subsurface_radius_scale.rgb, subsurface_scatter_anisotropy (the walk's: the path tracer reads them)
 import material.openpbr;
 
 public static const uint kLayerRowFirst = 7u;
@@ -65,6 +67,15 @@ public void applyTransmissionRows(inout MaterialInputs m, float4 r12, float4 r13
     m.thinFilmWeight = r14.x;
     m.thinFilmThickness = r14.y;
     m.thinFilmIor = r14.z;
+}
+
+// Step 4: subsurface_weight (row 2, z) and subsurface_color (row 15) into m.
+public static const uint kSubsurfaceRowFirst = 15u;
+
+public void applySubsurfaceRows(inout MaterialInputs m, float4 r2, float4 r15)
+{
+    m.subsurfaceWeight = r2.z;
+    m.subsurfaceColor = r15.rgb;
 }
 
 // The anisotropic lobes' tangent: the mesh's tangent T (unit, in the plane of N) turned about N by

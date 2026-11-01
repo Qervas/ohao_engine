@@ -168,6 +168,7 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     applyLayerRows(mi, matRows[lr], matRows[lr + 1u], matRows[lr + 2u], matRows[lr + 3u], matRows[lr + 4u], i.uv, tex);
     const uint tr = m * kMaterialRows + kTransmissionRowFirst;
     applyTransmissionRows(mi, matRows[tr], matRows[tr + 1u], matRows[tr + 2u]);
+    applySubsurfaceRows(mi, matRows[m * kMaterialRows + 2u], matRows[m * kMaterialRows + kSubsurfaceRowFirst]);
     float3 tangent = float3(0.0);
     if (mi.specularRoughnessAnisotropy > 0.0 || (mi.coatWeight > 0.0 && mi.coatRoughnessAnisotropy > 0.0))
     {

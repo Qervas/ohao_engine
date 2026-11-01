@@ -47,8 +47,8 @@ static const uint kAlphaOpaque = 0u;
 static const uint kAlphaMask = 1u;
 // a material's alpha mode: blended by base colour alpha times the albedo texture's alpha times row 3, z (opacity)
 static const uint kAlphaBlend = 2u;
-// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex), 12 (transmission_color, transmission_weight), 13 (transmission_depth, geometry_thin_walled, transmission_dispersion_scale, transmission_dispersion_abbe_number), 14 (thin_film_weight, thin_film_thickness, thin_film_ior, 0): material/material_layers.slang reads 7-14
-static const uint kMaterialRows = 15u;
+// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex), 12 (transmission_color, transmission_weight), 13 (transmission_depth, geometry_thin_walled, transmission_dispersion_scale, transmission_dispersion_abbe_number), 14 (thin_film_weight, thin_film_thickness, thin_film_ior, 0), 15 (subsurface_color, subsurface_radius), 16 (subsurface_radius_scale, subsurface_scatter_anisotropy): material/material_layers.slang reads 7-16
+static const uint kMaterialRows = 17u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
 static const uint kVfxGroupSize = 64u;
 // vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order
@@ -195,7 +195,7 @@ struct GITracePush
 struct SSSPush
 {
     uint4 extent;   // x, y the frame's size; z, w its tiles across and down
-    float4 params;   // x the kernel's step in pixels (its 7 taps reach 3 steps), clamped to 10
+    float4 params;   // x unused (the step is each pixel's, from its free path, at most 10); y a pixel's world size at unit distance (2 tan(fov/2) / height)
     float4 cameraPos;   // xyz the camera's position: the depth weight compares distances from it
 };
 

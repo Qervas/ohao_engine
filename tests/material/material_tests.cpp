@@ -44,6 +44,15 @@
 //   t3_thin_film           the Airy reflectance in [0, 1], at no thickness the base's Fresnel, coloured
 //                          (its channels apart) at 300 nm; a filmed white metal still within 1% of white
 //   t3_dispersion          the IOR at the d line (587.56 nm) is specular_ior; blue above red
+//
+// Step 4 (docs/plans/2026-11-01-openpbr-step4.md, T1): subsurface.
+//
+//   t4_defaults            subsurface's defaults are OpenPBR 1.1.1's
+//   t4_van_de_hulst        the single-scatter albedo of a black volume is 0, of a white one 1, rising in between
+//   t4_local               the local subsurface (a diffuse lobe of subsurface_color): albedo() the integral of eval(),
+//                          sampled with pdf(), a white one within 1% of white
+//   t4_walked              walked (lobe 5, the path tracer's): what enters is 1 - the specular's albedo, white
+//                          within 1% when the walk returns all of it, and pdf() leaves the walk out
 #include "openpbr_cpu.hpp"
 #include "render/material/openpbr_tables.hpp"
 #include "common/harness.hpp"
@@ -656,6 +665,93 @@ void t3_dispersion() {
 } // namespace
 
 
+// ---- step 4: subsurface ---------------------------------------------------------------------
+
+void t4_defaults() {
+    const Material m;
+    CHECK(m.subsurfaceWeight == 0.0f && m.subsurfaceColor[0] == 0.8f && !m.subsurfaceWalked, "subsurface defaults");
+}
+
+void t4_van_de_hulst() {
+    const Item a = one(Op::VanDeHulst, Material{}, {0.0f, 0.5f, 1.0f}, {});
+    CHECK(a.r0[0] < 1e-4f && a.r0[2] > 0.9999f, "black is 0, white 1");
+    CHECK(a.r0[1] > 0.5f && a.r0[1] < 1.0f, "a grey volume scatters more than it shows (0.5 shows from ~0.97)");
+}
+
+std::vector<Case> subsurfaceCases(bool walked) {
+    std::vector<Case> cases;
+    for (float mu : {0.9f, 0.5f, 0.15f}) {
+        Material skin;
+        skin.baseColor = {0.5f, 0.5f, 0.5f};
+        skin.subsurfaceWeight = 1.0f;
+        skin.subsurfaceColor = {0.9f, 0.6f, 0.5f};
+        skin.specularRoughness = 0.4f;
+        skin.subsurfaceWalked = walked;
+        cases.push_back({skin, mu, 0.01});
+        Material half = skin;   // half subsurface, half diffuse, over a rough diffuse
+        half.subsurfaceWeight = 0.5f;
+        half.baseDiffuseRoughness = 0.5f;
+        cases.push_back({half, mu, 0.01});
+    }
+    return cases;
+}
+
+void t4_local() {
+    samplingChi2(subsurfaceCases(false), 61u);
+    albedoMatchesIntegral(subsurfaceCases(false), 67u, 1u << 18);
+    uint32_t seed = 71u;
+    for (float rough : {0.05f, 0.5f, 1.0f})
+        for (float mu : {1.0f, 0.5f, 0.1f}) {
+            Material m;
+            m.baseColor = {1.0f, 1.0f, 1.0f};
+            m.subsurfaceWeight = 1.0f;
+            m.subsurfaceColor = {1.0f, 1.0f, 1.0f};
+            m.specularRoughness = rough;
+            const auto mc = meanWeight(m, view(mu), 1u << 18, seed++);
+            CHECK(std::abs(mc[0] - 1.0) <= 0.01, ("a white local subsurface is not white: " + describe(m, mu)).c_str());
+        }
+}
+
+void t4_walked() {
+    // What enters (lobe 5) and what the surface reflects add to white when the walk returns all of it.
+    uint32_t seed = 73u;
+    for (float rough : {0.05f, 0.5f, 1.0f})
+        for (float mu : {1.0f, 0.5f, 0.1f})
+            for (float weight : {1.0f, 0.5f}) {
+                Material m;
+                m.baseColor = {1.0f, 1.0f, 1.0f};
+                m.subsurfaceWeight = weight;
+                m.subsurfaceColor = {1.0f, 1.0f, 1.0f};
+                m.specularRoughness = rough;
+                m.subsurfaceWalked = true;
+                std::vector<Item> items(1u << 18);
+                for (Item& it : items) {
+                    it.op = Op::Sample;
+                    it.material = m;
+                    it.wo = view(mu);
+                    it.v = {rnd(seed), rnd(seed), rnd(seed)};
+                }
+                ohao::material::run(items, kTables);
+                double sum = 0.0;
+                bool inward = true;
+                for (const Item& it : items) {
+                    sum += it.r1[0];
+                    if (static_cast<int>(it.r1[3]) == 5 && it.r0[3] > 0.0f) inward = inward && it.r0[2] < 0.0f;
+                }
+                const double mean = sum / items.size();
+                if (!(std::abs(mean - 1.0) <= 0.01)) std::printf("\n    walked %.5f: %s", mean, describe(m, mu).c_str());
+                CHECK(std::abs(mean - 1.0) <= 0.01, ("reflected + entered is not white: " + describe(m, mu)).c_str());
+                CHECK(inward, "lobe 5 points into the surface");
+            }
+    // pdf() is a density of the directions above the surface only.
+    Material m;
+    m.subsurfaceWeight = 1.0f;
+    m.subsurfaceWalked = true;
+    const Item p = one(Op::Pdf, m, view(0.7f), {0.0f, 0.0f, -1.0f});
+    CHECK(p.r0[0] == 0.0f, "no density below an opaque subsurface");
+}
+
+
 int main(int argc, char** argv) {
     std::printf("material_tests (OpenPBR on the CPU)\n");
     // material_tests [NAME]: only the test NAME (t2_albedo); every test without one.
@@ -682,5 +778,9 @@ int main(int argc, char** argv) {
     RUN_ONE(t3_white_furnace);
     RUN_ONE(t3_thin_film);
     RUN_ONE(t3_dispersion);
+    RUN_ONE(t4_defaults);
+    RUN_ONE(t4_van_de_hulst);
+    RUN_ONE(t4_local);
+    RUN_ONE(t4_walked);
     return ohao::test::finish("material_tests");
 }

@@ -11,12 +11,12 @@ namespace ohao::render {
 // Material table: a fixed-capacity device-local array of 192-byte packs (the
 // MaterialGpuPack layout, gpu::shared::kMaterialRows rows: emissive strength in row 2 .y,
 // subsurface in row 2 .z, alpha in row 3, OpenPBR's specular and base in rows 4-6, its coat, fuzz
-// and anisotropy in rows 7-11, transmission and the thin film in rows 12-14). Index 0 is the default material. Writes are
+// and anisotropy in rows 7-11, transmission and the thin film in rows 12-14, subsurface in 15-16). Index 0 is the default material. Writes are
 // staged through the frame slot's staging buffer.
 class MaterialTable {
 public:
     static constexpr uint32_t kCapacity = 4096;
-    using Pack = std::array<float, 60>;
+    using Pack = std::array<float, 68>;
     static_assert(sizeof(Pack) == layout::MaterialGpuPack::kBytes);
 
     [[nodiscard]] bool initialize(GpuAllocator& allocator);   // registers MaterialDesc{} as index 0
@@ -44,7 +44,7 @@ public:
     [[nodiscard]] bool anyLayered() const noexcept { return m_layered > 0; }
     [[nodiscard]] static bool layered(const MaterialDesc& desc) noexcept {
         return desc.coatWeight > 0.0f || desc.fuzzWeight > 0.0f || desc.specularAnisotropy > 0.0f ||
-               desc.thinFilmWeight > 0.0f || desc.transmissionWeight > 0.0f;
+               desc.thinFilmWeight > 0.0f || desc.transmissionWeight > 0.0f || desc.subsurface > 0.0f;
     }
     [[nodiscard]] static Pack pack(const MaterialDesc& desc);
 

@@ -136,7 +136,7 @@ struct Material {
     float specularIor{1.5f};            // specular_ior
     float emissionLuminance{0.0f};      // emission_luminance (the engine's radiance units, ruling O4)
     glm::vec3 emissionColor{1.0f};      // emission_color
-    float subsurfaceWeight{0.0f};       // subsurface_weight: 0 none; > 0 the screen-space blur's strength (skin, wax)
+    float subsurfaceWeight{0.0f};       // subsurface_weight: the dielectric's diffuse slot that scatters under the surface
     MaterialAlpha alphaMode{MaterialAlpha::Opaque};   // alpha_mode
     float geometryOpacity{1.0f};        // geometry_opacity: coverage (Blend's factor; Mask cuts below 0.5)
     // OpenPBR step 2: the coat, the fuzz and specular anisotropy.
@@ -161,6 +161,11 @@ struct Material {
     float thinFilmWeight{0.0f};         // thin_film_weight
     float thinFilmThickness{0.5f};      // thin_film_thickness (micrometres)
     float thinFilmIor{1.4f};            // thin_film_ior
+    // OpenPBR step 4: subsurface scattering (subsurface_weight above).
+    glm::vec3 subsurfaceColor{0.8f};    // subsurface_color
+    float subsurfaceRadius{1.0f};       // subsurface_radius (m; ruling O15)
+    glm::vec3 subsurfaceRadiusScale{1.0f, 0.5f, 0.25f};   // subsurface_radius_scale
+    float subsurfaceScatterAnisotropy{0.0f};             // subsurface_scatter_anisotropy
 };
 
 // Instantiate's bookkeeping: tagged when MeshSource/Material change; the error

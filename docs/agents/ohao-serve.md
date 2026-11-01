@@ -331,16 +331,16 @@ restores and replays to the same hash:
 $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000000000001 --script docs/agents/examples/fly.jsonl
 {"method":"scene.load","result":{"entities":19}}
 {"method":"world.query","result":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,30.534174]},"FlyController":{"moveSpeed":3}}],"count":1}}
-{"method":"world.snapshot","result":{"name":"start","entities":19,"bytes":6112}}
+{"method":"world.snapshot","result":{"name":"start","entities":19,"bytes":6496}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":0,"events":0}}
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":60}}
 {"method":"world.step","result":{"frame":61,"watch":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,27.53422]}}],"count":1}}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":61,"events":2}}
-{"method":"world.hash","result":{"hash":"e82cf84edcd50e46","frame":61}}
+{"method":"world.hash","result":{"hash":"71e70fba476cf912","frame":61}}
 {"method":"world.diff","result":{"changed":[{"id":"0c6901342a294695","name":"MainCamera","fields":{"/Transform/position":[[0,-6.891139,30.534174],[0,-6.891139,27.53422]]}}],"created":[],"destroyed":[],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":2,"frame":0}}
 {"method":"input.replay","result":{"steps":61,"events":2,"checkpoints":2,"frame":61}}
-{"method":"world.hash","result":{"hash":"e82cf84edcd50e46","frame":61}}
+{"method":"world.hash","result":{"hash":"71e70fba476cf912","frame":61}}
 ```
 
 ## Look

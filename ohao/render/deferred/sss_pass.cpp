@@ -47,23 +47,27 @@ bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
         return false;
 
     using rtc::layoutBinding;
+    // 7, 8 (OpenPBR step 4): the G-buffer's layers target (each pixel's material) and the material
+    // table (its subsurface's free path and colour).
     const VkDescriptorSetLayoutBinding h[] = {
         layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
     const VkDescriptorSetLayoutBinding v[] = {
         layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), layoutBinding(5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
     for (auto [bindings, layout] : {std::pair{h, &m_hSetLayout}, std::pair{v, &m_vSetLayout}}) {
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 5;
+        li.bindingCount = 7;
         li.pBindings = bindings;
         if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
     }
-    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6 * MAX_FRAMES_IN_FLIGHT},
-                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * MAX_FRAMES_IN_FLIGHT},
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8 * MAX_FRAMES_IN_FLIGHT},
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * MAX_FRAMES_IN_FLIGHT},
                                           {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -125,7 +129,13 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     shared::SSSPush pc{};
     const VkExtent2D t = m_gbuffer->sssTiles();
     pc.extent = {m_width, m_height, t.width, t.height};
-    pc.params = {m_sssWidth, 0.0f, 0.0f, 0.0f};
+    // y: a pixel's world size at unit distance (2 tan(fov/2) / height), for the profile's radius.
+    pc.params = {m_sssWidth, 2.0f / (std::abs(m_gbuffer->projection()[1][1]) * float(std::max(m_height, 1u))), 0.0f, 0.0f};
+    const VkImageView layers = m_gbuffer->getLayersView();
+    const VkBuffer materials = m_gbuffer->materialBuffer();
+    if (!layers || !materials) return;
+    const VkDescriptorImageInfo layersInfo{VK_NULL_HANDLE, layers, kReadOnly};
+    const VkDescriptorBufferInfo materialInfo{materials, 0, VK_WHOLE_SIZE};
     pc.cameraPos = {m_cameraPos.x, m_cameraPos.y, m_cameraPos.z, 0.0f};
     const VkDescriptorBufferInfo tileInfo{tiles, 0, VK_WHOLE_SIZE};
     const VkImageView position = m_gbuffer->getPositionView(), normal = m_gbuffer->getNormalView();
@@ -138,16 +148,19 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                                                  {VK_NULL_HANDLE, position, kReadOnly},
                                                  {VK_NULL_HANDLE, normal, kReadOnly},
                                                  {VK_NULL_HANDLE, m_scratch.view, kGeneral}};
-        VkWriteDescriptorSet writes[5] = {
+        VkWriteDescriptorSet writes[7] = {
             rtc::descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
             rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-            rtc::descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+            rtc::descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), rtc::descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            rtc::descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
         writes[0].pImageInfo = &images[0];
         writes[1].pImageInfo = &images[1];
         writes[2].pImageInfo = &images[2];
         writes[3].pBufferInfo = &tileInfo;
         writes[4].pImageInfo = &images[3];
-        vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
+        writes[5].pImageInfo = &layersInfo;
+        writes[6].pBufferInfo = &materialInfo;
+        vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_hPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_hLayout, 0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, m_hLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
@@ -163,16 +176,19 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                                                  {VK_NULL_HANDLE, normal, kReadOnly},
                                                  {VK_NULL_HANDLE, m_scratch.view, kGeneral},
                                                  {VK_NULL_HANDLE, m_litView, kGeneral}};
-        VkWriteDescriptorSet writes[5] = {
+        VkWriteDescriptorSet writes[7] = {
             rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
             rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+            rtc::descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), rtc::descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            rtc::descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
         writes[0].pImageInfo = &images[0];
         writes[1].pImageInfo = &images[1];
         writes[2].pBufferInfo = &tileInfo;
         writes[3].pImageInfo = &images[2];
         writes[4].pImageInfo = &images[3];
-        vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
+        writes[5].pImageInfo = &layersInfo;
+        writes[6].pBufferInfo = &materialInfo;
+        vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vLayout, 0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, m_vLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);

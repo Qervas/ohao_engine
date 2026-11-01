@@ -54,6 +54,8 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
         d.transmissionColor.r, d.transmissionColor.g, d.transmissionColor.b, d.transmissionWeight,
         d.transmissionDepth, d.thinWalled ? 1.0f : 0.0f, d.dispersionScale, d.dispersionAbbe,
         d.thinFilmWeight, d.thinFilmThickness, d.thinFilmIor, 0.0f,
+        d.subsurfaceColor.r, d.subsurfaceColor.g, d.subsurfaceColor.b, d.subsurfaceRadius,
+        d.subsurfaceRadiusScale.r, d.subsurfaceRadiusScale.g, d.subsurfaceRadiusScale.b, d.subsurfaceAnisotropy,
     };
 }
 

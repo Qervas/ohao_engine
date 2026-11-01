@@ -158,8 +158,8 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .doc("Emitted radiance, in the engine's units until the camera step (ruling O4)").unitless().min(0.0)
         .field("emission_color", &Material::emissionColor).doc("The emission's colour").unit("linear-rgb").color().min(0.0)
         .field("subsurface_weight", &Material::subsurfaceWeight)
-            .doc("Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under "
-                 "the surface; 0 = none. Ignored where emission_luminance > 0.")
+            .doc("Subsurface scattering (skin, wax, marble): the share of the dielectric's diffuse that scatters under "
+                 "the surface; 0 = none")
             .unitless().min(0.0).max(1.0)
         .field("alpha_mode", &Material::alphaMode).doc("Opaque, alpha-tested (Mask) or blended (Blend)")
         .field("geometry_opacity", &Material::geometryOpacity)
@@ -211,7 +211,17 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("thin_film_thickness", &Material::thinFilmThickness)
             .doc("The film's thickness: its interference colours").unit("um").min(0.0).max(2.0)
         .field("thin_film_ior", &Material::thinFilmIor).doc("The film's index of refraction").unitless().min(1.0)
-            .max(3.0);
+            .max(3.0)
+        .field("subsurface_color", &Material::subsurfaceColor)
+            .doc("The colour the scattering volume shows (its multiple-scattering albedo)").unit("linear-rgb").color()
+            .min(0.0).max(1.0)
+        .field("subsurface_radius", &Material::subsurfaceRadius)
+            .doc("The mean free path: how far light travels under the surface (skin ~0.01, marble ~0.05)").unit("m")
+            .min(0.0)
+        .field("subsurface_radius_scale", &Material::subsurfaceRadiusScale)
+            .doc("subsurface_radius per channel (red travels furthest in skin)").unit("linear-rgb").min(0.0).max(1.0)
+        .field("subsurface_scatter_anisotropy", &Material::subsurfaceScatterAnisotropy)
+            .doc("The volume's Henyey-Greenstein anisotropy: > 0 forward, < 0 backward").unitless().min(-1.0).max(1.0);
 
     r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())
         .doc("The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y "

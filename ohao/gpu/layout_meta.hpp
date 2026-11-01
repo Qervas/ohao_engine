@@ -22,26 +22,28 @@ namespace layout {
 inline constexpr std::size_t kLightDataBytes       = 128;
 inline constexpr std::size_t kGPULightBytes        = 80;  // 5 * vec4
 inline constexpr std::size_t kPTPushConstantsBytes = 256;
-inline constexpr std::size_t kMaterialVec4s        = 15;  // gpu::shared::kMaterialRows
+inline constexpr std::size_t kMaterialVec4s        = 17;  // gpu::shared::kMaterialRows
 inline constexpr std::size_t kMaterialBytes        = kMaterialVec4s * sizeof(glm::vec4);
 
 // ─── Material SSBO packing (render::MaterialTable; core/gbuffer.slang, rt/path_tracer.slang) ─
 //
-// matColors[matID * 15 + 0]  = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
-// matColors[matID * 15 + 1]  = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
-// matColors[matID * 15 + 2]  = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
-// matColors[matID * 15 + 3]  = vec4(alphaMode, alphaCutoff, opacity, baseColorAlpha)
-// matColors[matID * 15 + 4]  = vec4(specularColor.rgb, specularWeight)                 (OpenPBR)
-// matColors[matID * 15 + 5]  = vec4(specularIor, diffuseRoughness, baseWeight, specularTexIdx)
-// matColors[matID * 15 + 6]  = vec4(emissionColor.rgb, specularColorTexIdx)
-// matColors[matID * 15 + 7]  = vec4(coatColor.rgb, coatWeight)                         (OpenPBR step 2)
-// matColors[matID * 15 + 8]  = vec4(coatRoughness, coatAnisotropy, coatIor, coatDarkening)
-// matColors[matID * 15 + 9]  = vec4(fuzzColor.rgb, fuzzWeight)
-// matColors[matID * 15 + 10] = vec4(fuzzRoughness, specularAnisotropy, tangentRotation, 0)
-// matColors[matID * 15 + 11] = vec4(coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex)
-// matColors[matID * 15 + 12] = vec4(transmissionColor.rgb, transmissionWeight)       (OpenPBR step 3)
-// matColors[matID * 15 + 13] = vec4(transmissionDepth, thinWalled, dispersionScale, dispersionAbbe)
-// matColors[matID * 15 + 14] = vec4(thinFilmWeight, thinFilmThickness, thinFilmIor, 0)
+// matColors[matID * 17 + 0]  = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
+// matColors[matID * 17 + 1]  = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
+// matColors[matID * 17 + 2]  = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
+// matColors[matID * 17 + 3]  = vec4(alphaMode, alphaCutoff, opacity, baseColorAlpha)
+// matColors[matID * 17 + 4]  = vec4(specularColor.rgb, specularWeight)                 (OpenPBR)
+// matColors[matID * 17 + 5]  = vec4(specularIor, diffuseRoughness, baseWeight, specularTexIdx)
+// matColors[matID * 17 + 6]  = vec4(emissionColor.rgb, specularColorTexIdx)
+// matColors[matID * 17 + 7]  = vec4(coatColor.rgb, coatWeight)                         (OpenPBR step 2)
+// matColors[matID * 17 + 8]  = vec4(coatRoughness, coatAnisotropy, coatIor, coatDarkening)
+// matColors[matID * 17 + 9]  = vec4(fuzzColor.rgb, fuzzWeight)
+// matColors[matID * 17 + 10] = vec4(fuzzRoughness, specularAnisotropy, tangentRotation, 0)
+// matColors[matID * 17 + 11] = vec4(coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex)
+// matColors[matID * 17 + 12] = vec4(transmissionColor.rgb, transmissionWeight)       (OpenPBR step 3)
+// matColors[matID * 17 + 13] = vec4(transmissionDepth, thinWalled, dispersionScale, dispersionAbbe)
+// matColors[matID * 17 + 14] = vec4(thinFilmWeight, thinFilmThickness, thinFilmIor, 0)
+// matColors[matID * 17 + 15] = vec4(subsurfaceColor.rgb, subsurfaceRadius)            (OpenPBR step 4)
+// matColors[matID * 17 + 16] = vec4(subsurfaceRadiusScale.rgb, subsurfaceAnisotropy)
 
 struct MaterialGpuPack {
     static constexpr std::size_t kSlots     = kMaterialVec4s;
@@ -72,9 +74,9 @@ struct MaterialGpuPack {
     }
 };
 
-static_assert(MaterialGpuPack::kBytes == 240, "material pack is 15 * 16 bytes");
-static_assert(MaterialGpuPack::byteOffset(2) == 480);
-static_assert(MaterialGpuPack::vec4Count(4) == 60);
+static_assert(MaterialGpuPack::kBytes == 272, "material pack is 17 * 16 bytes");
+static_assert(MaterialGpuPack::byteOffset(2) == 544);
+static_assert(MaterialGpuPack::vec4Count(4) == 68);
 
 template<GpuPod T>
 [[nodiscard]] consteval std::size_t gpu_sizeof() noexcept {

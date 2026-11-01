@@ -60,6 +60,8 @@ public:
     [[nodiscard]] VkImageView getSpecularView() const { return m_gbuffer[kSpecular].view; }
     [[nodiscard]] VkImageView getOpenPBRView() const { return m_gbuffer[kOpenPBR].view; }
     [[nodiscard]] VkImageView getLayersView() const { return m_gbuffer[kLayers].view; }
+    [[nodiscard]] const glm::mat4& projection() const { return m_projection; }
+    [[nodiscard]] VkBuffer materialBuffer() const;   // RenderScene's material table (null without a scene)
 
     // VkImage handles for render graph import
     [[nodiscard]] VkImage getPositionImage() const { return m_gbuffer[0].image; }

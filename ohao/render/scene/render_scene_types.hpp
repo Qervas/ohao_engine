@@ -81,7 +81,7 @@ struct MaterialDesc {
     uint32_t specularTex{kNoTexture};
     uint32_t specularColorTex{kNoTexture};
     float emissiveStrength{0.0f};
-    float subsurface{0.0f};   // > 0: the SSS blur's strength on this material's pixels (table row 2, z)
+    float subsurface{0.0f};   // subsurface_weight (table row 2, z); > 0 also flags the SSS pass's tiles
     // False: one-sided, its back faces culled in raster (glTF's doubleSided: false). Materials
     // that never say (scene-file materials, OBJ, FBX) stay double-sided.
     bool doubleSided{true};
@@ -121,6 +121,11 @@ struct MaterialDesc {
     float thinFilmWeight{0.0f};
     float thinFilmThickness{0.5f};   // micrometres
     float thinFilmIor{1.4f};
+    // OpenPBR step 4 (table rows 15-16; `subsurface` above is subsurface_weight).
+    glm::vec3 subsurfaceColor{0.8f};
+    float subsurfaceRadius{1.0f};
+    glm::vec3 subsurfaceRadiusScale{1.0f, 0.5f, 0.25f};
+    float subsurfaceAnisotropy{0.0f};
 };
 
 struct InstanceDesc {
