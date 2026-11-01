@@ -49,7 +49,7 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
         d.coatColor.r, d.coatColor.g, d.coatColor.b, d.coatWeight,
         d.coatRoughness, d.coatAnisotropy, d.coatIor, d.coatDarkening,
         d.fuzzColor.r, d.fuzzColor.g, d.fuzzColor.b, d.fuzzWeight,
-        d.fuzzRoughness, d.specularAnisotropy, d.tangentRotation, 0.0f,
+        d.fuzzRoughness, d.specularAnisotropy, d.tangentRotation, d.doubleSided ? 0.0f : 1.0f,   // w: one-sided
         bits(d.coatTex), bits(d.coatRoughnessTex), bits(d.fuzzColorTex), bits(d.fuzzRoughnessTex),
         d.transmissionColor.r, d.transmissionColor.g, d.transmissionColor.b, d.transmissionWeight,
         d.transmissionDepth, d.thinWalled ? 1.0f : 0.0f, d.dispersionScale, d.dispersionAbbe,

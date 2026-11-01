@@ -116,8 +116,8 @@ $ build/Release/level_physics_tests.exe > /dev/null
 $ build/Release/combat_tests.exe > /dev/null
 $ build/Release/anim_tests.exe > /dev/null
 $ build/Release/vfx_tests.exe > /dev/null
-$ build/Release/material_tests.exe > /dev/null
-$ build/Release/openpbr_tables.exe --check ohao/render/material/openpbr_tables.hpp > /dev/null
+$ build/Release/material_tests.exe > /dev/null   # slow
+$ build/Release/openpbr_tables.exe --check ohao/render/material/openpbr_tables.hpp > /dev/null   # slow
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
@@ -534,6 +534,12 @@ deferred, reference, path traced); two the transparency scene,
   level 0, the source, into sky pixels; without one they are black), as the path tracer's missing
   camera rays show it. `check_env_orientation.py` renders a scene with no
   light and checks the sky band in all three captures.
+- **The camera sees no back face of a one-sided material, in either renderer.** glTF's `doubleSided: false` culls
+  back faces in the raster; the TLAS disables facing culls (`TRIANGLE_FACING_CULL_DISABLE`), so the path tracer's camera
+  ray passes such a face (`kHitCulled`: the material's row 10 w is 1, and the world-space winding faces away; a mirroring
+  transform turns it) and goes on, up to `kCullSkips`. Every other ray meets both sides: one-sided geometry still
+  shadows and reflects, in both renderers. Without it the path tracer saw the back of a Sponza arch the raster culls, and
+  the referee read the arch's shadow on the wall behind as deferred being 18% dark.
 - Reflected light is counted once: RT direct light reflects the lights (and emissive triangles),
   RT GI's reflection everything else (its rays skip lights' emitter meshes and drop what a hit
   emits when RT direct light samples it). A new reflection source must fit that split, never be
@@ -697,6 +703,12 @@ deferred, reference, path traced); two the transparency scene,
   a staging buffer with the map. Keep the draw a continuous warp: an alias table was 1.1 ms faster
   but scattered neighbouring Sobol points across the map, 14% more error at 16 samples. A view of a 1080p render through an image tool may be palette-reduced and look
   posterized; judge renders from crops or pixel statistics.
+- **The path tracer's pipeline is cached on disk** (`render/rt/pipeline_disk_cache.*`): it compiles for minutes
+  cold, and a second process beside a live one (`check_live`'s headless host beside its window) was measured
+  compiling it again from scratch, 239 s, past the test's 120 s reply wait. Its `VkPipelineCache` is a file per
+  device and driver under `$OHAO_PIPELINE_CACHE_DIR`, else `%LOCALAPPDATA%/ohao/pipeline_cache` (about 11 MB a
+  shader version; past 64 MB it starts empty), loaded before the pipeline is created and saved right after. The
+  first process after a shader change still compiles cold.
 - **Emission is light** (frontier F3, ruling F-R7; `render/rt/emissive_lights.*`). Every triangle of an
   emissive material (`MaterialTable::emissive`: emission colour and luminance above 0) is a light of the
   path tracer: the `emissive.lights` pass (before `pt.cache.update`) writes each one's world corners, uvs

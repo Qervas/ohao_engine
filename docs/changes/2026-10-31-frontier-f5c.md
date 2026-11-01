@@ -3,7 +3,7 @@
 **Spec:** `docs/specs/2026-10-30-frontier-renderer-design.md` (section 3, step F5: retires SSAO in lighting and the
 constant ambient, moved to F5 by F2).
 **Plan:** `docs/plans/2026-10-31-frontier-f5.md`, F5c.
-**Status:** built; F5d (ReSTIR GI) next, if the referee asks for it.
+**Status:** built. F5d (ReSTIR GI): the referee did not ask for it (`docs/changes/2026-11-01-frontier-f5d-referee.md`).
 
 ## 1. Summary
 

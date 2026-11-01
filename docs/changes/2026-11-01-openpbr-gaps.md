@@ -60,6 +60,12 @@ budget; deferred glass is traced through the solid instead of offset in screen s
 - **The realtime profile's 2 bounces ended paths inside glass** once bounce rays met it (the realtime furnace's rough
   glass rim read 0.62).
 
+- **The SSS target first packed the irradiance as fp16** (`f32tof16`), which declared SPIR-V's `Float16` and `Int16`;
+  the device enables neither, and `engine_tests`' validation case reported 6 messages. It is three floats' bits now.
+- **`check_docs` timed out** (1200 s) running `material_tests` (1314 s alone; its chi-square and furnace cases 100-210 s
+  each) and `openpbr_tables --check` (266 s), both also CTest suites of their own: their AGENTS.md lines are `# slow`
+  (run by `check_docs --slow`); `check_docs --cpu-only` takes 733 s.
+
 ## 4. Spec and plan corrections
 
 None to the spec. Step 3's change record listed O14 as not built and the deferred refraction as one screen-space

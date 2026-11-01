@@ -96,6 +96,8 @@ static const uint kPathMask = kRayMaskScene | kTlasMaskTransparent;
 static const uint kCrossings = 16u;    // glass events (refractions, reflections inside) beyond the bounces
 static const uint kShadowRay = 16u;    // visible()'s ray: anyHit lets a pane through (paneMaterial)
 static const uint kPaneSeen = 32u;     // ... and says it did
+static const uint kHitCulled = 64u;    // the back face of a one-sided material (the raster culls it)
+static const uint kCullSkips = 8u;     // culled faces a camera ray passes
 
 // What a ray brings back: a surface's place and its OpenPBR inputs (resolved from its material
 // and textures by the closest hit), a light's emitter (its light), or nothing (a miss).
@@ -534,11 +536,24 @@ void raygen()
     bool insideVolume = false;
     float3 sigmaA = float3(0.0);
     int channel = -1;          // dispersion's wavelength once drawn (0 R, 1 G, 2 B)
+    uint skips = 0u;           // culled faces the camera ray passed, and how far it went past them
+    float skipped = 0.0;
     uint crossings = 0u;       // glass events so far: they do not count as bounces
 
     for (uint depth = 0u; ; ++depth)
     {
         const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kPathMask | kTlasMaskEmitter), 1.0e4);
+        // The camera sees no back face of a one-sided material, as the G-buffer culls it (glTF's
+        // doubleSided false): it goes on to what the raster draws behind. Other rays meet both sides
+        // (one-sided geometry still shadows and reflects light, as in the deferred frame's rays).
+        if (depth == 0u && (hit.flags & kHitCulled) != 0u && skips < kCullSkips)
+        {
+            ++skips;
+            skipped += hit.t;
+            origin = hit.position;
+            --depth;   // the camera ray again (the loop's ++depth brings it back to 0)
+            continue;
+        }
         if (insideVolume) throughput *= exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
         float3 add = float3(0.0);
         bool stop = false;
@@ -586,7 +601,7 @@ void raygen()
         if (depth == 0u)
         {
             // The primary hit's guides.
-            firstHitT = (hit.flags & kHit) != 0u ? hit.t : -1.0;
+            firstHitT = (hit.flags & kHit) != 0u ? hit.t + skipped : -1.0;
             float2 motion = float2(0.0);
             if (firstHitT > 0.0)
             {
@@ -1073,6 +1088,13 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
     const float3 nObj = vertexF3(c.v0, 6u) * w + vertexF3(c.v1, 6u) * bary.x + vertexF3(c.v2, 6u) * bary.y;
     float3 n = dot(nObj, nObj) > 1e-8 ? normalize(mul(nObj, w2o)) : geo;
     const bool front = dot(geo, dir) < 0.0;   // the side the winding faces (emitters emit from it)
+    // What the raster culls (glTF's doubleSided false, material row 10's w): the side the world-space
+    // winding faces away from the ray; a mirroring transform turns the winding (the normal's inverse
+    // transpose does not).
+    {
+        const bool mirrored = determinant((float3x3)ObjectToWorld3x4()) < 0.0;
+        if (front == mirrored && materials[c.material * kMaterialRows + 10u].w > 0.5) payload.flags |= kHitCulled;
+    }
     if (!front) geo = -geo;
     if (dot(n, geo) < 0.0) n = -n;
     payload.geoNormal = geo;
