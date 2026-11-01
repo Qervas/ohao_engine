@@ -94,8 +94,7 @@ static const uint kHitBack = 8u;       // the ray leaves a closed mesh (met from
 // its far side, refracting once: the lens was too weak, and glass cast no shadow.
 static const uint kPathMask = kRayMaskScene | kTlasMaskTransparent;
 static const uint kCrossings = 16u;    // glass events (refractions, reflections inside) beyond the bounces
-static const uint kShadowRay = 16u;    // visible()'s ray: anyHit lets a pane through (paneMaterial)
-static const uint kPaneSeen = 32u;     // ... and says it did
+static const uint kShadowRay = 16u;    // visible()'s ray: anyHit lets a pane through (paneMaterial), times its transmission
 static const uint kHitCulled = 64u;    // the back face of a one-sided material (the raster culls it)
 static const uint kCullSkips = 8u;     // culled faces a camera ray passes
 
@@ -238,32 +237,19 @@ uint traceFlags() { return alphaRays() ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE; 
 
 // ---- tracing --------------------------------------------------------------------------------
 
-PathPayload trace(float3 origin, float3 dir, uint mask, float tMax)
+// tMin 0 for a subsurface walk's step: it starts inside a volume, not on a surface, and a 1e-4 start
+// let a step from a scattering event within 0.1 mm of the surface step through it unseen and the walk
+// escape (a dense white volume lost 1.4%).
+PathPayload trace(float3 origin, float3 dir, uint mask, float tMax, float tMin = 1e-4)
 {
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = dir;
-    ray.TMin = 1e-4;
+    ray.TMin = tMin;
     ray.TMax = tMax;
     PathPayload p;
     p.flags = 0u;
     TraceRay(scene, traceFlags(), mask, 0, 0, 0, ray, p);
-    return p;
-}
-
-// A walk's step (walkSubsurface): from a point inside a volume, not on a surface, so from distance
-// 0. A 1e-4 start let a step from a scattering event within 0.1 mm of the surface step through it
-// unseen and the walk escape (a dense white volume lost 1.4%).
-PathPayload traceWalk(float3 origin, float3 dir, float tMax)
-{
-    RayDesc ray;
-    ray.Origin = origin;
-    ray.Direction = dir;
-    ray.TMin = 0.0;
-    ray.TMax = tMax;
-    PathPayload p;
-    p.flags = 0u;
-    TraceRay(scene, traceFlags(), kRayMaskScene, 0, 0, 0, ray, p);
     return p;
 }
 
@@ -283,12 +269,13 @@ bool paneMaterial(uint material)
     return r12.w > 0.0 && r13.y > 0.5 && r1.y < 1.0 && r1.x <= kPaneRough;
 }
 
-// What a shadow ray's last visible() carried through panes (1 without any).
-static float3 shadowT = float3(1.0);
-
-bool visible(float3 origin, float3 dir, float dist)
+// Whether the segment is unblocked, and what it carries through panes (T: 1 without any). A shadow
+// ray's payload carries the product of the panes' straight transmission in `emission`, which anyHit
+// multiplies (the order does not matter); a pane that lets nothing through is a hit. Kept to one trace:
+// a loop here, inlined at every light sample, made the whole tracer 8x slower on scenes without glass.
+bool visible(float3 origin, float3 dir, float dist, out float3 T)
 {
-    shadowT = float3(1.0);
+    T = float3(0.0);
     if (dist <= 0.0) return false;
     RayDesc ray;
     ray.Origin = origin;
@@ -297,28 +284,12 @@ bool visible(float3 origin, float3 dir, float dist)
     ray.TMax = dist;
     PathPayload p;
     p.flags = kHit | kShadowRay;   // the closest hit is skipped: only the miss shader clears kHit
+    p.emission = float3(1.0);
     TraceRay(scene, traceFlags() | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
              kPathMask, 0, 0, 0, ray, p);
     if ((p.flags & kHit) != 0u) return false;
-    if ((p.flags & kPaneSeen) == 0u) return true;
-    // Through panes: each one's straight transmission at the ray's angle, nearest first.
-    OpenPBRTables tables;
-    tables.data = openpbrTables;
-    float3 o = origin;
-    float left = dist;
-    for (uint k = 0u; k < 8u; ++k)
-    {
-        const PathPayload h = trace(o, dir, kPathMask, left);
-        if ((h.flags & kHit) == 0u) return any(shadowT > 0.0);
-        if (!paneMaterial(h.material)) break;
-        const float c = clamp(abs(dot(dir, h.geoNormal)), 1e-4, 1.0);
-        shadowT *= OpenPBRSurface(inputsOf(h)).transmissionAlbedo(float3(sqrt(1.0 - c * c), 0.0, c), tables);
-        left -= h.t;
-        o = h.position;
-        if (left <= 1e-4 || !any(shadowT > 0.0)) break;
-    }
-    shadowT = float3(0.0);
-    return false;
+    T = p.emission;
+    return true;
 }
 
 struct PathTextures : IMaterialTextures
@@ -343,7 +314,7 @@ MaterialInputs inputsOf(PathPayload p)
     const uint t = p.material * kMaterialRows + kTransmissionRowFirst;
     applyTransmissionRows(m, materials[t], materials[t + 1u], materials[t + 2u]);
     applySubsurfaceRows(m, materials[p.material * kMaterialRows + 2u], materials[p.material * kMaterialRows + kSubsurfaceRowFirst]);
-    m.subsurfaceLocal = false;   // walked: lobe 5 (walkSubsurface)
+    m.subsurfaceLocal = false;   // walked: lobe 5 (raygen's walk)
     return m;
 }
 
@@ -359,7 +330,9 @@ MaterialInputs inputsOf(PathPayload p)
 // kWalkSteps leaves along its direction at the surface it meets (a dense near-white volume would
 // otherwise lose the energy of its longest walks: the exit point is biased, the energy is not).
 // Meeting the surface is leaving it (ruling O16). Its own PCG stream: a walk takes up to
-// kWalkSteps steps, more than any Sobol group holds.
+// kWalkSteps steps, more than any Sobol group holds. The walk is a mode of raygen's path loop (its
+// steps are the loop's trace, its exit's light sampling the loop's): inlined beside the loop's own
+// traces, a walk of its own made the whole tracer 3.7x slower on scenes without subsurface.
 static const uint kWalkSteps = 1024u;
 
 struct WalkRng
@@ -404,52 +377,34 @@ void walkExit(PathPayload h, inout float3 pos, inout float3 dir, out float3 shad
     pos = h.position + out * 1e-3;
 }
 
-// From just under the surface at pos, along dir (into the volume): true when the walk leaves,
-// with pos the exit point, dir the way out (cosine-weighted about the outward normal) and weight
-// what it carries per channel; exitN the exit's outward shading normal.
-bool walkSubsurface(inout float3 pos, inout float3 dir, out float3 weight, out float3 exitN, float3 sigmaT, float3 albedo,
-                    float g, inout WalkRng rng)
+static const uint kNoWalk = 0xFFFFFFFFu;
+
+// A walked material's medium, from its rows 15-16.
+struct WalkMedium
 {
-    weight = float3(1.0);
-    exitN = float3(0.0, 1.0, 0.0);
-    for (uint k = 0u; k < kWalkSteps; ++k)
-    {
-        // The channel by throughput: p_j = w_j / sum w.
-        const float sw = weight.r + weight.g + weight.b;
-        const float3 pj = weight / sw;
-        const float uc = rng.next();
-        const uint c = uc < pj.r ? 0u : uc < pj.r + pj.g ? 1u : 2u;
-        const float dist = -log(max(1.0 - rng.next(), 1e-7)) / sigmaT[c];
-        const PathPayload h = traceWalk(pos, dir, dist);
-        if ((h.flags & kHit) != 0u)
-        {
-            // Out: no event before the surface, each channel's transmittance over the mixture's.
-            const float t = length(h.position - pos);
-            const float3 tr = exp(-sigmaT * t);
-            weight *= tr / max(dot(pj, tr), 1e-30);
-            walkExit(h, pos, dir, exitN, rng);
-            return true;
-        }
-        // A scattering event at dist: sigma_s T over the mixture's density sum_j p_j sigma_t,j T_j.
-        const float3 tr = exp(-sigmaT * dist);
-        weight *= albedo * sigmaT * tr / max(dot(pj, sigmaT * tr), 1e-30);
-        pos += dir * dist;
-        dir = sampleHG(dir, g, rng.next(), rng.next());
-        // Russian roulette only once the walk has lost weight (absorbed): a white walk is never
-        // cut short (a 1% cut a step kept a 500-step walk once in 150, at 150 times its weight,
-        // which 16 samples a pixel never see: a dense white volume read 0.94).
-        const float q = max(weight.r, max(weight.g, weight.b));
-        if (q < 1.0)
-        {
-            if (rng.next() >= q) return false;
-            weight /= q;
-        }
-    }
-    // The cap: leave along dir where it meets the surface.
-    const PathPayload h = traceWalk(pos, dir, 1.0e4);
-    if ((h.flags & kHit) == 0u) return false;
-    walkExit(h, pos, dir, exitN, rng);
-    return true;
+    float3 sigmaT;
+    float3 albedo;   // single scatter
+    float g;
+};
+
+WalkMedium walkMedium(uint material)
+{
+    const uint mr = material * kMaterialRows;
+    const float4 r15 = materials[mr + kSubsurfaceRowFirst], r16 = materials[mr + kSubsurfaceRowFirst + 1u];
+    WalkMedium m;
+    m.sigmaT = 1.0 / max(r15.w * r16.rgb, float3(1e-5));
+    m.albedo = subsurfaceSingleScatter(r15.rgb);
+    m.g = clamp(r16.w, -0.95, 0.95);
+    return m;
+}
+
+// A walk step's distance, on a channel drawn by throughput (p_j = w_j / sum w).
+float walkDraw(inout WalkRng rng, float3 weight, float3 sigmaT)
+{
+    const float3 pj = weight / (weight.r + weight.g + weight.b);
+    const float uc = rng.next();
+    const uint c = uc < pj.r ? 0u : uc < pj.r + pj.g ? 1u : 2u;
+    return -log(max(1.0 - rng.next(), 1e-7)) / sigmaT[c];
 }
 
 // Dispersion (OpenPBR step 3, ruling O12): a path's first dispersive refraction draws one of RGB at
@@ -539,141 +494,202 @@ void raygen()
     uint skips = 0u;           // culled faces the camera ray passed, and how far it went past them
     float skipped = 0.0;
     uint crossings = 0u;       // glass events so far: they do not count as bounces
+    // The subsurface walk (lobe 5) in progress: the loop's trace is its step (from tMin 0, up to the
+    // drawn distance, kRayMaskScene), and the step that meets the surface is its exit vertex, shaded
+    // Lambertian by the loop's light sampling. Its iterations do not count as bounces.
+    // Its state is kept small, since what raygen holds across a trace is spilled by every pixel
+    // (each word of it showed in pt.trace on scenes without subsurface): the medium is read back from
+    // the material's rows at each step, the channel probabilities from the weight, and the rest lives
+    // in the last vertex's MIS state, which means nothing during a walk and which its exit sets:
+    // misOrigin holds the walk's weight, lastPdf its step's distance, lastLobe the walked material.
+    uint walkSteps = kNoWalk;   // scattering events so far (kWalkSteps: the cap's ray)
+    WalkRng wr;
+    wr.state = 0u;
+#define walkWeight misOrigin
+#define walkDist lastPdf
+#define walkMaterial lastLobe
 
     for (uint depth = 0u; ; ++depth)
     {
-        const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kPathMask | kTlasMaskEmitter), 1.0e4);
-        // The camera sees no back face of a one-sided material, as the G-buffer culls it (glTF's
-        // doubleSided false): it goes on to what the raster draws behind. Other rays meet both sides
-        // (one-sided geometry still shadows and reflects light, as in the deferred frame's rays).
-        if (depth == 0u && (hit.flags & kHitCulled) != 0u && skips < kCullSkips)
+        // The path's one trace (every TraceRay site inlined into raygen costs every pixel).
+        const bool walking = walkSteps != kNoWalk;
+        const uint mask = walking ? kRayMaskScene : depth == 0u ? kRayMaskCamera : (kPathMask | kTlasMaskEmitter);
+        const PathPayload hit = trace(origin, dir, mask, walking ? walkDist : 1.0e4, walking ? 0.0 : 1e-4);
+        bool walkExitVertex = false;
+        float3 exitN = float3(0.0);
+        if (walking)
         {
-            ++skips;
-            skipped += hit.t;
-            origin = hit.position;
-            --depth;   // the camera ray again (the loop's ++depth brings it back to 0)
-            continue;
-        }
-        if (insideVolume) throughput *= exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
-        float3 add = float3(0.0);
-        bool stop = false;
-        if ((hit.flags & kHit) == 0u)
-        {
-            // The environment, weighed against its sampling at the last vertex.
-            const float3 le = envRadiance(dir);
-            const float w = depth == 0u ? 1.0 : powerHeuristic(lastPdf, envPdf(dir));
-            add = throughput * le * w;
-            stop = true;
-        }
-        else if ((hit.flags & kHitEmitter) != 0u)
-        {
-            // The camera sees the emitter mesh as the G-buffer draws it; a bounce ray takes the
-            // light's radiance toward its origin, weighed against light sampling.
-            if (depth == 0u)
+            const WalkMedium m = walkMedium(walkMaterial);
+            const float3 pj = walkWeight / (walkWeight.r + walkWeight.g + walkWeight.b);
+            if ((hit.flags & kHit) == 0u)
             {
-                add = hit.emission;
+                if (walkSteps == kWalkSteps) break;   // the cap's ray left without meeting the surface
+                // A scattering event at walkDist: sigma_s T over the mixture's density sum_j p_j sigma_t,j T_j.
+                const float3 tr = exp(-m.sigmaT * walkDist);
+                walkWeight *= m.albedo * m.sigmaT * tr / max(dot(pj, m.sigmaT * tr), 1e-30);
+                origin += dir * walkDist;
+                dir = sampleHG(dir, m.g, wr.next(), wr.next());
+                // Russian roulette only once the walk has lost weight (absorbed): a white walk is never
+                // cut short (a 1% cut a step kept a 500-step walk once in 150, at 150 times its weight,
+                // which 16 samples a pixel never see: a dense white volume read 0.94).
+                const float q = max(walkWeight.r, max(walkWeight.g, walkWeight.b));
+                if (q < 1.0)
+                {
+                    if (wr.next() >= q) break;
+                    walkWeight /= q;
+                }
+                // The cap: leave along dir where it meets the surface.
+                walkDist = 1.0e4;
+                if (++walkSteps < kWalkSteps) walkDist = walkDraw(wr, walkWeight, m.sigmaT);
+                --depth;
+                continue;
+            }
+            // Out: no event before the surface, each channel's transmittance over the mixture's.
+            if (walkSteps < kWalkSteps)
+            {
+                const float3 tr = exp(-m.sigmaT * length(hit.position - origin));
+                walkWeight *= tr / max(dot(pj, tr), 1e-30);
+            }
+            walkExit(hit, origin, dir, exitN, wr);
+            throughput *= walkWeight;
+            walkSteps = kNoWalk;
+            walkExitVertex = true;
+        }
+        // The walk's exit counts no emission and is no bounce: it goes straight to light sampling.
+        if (!walkExitVertex)
+        {
+            // The camera sees no back face of a one-sided material, as the G-buffer culls it (glTF's
+            // doubleSided false): it goes on to what the raster draws behind. Other rays meet both sides
+            // (one-sided geometry still shadows and reflects light, as in the deferred frame's rays).
+            if (depth == 0u && (hit.flags & kHitCulled) != 0u && skips < kCullSkips)
+            {
+                ++skips;
+                skipped += hit.t;
+                origin = hit.position;
+                --depth;   // the camera ray again (the loop's ++depth brings it back to 0)
+                continue;
+            }
+            if (insideVolume) throughput *= exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
+            float3 add = float3(0.0);
+            bool stop = false;
+            if ((hit.flags & kHit) == 0u)
+            {
+                // The environment, weighed against its sampling at the last vertex.
+                const float3 le = envRadiance(dir);
+                const float w = depth == 0u ? 1.0 : powerHeuristic(lastPdf, envPdf(dir));
+                add = throughput * le * w;
+                stop = true;
+            }
+            else if ((hit.flags & kHitEmitter) != 0u)
+            {
+                // The camera sees the emitter mesh as the G-buffer draws it; a bounce ray takes the
+                // light's radiance toward its origin, weighed against light sampling.
+                if (depth == 0u)
+                {
+                    add = hit.emission;
+                }
+                else
+                {
+                    float lightPdf;
+                    const float3 le = emitterRadiance(hit.light, misOrigin, hit.position, hit.geoNormal, dir, lightPdf);
+                    add = throughput * le * powerHeuristic(lastPdf, lightPdf);
+                }
+                stop = true;
             }
             else
             {
-                float lightPdf;
-                const float3 le = emitterRadiance(hit.light, misOrigin, hit.position, hit.geoNormal, dir, lightPdf);
-                add = throughput * le * powerHeuristic(lastPdf, lightPdf);
+                add = throughput * hit.emission * emissiveHitWeight(hit, misOrigin, lastPdf, depth);   // weighed against light sampling
             }
-            stop = true;
-        }
-        else
-        {
-            add = throughput * hit.emission * emissiveHitWeight(hit, misOrigin, lastPdf, depth);   // weighed against light sampling
-        }
-        if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;
-        radiance += add;
-        if (depth > 0u)
-        {
-            if (firstLobe == 1u) diffuseOut += add;
-            else specularOut += add;
-        }
-        else
-        {
-            // What the camera ray meets emits: never demodulated, never denoised (nrd_compose adds it).
-            emissionAOV[pixel] = lerp(emissionAOV[pixel], float4(add, 1.0), blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0);
-        }
-
-        if (depth == 0u)
-        {
-            // The primary hit's guides.
-            firstHitT = (hit.flags & kHit) != 0u ? hit.t + skipped : -1.0;
-            float2 motion = float2(0.0);
-            if (firstHitT > 0.0)
+            if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;
+            radiance += add;
+            if (depth > 0u)
             {
-                viewZ = dot(hit.position - camPos, fwd);
-                if (pc.control.z != 0u)
+                if (firstLobe == 1u) diffuseOut += add;
+                else specularOut += add;
+            }
+            else
+            {
+                // What the camera ray meets emits: never demodulated, never denoised (nrd_compose adds it).
+                emissionAOV[pixel] = lerp(emissionAOV[pixel], float4(add, 1.0), blendAOVs ? 1.0 / float(pc.control.y + 1u) : 1.0);
+            }
+
+            if (depth == 0u)
+            {
+                // The primary hit's guides.
+                firstHitT = (hit.flags & kHit) != 0u ? hit.t + skipped : -1.0;
+                float2 motion = float2(0.0);
+                if (firstHitT > 0.0)
                 {
-                    const float4 prev = pc.prevViewProj[0] * hit.position.x + pc.prevViewProj[1] * hit.position.y +
-                                        pc.prevViewProj[2] * hit.position.z + pc.prevViewProj[3];
-                    if (prev.w > 0.0)
+                    viewZ = dot(hit.position - camPos, fwd);
+                    if (pc.control.z != 0u)
                     {
-                        const float2 prevPix = (prev.xy / prev.w * 0.5 + 0.5) * float2(size);
-                        motion = uv * float2(size) - prevPix;
+                        const float4 prev = pc.prevViewProj[0] * hit.position.x + pc.prevViewProj[1] * hit.position.y +
+                                            pc.prevViewProj[2] * hit.position.z + pc.prevViewProj[3];
+                        if (prev.w > 0.0)
+                        {
+                            const float2 prevPix = (prev.xy / prev.w * 0.5 + 0.5) * float2(size);
+                            motion = uv * float2(size) - prevPix;
+                        }
+                    }
+                }
+                motionVector[pixel] = motion;
+                depthAOV[pixel] = viewZ;
+                if ((hit.flags & kHit) == 0u || (hit.flags & kHitEmitter) != 0u)
+                {
+                    roughnessAOV[pixel] = 1.0;
+                    if ((flags & kFlagAOVs) != 0u)
+                    {
+                        albedoAOV[pixel] = float4(add, 1.0);
+                        normalAOV[pixel] = float4(0.0);
+                    }
+                    const float4 zero = float4(0.0);
+                    diffuseAlbedoAOV[pixel] = blendAOVs ? lerp(diffuseAlbedoAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
+                    specColorAOV[pixel] = blendAOVs ? lerp(specColorAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
+                    normalRoughnessAOV[pixel] = blendAOVs ? lerp(normalRoughnessAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
+                }
+            }
+            // The radiance cache (realtime): a surface past the first vertex gives the light it reflects
+            // and the path ends there, if the segment reaching it is at least its voxel long and the
+            // lobe that drew it spreads over the voxel (a diffuse one, or roughness^2 x length >= voxel:
+            // a sharp reflection keeps tracing). The query point is jittered within the voxel's face
+            // (Binder 2019) so no voxel shows as a block.
+            // Never at glass: the cache's update paths stop where a surface refracts, so a cell there
+            // would hold its reflection alone.
+            if (!stop && depth > 0u && (flags & kFlagCache) != 0u &&
+                !(materials[hit.material * kMaterialRows + kTransmissionRowFirst].w > 0.0))
+            {
+                const float voxel = cacheVoxelSizeAt(hit.position, camPos);
+                if (hit.t >= voxel && (lastLobe == 1u || lastRough * lastRough * hit.t >= voxel))
+                {
+                    float3 jt, jb;
+                    basisOf(hit.geoNormal, jt, jb);
+                    const uint h = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ (depth * 0x9E3779B9u))));
+                    const float2 j = (float2(float(h & 0xFFFFu), float(h >> 16u)) / 65536.0 - 0.5) * voxel;
+                    float3 cached;
+                    if (cacheLookup(cacheKeys, cacheResolved, cacheCell(hit.position + jt * j.x + jb * j.y, hit.geoNormal, camPos),
+                                    cached))
+                    {
+                        const float3 c = throughput * cached;
+                        radiance += c;
+                        if (firstLobe == 1u) diffuseOut += c;
+                        else specularOut += c;
+                        break;
                     }
                 }
             }
-            motionVector[pixel] = motion;
-            depthAOV[pixel] = viewZ;
-            if ((hit.flags & kHit) == 0u || (hit.flags & kHitEmitter) != 0u)
-            {
-                roughnessAOV[pixel] = 1.0;
-                if ((flags & kFlagAOVs) != 0u)
-                {
-                    albedoAOV[pixel] = float4(add, 1.0);
-                    normalAOV[pixel] = float4(0.0);
-                }
-                const float4 zero = float4(0.0);
-                diffuseAlbedoAOV[pixel] = blendAOVs ? lerp(diffuseAlbedoAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
-                specColorAOV[pixel] = blendAOVs ? lerp(specColorAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
-                normalRoughnessAOV[pixel] = blendAOVs ? lerp(normalRoughnessAOV[pixel], zero, 1.0 / float(pc.control.y + 1u)) : zero;
-            }
+            // Glass has its own budget (Cycles' transmission bounces): a ray through a ball crosses
+            // twice, and inside rough glass it reflects off the inner wall again and again; counted as
+            // bounces, the realtime profile's 2 ended it inside (the realtime furnace's rough glass rim
+            // read 0.62).
+            if (stop || depth - crossings > bounces || crossings > kCrossings) break;
         }
-        // The radiance cache (realtime): a surface past the first vertex gives the light it reflects
-        // and the path ends there, if the segment reaching it is at least its voxel long and the
-        // lobe that drew it spreads over the voxel (a diffuse one, or roughness^2 x length >= voxel:
-        // a sharp reflection keeps tracing). The query point is jittered within the voxel's face
-        // (Binder 2019) so no voxel shows as a block.
-        // Never at glass: the cache's update paths stop where a surface refracts, so a cell there
-        // would hold its reflection alone.
-        if (!stop && depth > 0u && (flags & kFlagCache) != 0u &&
-            !(materials[hit.material * kMaterialRows + kTransmissionRowFirst].w > 0.0))
-        {
-            const float voxel = cacheVoxelSizeAt(hit.position, camPos);
-            if (hit.t >= voxel && (lastLobe == 1u || lastRough * lastRough * hit.t >= voxel))
-            {
-                float3 jt, jb;
-                basisOf(hit.geoNormal, jt, jb);
-                const uint h = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ (depth * 0x9E3779B9u))));
-                const float2 j = (float2(float(h & 0xFFFFu), float(h >> 16u)) / 65536.0 - 0.5) * voxel;
-                float3 cached;
-                if (cacheLookup(cacheKeys, cacheResolved, cacheCell(hit.position + jt * j.x + jb * j.y, hit.geoNormal, camPos),
-                                cached))
-                {
-                    const float3 c = throughput * cached;
-                    radiance += c;
-                    if (firstLobe == 1u) diffuseOut += c;
-                    else specularOut += c;
-                    break;
-                }
-            }
-        }
-        // Glass has its own budget (Cycles' transmission bounces): a ray through a ball crosses
-        // twice, and inside rough glass it reflects off the inner wall again and again; counted as
-        // bounces, the realtime profile's 2 ended it inside (the realtime furnace's rough glass rim
-        // read 0.62).
-        if (stop || depth - crossings > bounces || crossings > kCrossings) break;
 
         // The surface. A transmissive solid met from inside (a back face) is shaded in its outward
         // frame, so the module sees wo below it and refracts at 1 / eta.
         MaterialInputs mi = inputsOf(hit);
         const bool transmissive = mi.transmissionWeight > 0.0 && mi.baseMetalness < 1.0;
         const bool fromInside = transmissive && !mi.thinWalled && (hit.flags & kHitBack) != 0u;
-        const float3 n = fromInside ? -hit.normal : hit.normal;
+        const float3 n = walkExitVertex ? exitN : fromInside ? -hit.normal : hit.normal;
         float3 t, b;
         if (dot(hit.tangent, hit.tangent) > 0.0)
         {
@@ -687,7 +703,7 @@ void raygen()
         const float3 wo = toLocal(-dir, t, b, n);
         // Dispersion: the IOR at the path's wavelength (drawn at the first dispersive glass).
         const float4 row13 = materials[hit.material * kMaterialRows + kTransmissionRowFirst + 1u];
-        if (transmissive && row13.z > 0.0)
+        if (!walkExitVertex && transmissive && row13.z > 0.0)
         {
             if (channel < 0)
             {
@@ -715,25 +731,48 @@ void raygen()
             specColorAOV[pixel] = lerp(specColorAOV[pixel], float4(specColor, 1.0), k);
             normalRoughnessAOV[pixel] = lerp(normalRoughnessAOV[pixel], nrdPackNormalRoughness(n, firstRough), k);
         }
-        // Rays leave from just off the surface, on its geometric side the ray came from.
-        const float3 p = hit.position + hit.geoNormal * 1e-3;
+        // Rays leave from just off the surface, on its geometric side the ray came from. A walk's exit
+        // (ruling O16) is a Lambertian vertex about its outward shading normal, f = 1 / pi, already
+        // just outside; its draws come from the walk's stream.
+        const float3 p = walkExitVertex ? origin : hit.position + hit.geoNormal * 1e-3;
+        const float3 ng = walkExitVertex ? n : hit.geoNormal;
 
         // Next-event estimation: a light, then the environment, each weighed against the BSDF.
-        rng.group(1u + 3u * depth);
-        const float lu0 = rng.next(), lu1 = rng.next(), lu2 = rng.next();
-        const LightSample ls = sampleLight(hit.position, p, lu0, lu1, lu2);
+        float lu0, lu1, lu2;
+        if (walkExitVertex)
+        {
+            lu0 = wr.next();
+            lu1 = wr.next();
+            lu2 = wr.next();
+        }
+        else
+        {
+            rng.group(1u + 3u * depth);
+            lu0 = rng.next();
+            lu1 = rng.next();
+            lu2 = rng.next();
+        }
+        const LightSample ls = sampleLight(walkExitVertex ? origin : hit.position, p, lu0, lu1, lu2);
         if (ls.valid)
         {
             const float3 wi = toLocal(ls.L, t, b, n);
-            float3 fs, fd;
-            base.evalLobes(wo, wi, tables, fs, fd);
+            float3 fs = float3(0.0), fd;
+            if (walkExitVertex) fd = float3(max(dot(ls.L, n), 0.0) * (1.0 / kPi));
+            else base.evalLobes(wo, wi, tables, fs, fd);
             const float3 f = fs + fd;
-            if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist))
+            float3 vis1;
+            if (any(f > 0.0) && dot(ls.L, ng) > 0.0 && visible(p, ls.L, ls.dist, vis1))
             {
                 // A sun is a delta (its radiance already over its choice); a light without an
                 // emitter mesh only light sampling finds: full weight.
-                const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
-                const float3 le = ls.radiance * shadowT * w;
+                float w = 1.0;
+                if (ls.pdf > 0.0)
+                {
+                    float bsdfPdf = fd.x;
+                    if (ls.mis && !walkExitVertex) bsdfPdf = base.pdf(wo, wi, tables);
+                    w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
+                }
+                const float3 le = ls.radiance * vis1 * w;
                 const float3 c = throughput * f * le;
                 radiance += c;
                 // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
@@ -744,22 +783,52 @@ void raygen()
         }
         if (envSampled())
         {
-            rng.group(2u + 3u * depth);
             float pdfL;
-            const float3 L = sampleEnv(rng, pdfL);
-            const float3 wi = toLocal(L, t, b, n);
-            float3 fs, fd;
-            base.evalLobes(wo, wi, tables, fs, fd);
-            const float3 f = fs + fd;
-            if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))
+            float3 L;
+            if (walkExitVertex) L = sampleEnvAt(float4(wr.next(), wr.next(), wr.next(), wr.next()), pdfL);
+            else
             {
-                const float3 le = envRadiance(L) * shadowT * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL;
+                rng.group(2u + 3u * depth);
+                L = sampleEnv(rng, pdfL);
+            }
+            const float3 wi = toLocal(L, t, b, n);
+            float3 fs = float3(0.0), fd;
+            if (walkExitVertex) fd = float3(max(dot(L, n), 0.0) * (1.0 / kPi));
+            else base.evalLobes(wo, wi, tables, fs, fd);
+            const float3 f = fs + fd;
+            float3 vis2;
+            if (pdfL > 0.0 && any(f > 0.0) && dot(L, ng) > 0.0 && visible(p, L, 1.0e4, vis2))
+            {
+                float bsdfPdf = fd.x;
+                if (!walkExitVertex) bsdfPdf = base.pdf(wo, wi, tables);
+                const float3 le = envRadiance(L) * vis2 * powerHeuristic(pdfL, bsdfPdf) / pdfL;
                 const float3 c = throughput * f * le;
                 radiance += c;
                 if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
                 else if (firstLobe == 1u) diffuseOut += c;
                 else specularOut += c;
             }
+        }
+
+        if (walkExitVertex)
+        {
+            // On from the exit along the walk's cosine-weighted direction, which the next hit weighs
+            // against light sampling here. The walk's iterations were not bounces: depth is the entry's
+            // again (this iteration's minus one).
+            if (depth == 1u) firstLobe = 1u;
+            lastLobe = 1u;
+            lastRough = 1.0;
+            lastPdf = max(dot(dir, n), 0.0) * (1.0 / kPi);
+            misOrigin = origin;
+            insideVolume = false;
+            --depth;
+            if (depth >= 2u)
+            {
+                const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);
+                if (rng.next() >= q) break;
+                throughput /= q;
+            }
+            continue;
         }
 
         // The next direction.
@@ -770,63 +839,15 @@ void raygen()
         {
             // Into the volume: the walk decides where the light leaves, and the path goes on from
             // there; what it meets counts in full (light sampling at the entry did not see it).
-            const uint mr = hit.material * kMaterialRows;
-            const float4 r15 = materials[mr + kSubsurfaceRowFirst], r16 = materials[mr + kSubsurfaceRowFirst + 1u];
-            const float3 sigmaT = 1.0 / max(r15.w * r16.rgb, float3(1e-5));
-            WalkRng wr;
+            walkMaterial = hit.material;
             wr.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ pcg(depth ^ 0xA511E9B3u))));
-            float3 pos = hit.position - hit.geoNormal * 1e-3;
-            float3 wdir = toWorld(s.wi, t, b, n);
-            if (dot(wdir, hit.geoNormal) >= 0.0) wdir = -hit.geoNormal;
-            float3 walked, exitN;
-            if (!walkSubsurface(pos, wdir, walked, exitN, sigmaT, subsurfaceSingleScatter(r15.rgb),
-                                clamp(r16.w, -0.95, 0.95), wr))
-                break;
-            if (depth == 0u) firstLobe = 1u;
-            lastLobe = 1u;
-            lastRough = 1.0;
-            throughput *= s.weight * walked;
-            // The exit is a Lambertian vertex (ruling O16: f = 1 / pi, drawn by its cosine): light
-            // and the environment sampled there, weighed against that draw, which the next hit
-            // weighs the same way (a walk's exit that only found light by its own direction sparkled
-            // wherever the area light was small).
-            {
-                const float lu0 = wr.next(), lu1 = wr.next(), lu2 = wr.next();
-                const LightSample ls = sampleLight(pos, pos, lu0, lu1, lu2);
-                const float cl = dot(ls.L, exitN);
-                if (ls.valid && cl > 0.0 && visible(pos, ls.L, ls.dist))
-                {
-                    const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, cl * (1.0 / kPi)) : 1.0) / ls.pdf : 1.0;
-                    const float3 c = throughput * (cl * (1.0 / kPi)) * ls.radiance * shadowT * w;
-                    radiance += c;
-                    if (firstLobe == 1u) diffuseOut += c;
-                    else specularOut += c;
-                }
-                if (envSampled())
-                {
-                    float pdfL;
-                    const float3 L = sampleEnvAt(float4(wr.next(), wr.next(), wr.next(), wr.next()), pdfL);
-                    const float ce = dot(L, exitN);
-                    if (pdfL > 0.0 && ce > 0.0 && visible(pos, L, 1.0e4))
-                    {
-                        const float3 c = throughput * (ce * (1.0 / kPi)) * envRadiance(L) * shadowT * powerHeuristic(pdfL, ce * (1.0 / kPi)) / pdfL;
-                        radiance += c;
-                        if (firstLobe == 1u) diffuseOut += c;
-                        else specularOut += c;
-                    }
-                }
-            }
-            lastPdf = max(dot(wdir, exitN), 0.0) * (1.0 / kPi);
-            origin = pos;
-            misOrigin = pos;
-            dir = wdir;
-            insideVolume = false;
-            if (depth >= 2u)
-            {
-                const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);
-                if (rng.next() >= q) break;
-                throughput /= q;
-            }
+            origin = hit.position - hit.geoNormal * 1e-3;
+            dir = toWorld(s.wi, t, b, n);
+            if (dot(dir, hit.geoNormal) >= 0.0) dir = -hit.geoNormal;
+            throughput *= s.weight;
+            walkWeight = float3(1.0);
+            walkSteps = 0u;
+            walkDist = walkDraw(wr, walkWeight, walkMedium(walkMaterial).sigmaT);
             continue;
         }
         const float3 next = toWorld(s.wi, t, b, n);
@@ -901,6 +922,9 @@ void raygen()
 
     outputImage[pixel] = float4(displayPixel(acc, pc.tuning.z, asuint(pc.tuning.w)), 1.0);
 }
+#undef walkWeight
+#undef walkDist
+#undef walkMaterial
 
 // ---- the radiance cache's update ------------------------------------------------------------
 //
@@ -1008,10 +1032,11 @@ void cacheUpdate()
         {
             const float3 wi = toLocal(ls.L, t, b, n);
             const float3 f = base.eval(wo, wi, tables);
-            if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist))
+            float3 vis5;
+            if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist, vis5))
             {
                 const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
-                cacheContribute(verts, count, throughput * f * ls.radiance * shadowT * w);
+                cacheContribute(verts, count, throughput * f * ls.radiance * vis5 * w);
             }
         }
         if (envSampled())
@@ -1021,8 +1046,9 @@ void cacheUpdate()
             const float3 L = sampleEnv(rng, pdfL);
             const float3 wi = toLocal(L, t, b, n);
             const float3 f = base.eval(wo, wi, tables);
-            if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4))
-                cacheContribute(verts, count, throughput * f * envRadiance(L) * shadowT * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
+            float3 vis6;
+            if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4, vis6))
+                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis6 * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
         }
 
         rng.group(3u + 3u * depth);
@@ -1069,10 +1095,9 @@ Corners cornersOf(uint slot, uint primitive)
 
 float4 sampleTex(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0); }
 
-[shader("closesthit")]
-void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes attr)
+// The hit as closestHit reports it; anyHit fills one for a pane a shadow ray passes.
+void fillHit(inout PathPayload payload, float2 bary)
 {
-    const float2 bary = attr.barycentrics;
     const float w = 1.0 - bary.x - bary.y;
     const Corners c = cornersOf(InstanceID(), PrimitiveIndex());
     const float3 dir = WorldRayDirection();
@@ -1206,14 +1231,27 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
     }
 }
 
+[shader("closesthit")]
+void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes attr)
+{
+    fillHit(payload, attr.barycentrics);
+}
+
 [shader("anyhit")]
 void anyHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes attr)
 {
     const Corners c = cornersOf(InstanceID(), PrimitiveIndex());
     if ((payload.flags & kShadowRay) != 0u && paneMaterial(c.material))
     {
-        payload.flags |= kPaneSeen;   // visible() works out what it lets through
-        IgnoreHit();
+        // Its straight transmission at the ray's angle (the geometry's NO_DUPLICATE_ANY_HIT flag: once each).
+        PathPayload h;
+        h.flags = 0u;
+        fillHit(h, attr.barycentrics);
+        OpenPBRTables tables;
+        tables.data = openpbrTables;
+        const float cs = clamp(abs(dot(WorldRayDirection(), h.geoNormal)), 1e-4, 1.0);
+        payload.emission *= OpenPBRSurface(inputsOf(h)).transmissionAlbedo(float3(sqrt(1.0 - cs * cs), 0.0, cs), tables);
+        if (any(payload.emission > 0.0)) IgnoreHit();   // else a hit: nothing gets through
         return;
     }
     const uint m = c.material * kMaterialRows;

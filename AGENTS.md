@@ -587,9 +587,10 @@ deferred, reference, path traced); two the transparency scene,
   realtime profile's 2 bounces ended paths inside a ball). In the path tracer a ray that crossed a surface counts what it
   meets in full, not by MIS (light sampling only looks above the surface), and a solid's inside absorbs by
   `transmission_color` at `transmission_depth`. **Panes pass shadow rays** (ruling O14, `paneMaterial`: thin-walled,
-  transmissive, roughness at most `kPaneRough` 0.05): `anyHit` ignores one on a shadow ray and flags it, `visible()` then
-  walks the panes along the ray multiplying their `transmissionAlbedo` into `shadowT`, which every light sample
-  multiplies; a bounce through a pane is a null crossing for MIS (`misOrigin`, `lastPdf` kept). The radiance cache is
+  transmissive, roughness at most `kPaneRough` 0.05): on a shadow ray `anyHit` multiplies the pane's `transmissionAlbedo`
+  at the ray's angle into the payload's `emission` (1 at the start) and ignores the hit, and `visible()` hands it back as
+  `T`, which every light sample multiplies (the BLAS geometry is `NO_DUPLICATE_ANY_HIT`, so each pane counts once; never
+  carry a shadow ray's result in `flags`, which the miss shader clears); a bounce through a pane is a null crossing for MIS (`misOrigin`, `lastPdf` kept). The radiance cache is
   never read at glass. **Deferred glass is traced** (`vfx/transparent_mesh.slang`): the fragment refracts into the
   solid, finds its own instance's far side with a ray query (`glassExit`, committing only its own non-opaque triangles;
   total internal reflection up to `kGlassBounces` 4), refracts out, finds the opaque surface the ray meets, projects it
@@ -600,12 +601,16 @@ deferred, reference, path traced); two the transparency scene,
   through glass it is in the refracted frame. **Orient a transparent pixel's normal by `cross(ddx(P), ddy(P))`, never
   `SV_IsFrontFace`.**
 - **Subsurface** (OpenPBR step 4, `docs/changes/2026-11-01-openpbr-step4.md`): `subsurface_weight` takes the dielectric's
-  diffuse slot. **The path tracer walks it** (`walkSubsurface`, lobe 5, `MaterialInputs.subsurfaceLocal` false in
-  `inputsOf`): each step's channel is drawn in proportion to the walk's throughput (spectral MIS, Cycles' scheme: the
+  diffuse slot. **The path tracer walks it** (lobe 5, `MaterialInputs.subsurfaceLocal` false in
+  `inputsOf`) as a mode of raygen's path loop (`walkSteps`): each step's channel is drawn in proportion to the walk's throughput (spectral MIS, Cycles' scheme: the
   scatter weight `albedo sigmaT tr / dot(p, sigmaT tr)`, the exit's `tr / dot(p, tr)`), roulette only once the largest
-  weight is under 1 (a white walk is never cut), rays from TMin 0 (`traceWalk`: a step must not pass the boundary
+  weight is under 1 (a white walk is never cut), rays from TMin 0 (a step must not pass the boundary
   unseen), at most `kWalkSteps` 1024 steps, then out along its direction. The exit is a Lambertian vertex: light and the
-  environment are sampled there by MIS. **Every other reader shades a local diffuse lobe** in `subsurface_color` (the
+  environment are sampled there by MIS, by the loop's own light sampling. **Raygen has one trace and one light and one
+  environment shadow ray**: every `TraceRay` site inlined into raygen spills its live state for every pixel, so a walk of
+  its own beside the loop made the whole tracer 8x slower on scenes without subsurface (213 ms against 27 on the helmet
+  room). A new feature in raygen reuses those sites; `OHAO_PIPELINE_STATS=1` logs raygen's stack (`raygen stack N bytes`),
+  the cost's measure (callable shaders cannot trace in Vulkan). **Every other reader shades a local diffuse lobe** in `subsurface_color` (the
   default), and the deferred frame's SSS pass spreads it by Burley's profile at the pixel's free path, read from material
   rows 15-16 through the layers target (`kMaterialRows` is 17). **The SSS pass blurs the diffuse alone:** lighting writes
   a second target for subsurface pixels (`SV_Target1`, `R32G32B32A32_UINT`: the diffuse irradiance as fp16, a mask, the

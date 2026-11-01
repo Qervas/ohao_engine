@@ -242,7 +242,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     VkAccelerationStructureGeometryKHR geometry{};
     geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR | VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;  // anyHit multiplies panes' transmission once each
     geometry.geometry.triangles = triangles;
 
     uint32_t primitiveCount = indexCount / 3;
@@ -394,7 +394,7 @@ uint32_t RTAccelerationStructure::recordBlasUpdates(VkCommandBuffer cmd, std::sp
         VkAccelerationStructureGeometryKHR geometry{};
         geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR | VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;  // anyHit multiplies panes' transmission once each
         geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         geometry.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
         geometry.geometry.triangles.vertexData.deviceAddress = vertices;

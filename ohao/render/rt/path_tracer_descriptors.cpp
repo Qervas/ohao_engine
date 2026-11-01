@@ -79,7 +79,7 @@ bool PathTracer::createDescriptorResources() {
     add(26, IMAGE, RGEN);   // normal+roughness packed AOV — Sub-plan 4.B
     add(36, BUFFER, HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
     add(37, BUFFER, HIT);   // instance material refs
-    add(38, BUFFER, RGEN);  // OpenPBR's energy tables (rt/path_tracer.slang)
+    add(38, BUFFER, RGEN | HIT);  // OpenPBR's energy tables (rt/path_tracer.slang; anyHit: a pane's transmission)
     add(39, BUFFER, RGEN);  // the radiance cache: keys,
     add(40, BUFFER, RGEN);  // this frame's sums,
     add(41, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)

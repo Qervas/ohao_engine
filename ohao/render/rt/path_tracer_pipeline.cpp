@@ -4,6 +4,7 @@
 
 #include "path_tracer.hpp"
 #include "pipeline_disk_cache.hpp"
+#include "render/rt/rt_compute.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -160,6 +161,7 @@ bool PathTracer::createRTPipeline() {
     pipelineInfo.pGroups = groups;
     pipelineInfo.maxPipelineRayRecursionDepth = 2;  // path tracing needs bounce recursion
     pipelineInfo.layout = m_pipelineLayout;
+    if (rtc::pipelineStats()) pipelineInfo.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
 
     // Minutes cold: kept in a file so the next process (a headless host beside a window) loads it.
     PipelineDiskCache cache;
@@ -180,6 +182,16 @@ bool PathTracer::createRTPipeline() {
         return false;
     }
 
+    if (rtc::pipelineStats()) {
+        // The driver may report no executables for a ray tracing pipeline (NVIDIA's does not); the
+        // raygen group's stack is what raygen's live state spills across each trace.
+        rtc::logPipelineStats(m_device, m_rtPipeline, "path_tracer");
+        const auto stackSize = reinterpret_cast<PFN_vkGetRayTracingShaderGroupStackSizeKHR>(
+            vkGetDeviceProcAddr(m_device, "vkGetRayTracingShaderGroupStackSizeKHR"));
+        const VkDeviceSize raygenStack =
+            stackSize ? stackSize(m_device, m_rtPipeline, 0, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
+        OHAO_LOG(Info, render, "pipeline stats path_tracer: raygen stack {} bytes", raygenStack);
+    }
     OHAO_LOG(Debug, render, "PathTracer: RT pipeline created");
     return true;
 }

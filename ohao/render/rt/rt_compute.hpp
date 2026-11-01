@@ -43,6 +43,10 @@ void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelin
 // for it (registers, shared memory, ...) on the render channel. A kernel's occupancy is not in any
 // timing; this is how to see it.
 void setPipelineStats(bool enabled) noexcept;
+bool pipelineStats() noexcept;
+// Logs `pipeline`'s statistics, one line per executable (a ray tracing pipeline has one per stage),
+// named `name`. The pipeline must have been created with VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR.
+void logPipelineStats(VkDevice device, VkPipeline pipeline, const char* name);
 
 // A compute pipeline of `entry` in bin/shaders/<spirv>, one descriptor set, `pushBytes` of
 // push constants. Logs and returns false when the SPIR-V is missing or creation fails.
