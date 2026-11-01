@@ -10,6 +10,10 @@
 //   row 10  fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation (turns), 0
 //   row 11  the coat's texture, the coat roughness's, the fuzz colour's, the fuzz roughness's (indices;
 //           0xFFFFFFFF none)
+//   row 12  transmission_color.rgb, transmission_weight                        (step 3)
+//   row 13  transmission_depth, geometry_thin_walled, transmission_dispersion_scale,
+//           transmission_dispersion_abbe_number (the volume and dispersion: the path tracer's)
+//   row 14  thin_film_weight, thin_film_thickness, thin_film_ior, 0
 import material.openpbr;
 
 public static const uint kLayerRowFirst = 7u;
@@ -47,6 +51,20 @@ public void applyLayerRows<T : IMaterialTextures>(inout MaterialInputs m, float4
         if (t.z < 4096u) m.fuzzColor *= tex.sample(t.z, uv).rgb;
         if (t.w < 4096u) m.fuzzRoughness *= tex.sample(t.w, uv).a;
     }
+}
+
+// Step 3's rows 12-14 into m: transmission, thin-walled, the thin film. (The volume's depth and
+// dispersion are not MaterialInputs: the path tracer reads them from row 13 itself.)
+public static const uint kTransmissionRowFirst = 12u;
+
+public void applyTransmissionRows(inout MaterialInputs m, float4 r12, float4 r13, float4 r14)
+{
+    m.transmissionColor = r13.x > 0.0 ? float3(1.0) : r12.rgb;   // at a depth the volume absorbs instead
+    m.transmissionWeight = r12.w;
+    m.thinWalled = r13.y > 0.5;
+    m.thinFilmWeight = r14.x;
+    m.thinFilmThickness = r14.y;
+    m.thinFilmIor = r14.z;
 }
 
 // The anisotropic lobes' tangent: the mesh's tangent T (unit, in the plane of N) turned about N by

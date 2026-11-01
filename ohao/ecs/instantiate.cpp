@@ -104,6 +104,15 @@ render::MaterialDesc describe(const Material& o) {
     d.fuzzColor = o.fuzzColor;
     d.fuzzRoughness = o.fuzzRoughness;
     d.tangentRotation = o.geometryTangentRotation;
+    d.transmissionWeight = o.transmissionWeight;
+    d.transmissionColor = o.transmissionColor;
+    d.transmissionDepth = o.transmissionDepth;
+    d.dispersionScale = o.transmissionDispersionScale;
+    d.dispersionAbbe = o.transmissionDispersionAbbeNumber;
+    d.thinWalled = o.geometryThinWalled;
+    d.thinFilmWeight = o.thinFilmWeight;
+    d.thinFilmThickness = o.thinFilmThickness;
+    d.thinFilmIor = o.thinFilmIor;
     return d;
 }
 
@@ -240,7 +249,10 @@ private:
                                 static_cast<float>(d.alphaMode), d.opacity, d.specularAnisotropy, d.coatWeight,
                                 d.coatColor.r, d.coatColor.g, d.coatColor.b, d.coatRoughness, d.coatAnisotropy,
                                 d.coatIor, d.coatDarkening, d.fuzzWeight, d.fuzzColor.r, d.fuzzColor.g,
-                                d.fuzzColor.b, d.fuzzRoughness, d.tangentRotation};
+                                d.fuzzColor.b, d.fuzzRoughness, d.tangentRotation, d.transmissionWeight,
+                                d.transmissionColor.r, d.transmissionColor.g, d.transmissionColor.b,
+                                d.transmissionDepth, d.dispersionScale, d.dispersionAbbe,
+                                d.thinWalled ? 1.0f : 0.0f, d.thinFilmWeight, d.thinFilmThickness, d.thinFilmIor};
         static_assert(std::size(values) == std::tuple_size_v<MaterialKey>, "a key holds every value");
         MaterialKey key{};
         for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);
@@ -286,7 +298,7 @@ private:
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
-    using MaterialKey = std::array<uint32_t, 34>;   // material()'s values, one each
+    using MaterialKey = std::array<uint32_t, 45>;   // material()'s values, one each
     std::map<MaterialKey, render::MaterialHandle> m_materials;
     std::vector<entt::entity> m_sourceGone, m_overrideGone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;

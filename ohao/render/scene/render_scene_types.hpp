@@ -110,6 +110,17 @@ struct MaterialDesc {
     uint32_t coatRoughnessTex{kNoTexture};   // G: coat_roughness
     uint32_t fuzzColorTex{kNoTexture};       // RGB: fuzz_color (sRGB)
     uint32_t fuzzRoughnessTex{kNoTexture};   // A: fuzz_roughness
+    // OpenPBR step 3 (table rows 12-14; material/material_layers.slang applyTransmissionRows):
+    // transmission, its volume and dispersion, thin-walled, the thin film.
+    float transmissionWeight{0.0f};
+    glm::vec3 transmissionColor{1.0f};
+    float transmissionDepth{0.0f};
+    float dispersionScale{0.0f};
+    float dispersionAbbe{20.0f};
+    bool thinWalled{false};
+    float thinFilmWeight{0.0f};
+    float thinFilmThickness{0.5f};   // micrometres
+    float thinFilmIor{1.4f};
 };
 
 struct InstanceDesc {

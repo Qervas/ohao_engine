@@ -403,6 +403,9 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     model->materialRoughMetalTexIndex.resize(numMats, -1);
     model->materialEmissiveTexIndex.resize(numMats, -1);
     model->materialOcclusionTexIndex.resize(numMats, -1);
+    model->materialTransmission.resize(numMats, 0.0f);
+    model->materialTransmissionColor.resize(numMats, glm::vec3(1.0f));
+    model->materialTransmissionDepth.resize(numMats, 0.0f);
     model->materialCoatTexIndex.resize(numMats, -1);
     model->materialCoatRoughnessTexIndex.resize(numMats, -1);
     model->materialFuzzColorTexIndex.resize(numMats, -1);
@@ -467,6 +470,16 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
                 loadAssimpTexture(scene, mat, aiTextureType_CLEARCOAT, modelDir, model->coatTextures, 0);
             model->materialCoatRoughnessTexIndex[m] =
                 loadAssimpTexture(scene, mat, aiTextureType_CLEARCOAT, modelDir, model->coatRoughnessTextures, 1);
+        }
+        if (float tr = 0.0f; mat->Get(AI_MATKEY_TRANSMISSION_FACTOR, tr) == aiReturn_SUCCESS) {
+            model->materialTransmission[m] = tr;
+            aiColor3D att(1.0f, 1.0f, 1.0f);
+            float dist = 0.0f;
+            if (mat->Get(AI_MATKEY_VOLUME_ATTENUATION_COLOR, att) == aiReturn_SUCCESS &&
+                mat->Get(AI_MATKEY_VOLUME_ATTENUATION_DISTANCE, dist) == aiReturn_SUCCESS && std::isfinite(dist) && dist > 0.0f) {
+                model->materialTransmissionColor[m] = glm::vec3(att.r, att.g, att.b);
+                model->materialTransmissionDepth[m] = dist;
+            }
         }
         if (aiColor3D sheen(0.0f, 0.0f, 0.0f); mat->Get(AI_MATKEY_SHEEN_COLOR_FACTOR, sheen) == aiReturn_SUCCESS) {
             model->materialFuzzColor[m] = glm::vec3(sheen.r, sheen.g, sheen.b);

@@ -150,7 +150,8 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     if (m_rayQuery && m_textureManager) {
         m_vfx = std::make_unique<VfxRenderer>();
         if (!m_vfx->initialize(device, physicalDevice, textures, m_gbufferPass->sceneSetLayout()) ||
-            !m_vfx->resize(m_width, m_height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView())) {
+            !m_vfx->resize(m_width, m_height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView(),
+                           m_lightingPass->getOutputImage())) {
             OHAO_LOG(Warn, render, "DeferredRenderer: VfxRenderer failed (no effects or blended surfaces drawn)");
             m_vfx.reset();
         }
@@ -648,7 +649,8 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 
     // The transparent pass draws into the new lit image against the new depth.
     if (m_vfx && m_lightingPass && m_gbufferPass &&
-        !m_vfx->resize(width, height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView()))
+        !m_vfx->resize(width, height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView(),
+                           m_lightingPass->getOutputImage()))
         OHAO_LOG(Error, render, "DeferredRenderer: the transparent pass's targets failed at {}x{}", width, height);
     if (m_decals && m_gbufferPass &&
         !m_decals->resize(width, height, m_gbufferPass->getAlbedoView(), m_gbufferPass->getNormalView(),

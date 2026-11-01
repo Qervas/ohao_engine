@@ -150,6 +150,11 @@ std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const
                 mats[i].coatIor = 1.5f;        // glTF's clearcoat: IOR 1.5, no darkening
                 mats[i].coatDarkening = 0.0f;
             }
+            if (i < model.materialTransmission.size() && model.materialTransmission[i] > 0.0f) {
+                mats[i].transmissionWeight = model.materialTransmission[i];
+                mats[i].transmissionColor = model.materialTransmissionColor[i];
+                mats[i].transmissionDepth = model.materialTransmissionDepth[i];
+            }
             if (i < model.materialFuzzColor.size() && glm::any(glm::greaterThan(model.materialFuzzColor[i], glm::vec3(0.0f)))) {
                 mats[i].fuzzWeight = 1.0f;
                 mats[i].fuzzColor = model.materialFuzzColor[i];

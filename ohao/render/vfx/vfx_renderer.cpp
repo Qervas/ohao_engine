@@ -204,6 +204,7 @@ void VfxRenderer::destroySizeResources() {
     if (m_framebuffer) vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
     m_framebuffer = VK_NULL_HANDLE;
     rtc::destroyImage(m_device, m_mask);
+    rtc::destroyImage(m_device, m_refraction);
 }
 
 bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetLayout gbufferScene) {
@@ -225,11 +226,12 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
         rtc::layoutBinding(0, kStorage, kDraw), rtc::layoutBinding(1, kStorage, kDraw),
         rtc::layoutBinding(2, kStorage, kDraw), rtc::layoutBinding(3, kSampled, kDraw),
     }};
-    const std::array<VkDescriptorSetLayoutBinding, 8> forward{{
+    const std::array<VkDescriptorSetLayoutBinding, 9> forward{{
         rtc::layoutBinding(0, kStorage, kFrag), rtc::layoutBinding(1, kStorage, kFrag),
         rtc::layoutBinding(2, kSampled, kFrag), rtc::layoutBinding(3, kSampled, kFrag),
         rtc::layoutBinding(4, kSampler, kFrag), rtc::layoutBinding(5, kTlas, kFrag),
         rtc::layoutBinding(6, kSampled, kFrag), rtc::layoutBinding(7, kStorage, kFrag),   // 7: OpenPBR's tables
+        rtc::layoutBinding(8, kSampled, kFrag),                                           // 8: the refraction source
     }};
     m_expandLayout = makeLayout(m_device, expand, 6);
     m_sortLayout = makeLayout(m_device, sort);
@@ -239,7 +241,7 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
 
     constexpr uint32_t n = MAX_FRAMES_IN_FLIGHT;
     const std::array<VkDescriptorPoolSize, 4> sizes{{
-        {kStorage, 15 * n}, {kSampled, 6 * n}, {kSampler, 2 * n}, {kTlas, 2 * n},
+        {kStorage, 15 * n}, {kSampled, 7 * n}, {kSampler, 2 * n}, {kTlas, 2 * n},
     }};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -484,15 +486,18 @@ bool VfxRenderer::createPipelines() {
     return ok;
 }
 
-bool VfxRenderer::resize(uint32_t width, uint32_t height, VkImageView hdr, VkImageView depth) {
+bool VfxRenderer::resize(uint32_t width, uint32_t height, VkImageView hdr, VkImageView depth, VkImage hdrImage) {
     if (m_renderPass == VK_NULL_HANDLE) return false;
     destroySizeResources();
     m_width = std::max(width, 1u);
     m_height = std::max(height, 1u);
     m_hdrView = hdr;
     m_depthView = depth;
+    m_hdrImage = hdrImage;
     if (!rtc::createImage(m_device, m_physical, m_mask, kMaskFormat,
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height))
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height) ||
+        !rtc::createImage(m_device, m_physical, m_refraction, kHdrFormat,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height))
         return false;
     const std::array<VkImageView, 3> views{hdr, m_mask.view, depth};
     VkFramebufferCreateInfo fi{};
@@ -734,6 +739,8 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting) {
                                             lighting.envPrefiltered ? lighting.envPrefiltered : m_dummy.view, kReadOnly};
     const VkDescriptorImageInfo sampler{m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     const VkDescriptorImageInfo gi{VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance : m_dummy.view, kReadOnly};
+    const VkDescriptorImageInfo refraction{VK_NULL_HANDLE,
+                                           m_refraction.layout == kReadOnly ? m_refraction.view : m_dummy.view, kReadOnly};
     VkWriteDescriptorSetAccelerationStructureKHR as{};
     as.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     as.accelerationStructureCount = 1;
@@ -758,6 +765,8 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting) {
     w.back().pImageInfo = &gi;
     w.push_back(rtc::descriptorWrite(s.forwardSet, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
     w.back().pBufferInfo = &tables;
+    w.push_back(rtc::descriptorWrite(s.forwardSet, 8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
+    w.back().pImageInfo = &refraction;
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
 
@@ -854,6 +863,43 @@ void VfxRenderer::sort(VkCommandBuffer cmd, uint32_t slot) {
                          nullptr, 0, nullptr);
 }
 
+// The lit frame as it is before the transparent pass, into m_refraction: what glass refracts. The
+// lit image waits between its writers (lighting, SSS) and this pass in the read-only layout.
+void VfxRenderer::copyRefraction(VkCommandBuffer cmd) {
+    if (m_hdrImage == VK_NULL_HANDLE || m_refraction.image == VK_NULL_HANDLE) return;
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toSrc.oldLayout = kReadOnly;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.srcQueueFamilyIndex = toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toSrc.image = m_hdrImage;
+    toSrc.subresourceRange = range;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+    rtc::transition(cmd, m_refraction, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, true);
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = region.srcSubresource;
+    region.extent = {m_width, m_height, 1};
+    vkCmdCopyImage(cmd, m_hdrImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_refraction.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    VkImageMemoryBarrier back = toSrc;
+    back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    back.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    back.newLayout = kReadOnly;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &back);
+    rtc::transition(cmd, m_refraction, kReadOnly, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, false);
+}
+
 void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const render::RenderScene& scene,
                                   const Lighting& lighting, VkDescriptorSet textures, VkDescriptorSet gbufferScene) {
     if (m_objects.empty() || slot >= m_slots.size() || m_framebuffer == VK_NULL_HANDLE) return;
@@ -875,7 +921,10 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
         w[3].pImageInfo = &depth;
         vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
     }
-    if (meshes) writeForwardSet(slot, lighting);
+    if (meshes) {
+        copyRefraction(cmd);
+        writeForwardSet(slot, lighting);
+    }
 
     std::array<VkClearValue, 3> clears{};
     VkRenderPassBeginInfo rb{};
@@ -906,6 +955,7 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
     fp.screen = {static_cast<float>(m_width), static_cast<float>(m_height), lighting.sliceScale, lighting.sliceBias};
     fp.config = {lighting.lightCount, flags, 0u, 0u};
     fp.env = {lighting.envIntensity, 0.0f, 0.0f, 0.0f};
+    copyMatrix(fp.proj, m_view.proj);
 
     const auto draws = scene.draws();
     enum class Bound { None, Particles, Meshes, Tracers } bound = Bound::None;

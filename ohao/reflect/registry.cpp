@@ -7,10 +7,11 @@
 namespace ohao::reflect {
 
 namespace {
-constexpr std::array<std::string_view, 20> kUnits = {
+constexpr std::array<std::string_view, 21> kUnits = {
     "m", "m/s", "m/s2", "rad", "rad/s", "deg", "deg/s", "s", "kg", "N", "px",
     "linear-rgb", "srgb", "lux", "cd", "lm", "nits", "ratio", "Hz",
     "EV",   // exposure value at ISO 100 (a camera's EV100)
+    "um",   // micrometres (OpenPBR's thin_film_thickness)
 };
 } // namespace
 

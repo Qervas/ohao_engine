@@ -64,6 +64,19 @@ bool alphaHit(uint slot, uint primitive, float2 bary)
     const uint material = triSlot < info.z ? atMaterialRefs[info.y + triSlot] : 0u;
     const float4 row3 = atMaterials[material * kMaterialRows + 3u];   // mode, cutoff, opacity, base alpha
     const uint mode = uint(row3.x + 0.5);
+    // Glass (OpenPBR step 3, ruling O10): a ray passes it with the chance of its transmittance,
+    // T (1 - F0) x transmission_color's luminance, by a hash of where it crosses (a dither RT
+    // direct light's and GI's denoisers spread into a soft, partial shadow); no caustics.
+    const float4 row12 = atMaterials[material * kMaterialRows + 12u];
+    if (row12.w > 0.0 && atMaterials[material * kMaterialRows + 1u].y < 1.0)
+    {
+        const float pass = row12.w * 0.96 * dot(row12.rgb, float3(0.2126, 0.7152, 0.0722));
+        uint h = asuint(bary.x) * 747796405u ^ asuint(bary.y) * 2891336453u ^ primitive * 277803737u ^ slot;
+        h ^= h >> 16u;
+        h *= 2246822519u;
+        h ^= h >> 13u;
+        return float(h >> 8u) * (1.0 / 16777216.0) >= pass;
+    }
     if (mode == kAlphaOpaque) return true;
     if (mode == kAlphaBlend) return false;
     float alpha = row3.w * row3.z;
@@ -137,5 +150,7 @@ HitMaterial hitMaterial(uint slot, uint primitive, float2 bary)
     const uint r = m + kLayerRowFirst;
     applyLayerRows(h.inputs, atMaterials[r], atMaterials[r + 1u], atMaterials[r + 2u], atMaterials[r + 3u],
                    atMaterials[r + 4u], uv, tex);
+    const uint tr = m + kTransmissionRowFirst;
+    applyTransmissionRows(h.inputs, atMaterials[tr], atMaterials[tr + 1u], atMaterials[tr + 2u]);
     return h;
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 21e010456c0177b4. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash ed5476b497ae0478. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -719,6 +719,58 @@
           "description": "Turns the mesh's tangent about the normal, in turns: the direction anisotropy stretches along",
           "default": 0,
           "allOf": [{ "type": "number" }]
+        },
+        "transmission_weight": {
+          "description": "How much of the dielectric refracts instead of scattering diffusely (glass, water): 0 = opaque",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "transmission_color": {
+          "description": "The refracted light's colour: at the surface when transmission_depth is 0, else the colour light has after travelling transmission_depth inside",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "transmission_depth": {
+          "description": "The distance inside at which light has transmission_color (Beer-Lambert absorption): 0 = none",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "transmission_dispersion_scale": {
+          "description": "Scales dispersion (the IOR changing with wavelength): 0 = none, 1 = the Abbe number's",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "transmission_dispersion_abbe_number": {
+          "description": "The glass's Abbe number: lower disperses more (flint ~30, crown ~60)",
+          "default": 20,
+          "allOf": [{ "type": "number", "minimum": 9, "maximum": 91 }]
+        },
+        "geometry_thin_walled": {
+          "description": "A thin slab with no inside (a window, a soap bubble, a leaf): refraction passes straight through",
+          "default": false,
+          "allOf": [{ "type": "boolean" }]
+        },
+        "thin_film_weight": {
+          "description": "A thin film's coverage over the base (oil on water, soap, anodised metal): 0 = none",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "thin_film_thickness": {
+          "description": "The film's thickness: its interference colours",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 2 }]
+        },
+        "thin_film_ior": {
+          "description": "The film's index of refraction",
+          "default": 1.4,
+          "allOf": [{ "type": "number", "minimum": 1, "maximum": 3 }]
         }
       },
       "additionalProperties": false

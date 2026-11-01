@@ -15,6 +15,11 @@
 //               single-scatter albedo there (OpenPBR's alpha mapping); every table above is read at
 //               it, so an anisotropic lobe is compensated as an isotropic one is
 //   AnisoE1Avg  [aniso][rough], 8 x 16: the cosine-weighted average of E1 read at AnisoRough
+//   EssT        [n][rough][mu], EssD's mu and roughness, 32 points of n in [1, 3]: the refraction's single-scatter albedo
+//               entering a dielectric of relative IOR n, exact Fresnel (1 - F)
+//   EssDIn      the same grid: the reflection's leaving it (relative IOR 1 / n; total internal
+//               reflection included)
+//   EssTIn      the same grid: the refraction's leaving it
 //   AnisoS56    [aniso][rough][mu][phi][2], AnisoRough's grid: the anisotropic lobe's S5 and S6
 //               (single scatter weighted by (1 - c)^5 and c (1 - c)^6), interleaved. With E1 at
 //               AnisoRough they make an F82 metal's albedo exact; a dielectric's is corrected by
@@ -47,6 +52,7 @@ constexpr unsigned kDMu = 16, kDRough = 16, kDEta = 16;
 constexpr float kEtaMax = 3.0f;
 constexpr float kLowEtaSpan = 0.3f;
 constexpr unsigned kAA = 8, kAR = 16, kAM = 16, kAP = 8;
+constexpr unsigned kGEta = 32;   // the glass tables' IOR points
 constexpr unsigned kAnisoSamples = 1u << 11;
 constexpr float kMinRough = 0.01f;
 constexpr float kMinMu = 1e-3f;
@@ -227,7 +233,37 @@ std::vector<float> build() {
             anisoE1Avg[a * kAR + r] = static_cast<float>(2.0 * sum / (kStepsMu * kStepsPhi));
         }
     std::vector<float> all;
-    for (const auto* t : {&e1, &s5, &s6, &e1Avg, &favg, &essD, &essDLow, &anisoRough, &anisoE1Avg, &anisoS56})
+    // Step 3: the glass's interface from both sides (op 8: refraction and reflection through the
+    // same visible normals; op 4's dielectric weight for the reflection inside, as EssD's).
+    auto glass = [&](float mu, float rough, float eta) {
+        mu = std::max(mu, kMinMu);
+        rough = std::max(rough, kMinRough);
+        std::vector<Item> items(kDielSamples);
+        const float s = std::sqrt(std::max(0.0f, 1.0f - mu * mu));
+        for (unsigned k = 0; k < kDielSamples; ++k) {
+            Item& it = items[k];
+            it.op = Op::Glass;
+            it.material.specularRoughness = rough;
+            it.wo = {s, 0.0f, mu};
+            it.v = {(static_cast<float>(k) + 0.5f) / static_cast<float>(kDielSamples), radicalInverse(k), eta};
+        }
+        ohao::material::run(items, {});
+        double t = 0.0;
+        for (const Item& it : items) t += it.r0[0];
+        return t / kDielSamples;
+    };
+    std::vector<float> essT(kDMu * kDRough * kGEta), essDIn(kDMu * kDRough * kGEta), essTIn(kDMu * kDRough * kGEta);
+    for (unsigned e = 0; e < kGEta; ++e)
+        for (unsigned r = 0; r < kDRough; ++r)
+            for (unsigned m = 0; m < kDMu; ++m) {
+                const float n = 1.0f + (kEtaMax - 1.0f) * gridAt(e, kGEta);
+                const unsigned i = (e * kDRough + r) * kDMu + m;
+                essT[i] = static_cast<float>(glass(muAt(m, kDMu), gridAt(r, kDRough), n));
+                essTIn[i] = static_cast<float>(glass(muAt(m, kDMu), gridAt(r, kDRough), 1.0f / n));
+                essDIn[i] = static_cast<float>(integrate(muAt(m, kDMu), gridAt(r, kDRough), 1.0f / n, kDielSamples)[3]);
+            }
+    for (const auto* t : {&e1, &s5, &s6, &e1Avg, &favg, &essD, &essDLow, &anisoRough, &anisoE1Avg, &anisoS56, &essT,
+                          &essDIn, &essTIn})
         all.insert(all.end(), t->begin(), t->end());
     return all;
 }

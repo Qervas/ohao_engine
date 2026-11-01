@@ -55,9 +55,11 @@ public:
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkDescriptorSetLayout textures,
                                   VkDescriptorSetLayout gbufferScene);
     void cleanup();
+    void copyRefraction(VkCommandBuffer cmd);
     // The frame's size and the images the pass draws into: the lit HDR image (RGBA16F) and the
     // G-buffer's depth (D32). Rebuilds the mask and the framebuffer; the device must be idle.
-    [[nodiscard]] bool resize(uint32_t width, uint32_t height, VkImageView hdr, VkImageView depth);
+    // `hdrImage` is the lit image's VkImage (`hdr` its view): glass refracts a copy of it.
+    [[nodiscard]] bool resize(uint32_t width, uint32_t height, VkImageView hdr, VkImageView depth, VkImage hdrImage);
 
     struct View {
         glm::mat4 view{1.0f};
@@ -136,6 +138,10 @@ private:
     VkPhysicalDevice m_physical{VK_NULL_HANDLE};
     uint32_t m_width{0}, m_height{0};
     VkImageView m_hdrView{VK_NULL_HANDLE}, m_depthView{VK_NULL_HANDLE};
+    VkImage m_hdrImage{VK_NULL_HANDLE};
+    // OpenPBR step 3: the lit frame before the transparent pass (RGBA16F, the frame's size), copied
+    // when a blended mesh draws: what glass refracts (forward set binding 8).
+    rtc::Image m_refraction;
 
     bool m_particlesEnabled{true}, m_softEnabled{true}, m_tracersEnabled{true};   // render.settings vfx
     rtc::HostBuffer m_particles, m_order;   // kVfx caps: one set of slots, fenced by queue order

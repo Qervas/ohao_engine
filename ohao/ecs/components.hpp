@@ -151,6 +151,16 @@ struct Material {
     glm::vec3 fuzzColor{1.0f};          // fuzz_color
     float fuzzRoughness{0.5f};          // fuzz_roughness
     float geometryTangentRotation{0.0f};   // geometry_tangent_rotation (turns; ruling O9)
+    // OpenPBR step 3: transmission, its volume and dispersion, thin-walled, the thin film.
+    float transmissionWeight{0.0f};     // transmission_weight
+    glm::vec3 transmissionColor{1.0f};  // transmission_color
+    float transmissionDepth{0.0f};      // transmission_depth (m; 0: the colour tints the surface)
+    float transmissionDispersionScale{0.0f};        // transmission_dispersion_scale
+    float transmissionDispersionAbbeNumber{20.0f};  // transmission_dispersion_abbe_number
+    bool geometryThinWalled{false};     // geometry_thin_walled
+    float thinFilmWeight{0.0f};         // thin_film_weight
+    float thinFilmThickness{0.5f};      // thin_film_thickness (micrometres)
+    float thinFilmIor{1.4f};            // thin_film_ior
 };
 
 // Instantiate's bookkeeping: tagged when MeshSource/Material change; the error

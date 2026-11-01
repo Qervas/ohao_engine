@@ -52,7 +52,15 @@ static const uint kPbrAnisoPhi = 8u;       // phi over [0, pi/2] from the tangen
 static const uint kPbrOffAnisoRough = kPbrOffEssDLow + kPbrDielMu * kPbrDielRough * kPbrDielEta;
 static const uint kPbrOffAnisoE1Avg = kPbrOffAnisoRough + kPbrAnisoA * kPbrAnisoRough * kPbrAnisoMu * kPbrAnisoPhi;
 static const uint kPbrOffAnisoS56 = kPbrOffAnisoE1Avg + kPbrAnisoA * kPbrAnisoRough;   // AnisoRough's grid x 2
-static const uint kPbrTableFloats = kPbrOffAnisoS56 + 2u * kPbrAnisoA * kPbrAnisoRough * kPbrAnisoMu * kPbrAnisoPhi;
+static const uint kPbrOffEssT = kPbrOffAnisoS56 + 2u * kPbrAnisoA * kPbrAnisoRough * kPbrAnisoMu * kPbrAnisoPhi;
+// Step 3 (transmission), each [n][rough][mu] on EssD's mu and roughness axes with 32 points of n over
+// [1, kPbrEtaMax] (16 left glass at IOR 1.33, between two, 1.1% dark seen from inside): the
+// refraction's single-scatter albedo entering (EssT, relative IOR n), and leaving (relative 1 / n)
+// the reflection's (EssDIn) and the refraction's (EssTIn).
+static const uint kPbrGlassEta = 32u;
+static const uint kPbrOffEssDIn = kPbrOffEssT + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
+static const uint kPbrOffEssTIn = kPbrOffEssDIn + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
+static const uint kPbrTableFloats = kPbrOffEssTIn + kPbrDielMu * kPbrDielRough * kPbrGlassEta;
 // EssDLow's eta axis: 1 + kPbrLowEtaSpan g^2 over the grid g, below which EssD is read from it (a
 // base under a coat sees an IOR near 1, where grazing Fresnel changes fastest).
 static const float kPbrLowEtaSpan = 0.3;
@@ -121,6 +129,29 @@ struct OpenPBRTables
         }
         return lerp(v[0], v[1], fe);
     }
+
+    // A [n][rough][mu] table at offset off, n the IOR in [1, kPbrEtaMax] over kPbrGlassEta points (step 3's
+    // EssT, EssDIn, EssTIn), trilinear.
+    float glass(uint off, float mu, float rough, float n)
+    {
+        uint im, ir, ie;
+        float fm, fr, fe;
+        pbrGridCoord(sqrt(saturate(mu)), kPbrDielMu, im, fm);
+        pbrGridCoord(rough, kPbrDielRough, ir, fr);
+        pbrGridCoord((n - 1.0) / (kPbrEtaMax - 1.0), kPbrGlassEta, ie, fe);
+        float v[2];
+        [unroll]
+        for (uint k = 0u; k < 2u; ++k)
+        {
+            const uint e0 = off + (ie + k) * kPbrDielRough * kPbrDielMu;
+            const uint r0 = e0 + ir * kPbrDielMu, r1 = r0 + kPbrDielMu;
+            v[k] = lerp(lerp(data[r0 + im], data[r0 + im + 1u], fm), lerp(data[r1 + im], data[r1 + im + 1u], fm), fr);
+        }
+        return lerp(v[0], v[1], fe);
+    }
+    float EssT(float mu, float rough, float n) { return glass(kPbrOffEssT, mu, rough, n); }
+    float EssDIn(float mu, float rough, float n) { return glass(kPbrOffEssDIn, mu, rough, n); }
+    float EssTIn(float mu, float rough, float n) { return glass(kPbrOffEssTIn, mu, rough, n); }
 
     // The isotropic roughness whose E1 is an anisotropic GGX lobe's single-scatter albedo seen
     // from w (OpenPBR's alpha mapping of (rough, aniso)), quadrilinear: every table is read at it.
@@ -329,6 +360,144 @@ float ggxPdfBoundedAniso(float3 wo, float3 wi, float2 alpha)
         return ndf / (2.0 * (k * wo.z + t));
     }
     return ndf * (t - wo.z) / (2.0 * len2);
+}
+
+// ---- refraction (step 3) ---------------------------------------------------------------------
+// GGX with two alphas a (an isotropic lobe passes (alpha, alpha): the same D and Lambda), its
+// visible normals unbounded (refraction needs the normals bounded sampling leaves out), and
+// Walter et al. 2007's rough refraction. eta is the relative IOR, wi's side over wo's.
+
+float3 ggxSampleVisible(float3 wo, float2 alpha, float2 u)
+{
+    const float3 woStd = normalize(float3(wo.xy * alpha, wo.z));
+    const float phi = (2.0 * u.x - 1.0) * kPbrPi;
+    const float z = (1.0 - u.y) * (1.0 + woStd.z) - woStd.z;
+    const float sinTheta = sqrt(saturate(1.0 - z * z));
+    const float3 mStd = float3(sinTheta * cos(phi), sinTheta * sin(phi), z) + woStd;
+    return normalize(float3(mStd.xy * alpha, mStd.z));
+}
+
+// The density of m under ggxSampleVisible: G1(wo) max(0, wo.m) D(m) / wo.z.
+float ggxVisiblePdf(float3 wo, float3 m, float2 alpha)
+{
+    const float c = dot(wo, m);
+    if (!(c > 0.0) || !(wo.z > 0.0)) return 0.0;
+    return c * ggxDAniso(m, alpha) / ((1.0 + ggxLambdaAniso(wo, alpha)) * wo.z);
+}
+
+// wi refracted from wo through m (eta = n_wi / n_wo); false at total internal reflection.
+bool refractThrough(float3 wo, float3 m, float eta, out float3 wi)
+{
+    const float c = dot(wo, m);
+    const float s2 = (1.0 - c * c) / (eta * eta);
+    wi = float3(0.0, 0.0, -1.0);
+    if (s2 >= 1.0) return false;
+    wi = normalize(-wo / eta + (c / eta - sqrt(1.0 - s2)) * m);
+    return true;
+}
+
+// The refraction's half vector (toward wo's side), or 0 when wo and wi cannot be a refraction.
+float3 refractHalf(float3 wo, float3 wi, float eta)
+{
+    float3 h = wo + eta * wi;
+    const float l = length(h);
+    if (!(l > 1e-6)) return float3(0.0);
+    h /= l;
+    if (h.z < 0.0) h = -h;
+    if (!(dot(wo, h) > 0.0) || !(dot(wi, h) < 0.0)) return float3(0.0);
+    return h;
+}
+
+// Single-scatter refraction x |cos(wi)| (wo.z > 0 > wi.z), with (1 - F): Walter et al. 2007, in
+// the form whose integral over wi is the energy refracted (no eta^2 radiance scaling: it cancels
+// through a closed surface, and keeps the albedo at most 1).
+float ggxRefract(float3 wo, float3 wi, float2 alpha, float eta)
+{
+    const float3 h = refractHalf(wo, wi, eta);
+    if (!(h.z > 0.0)) return 0.0;
+    const float co = dot(wo, h), ci = dot(wi, h);
+    const float denom = co + eta * ci;
+    const float G2 = 1.0 / (1.0 + ggxLambdaAniso(wo, alpha) + ggxLambdaAniso(float3(wi.xy, -wi.z), alpha));
+    const float F = fresnelDielectric(co, eta);
+    return (1.0 - F) * ggxDAniso(h, alpha) * G2 * co * abs(ci) * eta * eta / (wo.z * denom * denom);
+}
+
+// The density of wi under refraction through ggxSampleVisible's normals.
+float ggxRefractPdf(float3 wo, float3 wi, float2 alpha, float eta)
+{
+    const float3 h = refractHalf(wo, wi, eta);
+    if (!(h.z > 0.0)) return 0.0;
+    const float denom = dot(wo, h) + eta * dot(wi, h);
+    return ggxVisiblePdf(wo, h, alpha) * eta * eta * abs(dot(wi, h)) / (denom * denom);
+}
+
+// Dispersion (OpenPBR): the IOR at wavelength lambda (nm) of a glass whose IOR at the d line is
+// nd, its Abbe number abbe / scale: n = nd + (nd - 1) / V (523655 / lambda^2 - 1.5168).
+float dispersedIor(float nd, float abbe, float scale, float lambda)
+{
+    if (!(scale > 0.0) || !(abbe > 0.0)) return nd;
+    const float V = abbe / scale;
+    return nd + (nd - 1.0) / V * (523655.0 / (lambda * lambda) - 1.5168);
+}
+
+// ---- the thin film (step 3) -------------------------------------------------------------------
+// Belcour & Barla 2017, "A Practical Extension to Microfacet Theory for the Modeling of Varying
+// Iridescence": the Airy reflectance of a film of IOR filmIor and thickness d (nm) between the
+// outside (IOR 1) and a base of normal-incidence reflectance F0, in RGB through their Gaussian fits
+// of the CIE colour matching functions (the paper's supplemental), two orders of the sum.
+
+float3 airySensitivity(float opd, float3 shift)
+{
+    const float phase = 2.0 * kPbrPi * opd * 1e-9;
+    const float3 val = float3(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    const float3 pos = float3(1.6810e6, 1.7953e6, 2.2084e6);
+    const float3 var = float3(4.3278e9, 9.3046e9, 6.6121e9);
+    float3 xyz = val * sqrt(2.0 * kPbrPi * var) * cos(pos * phase + shift) * exp(-phase * phase * var);
+    xyz.x += 9.7470e-14 * sqrt(2.0 * kPbrPi * 4.5282e9) * cos(2.2399e6 * phase + shift.x) * exp(-4.5282e9 * phase * phase);
+    xyz /= 1.0685e-7;
+    return float3(3.2404542 * xyz.x - 1.5371385 * xyz.y - 0.4985314 * xyz.z,
+                  -0.9692660 * xyz.x + 1.8760108 * xyz.y + 0.0415560 * xyz.z,
+                  0.0556434 * xyz.x - 0.2040259 * xyz.y + 1.0572252 * xyz.z);
+}
+
+float pbrIorToF0(float a, float b)
+{
+    const float r = (a - b) / (a + b);
+    return r * r;
+}
+
+float3 airyReflectance(float cosTheta1, float filmIor, float thickness, float3 baseF0)
+{
+    // A film thinner than 30 nm fades to none (its IOR toward the outside's).
+    const float n2 = lerp(1.0, filmIor, smoothstep(0.0, 30.0, thickness));
+    const float sin2 = (1.0 - cosTheta1 * cosTheta1) / (n2 * n2);
+    if (sin2 >= 1.0) return float3(1.0);
+    const float cosTheta2 = sqrt(1.0 - sin2);
+    const float R12 = fresnelDielectric(cosTheta1, n2);
+    const float T121 = 1.0 - R12;
+    const float phi12 = n2 < 1.0 ? kPbrPi : 0.0;
+    const float phi21 = kPbrPi - phi12;
+    const float3 f0 = clamp(baseF0, float3(0.0), float3(0.9999));
+    const float3 sf0 = sqrt(f0);
+    const float3 n3 = (1.0 + sf0) / (1.0 - sf0);   // the base's IOR from its F0
+    const float3 R1 = float3(pbrIorToF0(n3.x, n2), pbrIorToF0(n3.y, n2), pbrIorToF0(n3.z, n2));
+    const float m5 = pow(1.0 - cosTheta2, 5.0);
+    const float3 R23 = R1 + (1.0 - R1) * m5;
+    const float3 phi23 = float3(n3.x < n2 ? kPbrPi : 0.0, n3.y < n2 ? kPbrPi : 0.0, n3.z < n2 ? kPbrPi : 0.0);
+    const float opd = 2.0 * n2 * thickness * cosTheta2;
+    const float3 phi = phi21 + phi23;
+    const float3 R123 = clamp(R12 * R23, float3(1e-5), float3(0.9999));
+    const float3 r123 = sqrt(R123);
+    const float3 Rs = T121 * T121 * R23 / (1.0 - R123);
+    float3 I = R12 + Rs;
+    float3 Cm = Rs - T121;
+    [unroll]
+    for (uint m = 1u; m <= 2u; ++m)
+    {
+        Cm *= r123;
+        I += Cm * 2.0 * airySensitivity(float(m) * opd, float(m) * phi);
+    }
+    return max(I, float3(0.0));
 }
 
 // ---- Fresnel --------------------------------------------------------------------------------
@@ -553,6 +722,12 @@ struct MaterialInputs
     float fuzzWeight;           // fuzz_weight
     float3 fuzzColor;           // fuzz_color
     float fuzzRoughness;        // fuzz_roughness
+    float transmissionWeight;   // transmission_weight
+    float3 transmissionColor;   // transmission_color (at the surface; transmission_depth's volume is the path tracer's)
+    bool thinWalled;            // geometry_thin_walled
+    float thinFilmWeight;       // thin_film_weight
+    float thinFilmThickness;    // thin_film_thickness (micrometres)
+    float thinFilmIor;          // thin_film_ior
 };
 
 MaterialInputs defaultMaterialInputs()
@@ -576,6 +751,12 @@ MaterialInputs defaultMaterialInputs()
     m.fuzzWeight = 0.0;
     m.fuzzColor = float3(1.0);
     m.fuzzRoughness = 0.5;
+    m.transmissionWeight = 0.0;
+    m.transmissionColor = float3(1.0);
+    m.thinWalled = false;
+    m.thinFilmWeight = 0.0;
+    m.thinFilmThickness = 0.5;
+    m.thinFilmIor = 1.4;
     return m;
 }
 
@@ -585,7 +766,7 @@ float pbrLuminance(float3 c)
 }
 
 // What sample() returns: the direction, f cos / pdf, the pdf (0: no sample) and the lobe it
-// came from (0 the base's specular, 1 the diffuse, 2 the coat, 3 the fuzz).
+// came from (0 the base's specular, 1 the diffuse, 2 the coat, 3 the fuzz, 4 the transmission).
 struct BsdfSample
 {
     float3 wi;
@@ -610,6 +791,12 @@ struct OpenPBRBase
     float3 metalF0;      // specular_weight folded in below
     float3 metalB;
     float metalWeight;   // specular_weight on the metal
+    float transmission;  // transmission_weight (the dielectric's share that refracts instead of the diffuse)
+    float3 transTint;    // transmission_color, entering
+    bool thinWalled;     // geometry_thin_walled: a slab, refraction straight through
+    float film;          // thin_film_weight
+    float filmThickness; // nm
+    float filmIor;
 
     __init(MaterialInputs m)
     {
@@ -627,6 +814,30 @@ struct OpenPBRBase
         metalF0 = rho;
         metalB = f82B(metalF0, specColor);
         metalWeight = saturate(m.specularWeight);
+        transmission = saturate(m.transmissionWeight);
+        transTint = saturate(m.transmissionColor);
+        thinWalled = m.thinWalled;
+        film = saturate(m.thinFilmWeight);
+        filmThickness = max(m.thinFilmThickness, 0.0) * 1000.0;
+        filmIor = max(m.thinFilmIor, 1.0);
+    }
+
+    // Light passes through this surface (some of its dielectric refracts).
+    bool transmissive() { return transmission > 0.0 && metalness < 1.0; }
+
+    // The dielectric's Fresnel at c with the thin film lerped in.
+    float3 dielectricFresnel(float c)
+    {
+        const float F = fresnelDielectric(c, eta);
+        if (!(film > 0.0)) return float3(F);
+        return lerp(float3(F), airyReflectance(c, filmIor, filmThickness, float3(pbrIorToF0(eta, 1.0))), film);
+    }
+
+    float3 metalFresnel(float c)
+    {
+        const float3 F = fresnelF82(c, metalF0, metalB);
+        if (!(film > 0.0)) return F;
+        return lerp(F, airyReflectance(c, filmIor, filmThickness, metalF0), film);
     }
 
     // The metal's Fresnel average, F82's in closed form: F0 + (1 - F0) / 21 - b / 126.
@@ -662,7 +873,11 @@ struct OpenPBRBase
     {
         specular = float3(0.0);
         diffuse = float3(0.0);
-        if (wo.z <= 0.0 || wi.z <= 0.0) return;
+        if (wo.z <= 0.0 || wi.z <= 0.0)
+        {
+            if (transmissive()) specular = evalTransmission(wo, wi, t);
+            return;
+        }
         const float3 m = normalize(wo + wi);
         const float c = dot(wo, m);
         const float ss = anisotropy > 0.0 ? ggxSingleAniso(wo, wi, alphaXY) : ggxSingle(wo, wi, alpha * alpha);
@@ -670,22 +885,182 @@ struct OpenPBRBase
         const float e1Avg = pbrE1Avg(t, rough, anisotropy);
         if (metalness > 0.0)
         {
-            const float3 F = metalWeight * fresnelF82(c, metalF0, metalB);
+            const float3 F = metalWeight * metalFresnel(c);
             specular += metalness * (F * ss + msFresnel(metalFavg(), e1Avg) * ms);
         }
         if (metalness < 1.0)
         {
-            const float spec = fresnelDielectric(c, eta) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms;
-            specular += (1.0 - metalness) * specColor * spec;
-            diffuse = (1.0 - metalness) * (1.0 - dielectricAlbedo(wo.z, t)) * eonEval(rho, diffRough, wi, wo) * wi.z;
+            if (film > 0.0)
+                specular += (1.0 - metalness) * specColor
+                          * (dielectricFresnel(c) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms);
+            else
+            {
+                const float spec = fresnelDielectric(c, eta) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms;
+                specular += (1.0 - metalness) * specColor * spec;
+            }
+            diffuse = (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t))
+                    * eonEval(rho, diffRough, wi, wo) * wi.z;
         }
+    }
+
+    // ---- transmission (step 3) ----
+    // Seen from outside (wo.z > 0): the dielectric's (1 - metalness) x transmission share refracts
+    // what its reflection leaves, 1 - dielectricAlbedo(wo), spread over the refraction lobe by its
+    // single-scatter albedo (so a white glass passes all of it: Turquin 2019's scaling), tinted by
+    // transmission_color. From inside (wo.z < 0, solid): the interface at 1 / eta, its reflection
+    // single scatter (EssDIn) and its refraction everything else. Thin-walled: either side is the
+    // outside, and the refraction is the reflection lobe mirrored through the surface.
+
+    float3 flipZ(float3 v) { return float3(v.xy, -v.z); }
+
+    // E1 at the view's table roughness: the thin slab's lobe's albedo.
+    float thinE1(float3 wo, OpenPBRTables t) { return t.E1(wo.z, tableRough); }
+
+    float refractedShare(float3 wo, OpenPBRTables t)
+    {
+        return (1.0 - metalness) * transmission * (1.0 - dielectricAlbedo(wo.z, t));
+    }
+
+    float3 evalTransmission(float3 wo, float3 wi, OpenPBRTables t)
+    {
+        if (wo.z == 0.0 || wi.z == 0.0) return float3(0.0);
+        if (thinWalled)
+        {
+            const float3 o = wo.z > 0.0 ? wo : flipZ(wo);
+            const float3 i = wo.z > 0.0 ? wi : flipZ(wi);
+            if (i.z >= 0.0) return float3(0.0);   // the reflection is evalLobes' (after the flip)
+            const OpenPBRBase b = viewedFrom(o, t);
+            const float3 r = flipZ(i);
+            const float shape = anisotropy > 0.0 ? ggxSingleAniso(o, r, alphaXY) : ggxSingle(o, r, alpha * alpha);
+            return transTint * (b.refractedShare(o, t) / max(b.thinE1(o, t), 1e-4)) * shape;   // ggxSingle is f x cos already
+        }
+        if (wo.z > 0.0)
+        {
+            if (wi.z >= 0.0) return float3(0.0);
+            const OpenPBRBase b = viewedFrom(wo, t);
+            const float et = t.EssT(wo.z, b.tableRough, eta);
+            return transTint * (b.refractedShare(wo, t) / max(et, 1e-4)) * ggxRefract(wo, wi, alphaXY, eta);
+        }
+        // Inside a solid: the interface seen from below, at 1 / eta.
+        // Both lobes over their single-scatter sum: total internal reflection moves energy between
+        // them sharply with the view and the IOR, but not their sum, which interpolates cleanly
+        // (filling 1 - EssDIn with the refraction left rough glass 2% dark seen from inside).
+        const float3 o = flipZ(wo), i = flipZ(wi);
+        const float n = 1.0 / eta;
+        const float norm = 1.0 / max(insideSum(wo, t), 1e-4);
+        if (i.z > 0.0)
+        {
+            const float3 m = normalize(o + i);
+            const float ss = anisotropy > 0.0 ? ggxSingleAniso(o, i, alphaXY) : ggxSingle(o, i, alpha * alpha);
+            return float3(fresnelDielectric(dot(o, m), n) * ss * norm);
+        }
+        return float3(ggxRefract(o, i, alphaXY, n) * norm);
+    }
+
+    // Inside a solid: the single-scatter reflection and refraction toward wo (EssDIn + EssTIn).
+    float insideSum(float3 wo, OpenPBRTables t)
+    {
+        const float3 o = flipZ(wo);
+        const float r = viewedFrom(o, t).tableRough;
+        return t.EssDIn(o.z, r, eta) + t.EssTIn(o.z, r, eta);
+    }
+
+    // The refraction's albedo toward wo (outside): what passes, tinted.
+    float3 transmissionAlbedo(float3 wo, OpenPBRTables t)
+    {
+        if (!transmissive() || wo.z <= 0.0) return float3(0.0);
+        return transTint * refractedShare(wo, t);
+    }
+
+    // From inside a solid, reflection's share of what leaves (the chance of sampling it).
+    float insideReflection(float3 wo, OpenPBRTables t)
+    {
+        const float3 o = flipZ(wo);
+        const float r = viewedFrom(o, t).tableRough;
+        const float er = t.EssDIn(o.z, r, eta), et = t.EssTIn(o.z, r, eta);
+        return er + et > 0.0 ? saturate(er / (er + et)) : 1.0;
+    }
+
+    float pdfTransmissive(float3 wo, float3 wi, OpenPBRTables t)
+    {
+        if (wo.z == 0.0 || wi.z == 0.0) return 0.0;
+        if (!thinWalled && wo.z < 0.0)
+        {
+            const float3 o = flipZ(wo), i = flipZ(wi);
+            const float pr = insideReflection(wo, t);
+            return i.z > 0.0 ? pr * ggxPdfBoundedAniso(o, i, alphaXY) : (1.0 - pr) * ggxRefractPdf(o, i, alphaXY, 1.0 / eta);
+        }
+        const float3 o = wo.z > 0.0 ? wo : flipZ(wo);
+        const float3 i = wo.z > 0.0 ? wi : flipZ(wi);
+        const float3 s = transmissiveShares(o, t);
+        if (i.z > 0.0) return s.x * pdfSpecular(o, i) + s.y * eonPdf(o, i, diffRough);
+        return s.z * (thinWalled ? pdfSpecular(o, flipZ(i)) : ggxRefractPdf(o, i, alphaXY, eta));
+    }
+
+    // The chances of the reflection, the diffuse and the refraction from outside, by luminance.
+    float3 transmissiveShares(float3 wo, OpenPBRTables t)
+    {
+        const OpenPBRBase b = viewedFrom(wo, t);
+        const float r = pbrLuminance(b.specularAlbedo(wo, t));
+        const float d = pbrLuminance(b.diffuseAlbedo(wo, t));
+        const float tr = pbrLuminance(b.transmissionAlbedo(wo, t));
+        const float total = r + d + tr;
+        return total > 0.0 ? float3(r, d, tr) / total : float3(0.0, 0.0, 1.0);
+    }
+
+    BsdfSample sampleTransmissive(float3 wo, float3 u, OpenPBRTables t)
+    {
+        BsdfSample s;
+        s.wi = float3(0.0, 0.0, 1.0);
+        s.weight = float3(0.0);
+        s.pdf = 0.0;
+        s.lobe = 0u;
+        if (wo.z == 0.0) return s;
+        const bool inside = !thinWalled && wo.z < 0.0;
+        const bool flip = wo.z < 0.0;
+        const float3 o = flip ? flipZ(wo) : wo;
+        float3 i;
+        if (inside)
+        {
+            const float pr = insideReflection(wo, t);
+            if (u.x < pr) i = reflect(-o, ggxSampleBoundedAniso(o, alphaXY, u.yz));
+            else
+            {
+                if (!refractThrough(o, ggxSampleVisible(o, alphaXY, u.yz), 1.0 / eta, i)) return s;
+                s.lobe = 4u;
+            }
+        }
+        else
+        {
+            const float3 p = transmissiveShares(o, t);
+            if (u.x < p.x) i = reflect(-o, sampleSpecular(o, u.yz));
+            else if (u.x < p.x + p.y)
+            {
+                i = eonSample(o, diffRough, u.y, u.z).xyz;
+                s.lobe = 1u;
+            }
+            else
+            {
+                if (thinWalled) i = flipZ(reflect(-o, sampleSpecular(o, u.yz)));
+                else if (!refractThrough(o, ggxSampleVisible(o, alphaXY, u.yz), eta, i)) return s;
+                s.lobe = 4u;
+            }
+        }
+        if (s.lobe == 4u ? i.z >= 0.0 : i.z <= 0.0) return s;
+        s.wi = flip ? flipZ(i) : i;
+        s.pdf = pdfTransmissive(wo, s.wi, t);
+        if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;
+        return s;
     }
 
     // BSDF x cos(wi).
     float3 eval(float3 wo, float3 wi, OpenPBRTables t)
     {
         float3 specular, diffuse;
-        evalLobes(wo, wi, t, specular, diffuse);
+        if (thinWalled && transmissive() && wo.z < 0.0)
+            evalLobes(flipZ(wo), flipZ(wi), t, specular, diffuse);
+        else
+            evalLobes(wo, wi, t, specular, diffuse);
         return specular + diffuse;
     }
 
@@ -707,8 +1082,9 @@ struct OpenPBRBase
     OpenPBRBase viewedFrom(float3 wo, OpenPBRTables t)
     {
         OpenPBRBase b = this;
-        b.tableRough = pbrTableRough(t, rough, anisotropy, wo);
-        b.s56Delta = pbrS56Delta(t, rough, anisotropy, wo, b.tableRough);
+        const float3 w = float3(wo.xy, abs(wo.z));
+        b.tableRough = pbrTableRough(t, rough, anisotropy, w);
+        b.s56Delta = pbrS56Delta(t, rough, anisotropy, w, b.tableRough);
         return b;
     }
 
@@ -724,12 +1100,12 @@ struct OpenPBRBase
     float3 diffuseAlbedo(float3 wo, OpenPBRTables t)
     {
         if (wo.z <= 0.0) return float3(0.0);
-        return (1.0 - metalness) * (1.0 - dielectricAlbedo(wo.z, t)) * eonAlbedo(rho, diffRough, wo.z);
+        return (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t)) * eonAlbedo(rho, diffRough, wo.z);
     }
 
     float3 albedo(float3 wo, OpenPBRTables t)
     {
-        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t);
+        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t);
     }
 
     // The chance of sampling the specular lobe (GGX, the metal and the dielectric's together):
@@ -738,7 +1114,7 @@ struct OpenPBRBase
     {
         const float ed = dielectricAlbedo(wo.z, t);
         const float spec = metalness * pbrLuminance(metalAlbedo(wo.z, t)) + (1.0 - metalness) * pbrLuminance(specColor) * ed;
-        const float diff = (1.0 - metalness) * (1.0 - ed) * pbrLuminance(eonAlbedo(rho, diffRough, wo.z));
+        const float diff = (1.0 - metalness) * (1.0 - transmission) * (1.0 - ed) * pbrLuminance(eonAlbedo(rho, diffRough, wo.z));
         const float total = spec + diff;
         return total > 0.0 ? spec / total : 1.0;
     }
@@ -756,6 +1132,7 @@ struct OpenPBRBase
 
     float pdf(float3 wo, float3 wi, OpenPBRTables t)
     {
+        if (transmissive()) return pdfTransmissive(wo, wi, t);
         if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
         const float ps = specularShare(wo, t);
         return ps * pdfSpecular(wo, wi) + (1.0 - ps) * eonPdf(wo, wi, diffRough);
@@ -768,6 +1145,7 @@ struct OpenPBRBase
         s.weight = float3(0.0);
         s.pdf = 0.0;
         s.lobe = 0u;
+        if (transmissive()) return sampleTransmissive(wo, u, t);
         if (wo.z <= 0.0) return s;
         const float ps = specularShare(wo, t);
         if (u.x < ps)
@@ -1014,6 +1392,11 @@ struct OpenPBRSurface
     void evalLobes(float3 wo, float3 wi, OpenPBRTables t, out float3 specular, out float3 diffuse)
     {
         baseAt(wo, t).evalLobes(wo, wi, t, specular, diffuse);
+        if (layered && wo.z > 0.0 && wi.z < 0.0)   // refracted: through the coat and the fuzz, as the diffuse goes
+        {
+            specular *= baseScale(coatPathDiffuse(), wo, t);
+            return;
+        }
         if (!layered || wo.z <= 0.0 || wi.z <= 0.0) return;
         const float3 k = baseScale(coatPath(wi.z), wo, t);
         const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
@@ -1023,9 +1406,18 @@ struct OpenPBRSurface
 
     float3 eval(float3 wo, float3 wi, OpenPBRTables t)
     {
+        if (base.transmissive() && (wo.z < 0.0 || (base.thinWalled && wo.z < 0.0))) return base.eval(wo, wi, t);
         float3 specular, diffuse;
         evalLobes(wo, wi, t, specular, diffuse);
         return specular + diffuse;
+    }
+
+    // The refraction's albedo toward wo, through the layers.
+    float3 transmissionAlbedo(float3 wo, OpenPBRTables t)
+    {
+        const float3 a = baseAt(wo, t).transmissionAlbedo(wo, t);
+        if (!layered || wo.z <= 0.0) return a;
+        return baseScale(coatPathDiffuse(), wo, t) * a;
     }
 
     // The directional albedos: the specular's light crosses the coat about as it came (wi near the
@@ -1047,7 +1439,7 @@ struct OpenPBRSurface
 
     float3 albedo(float3 wo, OpenPBRTables t)
     {
-        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t);
+        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t);
     }
 
     // The coat's part of specularAlbedo (the deferred frame's split sum reads it at the coat's
@@ -1090,20 +1482,67 @@ struct OpenPBRSurface
 
     float pdf(float3 wo, float3 wi, OpenPBRTables t)
     {
-        if (!layered) return baseAt(wo, t).pdf(wo, wi, t);
+        if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).pdf(wo, wi, t);
+        if (base.transmissive()) return pdfLayeredTransmissive(wo, wi, t);
         if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
         return pdfOf(wo, wi, lobeShares(wo, t));
     }
 
+    // A layered glass: the base (all its lobes, by its own sampling), the coat and the fuzz, by the
+    // luminance of their albedos.
+    float3 layeredTransmissiveShares(float3 wo, OpenPBRTables t)
+    {
+        const float b = pbrLuminance(specularAlbedo(wo, t) - coatAlbedo(wo, t) + diffuseAlbedo(wo, t)
+                                     - fuzzWeight * fuzzColor * fuzz.albedo(wo.z) + transmissionAlbedo(wo, t));
+        const float c = coatAlbedo(wo, t);
+        const float f = fuzzWeight * pbrLuminance(fuzzColor) * fuzz.albedo(wo.z);
+        const float total = max(b, 0.0) + c + f;
+        return total > 0.0 ? float3(max(b, 0.0), c, f) / total : float3(1.0, 0.0, 0.0);
+    }
+
+    float pdfLayeredTransmissive(float3 wo, float3 wi, OpenPBRTables t)
+    {
+        if (wo.z <= 0.0) return 0.0;
+        const float3 p = layeredTransmissiveShares(wo, t);
+        float pdf = p.x * baseAt(wo, t).pdf(wo, wi, t);
+        if (wi.z > 0.0) pdf += p.y * coat.pdf(wo, wi) + p.z * fuzz.D(wo, wi);
+        return pdf;
+    }
+
     BsdfSample sample(float3 wo, float3 u, OpenPBRTables t)
     {
-        if (!layered) return baseAt(wo, t).sample(wo, u, t);
+        if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).sample(wo, u, t);
         BsdfSample s;
         s.wi = float3(0.0, 0.0, 1.0);
         s.weight = float3(0.0);
         s.pdf = 0.0;
         s.lobe = 0u;
         if (wo.z <= 0.0) return s;
+        if (base.transmissive())
+        {
+            const float3 p = layeredTransmissiveShares(wo, t);
+            if (u.x < p.x)
+            {
+                const BsdfSample b = baseAt(wo, t).sample(wo, float3(u.x / max(p.x, 1e-6), u.y, u.z), t);
+                s.wi = b.wi;
+                s.lobe = b.lobe;
+                if (!(b.pdf > 0.0)) return s;
+            }
+            else if (u.x < p.x + p.y)
+            {
+                s.wi = reflect(-wo, coat.sampleNormal(wo, u.yz));
+                s.lobe = 2u;
+            }
+            else
+            {
+                s.wi = fuzz.sample(wo, u.yz);
+                s.lobe = 3u;
+            }
+            if (s.wi.z == 0.0 || ((s.lobe == 2u || s.lobe == 3u) && s.wi.z < 0.0)) return s;   // the coat and fuzz reflect only
+            s.pdf = pdfLayeredTransmissive(wo, s.wi, t);
+            if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;
+            return s;
+        }
         const float4 p = lobeShares(wo, t);
         if (u.x < p.x)
         {

@@ -10,7 +10,9 @@
 
 namespace ohao::material {
 
-enum class Op : uint32_t { Eval = 0, Sample = 1, Pdf = 2, Albedo = 3, Tables = 4, Fresnel = 5, Lobes = 6, Aniso = 7 };
+enum class Op : uint32_t {
+    Eval = 0, Sample = 1, Pdf = 2, Albedo = 3, Tables = 4, Fresnel = 5, Lobes = 6, Aniso = 7, Glass = 8, Film = 9, Ior = 10
+};
 
 using Float3 = std::array<float, 3>;
 using Float4 = std::array<float, 4>;
@@ -35,6 +37,12 @@ struct Material {
     float fuzzWeight{0.0f};
     Float3 fuzzColor{1.0f, 1.0f, 1.0f};
     float fuzzRoughness{0.5f};
+    float transmissionWeight{0.0f};
+    Float3 transmissionColor{1.0f, 1.0f, 1.0f};
+    bool thinWalled{false};
+    float thinFilmWeight{0.0f};
+    float thinFilmThickness{0.5f};   // micrometres
+    float thinFilmIor{1.4f};
 };
 
 // One call of the kernel: an op on a material at (wo, v), v being wi or the random numbers.

@@ -57,9 +57,13 @@ Surface makeSurface(float3 position, float3 normal, float3 view, MaterialInputs 
 }
 
 // What a light of `radiance` arriving along L gives toward the viewer.
+// Light from below the surface gives nothing here, also through a transmissive surface: the
+// transparent pass refracts the lit frame behind it, which already holds that light.
 float3 evaluateLight(Surface s, float3 L, float3 radiance, OpenPBRTables t)
 {
-    return s.bsdf.eval(s.wo, s.toLocal(L), t) * radiance;
+    const float3 wi = s.toLocal(L);
+    if (wi.z <= 0.0) return float3(0.0);
+    return s.bsdf.eval(s.wo, wi, t) * radiance;
 }
 
 // A sphere of `radius` at `toLight` (from the point): the diffuse toward its centre, the specular
@@ -72,9 +76,10 @@ float3 evaluateSphere(Surface s, float3 toLight, float radius, float3 radiance, 
     const float3 centerToRay = dot(toLight, R) * R - toLight;
     const float3 closest = toLight + centerToRay * clamp(radius / max(length(centerToRay), kEpsilon), 0.0, 1.0);
     const float da = radius / (2.0 * length(toLight));
-    float3 specular, diffuse, unused;
-    s.bsdf.evalLobes(s.wo, s.toLocal(L), t, unused, diffuse);
-    s.bsdf.widened(da).evalLobes(s.wo, s.toLocal(normalize(closest)), t, specular, unused);
+    float3 specular = float3(0.0), diffuse = float3(0.0), unused;
+    const float3 wl = s.toLocal(L), wc = s.toLocal(normalize(closest));
+    if (wl.z > 0.0) s.bsdf.evalLobes(s.wo, wl, t, unused, diffuse);
+    if (wc.z > 0.0) s.bsdf.widened(da).evalLobes(s.wo, wc, t, specular, unused);
     return (specular + diffuse) * radiance;
 }
 

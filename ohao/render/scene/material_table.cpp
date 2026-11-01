@@ -51,6 +51,9 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
         d.fuzzColor.r, d.fuzzColor.g, d.fuzzColor.b, d.fuzzWeight,
         d.fuzzRoughness, d.specularAnisotropy, d.tangentRotation, 0.0f,
         bits(d.coatTex), bits(d.coatRoughnessTex), bits(d.fuzzColorTex), bits(d.fuzzRoughnessTex),
+        d.transmissionColor.r, d.transmissionColor.g, d.transmissionColor.b, d.transmissionWeight,
+        d.transmissionDepth, d.thinWalled ? 1.0f : 0.0f, d.dispersionScale, d.dispersionAbbe,
+        d.thinFilmWeight, d.thinFilmThickness, d.thinFilmIor, 0.0f,
     };
 }
 
@@ -67,7 +70,12 @@ MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
     const auto index = static_cast<uint32_t>(m_packs.size());
     m_packs.push_back(pack(desc));
     m_doubleSided.push_back(desc.doubleSided ? 1u : 0u);
-    m_alphaMode.push_back(static_cast<uint8_t>(desc.alphaMode));
+    // A transmissive material (OpenPBR step 3) is drawn by the transparent pass, which refracts the
+    // lit frame behind it, and its TLAS instance is non-opaque (rt/alpha_test.slang passes rays by
+    // its transmittance): as a blended one on the host. Its table row keeps its own mode.
+    const bool transmissive = desc.transmissionWeight > 0.0f && desc.metallic < 1.0f;
+    m_alphaMode.push_back(static_cast<uint8_t>(transmissive && desc.alphaMode == AlphaMode::Opaque ? AlphaMode::Blend
+                                                                                                 : desc.alphaMode));
     m_emissive.push_back(desc.emissiveStrength > 0.0f && glm::any(glm::greaterThan(desc.emissionColor, glm::vec3(0.0f))) ? 1u
                                                                                                                        : 0u);
     if (layered(desc)) ++m_layered;

@@ -11,12 +11,12 @@ namespace ohao::render {
 // Material table: a fixed-capacity device-local array of 192-byte packs (the
 // MaterialGpuPack layout, gpu::shared::kMaterialRows rows: emissive strength in row 2 .y,
 // subsurface in row 2 .z, alpha in row 3, OpenPBR's specular and base in rows 4-6, its coat, fuzz
-// and anisotropy in rows 7-11). Index 0 is the default material. Writes are
+// and anisotropy in rows 7-11, transmission and the thin film in rows 12-14). Index 0 is the default material. Writes are
 // staged through the frame slot's staging buffer.
 class MaterialTable {
 public:
     static constexpr uint32_t kCapacity = 4096;
-    using Pack = std::array<float, 48>;
+    using Pack = std::array<float, 60>;
     static_assert(sizeof(Pack) == layout::MaterialGpuPack::kBytes);
 
     [[nodiscard]] bool initialize(GpuAllocator& allocator);   // registers MaterialDesc{} as index 0
@@ -29,7 +29,7 @@ public:
         return index >= m_doubleSided.size() || m_doubleSided[index] != 0;
     }
     // Host copy of a material's alpha mode (the draw table's kDrawMask / kDrawTransparent, the
-    // TLAS instances' masks and flags).
+    // TLAS instances' masks and flags); a transmissive opaque material reads as Blend.
     [[nodiscard]] AlphaMode alphaMode(uint32_t index) const noexcept {
         return index < m_alphaMode.size() ? static_cast<AlphaMode>(m_alphaMode[index]) : AlphaMode::Opaque;
     }
@@ -38,11 +38,13 @@ public:
     [[nodiscard]] bool emissive(uint32_t index) const noexcept {
         return index < m_emissive.size() && m_emissive[index] != 0;
     }
-    // Whether any material has OpenPBR's layers (a coat, a fuzz or specular anisotropy). A frame
-    // without them runs RT direct light's shading without the layers' code (its registers).
+    // Whether any material has OpenPBR's layers (a coat, a fuzz, specular anisotropy, a thin film or
+    // transmission). A frame without them runs RT direct light's shading without the layers' code
+    // (its registers).
     [[nodiscard]] bool anyLayered() const noexcept { return m_layered > 0; }
     [[nodiscard]] static bool layered(const MaterialDesc& desc) noexcept {
-        return desc.coatWeight > 0.0f || desc.fuzzWeight > 0.0f || desc.specularAnisotropy > 0.0f;
+        return desc.coatWeight > 0.0f || desc.fuzzWeight > 0.0f || desc.specularAnisotropy > 0.0f ||
+               desc.thinFilmWeight > 0.0f || desc.transmissionWeight > 0.0f;
     }
     [[nodiscard]] static Pack pack(const MaterialDesc& desc);
 

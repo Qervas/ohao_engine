@@ -109,6 +109,12 @@ public:
     std::vector<float> materialCoatRoughness;
     std::vector<glm::vec3> materialFuzzColor;
     std::vector<float> materialFuzzRoughness;
+    // OpenPBR step 3 from KHR_materials_transmission (transmission_weight: its factor) and
+    // KHR_materials_volume (transmission_color and transmission_depth: its attenuation colour and
+    // distance; a volume with no distance, infinite, absorbs nothing). Thickness is not read.
+    std::vector<float> materialTransmission;
+    std::vector<glm::vec3> materialTransmissionColor;
+    std::vector<float> materialTransmissionDepth;
 
     // Per-material texture data (RGBA pixels, decoded from GLTF images)
     struct TextureData {

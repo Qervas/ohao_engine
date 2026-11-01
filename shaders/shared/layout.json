@@ -55,8 +55,8 @@
      "doc": "a material's alpha mode: alpha-tested against row 3, y (the cutoff); base colour alpha times the albedo texture's alpha times row 3, z (opacity)"},
     {"name": "kAlphaBlend", "type": "uint", "value": 2,
      "doc": "a material's alpha mode: blended by base colour alpha times the albedo texture's alpha times row 3, z (opacity)"},
-    {"name": "kMaterialRows", "type": "uint", "value": 12,
-     "doc": "float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex): material/material_layers.slang reads 7-11"},
+    {"name": "kMaterialRows", "type": "uint", "value": 15,
+     "doc": "float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex), 12 (transmission_color, transmission_weight), 13 (transmission_depth, geometry_thin_walled, transmission_dispersion_scale, transmission_dispersion_abbe_number), 14 (thin_film_weight, thin_film_thickness, thin_film_ior, 0): material/material_layers.slang reads 7-14"},
     {"name": "kVfxGroupSize", "type": "uint", "value": 64,
      "doc": "vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread"},
     {"name": "kVfxSortMax", "type": "uint", "value": 1024,
@@ -345,7 +345,8 @@
        {"name": "camera", "type": "float4", "doc": "xyz the camera's position, w unused"},
        {"name": "screen", "type": "float4", "doc": "x, y the frame's size; z, w the froxel slice scale and bias"},
        {"name": "config", "type": "uint4", "doc": "x lights (without clusters), y flags: 1 clustered, 2 RT GI, 4 environment (IBL), 8 TLAS (sun shadow ray)"},
-       {"name": "env", "type": "float4", "doc": "x the environment's intensity"}
+       {"name": "env", "type": "float4", "doc": "x the environment's intensity"},
+       {"name": "proj", "type": "float4x4", "doc": "the jittered projection the G-buffer was drawn with (OpenPBR step 3: a refracted point's place in the lit frame)"}
      ]},
     {"name": "EnvPrefilterPush", "doc": "ibl/env_prefilter.slang push constants",
      "fields": [

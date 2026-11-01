@@ -26,6 +26,14 @@ import material.material_layers;
 [[vk::binding(5, 2)]] RaytracingAccelerationStructure scene;
 [[vk::binding(6, 2)]] Texture2D<float4> giRadiance;
 [[vk::binding(7, 2)]] StructuredBuffer<float> openpbrTables;   // OpenPBR's energy tables
+[[vk::binding(8, 2)]] Texture2D<float4> refraction;           // the lit frame before this pass (glass refracts it)
+
+// Glass's refraction in the deferred frame (OpenPBR step 3, T4): the lit frame behind the surface,
+// read where the refracted ray stands kRefractionDepth on (transmission_depth when set), spread by
+// the roughness over a disc of up to kRefractionBlur of the frame's height, tinted and absorbed.
+// One layer: glass behind glass, or an effect drawn after the copy, is not seen through it.
+static const float kRefractionDepth = 0.1;
+static const float kRefractionBlur = 0.06;
 [[vk::push_constant]] ConstantBuffer<ForwardPush> pc;
 
 struct FsIn
@@ -75,12 +83,12 @@ float sunVisibility(float3 p, float3 n)
     return 1.0;
 }
 
-[shader("fragment")]
 struct TransparentTextures : IMaterialTextures
 {
     float4 sample(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].Sample(uv); }
 };
 
+[shader("fragment")]
 FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
 {
     const uint m = materialOf(i.instance, i.materialSlot);
@@ -92,8 +100,12 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const float4 row5 = matRows[m * kMaterialRows + 5u];   // specular_ior, base_diffuse_roughness, base_weight, specularTex
     const float4 row6 = matRows[m * kMaterialRows + 6u];   // emission_color, specularColorTex
 
+    // The normal faces the viewer by the rasterised surface (the cross of the world position's
+    // screen derivatives), as the G-buffer turns it: the winding, which SV_IsFrontFace reads, is not
+    // the same across assets and primitives (the generated sphere's is inverted), so a sphere's front
+    // was shaded from behind. A pane seen from behind is lit on that side.
     float3 N = normalize(i.normal);
-    if (!frontFacing) N = -N;   // a pane seen from behind is lit on that side
+    if (dot(cross(ddx(i.worldPos), ddy(i.worldPos)), N) > 0.0) N = -N;
     const uint albedoTex = asuint(row0.w);
     float4 albedoSample = float4(1.0);
     if (albedoTex != 0xFFFFFFFFu) albedoSample = textures[NonUniformResourceIndex(albedoTex)].Sample(i.uv);
@@ -154,6 +166,8 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const uint lr = m * kMaterialRows + kLayerRowFirst;
     TransparentTextures tex;
     applyLayerRows(mi, matRows[lr], matRows[lr + 1u], matRows[lr + 2u], matRows[lr + 3u], matRows[lr + 4u], i.uv, tex);
+    const uint tr = m * kMaterialRows + kTransmissionRowFirst;
+    applyTransmissionRows(mi, matRows[tr], matRows[tr + 1u], matRows[tr + 2u]);
     float3 tangent = float3(0.0);
     if (mi.specularRoughnessAnisotropy > 0.0 || (mi.coatWeight > 0.0 && mi.coatRoughnessAnisotropy > 0.0))
     {
@@ -173,7 +187,9 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const float3 diffuseAlbedo = surface.bsdf.diffuseAlbedo(surface.wo, tables);
     const float3 specularAlbedo = surface.bsdf.specularAlbedo(surface.wo, tables);
 
-    const bool rtGI = (pc.config.y & 2u) != 0u;
+    // RT GI's radiance at this pixel is the surface's behind it: glass reflects the environment.
+    const bool transmissive = mi.transmissionWeight > 0.0 && metallic < 1.0;
+    const bool rtGI = (pc.config.y & 2u) != 0u && !transmissive;
     const bool ibl = (pc.config.y & 4u) != 0u;
     const float4 gi = rtGI ? giRadiance.SampleLevel(linearSampler, i.position.xy / pc.screen.xy, 0.0) : float4(0.0, 0.0, 0.0, 1.0);
     float3 ambient = float3(0.0);
@@ -191,8 +207,38 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
         if (!rtGI) ambient += diffuseAlbedo * irradiance * ao;
     }
 
+    // Transmission: what the surface passes of the lit frame behind it.
+    float3 transmitted = float3(0.0);
+    if (transmissive)
+    {
+        const float4 r12 = matRows[tr], r13 = matRows[tr + 1u];
+        const float3 passes = surface.bsdf.transmissionAlbedo(surface.wo, tables);
+        const float depth = r13.x > 0.0 ? r13.x : kRefractionDepth;
+        float3 T = mi.thinWalled ? -V : refract(-V, N, 1.0 / max(mi.specularIor, 1.0));
+        if (!(dot(T, T) > 0.0)) T = -V;
+        const float4 at = mul(pc.proj, mul(pc.view, float4(P + T * depth, 1.0)));
+        const float4 here = mul(pc.proj, mul(pc.view, float4(P, 1.0)));
+        const float2 shift = (at.xy / at.w - here.xy / here.w) * 0.5;
+        const float2 uv = i.position.xy / pc.screen.xy + shift;
+        const float radius = kRefractionBlur * roughness * roughness;
+        float3 behind = float3(0.0);
+        [unroll]
+        for (uint k = 0u; k < 8u; ++k)
+        {
+            const float a = float(k) * 2.39996323;   // the golden angle
+            const float r = radius * sqrt((float(k) + 0.5) / 8.0);
+            const float2 o = float2(cos(a), sin(a)) * r * float2(pc.screen.y / pc.screen.x, 1.0);
+            behind += refraction.SampleLevel(linearSampler, saturate(uv + o), 0.0).rgb;
+        }
+        behind *= 1.0 / 8.0;
+        // transmission_color at transmission_depth: Beer-Lambert over the distance read (the
+        // depth itself, so exactly the colour); at depth 0 the module's tint already holds it.
+        const float3 absorbed = r13.x > 0.0 ? r12.rgb : float3(1.0);
+        transmitted = passes * absorbed * behind;
+    }
+
     FsOut o;
-    o.color = float4(ambient + Lo + emissive, coverage);
+    o.color = float4(ambient + Lo + emissive + transmitted, coverage);
     o.coverage = coverage;
     return o;
 }

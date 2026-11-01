@@ -14,7 +14,8 @@ namespace ohao::material {
 
 void run(std::span<Item> items, std::span<const float> tables) {
     if (items.empty()) return;
-    std::vector<Vector<float, 4>> io(items.size() * 12);
+    constexpr size_t kRows = 14;
+    std::vector<Vector<float, 4>> io(items.size() * kRows);
     auto set = [](Vector<float, 4>& d, float x, float y, float z, float w) {
         d.x = x;
         d.y = y;
@@ -24,7 +25,7 @@ void run(std::span<Item> items, std::span<const float> tables) {
     for (size_t i = 0; i < items.size(); ++i) {
         const Item& it = items[i];
         const Material& m = it.material;
-        Vector<float, 4>* b = &io[i * 12];
+        Vector<float, 4>* b = &io[i * kRows];
         set(b[0], static_cast<float>(it.op), 0.0f, 0.0f, 0.0f);
         set(b[1], m.baseColor[0], m.baseColor[1], m.baseColor[2], m.baseWeight);
         set(b[2], m.baseMetalness, m.baseDiffuseRoughness, m.specularWeight, m.specularRoughness);
@@ -37,6 +38,8 @@ void run(std::span<Item> items, std::span<const float> tables) {
         set(b[9], m.coatColor[0], m.coatColor[1], m.coatColor[2], m.coatDarkening);
         set(b[10], m.fuzzColor[0], m.fuzzColor[1], m.fuzzColor[2], m.fuzzWeight);
         set(b[11], m.fuzzRoughness, m.specularRoughnessAnisotropy, 0.0f, 0.0f);
+        set(b[12], m.transmissionColor[0], m.transmissionColor[1], m.transmissionColor[2], m.transmissionWeight);
+        set(b[13], m.thinWalled ? 1.0f : 0.0f, m.thinFilmWeight, m.thinFilmThickness, m.thinFilmIor);
     }
     static const float kNoTables = 0.0f;
     GlobalParams_0 globals{};
@@ -49,7 +52,7 @@ void run(std::span<Item> items, std::span<const float> tables) {
     range.endGroupID = {static_cast<uint32_t>(items.size()), 1, 1};
     ::run(&range, nullptr, &globals);
     for (size_t i = 0; i < items.size(); ++i) {
-        const Vector<float, 4>* b = &io[i * 12];
+        const Vector<float, 4>* b = &io[i * kRows];
         items[i].r0 = {b[6].x, b[6].y, b[6].z, b[6].w};
         items[i].r1 = {b[7].x, b[7].y, b[7].z, b[7].w};
     }

@@ -196,6 +196,22 @@ void writeFields(const Material& v, const Material* omit, FieldSink& out) {
     if (!omit || !same(v.fuzzRoughness, omit->fuzzRoughness)) t.f32("\"fuzz_roughness\"", v.fuzzRoughness);
     if (!omit || !same(v.geometryTangentRotation, omit->geometryTangentRotation))
         t.f32("\"geometry_tangent_rotation\"", v.geometryTangentRotation);
+    if (!omit || !same(v.transmissionWeight, omit->transmissionWeight))
+        t.f32("\"transmission_weight\"", v.transmissionWeight);
+    if (!omit || !same(v.transmissionColor, omit->transmissionColor))
+        vec3(t, "\"transmission_color\"", v.transmissionColor);
+    if (!omit || !same(v.transmissionDepth, omit->transmissionDepth))
+        t.f32("\"transmission_depth\"", v.transmissionDepth);
+    if (!omit || !same(v.transmissionDispersionScale, omit->transmissionDispersionScale))
+        t.f32("\"transmission_dispersion_scale\"", v.transmissionDispersionScale);
+    if (!omit || !same(v.transmissionDispersionAbbeNumber, omit->transmissionDispersionAbbeNumber))
+        t.f32("\"transmission_dispersion_abbe_number\"", v.transmissionDispersionAbbeNumber);
+    if (!omit || v.geometryThinWalled != omit->geometryThinWalled)
+        t.boolean("\"geometry_thin_walled\"", v.geometryThinWalled);
+    if (!omit || !same(v.thinFilmWeight, omit->thinFilmWeight)) t.f32("\"thin_film_weight\"", v.thinFilmWeight);
+    if (!omit || !same(v.thinFilmThickness, omit->thinFilmThickness))
+        t.f32("\"thin_film_thickness\"", v.thinFilmThickness);
+    if (!omit || !same(v.thinFilmIor, omit->thinFilmIor)) t.f32("\"thin_film_ior\"", v.thinFilmIor);
 }
 
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out) {

@@ -127,6 +127,12 @@ FURNACE = [
     ("fuzz_dielectric", {"base_color": [1, 1, 1], "fuzz_weight": 1.0, "fuzz_roughness": 0.5}),
     ("aniso_metal", {"base_color": [1, 1, 1], "base_metalness": 1.0, "specular_roughness": 0.4,
                      "specular_roughness_anisotropy": 0.7}),
+    # OpenPBR step 3: white glass, smooth and rough, solid and thin-walled
+    # (docs/plans/2026-10-31-openpbr-step3.md, T3 and T4): what it reflects and refracts is all it gets.
+    ("glass_r005", {"base_color": [1, 1, 1], "specular_roughness": 0.05, "transmission_weight": 1.0}),
+    ("glass_r05", {"base_color": [1, 1, 1], "specular_roughness": 0.5, "transmission_weight": 1.0}),
+    ("glass_thin", {"base_color": [1, 1, 1], "specular_roughness": 0.2, "transmission_weight": 1.0,
+                    "geometry_thin_walled": True}),
 ]
 
 

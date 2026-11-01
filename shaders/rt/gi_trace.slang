@@ -362,7 +362,9 @@ float3 incoming(float3 origin, float3 dir, uint key, uint s, bool feeds, out flo
                                            q.CommittedTriangleBarycentrics());
         OpenPBRTables tables;
         tables.data = openpbrTables;
-        const float3 albedo = OpenPBRSurface(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);
+        // What the hit reflects (a glass's refracted share passes on, it is not reflected light).
+        const OpenPBRSurface hs = OpenPBRSurface(hm.inputs);
+        const float3 albedo = hs.specularAlbedo(float3(0.0, 0.0, 1.0), tables) + hs.diffuseAlbedo(float3(0.0, 0.0, 1.0), tables);
         const float3 at = origin + dir * q.CommittedRayT();
         float3 ng = hitGeometricNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedObjectToWorld3x4());
         if (dot(ng, dir) > 0.0) ng = -ng;

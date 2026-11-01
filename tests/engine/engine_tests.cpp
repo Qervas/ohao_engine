@@ -415,9 +415,9 @@ void runMetaTests() {
     TEST_BEGIN("GPU layout contracts");
     {
         static_assert(sizeof(GPULight) == layout::kGPULightBytes);
-        static_assert(layout::MaterialGpuPack::kBytes == 192);
-        static_assert(layout::MaterialGpuPack::byteOffset(1) == 192);
-        EXPECT(layout::MaterialGpuPack::vec4Count(2) == 24, "2 materials = 24 vec4s");
+        static_assert(layout::MaterialGpuPack::kBytes == 240);
+        static_assert(layout::MaterialGpuPack::byteOffset(1) == 240);
+        EXPECT(layout::MaterialGpuPack::vec4Count(2) == 30, "2 materials = 30 vec4s");
         EXPECT(GpuPod<GPULight>, "GPULight is GpuPod");
         TEST_PASS();
     }

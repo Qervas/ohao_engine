@@ -30,6 +30,20 @@
 //   t2_aniso_furnace       a white anisotropic metal (0.5, 0.9) seen along and across the tangent
 //                          (2^20 samples): within 1% to 60 degrees, 5% at 85, at roughness 0.01 to
 //                          0.6 (past that alpha_t leaves GGX's tables at alpha 1, a known gap)
+//
+// Step 3 (docs/plans/2026-10-31-openpbr-step3.md, T1): transmission, thin-walled, thin film, dispersion.
+//
+//   t3_defaults            transmission's, the thin film's and thin-walled's defaults are OpenPBR 1.1.1's
+//   t3_sampling_chi2       sample() drawn with pdf() over the whole sphere for glass (solid from
+//                          outside and inside, thin-walled, half transmissive, coated), and its weights
+//                          eval / pdf
+//   t3_albedo              albedo() the integral of eval() over the sphere for transmissive materials
+//   t3_white_furnace       white glass (IOR 1.33, 1.5 and 2.4, roughness 0.01 to 1, solid from outside and
+//                          inside, thin-walled from both sides, half diffuse) reflects and refracts exactly
+//                          what it receives: within 1%
+//   t3_thin_film           the Airy reflectance in [0, 1], at no thickness the base's Fresnel, coloured
+//                          (its channels apart) at 300 nm; a filmed white metal still within 1% of white
+//   t3_dispersion          the IOR at the d line (587.56 nm) is specular_ior; blue above red
 #include "openpbr_cpu.hpp"
 #include "render/material/openpbr_tables.hpp"
 #include "common/harness.hpp"
@@ -297,8 +311,12 @@ std::vector<Case> layeredCases() {
     return cases;
 }
 
-void samplingChi2(const std::vector<Case>& cases, uint32_t seed) {
-    constexpr unsigned kTheta = 32, kPhi = 64, kSub = 6, kN = 1u << 20;
+// sphere: mu's bins cover [-1, 1] (transmission), else [0, 1].
+void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = false) {
+    // Over the sphere twice the polar bins, so each spans what a hemisphere's does.
+    const unsigned kTheta = sphere ? 64u : 32u, kSub = sphere ? 12u : 6u;
+    constexpr unsigned kPhi = 64, kN = 1u << 20;
+    const float muLo = sphere ? -1.0f : 0.0f, muSpan = sphere ? 2.0f : 1.0f;
     const auto tested = std::count_if(cases.begin(), cases.end(), [](const Case& c) { return c.chi2; });
     const double threshold = 1.0 - std::pow(1.0 - 0.01, 1.0 / static_cast<double>(tested));   // Sidak
     for (const Case& c : cases) {
@@ -310,7 +328,7 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed) {
             for (unsigned p = 0; p < kPhi; ++p)
                 for (unsigned i = 0; i < kSub; ++i)
                     for (unsigned j = 0; j < kSub; ++j) {
-                        const float mu = (t + (i + 0.5f) / kSub) / kTheta;
+                        const float mu = muLo + muSpan * (t + (i + 0.5f) / kSub) / kTheta;
                         const float phi = static_cast<float>(2.0 * kPi) * (p + (j + 0.5f) / kSub) / kPhi - static_cast<float>(kPi);
                         const float s = std::sqrt(std::max(0.0f, 1.0f - mu * mu));
                         Item it;
@@ -322,7 +340,7 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed) {
                     }
         ohao::material::run(grid, kTables);
         std::vector<double> expected(kTheta * kPhi, 0.0);
-        const double cell = (1.0 / kTheta) * (2.0 * kPi / kPhi) / (kSub * kSub);
+        const double cell = (muSpan / kTheta) * (2.0 * kPi / kPhi) / (kSub * kSub);
         for (size_t k = 0; k < grid.size(); ++k) expected[k / (kSub * kSub)] += grid[k].r0[0] * cell * kN;
         // Observed counts, and each sample's weight against eval / pdf.
         std::vector<Item> samples(kN);
@@ -337,9 +355,9 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed) {
         std::vector<Item> checks;
         for (const Item& it : samples) {
             if (!(it.r0[3] > 0.0f)) continue;
-            const float mu = std::clamp(it.r0[2], 0.0f, 0.999999f);
+            const float mu = std::clamp(it.r0[2], muLo, 0.999999f);
             float phi = std::atan2(it.r0[1], it.r0[0]);
-            const unsigned t = std::min(static_cast<unsigned>(mu * kTheta), kTheta - 1);
+            const unsigned t = std::min(static_cast<unsigned>((mu - muLo) / muSpan * kTheta), kTheta - 1);
             const unsigned p = std::min(static_cast<unsigned>((phi + kPi) / (2.0 * kPi) * kPhi), kPhi - 1);
             observed[t * kPhi + p] += 1.0;
             if (checks.size() < 4096) {
@@ -523,7 +541,120 @@ void t1_white_furnace() {
             }
 }
 
+// ---- step 3: transmission, thin-walled, thin film, dispersion ----------------------------------
+
+void t3_defaults() {
+    const Material m;
+    CHECK(m.transmissionWeight == 0.0f && m.transmissionColor[0] == 1.0f && !m.thinWalled, "transmission, thin-walled");
+    CHECK(m.thinFilmWeight == 0.0f && m.thinFilmThickness == 0.5f && m.thinFilmIor == 1.4f, "thin film");
+}
+
+// Glass: solid (outside and inside), thin-walled, half transmissive, tinted, coated.
+std::vector<Case> glassCases() {
+    std::vector<Case> cases;
+    for (float rough : {0.3f, 0.6f})
+        for (float mu : {0.9f, 0.4f, -0.9f, -0.4f}) {
+            Material glass;
+            glass.transmissionWeight = 1.0f;
+            glass.specularRoughness = rough;
+            cases.push_back({glass, mu, 0.01});
+            Material thin = glass;
+            thin.thinWalled = true;
+            cases.push_back({thin, mu, 0.01});
+            if (mu < 0.0f) continue;   // the rest from outside
+            Material half = glass;     // half refracts, half is the diffuse
+            half.transmissionWeight = 0.5f;
+            half.baseColor = {0.7f, 0.4f, 0.2f};
+            half.transmissionColor = {0.9f, 0.6f, 0.3f};
+            cases.push_back({half, mu, 0.01});
+            Material coated = glass;
+            coated.coatWeight = 1.0f;
+            coated.coatRoughness = 0.3f;
+            cases.push_back({coated, mu, 0.01});
+        }
+    return cases;
+}
+
+void t3_sampling_chi2() { samplingChi2(glassCases(), 43u, true); }
+
+void t3_albedo() {
+    std::vector<Case> outside;
+    for (const Case& c : glassCases())
+        if (c.mu > 0.0f) outside.push_back(c);
+    albedoMatchesIntegral(outside, 47u, 1u << 19);
+}
+
+void t3_white_furnace() {
+    uint32_t seed = 53u;
+    for (float ior : {1.33f, 1.5f, 2.4f})
+        for (float rough : {0.01f, 0.3f, 0.6f, 1.0f})
+            for (float deg : {0.0f, 30.0f, 60.0f, 85.0f, 120.0f, 150.0f, 180.0f}) {
+                const float mu = std::cos(deg * static_cast<float>(kPi) / 180.0f);
+                Material glass;
+                glass.baseColor = {1.0f, 1.0f, 1.0f};
+                glass.transmissionWeight = 1.0f;
+                glass.specularIor = ior;
+                glass.specularRoughness = rough;
+                std::vector<Material> ms{glass};
+                Material thin = glass;
+                thin.thinWalled = true;
+                ms.push_back(thin);
+                if (mu > 0.0f) {   // half diffuse, from outside
+                    Material half = glass;
+                    half.transmissionWeight = 0.5f;
+                    ms.push_back(half);
+                }
+                for (const Material& m : ms) {
+                    const auto mc = meanWeight(m, view(mu), 1u << 18, seed++);
+                    if (!(std::abs(mc[0] - 1.0) <= 0.01))
+                        std::printf("\n    integral %.5f: %s thin %d", mc[0], describe(m, mu).c_str(), m.thinWalled ? 1 : 0);
+                    CHECK(std::abs(mc[0] - 1.0) <= 0.01, ("the integral of eval() is not 1: " + describe(m, mu)).c_str());
+                    if (mu > 0.0f) {
+                        const Item a = one(Op::Albedo, m, view(mu), {});
+                        if (!(std::abs(a.r0[0] - 1.0f) <= 0.01f))
+                            std::printf("\n    albedo %.5f: %s thin %d", a.r0[0], describe(m, mu).c_str(), m.thinWalled ? 1 : 0);
+                        CHECK(std::abs(a.r0[0] - 1.0f) <= 0.01f, ("albedo() is not 1: " + describe(m, mu)).c_str());
+                    }
+                }
+            }
+}
+
+void t3_thin_film() {
+    for (float mu : {1.0f, 0.7f, 0.3f}) {
+        for (float d : {0.0f, 150.0f, 300.0f, 600.0f, 1000.0f}) {
+            const Item f = one(Op::Film, Material{}, {mu, 1.4f, d}, {0.04f, 0.04f, 0.04f});
+            for (int c = 0; c < 3; ++c) CHECK(f.r0[c] >= 0.0f && f.r0[c] <= 1.0f, "the Airy reflectance in [0, 1]");
+        }
+        // No film: the base's Fresnel (Schlick's of its F0 in the fit) within 0.01.
+        const Item none = one(Op::Film, Material{}, {mu, 1.4f, 0.0f}, {0.04f, 0.04f, 0.04f});
+        const float m5 = std::pow(1.0f - mu, 5.0f), schlick = 0.04f + 0.96f * m5;
+        CHECK(std::abs(none.r0[1] - schlick) <= 0.01f, "no thickness, no film");
+    }
+    const Item col = one(Op::Film, Material{}, {1.0f, 1.4f, 300.0f}, {0.04f, 0.04f, 0.04f});
+    CHECK(std::abs(col.r0[0] - col.r0[2]) > 0.01f, "a 300 nm film colours the reflection");
+    // A filmed white metal keeps its energy within 1% (the film recolours F; F stays near 1).
+    Material metal;
+    metal.baseMetalness = 1.0f;
+    metal.baseColor = {1.0f, 1.0f, 1.0f};
+    metal.thinFilmWeight = 1.0f;
+    metal.thinFilmThickness = 0.3f;
+    metal.specularRoughness = 0.3f;
+    const auto mc = meanWeight(metal, view(0.8f), 1u << 18, 59u);
+    for (int c = 0; c < 3; ++c) CHECK(mc[c] > 0.9 && mc[c] <= 1.01, "a filmed white metal stays near white");
+}
+
+void t3_dispersion() {
+    const Item d = one(Op::Ior, Material{}, {1.5f, 20.0f, 1.0f}, {587.56f, 0.0f, 0.0f});
+    CHECK(std::abs(d.r0[0] - 1.5f) < 1e-4f, "the d line's IOR is specular_ior");
+    const Item blue = one(Op::Ior, Material{}, {1.5f, 20.0f, 1.0f}, {450.0f, 0.0f, 0.0f});
+    const Item red = one(Op::Ior, Material{}, {1.5f, 20.0f, 1.0f}, {600.0f, 0.0f, 0.0f});
+    CHECK(blue.r0[0] > 1.5f && red.r0[0] < 1.5f, "blue bends more than red");
+    const Item none = one(Op::Ior, Material{}, {1.5f, 20.0f, 0.0f}, {450.0f, 0.0f, 0.0f});
+    CHECK(none.r0[0] == 1.5f, "scale 0: no dispersion");
+}
+
 } // namespace
+
 
 int main(int argc, char** argv) {
     std::printf("material_tests (OpenPBR on the CPU)\n");
@@ -545,5 +676,11 @@ int main(int argc, char** argv) {
     RUN_ONE(t2_albedo);
     RUN_ONE(t2_white_furnace);
     RUN_ONE(t2_aniso_furnace);
+    RUN_ONE(t3_defaults);
+    RUN_ONE(t3_sampling_chi2);
+    RUN_ONE(t3_albedo);
+    RUN_ONE(t3_white_furnace);
+    RUN_ONE(t3_thin_film);
+    RUN_ONE(t3_dispersion);
     return ohao::test::finish("material_tests");
 }

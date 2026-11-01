@@ -30,6 +30,11 @@ float3 gbufferLayers(inout MaterialInputs mi, uint2 layers, StructuredBuffer<flo
     if (layers.y == 0u && ((layers.x >> 12u) & 255u) == 0u) return float3(0.0);   // no coat, fuzz or anisotropy
     const uint r = layersMaterial(layers) * kMaterialRows + kLayerRowFirst;
     const float3 T = unpackLayers(layers, mi, rows[r], rows[r + 1u], rows[r + 2u], rows[r + 3u], N);
+    // The thin film (step 3, row 14; an opaque G-buffer surface has no transmission).
+    const float4 film = rows[layersMaterial(layers) * kMaterialRows + kTransmissionRowFirst + 2u];
+    mi.thinFilmWeight = film.x;
+    mi.thinFilmThickness = film.y;
+    mi.thinFilmIor = film.z;
     return mi.specularRoughnessAnisotropy > 0.0 || (mi.coatWeight > 0.0 && mi.coatRoughnessAnisotropy > 0.0) ? T : float3(0.0);
 }
 

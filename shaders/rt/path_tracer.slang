@@ -87,6 +87,7 @@ static const uint kNoTex = 0xFFFFFFFFu;
 static const uint kHit = 1u;
 static const uint kHitEmitter = 2u;
 static const uint kHitEmissive = 4u;   // an emissive triangle light (payload.light its index)
+static const uint kHitBack = 8u;       // the ray met the triangle's back (from inside a closed mesh)
 
 // What a ray brings back: a surface's place and its OpenPBR inputs (resolved from its material
 // and textures by the closest hit), a light's emitter (its light), or nothing (a miss).
@@ -260,8 +261,14 @@ MaterialInputs inputsOf(PathPayload p)
     const uint r = p.material * kMaterialRows + kLayerRowFirst;
     PathTextures tex;
     applyLayerRows(m, materials[r], materials[r + 1u], materials[r + 2u], materials[r + 3u], materials[r + 4u], p.uv, tex);
+    const uint t = p.material * kMaterialRows + kTransmissionRowFirst;
+    applyTransmissionRows(m, materials[t], materials[t + 1u], materials[t + 2u]);
     return m;
 }
+
+// Dispersion (OpenPBR step 3, ruling O12): a path's first dispersive refraction draws one of RGB at
+// these wavelengths (nm), weighs it by 3 and keeps it; its IOR is dispersedIor's there.
+static const float3 kDispersionLambda = float3(600.0, 550.0, 450.0);
 
 // The shading frame: an anisotropic material's tangent, else any basis of n.
 void frameOf(PathPayload p, out float3 t, out float3 b)
@@ -337,10 +344,16 @@ void raygen()
     float3 diffAlbedo = float3(0.0), specColor = float3(0.0);
     uint lastLobe = 0u;       // the last vertex's sampled lobe and its roughness (the cache's cone rule)
     float lastRough = 0.0;
+    // Inside a transmissive solid (OpenPBR step 3): its absorption per metre (transmission_color at
+    // transmission_depth, Beer-Lambert), applied to every segment until the path refracts out.
+    bool insideVolume = false;
+    float3 sigmaA = float3(0.0);
+    int channel = -1;          // dispersion's wavelength once drawn (0 R, 1 G, 2 B)
 
     for (uint depth = 0u; ; ++depth)
     {
         const PathPayload hit = trace(origin, dir, depth == 0u ? kRayMaskCamera : (kRayMaskScene | kTlasMaskEmitter), 1.0e4);
+        if (insideVolume) throughput *= exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
         float3 add = float3(0.0);
         bool stop = false;
         if ((hit.flags & kHit) == 0u)
@@ -447,12 +460,35 @@ void raygen()
         }
         if (stop || depth > bounces) break;
 
-        // The surface.
-        const float3 n = hit.normal;
+        // The surface. A transmissive solid met from inside (a back face) is shaded in its outward
+        // frame, so the module sees wo below it and refracts at 1 / eta.
+        MaterialInputs mi = inputsOf(hit);
+        const bool transmissive = mi.transmissionWeight > 0.0 && mi.baseMetalness < 1.0;
+        const bool fromInside = transmissive && !mi.thinWalled && (hit.flags & kHitBack) != 0u;
+        const float3 n = fromInside ? -hit.normal : hit.normal;
         float3 t, b;
-        frameOf(hit, t, b);
+        if (dot(hit.tangent, hit.tangent) > 0.0)
+        {
+            t = hit.tangent;
+            b = cross(n, t);
+        }
+        else
+        {
+            basisOf(n, t, b);
+        }
         const float3 wo = toLocal(-dir, t, b, n);
-        const MaterialInputs mi = inputsOf(hit);
+        // Dispersion: the IOR at the path's wavelength (drawn at the first dispersive glass).
+        const float4 row13 = materials[hit.material * kMaterialRows + kTransmissionRowFirst + 1u];
+        if (transmissive && row13.z > 0.0)
+        {
+            if (channel < 0)
+            {
+                const uint h = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ 0x51ED270Bu)));
+                channel = int(min(float(h >> 8u) * (3.0 / 16777216.0), 2.0));
+                throughput *= float3(channel == 0 ? 3.0 : 0.0, channel == 1 ? 3.0 : 0.0, channel == 2 ? 3.0 : 0.0);
+            }
+            mi.specularIor = dispersedIor(mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
+        }
         const OpenPBRSurface base = OpenPBRSurface(mi);
         if (depth == 0u)
         {
@@ -522,14 +558,34 @@ void raygen()
         const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
         if (!(s.pdf > 0.0)) break;
         const float3 next = toWorld(s.wi, t, b, n);
-        if (dot(next, hit.geoNormal) <= 0.0) break;
+        // A refraction crosses the surface (hit.geoNormal faces the ray's side); anything else
+        // below it ends the path.
+        const bool crosses = transmissive && s.lobe == 4u && dot(next, hit.geoNormal) <= 0.0;
+        if (!crosses && dot(next, hit.geoNormal) <= 0.0) break;
         if (depth == 0u) firstLobe = s.lobe;
         lastLobe = s.lobe;
         lastRough = s.lobe == 2u ? mi.coatRoughness : s.lobe == 3u ? 1.0 : hit.specularRoughness;
         throughput *= s.weight;
-        lastPdf = s.pdf;
+        // A ray that crossed the surface could not have been drawn by light sampling there (it
+        // samples above the surface only): what it meets counts in full, not by MIS (a huge pdf).
+        lastPdf = crosses ? 1.0e18 : s.pdf;
         origin = p;
         dir = next;
+        if (crosses)
+        {
+            origin = hit.position - hit.geoNormal * 1e-3;
+            if (!mi.thinWalled)
+            {
+                // Into the solid, or out of it.
+                insideVolume = !fromInside;
+                sigmaA = float3(0.0);
+                if (insideVolume && row13.x > 0.0)
+                {
+                    const float3 c = materials[hit.material * kMaterialRows + kTransmissionRowFirst].rgb;
+                    sigmaA = -log(max(c, float3(1e-4))) / row13.x;
+                }
+            }
+        }
         if (depth >= 2u)
         {
             const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);
@@ -752,6 +808,7 @@ void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes
     if (!front) geo = -geo;
     if (dot(n, geo) < 0.0) n = -n;
     payload.geoNormal = geo;
+    if (!front) payload.flags |= kHitBack;
 
     if ((c.flags & kInstanceEmitter) != 0u)
     {

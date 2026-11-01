@@ -187,7 +187,31 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .min(0.0).max(1.0)
         .field("geometry_tangent_rotation", &Material::geometryTangentRotation)
             .doc("Turns the mesh's tangent about the normal, in turns: the direction anisotropy stretches along")
-            .unitless();
+            .unitless()
+        .field("transmission_weight", &Material::transmissionWeight)
+            .doc("How much of the dielectric refracts instead of scattering diffusely (glass, water): 0 = opaque")
+            .unitless().min(0.0).max(1.0)
+        .field("transmission_color", &Material::transmissionColor)
+            .doc("The refracted light's colour: at the surface when transmission_depth is 0, else the colour "
+                 "light has after travelling transmission_depth inside")
+            .unit("linear-rgb").color().min(0.0).max(1.0)
+        .field("transmission_depth", &Material::transmissionDepth)
+            .doc("The distance inside at which light has transmission_color (Beer-Lambert absorption): 0 = none")
+            .unit("m").min(0.0)
+        .field("transmission_dispersion_scale", &Material::transmissionDispersionScale)
+            .doc("Scales dispersion (the IOR changing with wavelength): 0 = none, 1 = the Abbe number's")
+            .unitless().min(0.0).max(1.0)
+        .field("transmission_dispersion_abbe_number", &Material::transmissionDispersionAbbeNumber)
+            .doc("The glass's Abbe number: lower disperses more (flint ~30, crown ~60)").unitless().min(9.0).max(91.0)
+        .field("geometry_thin_walled", &Material::geometryThinWalled)
+            .doc("A thin slab with no inside (a window, a soap bubble, a leaf): refraction passes straight through")
+        .field("thin_film_weight", &Material::thinFilmWeight)
+            .doc("A thin film's coverage over the base (oil on water, soap, anodised metal): 0 = none")
+            .unitless().min(0.0).max(1.0)
+        .field("thin_film_thickness", &Material::thinFilmThickness)
+            .doc("The film's thickness: its interference colours").unit("um").min(0.0).max(2.0)
+        .field("thin_film_ior", &Material::thinFilmIor).doc("The film's index of refraction").unitless().min(1.0)
+            .max(3.0);
 
     r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())
         .doc("The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y "

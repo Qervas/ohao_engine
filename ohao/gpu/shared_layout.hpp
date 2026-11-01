@@ -53,8 +53,8 @@ inline constexpr uint32_t kAlphaOpaque = 0u;
 inline constexpr uint32_t kAlphaMask = 1u;
 // a material's alpha mode: blended by base colour alpha times the albedo texture's alpha times row 3, z (opacity)
 inline constexpr uint32_t kAlphaBlend = 2u;
-// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex): material/material_layers.slang reads 7-11
-inline constexpr uint32_t kMaterialRows = 12u;
+// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex), 12 (transmission_color, transmission_weight), 13 (transmission_depth, geometry_thin_walled, transmission_dispersion_scale, transmission_dispersion_abbe_number), 14 (thin_film_weight, thin_film_thickness, thin_film_ior, 0): material/material_layers.slang reads 7-14
+inline constexpr uint32_t kMaterialRows = 15u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
 inline constexpr uint32_t kVfxGroupSize = 64u;
 // vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order
@@ -487,13 +487,15 @@ struct alignas(16) ForwardPush {
     alignas(16) std::array<float, 4> screen{};
     alignas(16) std::array<uint32_t, 4> config{};
     alignas(16) std::array<float, 4> env{};
+    alignas(16) std::array<float, 16> proj{};
 };
 static_assert(offsetof(ForwardPush, view) == 0);
 static_assert(offsetof(ForwardPush, camera) == 64);
 static_assert(offsetof(ForwardPush, screen) == 80);
 static_assert(offsetof(ForwardPush, config) == 96);
 static_assert(offsetof(ForwardPush, env) == 112);
-static_assert(sizeof(ForwardPush) == 128);
+static_assert(offsetof(ForwardPush, proj) == 128);
+static_assert(sizeof(ForwardPush) == 192);
 
 // ibl/env_prefilter.slang push constants
 struct alignas(16) EnvPrefilterPush {
