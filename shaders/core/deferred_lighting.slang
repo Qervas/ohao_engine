@@ -70,6 +70,10 @@ struct LightingPush
 struct LightingOut
 {
     float4 color : SV_Target0;
+    // A subsurface pixel's diffuse irradiance and albedo for the SSS pass (packSubsurfaceDiffuse),
+    // which spreads the irradiance alone and multiplies it by the pixel's own albedo: the specular
+    // stays sharp, and a uniform surround stays uniform. 0 elsewhere.
+    uint4 subsurfaceDiffuse : SV_Target1;
 };
 
 float4 mulColumns(float4 c[4], float4 v) { return c[0] * v.x + c[1] * v.y + c[2] * v.z + c[3] * v.w; }
@@ -107,6 +111,7 @@ float shadowCSM(float3 p, float viewDepth)
 LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
 {
     LightingOut o;
+    o.subsurfaceDiffuse = uint4(0u);
     const float4 g0 = gBuffer0.SampleLevel(uv, 0.0);
     const float4 g1 = gBuffer1.SampleLevel(uv, 0.0);
     const float4 g2 = gBuffer2.SampleLevel(uv, 0.0);
@@ -221,6 +226,15 @@ LightingOut main(float2 uv : TEXCOORD0, float4 fragCoord : SV_Position)
                       + coatPrefiltered * coatWeight;
         }
         ambient += reflected + diffuseAlbedo * irradiance * ao;
+    }
+
+    if (g1.w < 0.0)
+    {
+        float3 d = directLightDiffuse(s, lights, clusters, list, clustered, vis, tables);
+        if (vis.traced) d += directDiffuse.SampleLevel(uv, 0.0).rgb * diffuseAlbedo;
+        if (rtGI) d += gi.rgb * diffuseAlbedo * ao;
+        else if (ibl) d += diffuseAlbedo * pc.envIntensity * envIrradiance.SampleLevel(equirectUV(s.normal), 0.0).rgb * ao;
+        o.subsurfaceDiffuse = packSubsurfaceDiffuse(d, diffuseAlbedo);
     }
 
     o.color = float4(ambient + Lo + emitted.rgb, 1.0);

@@ -2,6 +2,7 @@
 #include "gbuffer_pass.hpp"
 #include "gpu/shared_layout.hpp"
 #include "core/log.hpp"
+#include <tuple>
 #include <utility>
 
 namespace ohao {
@@ -48,7 +49,8 @@ bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
 
     using rtc::layoutBinding;
     // 7, 8 (OpenPBR step 4): the G-buffer's layers target (each pixel's material) and the material
-    // table (its subsurface's free path and colour).
+    // table (its subsurface's free path and colour). blurH's 0 is the subsurface diffuse light, blurV's
+    // 9 the same image (the centre's own, which it takes out of the lit image).
     const VkDescriptorSetLayoutBinding h[] = {
         layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
@@ -58,15 +60,15 @@ bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
         layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), layoutBinding(5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
-    for (auto [bindings, layout] : {std::pair{h, &m_hSetLayout}, std::pair{v, &m_vSetLayout}}) {
+        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), layoutBinding(9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)};
+    for (auto [bindings, count, layout] : {std::tuple{h, 7u, &m_hSetLayout}, std::tuple{v, 8u, &m_vSetLayout}}) {
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 7;
+        li.bindingCount = count;
         li.pBindings = bindings;
         if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
     }
-    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8 * MAX_FRAMES_IN_FLIGHT},
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 9 * MAX_FRAMES_IN_FLIGHT},
                                           {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * MAX_FRAMES_IN_FLIGHT},
                                           {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT}};
     VkDescriptorPoolCreateInfo pi{};
@@ -110,7 +112,8 @@ void SSSPass::cleanup() {
 }
 
 void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
-    if (!m_hPipeline || !m_vPipeline || !m_gbuffer || !m_litImage || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
+    if (!m_hPipeline || !m_vPipeline || !m_gbuffer || !m_litImage || !m_diffuseView || frameIndex >= MAX_FRAMES_IN_FLIGHT)
+        return;
     const VkBuffer tiles = m_gbuffer->sssTileBuffer();
     if (!tiles) return;
 
@@ -140,11 +143,11 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     const VkDescriptorBufferInfo tileInfo{tiles, 0, VK_WHOLE_SIZE};
     const VkImageView position = m_gbuffer->getPositionView(), normal = m_gbuffer->getNormalView();
 
-    // Horizontal: lit -> scratch
+    // Horizontal: the subsurface diffuse light -> scratch
     rtc::transition(cmd, m_scratch, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT, true);
     {
         const VkDescriptorSet set = m_hSets[frameIndex];
-        const VkDescriptorImageInfo images[4] = {{VK_NULL_HANDLE, m_litView, kReadOnly},
+        const VkDescriptorImageInfo images[4] = {{VK_NULL_HANDLE, m_diffuseView, kReadOnly},
                                                  {VK_NULL_HANDLE, position, kReadOnly},
                                                  {VK_NULL_HANDLE, normal, kReadOnly},
                                                  {VK_NULL_HANDLE, m_scratch.view, kGeneral}};
@@ -168,6 +171,7 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // Vertical: scratch -> lit, in place (the lit image to GENERAL and back)
+    const VkDescriptorImageInfo diffuseInfo{VK_NULL_HANDLE, m_diffuseView, kReadOnly};
     rtc::transition(cmd, m_scratch, kGeneral, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kCompute, VK_ACCESS_SHADER_READ_BIT, false);
     imageBarrier(cmd, m_litImage, kReadOnly, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT);
     {
@@ -176,11 +180,11 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                                                  {VK_NULL_HANDLE, normal, kReadOnly},
                                                  {VK_NULL_HANDLE, m_scratch.view, kGeneral},
                                                  {VK_NULL_HANDLE, m_litView, kGeneral}};
-        VkWriteDescriptorSet writes[7] = {
+        VkWriteDescriptorSet writes[8] = {
             rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
             rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
             rtc::descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), rtc::descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+            rtc::descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)};
         writes[0].pImageInfo = &images[0];
         writes[1].pImageInfo = &images[1];
         writes[2].pBufferInfo = &tileInfo;
@@ -188,7 +192,8 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         writes[4].pImageInfo = &images[3];
         writes[5].pImageInfo = &layersInfo;
         writes[6].pBufferInfo = &materialInfo;
-        vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
+        writes[7].pImageInfo = &diffuseInfo;
+        vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vLayout, 0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, m_vLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);

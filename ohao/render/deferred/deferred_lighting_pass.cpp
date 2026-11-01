@@ -126,8 +126,10 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // Begin render pass (the lit image)
-    std::array<VkClearValue, 1> clearValues{};
+    std::array<VkClearValue, 2> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clearValues[1].color.uint32[0] = clearValues[1].color.uint32[1] = 0u;
+    clearValues[1].color.uint32[2] = clearValues[1].color.uint32[3] = 0u;
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -395,8 +397,8 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
-bool DeferredLightingPass::createTarget(RenderTarget& target, VkImageUsageFlags usage) {
-    target.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+bool DeferredLightingPass::createTarget(RenderTarget& target, VkImageUsageFlags usage, VkFormat format) {
+    target.format = format;
     target.width = m_width;
     target.height = m_height;
 
@@ -450,20 +452,25 @@ bool DeferredLightingPass::createOutputImages() {
     return createTarget(m_hdrOutput,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT |   // final image when post-processing is off: readback copy / swapchain blit
-                            VK_IMAGE_USAGE_STORAGE_BIT);        // SSS blurs skin tiles in place
+                            VK_IMAGE_USAGE_STORAGE_BIT) &&      // SSS blurs skin tiles in place
+           // The subsurface pixels' diffuse irradiance and albedo, which the SSS pass spreads alone.
+           createTarget(m_subsurfaceDiffuse, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                        kSubsurfaceDiffuseFormat);
 }
 
 void DeferredLightingPass::destroyOutputImages() {
     m_hdrOutput.destroy(m_device);
+    m_subsurfaceDiffuse.destroy(m_device);
 }
 
 bool DeferredLightingPass::createRenderPass() {
-    // The lit image: one RGBA16F color attachment, cleared, stored and left for shader reads.
-    std::array<VkAttachmentDescription, 1> attachments{};
-    std::array<VkAttachmentReference, 1> colorRefs{};
-    for (uint32_t i = 0; i < 1; ++i) {
+    // The lit image (RGBA16F) and the subsurface pixels' diffuse irradiance and albedo (RGBA32_UINT):
+    // cleared, stored and left for shader reads.
+    std::array<VkAttachmentDescription, 2> attachments{};
+    std::array<VkAttachmentReference, 2> colorRefs{};
+    for (uint32_t i = 0; i < 2; ++i) {
         VkAttachmentDescription& colorAttachment = attachments[i];
-        colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        colorAttachment.format = i == 0 ? VK_FORMAT_R16G16B16A16_SFLOAT : kSubsurfaceDiffuseFormat;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -504,7 +511,7 @@ bool DeferredLightingPass::createFramebuffer() {
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = m_renderPass;
-    const std::array<VkImageView, 1> views = {m_hdrOutput.view};
+    const std::array<VkImageView, 2> views = {m_hdrOutput.view, m_subsurfaceDiffuse.view};
     framebufferInfo.attachmentCount = static_cast<uint32_t>(views.size());
     framebufferInfo.pAttachments = views.data();
     framebufferInfo.width = m_width;
@@ -632,8 +639,8 @@ bool DeferredLightingPass::createPipeline() {
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // One unblended write: the lit image
-    std::array<VkPipelineColorBlendAttachmentState, 1> colorBlendAttachments{};
+    // Unblended writes: the lit image, the subsurface pixels' diffuse light
+    std::array<VkPipelineColorBlendAttachmentState, 2> colorBlendAttachments{};
     for (VkPipelineColorBlendAttachmentState& colorBlendAttachment : colorBlendAttachments) {
         colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;

@@ -48,6 +48,8 @@ public:
     // Get output
     [[nodiscard]] VkImageView getOutputView() const { return m_hdrOutput.view; }
     [[nodiscard]] VkImage getOutputImage() const { return m_hdrOutput.image; }
+    // A subsurface pixel's diffuse irradiance and albedo (packSubsurfaceDiffuse; 0 elsewhere), for the SSS pass.
+    [[nodiscard]] VkImageView getSubsurfaceDiffuseView() const { return m_subsurfaceDiffuse.view; }
     [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
 
     // The light table (LightGpu records, binding 5) and its light count.
@@ -83,7 +85,9 @@ private:
     [[nodiscard]] bool createFramebuffer();
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createOutputImages();
-    [[nodiscard]] bool createTarget(RenderTarget& target, VkImageUsageFlags usage);
+    [[nodiscard]] bool createTarget(RenderTarget& target, VkImageUsageFlags usage,
+                                    VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT);
+    static constexpr VkFormat kSubsurfaceDiffuseFormat = VK_FORMAT_R32G32B32A32_UINT;
     void destroyOutputImages();
     [[nodiscard]] bool createDescriptors();
 
@@ -92,6 +96,7 @@ private:
 
     // The color attachment: the lit HDR image
     RenderTarget m_hdrOutput;
+    RenderTarget m_subsurfaceDiffuse;
 
     // Render pass and framebuffer
     VkRenderPass m_renderPass{VK_NULL_HANDLE};

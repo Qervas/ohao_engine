@@ -559,6 +559,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_sssPass && m_sssWanted && litOutput) {
         timerBegin("sss");
         m_sssPass->setLitImage(m_lightingPass->getOutputImage(), litOutput);
+        m_sssPass->setSubsurfaceDiffuse(m_lightingPass->getSubsurfaceDiffuseView());
         m_sssPass->setCameraPos(m_cameraPos);
         m_sssPass->execute(cmd, frameIndex);
         timerEnd();

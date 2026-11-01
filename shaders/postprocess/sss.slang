@@ -1,21 +1,26 @@
 // Subsurface scattering (sub-project 2b spec, "Screen-space passes and order"): a separable
-// 7-tap blur of the lit image, wider in red than in blue (skin), on the 16x16 tiles the
-// G-buffer pass flagged (core/gbuffer.frag: fragments of materials with `subsurface` > 0).
-// Two indirect dispatches, one 16x16 workgroup a tile; no flagged tile, no work.
+// 7-tap blur of the subsurface pixels' diffuse irradiance E (the lighting pass's second target:
+// E, the mask and the diffuse albedo A, clustered_lights' packSubsurfaceDiffuse), on the 16x16
+// tiles the G-buffer pass flagged (fragments of materials with `subsurface_weight` > 0). Two
+// indirect dispatches, one 16x16 workgroup a tile; no flagged tile, no work. Only the diffuse light
+// spreads, as irradiance times the pixel's own albedo (Jimenez et al. 2015's pre- and
+// post-scatter split): the specular stays sharp and a uniform surround stays uniform.
 //
-// blurH   lit -> scratch, over the skin tiles and the kSSSRadiusTiles rows above and below
-//         them (whatever the vertical kernel reaches): skin pixels blurred horizontally,
-//         every other pixel copied.
-// blurV   scratch -> lit, in place, over the skin tiles: skin pixels blurred vertically.
+// blurH   E -> scratch, over the skin tiles and the kSSSRadiusTiles rows above and below them
+//         (whatever the vertical kernel reaches): E blurred horizontally (alpha: the mask), 0 off
+//         subsurface pixels.
+// blurV   scratch -> lit, in place, over the skin tiles: lit + w A (E blurred vertically - E), w the
+//         pixel's subsurface_weight.
 //
-// Each blur mixes its result with the centre by the pixel's subsurface_weight and weights each
-// tap by how close its distance from the camera is. OpenPBR step 4: the taps sit at the pixel's
-// world-space free path, subsurface_radius x subsurface_radius_scale (its material's rows 15-16,
-// through the G-buffer's layers target), weighed per channel by Burley's normalized diffusion
-// (Christensen & Burley 2015), r R(r) proportional to e^(-r/d) + e^(-r/3d), d the free path over
-// s = 1.85 - A + 7 |A - 0.8|^3 (A subsurface_color); a step stays within the kernel's 10 pixels.
+// A tap counts only on a subsurface pixel, weighed by how close its distance from the camera is.
+// OpenPBR step 4: the taps sit at the pixel's world-space free path, subsurface_radius x
+// subsurface_radius_scale (its material's rows 15-16, through the G-buffer's layers target), weighed
+// per channel by Burley's normalized diffusion (Christensen & Burley 2015), r R(r) proportional to
+// e^(-r/d) + e^(-r/3d), d the free path over s = 1.85 - A + 7 |A - 0.8|^3 (A subsurface_color); a
+// step stays within the kernel's 10 pixels.
 import shared.layout;
 import material.material_layers;
+import includes.lighting.clustered_lights;
 
 [[vk::push_constant]] ConstantBuffer<SSSPush> pc;
 
@@ -65,7 +70,7 @@ bool pixelOf(uint listBase, uint group, uint2 local, out int2 p)
 // ---------------------------------------------------------------------------------------
 // horizontal
 
-[[vk::binding(0, 0)]] Texture2D<float4> hLit;
+[[vk::binding(0, 0)]] Texture2D<uint4> hLit;   // packSubsurfaceDiffuse
 [[vk::binding(4, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> hOut;
 
 [shader("compute")]
@@ -74,11 +79,11 @@ void blurH(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
 {
     int2 p;
     if (!pixelOf(kSSSHeaderWords + 2u * kSSSMaxTiles, group.x, local.xy, p)) return;
-    const float4 centre = hLit.Load(int3(p, 0));
+    const float4 centre = subsurfaceIrradiance(hLit.Load(int3(p, 0)));
     const float skin = subsurfaceAt(p);
-    if (skin <= 0.0)
+    if (skin <= 0.0 || centre.a <= 0.0)
     {
-        hOut[p] = centre;
+        hOut[p] = float4(0.0);
         return;
     }
     const float d0 = distanceAt(p);
@@ -95,13 +100,14 @@ void blurH(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
         for (int s = -1; s <= 1; s += 2)
         {
             const int2 q = int2(clamp(p.x + s * off, 0, int(pc.extent.x) - 1), p.y);
+            const float4 dq = subsurfaceIrradiance(hLit.Load(int3(q, 0)));
             const float dd = distanceAt(q) - d0;
-            const float3 w = wk * exp(-dd * dd * 100.0);
-            sum += hLit.Load(int3(q, 0)).rgb * w;
+            const float3 w = wk * (exp(-dd * dd * 100.0) * dq.a);
+            sum += dq.rgb * w;
             wsum += w;
         }
     }
-    hOut[p] = float4(lerp(centre.rgb, sum / max(wsum, float3(0.001)), skin), 1.0);
+    hOut[p] = float4(sum / max(wsum, float3(1e-6)), 1.0);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -109,6 +115,7 @@ void blurH(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
 
 [[vk::binding(5, 0)]] Texture2D<float4> vIn;   // the horizontal pass's output
 [[vk::binding(6, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> vLit;
+[[vk::binding(9, 0)]] Texture2D<uint4> vDiffuse;   // packSubsurfaceDiffuse
 
 [shader("compute")]
 [numthreads(kSSSTile, kSSSTile, 1)]
@@ -118,6 +125,9 @@ void blurV(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
     if (!pixelOf(kSSSHeaderWords + kSSSMaxTiles, group.x, local.xy, p)) return;
     const float skin = subsurfaceAt(p);
     if (skin <= 0.0) return;   // the lit image keeps the pixel
+    const uint4 packed = vDiffuse.Load(int3(p, 0));
+    const float4 own = subsurfaceIrradiance(packed);
+    if (own.a <= 0.0) return;
     const float4 centre = vIn.Load(int3(p, 0));
     const float d0 = distanceAt(p);
     const Profile pr = profileAt(p, d0);
@@ -133,11 +143,13 @@ void blurV(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
         for (int s = -1; s <= 1; s += 2)
         {
             const int2 q = int2(p.x, clamp(p.y + s * off, 0, int(pc.extent.y) - 1));
+            const float4 dq = vIn.Load(int3(q, 0));
             const float dd = distanceAt(q) - d0;
-            const float3 w = wk * exp(-dd * dd * 100.0);
-            sum += vIn.Load(int3(q, 0)).rgb * w;
+            const float3 w = wk * (exp(-dd * dd * 100.0) * dq.a);
+            sum += dq.rgb * w;
             wsum += w;
         }
     }
-    vLit[p] = float4(lerp(centre.rgb, sum / max(wsum, float3(0.001)), skin), 1.0);
+    const float3 lit = vLit[p].rgb;
+    vLit[p] = float4(lit + skin * subsurfaceAlbedo(packed) * (sum / max(wsum, float3(1e-6)) - own.rgb), 1.0);
 }

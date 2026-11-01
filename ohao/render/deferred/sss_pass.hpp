@@ -34,6 +34,8 @@ public:
         m_litView = view;
     }
     void setCameraPos(const glm::vec3& p) noexcept { m_cameraPos = p; }
+    // The lighting pass's subsurface diffuse light: the only light the pass spreads.
+    void setSubsurfaceDiffuse(VkImageView view) noexcept { m_diffuseView = view; }
     // The kernel's step in pixels (3 steps each way), at most 10: the vertical blur reaches no
     // further than the tile rows the horizontal one covers.
     void setSSSWidth(float w) { m_sssWidth = glm::clamp(w, 0.0f, 10.0f); }
@@ -44,6 +46,7 @@ private:
     GBufferPass* m_gbuffer{nullptr};
     VkImage m_litImage{VK_NULL_HANDLE};
     VkImageView m_litView{VK_NULL_HANDLE};
+    VkImageView m_diffuseView{VK_NULL_HANDLE};
     glm::vec3 m_cameraPos{0.0f};
     float m_sssWidth{8.0f};
 

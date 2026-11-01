@@ -86,7 +86,7 @@ float3 evaluateSphere(Surface s, float3 toLight, float radius, float3 radiance, 
 // A rectangle (centre, edges e1 and e2, one-sided toward e1 x e2) of radiance Le: the diffuse by
 // its exact irradiance (the polygon's vector form factor J, the edge integral), the specular by the
 // representative point with the lobe widened by the rectangle's size as a disc of equal area.
-float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, OpenPBRTables t)
+float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, OpenPBRTables t, bool diffuseOnly = false)
 {
     const float3 P = s.position;
     const float3 nArea = cross(e1, e2);
@@ -116,6 +116,7 @@ float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, O
     float3 specular = float3(0.0), diffuse, unused;
     s.bsdf.evalLobes(s.wo, s.toLocal(Lj), t, unused, diffuse);
     diffuse *= E / max(dot(s.normal, Lj), kEpsilon);
+    if (diffuseOnly) return diffuse * Le;
     // Specular by linearly transformed cosines (Heitz et al. 2016): the fraction of each specular lobe
     // the rectangle covers (OpenPBRTables.Ltc at the view and the lobe's roughness, ltcQuad), times
     // that lobe's directional albedo: the base's at its roughness, the coat's at its own.
@@ -246,6 +247,56 @@ float3 directLight(Surface s, StructuredBuffer<LightGpu> lights, StructuredBuffe
             Lo += evaluateSphere(s, light.position.xyz - s.position, light.params.z, radiance, t) * shadow;
         else
             Lo += evaluateLight(s, L, radiance, t) * shadow;
+    }
+    return Lo;
+}
+
+// The SSS pass's input (core/deferred_lighting.slang's second target, RGBA32_UINT): a subsurface
+// pixel's diffuse light d over its diffuse albedo a (the irradiance, which the pass spreads) as three
+// floats' bits in xyz, a in w's low 24 bits (8 a channel) and the mask (1) at bit 24. No 16-bit types:
+// f32tof16 declares SPIR-V's Float16 and Int16, which the device does not enable. Unpacked: rgb the
+// irradiance, w 1 on a subsurface pixel.
+uint4 packSubsurfaceDiffuse(float3 d, float3 a)
+{
+    const float3 e = min(d / max(a, float3(1e-4)), float3(60000.0));
+    const uint3 a8 = uint3(round(saturate(a) * 255.0));
+    return uint4(asuint(e.r), asuint(e.g), asuint(e.b), a8.r | (a8.g << 8u) | (a8.b << 16u) | (1u << 24u));
+}
+float4 subsurfaceIrradiance(uint4 v)
+{
+    return float4(asfloat(v.x), asfloat(v.y), asfloat(v.z), float((v.w >> 24u) & 1u));
+}
+float3 subsurfaceAlbedo(uint4 v)
+{
+    return float3(float(v.w & 0xFFu), float((v.w >> 8u) & 0xFFu), float((v.w >> 16u) & 0xFFu)) / 255.0;
+}
+
+// The diffuse share of directLight (the SSS pass spreads a subsurface pixel's diffuse light alone).
+float3 directLightDiffuse(Surface s, StructuredBuffer<LightGpu> lights, StructuredBuffer<uint> clusters, uint2 list,
+                          bool clustered, LightVisibility vis, OpenPBRTables t)
+{
+    float3 Lo = float3(0.0);
+    for (uint k = 0u; k < list.y; ++k)
+    {
+        const LightGpu light = lights[clustered ? clusters[list.x + k] : k];
+        float3 L, radiance;
+        int type;
+        lightAt(light, s.position, L, radiance, type);
+        if (all(radiance == float3(0.0)) && type != 3) continue;
+        const int casts = int(round(light.params.w));
+        if (vis.traced && casts >= 0) continue;
+        const float shadow = casts > 0 && type == 0 ? vis.directional : 1.0;
+        if (shadow == 0.0) continue;
+        if (type == 3)
+        {
+            Lo += evaluateRect(s, light.position.xyz, light.direction.xyz, light.params.xyz, radiance, t, true) * shadow;
+            continue;
+        }
+        const float3 wi = s.toLocal(L);
+        if (wi.z <= 0.0) continue;
+        float3 unused, diffuse;
+        s.bsdf.evalLobes(s.wo, wi, t, unused, diffuse);
+        Lo += diffuse * radiance * shadow;
     }
     return Lo;
 }
