@@ -48,6 +48,15 @@ foreach(SLANG ${SLANG_SOURCES})
         list(APPEND SLANG_ENTRIES ${CMAKE_MATCH_1})
     endforeach()
     list(LENGTH SLANG_ENTRIES SLANG_ENTRY_COUNT)
+    # Every [shader(...)] attribute must head an entry point this parse finds: one that does not
+    # (an attribute left above a struct) gets no rule, and the last good SPIR-V would stay in use
+    # unnoticed (the transparent pass ran OpenPBR step 1's shader through step 2 that way).
+    string(REGEX MATCHALL "\\[shader\\(\"[a-z]+\"\\)\\]" SLANG_ATTRIBUTES "${SLANG_TEXT}")
+    list(LENGTH SLANG_ATTRIBUTES SLANG_ATTRIBUTE_COUNT)
+    if(NOT SLANG_ATTRIBUTE_COUNT EQUAL SLANG_ENTRY_COUNT)
+        message(FATAL_ERROR "${SLANG}: ${SLANG_ATTRIBUTE_COUNT} [shader(...)] attributes but ${SLANG_ENTRY_COUNT} entry "
+                            "points parsed: put each attribute directly above its entry function")
+    endif()
     # A shader with inline ray queries declares the capability (else slangc warns and adds it).
     set(SLANG_CAPS "")
     if(SLANG_TEXT MATCHES "RayQuery<")
