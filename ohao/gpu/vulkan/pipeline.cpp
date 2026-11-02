@@ -1,5 +1,5 @@
 #include "renderer_impl.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 #include "core/log.hpp"
 
 namespace ohao {

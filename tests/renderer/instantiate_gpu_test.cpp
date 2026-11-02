@@ -20,8 +20,8 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "render/camera/camera.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/asset/model.hpp"
-#include "scene/asset/primitive_mesh_generator.hpp"
+#include "asset/model.hpp"
+#include "asset/primitive_mesh_generator.hpp"
 
 #include <cstdio>
 #include <cstdlib>

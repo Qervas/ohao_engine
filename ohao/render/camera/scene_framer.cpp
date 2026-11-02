@@ -1,6 +1,6 @@
 #include "scene_framer.hpp"
 #include "camera.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <algorithm>
 #include <cctype>

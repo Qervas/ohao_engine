@@ -41,9 +41,9 @@
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
-#include "scene/asset/model.hpp"
-#include "scene/asset/model_loader.hpp"
-#include "scene/asset/primitive_mesh_generator.hpp"
+#include "asset/model.hpp"
+#include "asset/model_loader.hpp"
+#include "asset/primitive_mesh_generator.hpp"
 #include "runtime/image.hpp"
 
 #include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
@@ -565,10 +565,10 @@ void runMetaTests() {
 // own failure and wrong about the conclusion:
 //
 //   1. Linking DeferredRenderer into a focused GPU test binary fails: it drags
-//      in ohao_scene -> ohao_physics -> Jolt, which such a
+//      in ohao_asset -> ohao_physics -> Jolt, which such a
 //      binary has no business acquiring.
 //   2. Linking it into THIS binary, which already has all of those, fails on
-//      stb_image being defined in both ohao_gpu_vulkan and ohao_scene.
+//      stb_image being defined in both ohao_gpu_vulkan and ohao_asset.
 //
 // The second is a known engine-wide condition with a known engine-wide answer
 // -- /FORCE:MULTIPLE, which the GDExtension build has always used -- and once

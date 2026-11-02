@@ -4,7 +4,7 @@
 #include "ecs/instantiate.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <glm/gtc/matrix_transform.hpp>

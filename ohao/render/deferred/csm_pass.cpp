@@ -4,7 +4,7 @@
 #include "core/log.hpp"
 #include <cstring>
 #include "render/scene/render_scene.hpp"
-#include "../../scene/asset/model.hpp"
+#include "asset/model.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <algorithm>

@@ -1,7 +1,7 @@
 #include "ecs/asset_resolver.hpp"
 
-#include "scene/asset/model.hpp"
-#include "scene/asset/model_loader.hpp"
+#include "asset/model.hpp"
+#include "asset/model_loader.hpp"
 
 namespace ohao::ecs {
 

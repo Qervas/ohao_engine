@@ -10,7 +10,7 @@
 #include "ecs/physics_scene.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <algorithm>
 #include <chrono>

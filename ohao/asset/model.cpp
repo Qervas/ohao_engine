@@ -9,7 +9,7 @@
 #include <vector>
 #include "stb_image.h"
 #include <vulkan/vulkan_core.h>
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 #include "core/log.hpp"
 
 namespace ohao {

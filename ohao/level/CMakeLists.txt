@@ -1,7 +1,7 @@
 # The level pipeline (sub-project 5), in two libraries:
 #
 # ohao_level -- a glTF file's structure (nodes, extras, lights, cameras, primitive counts) read
-# from its JSON. ohao_scene links it (ModelLoader's per-mesh loading needs the primitive
+# from its JSON. ohao_asset links it (ModelLoader's per-mesh loading needs the primitive
 # counts), so it depends on nothing above core: glm, and simdjson privately for the JSON.
 add_library(ohao_level STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/gltf_structure.cpp

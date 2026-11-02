@@ -13,8 +13,8 @@
 #include "example_cli.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
-#include "scene/asset/model.hpp"
-#include "scene/asset/model_loader.hpp"
+#include "asset/model.hpp"
+#include "asset/model_loader.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 

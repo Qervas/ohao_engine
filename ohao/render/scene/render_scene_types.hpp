@@ -2,7 +2,7 @@
 #include "render/scene/handles.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
-#include "scene/asset/model.hpp"   // Vertex
+#include "asset/model.hpp"   // Vertex
 #include "gpu/layout_meta.hpp"
 #include "gpu/shared_layout.hpp"
 

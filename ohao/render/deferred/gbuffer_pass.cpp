@@ -2,7 +2,7 @@
 #include "gpu_culling.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 #include "gpu/shared_layout.hpp"
 #include <array>
 #include <cstring>

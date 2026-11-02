@@ -40,7 +40,7 @@
 #include "ohao/render_host.hpp"
 #include "render/scene/render_scene.hpp"
 #include "runtime/image.hpp"
-#include "scene/asset/model_loader.hpp"
+#include "asset/model_loader.hpp"
 #include "stb_image.h"
 
 #include <glm/gtc/matrix_transform.hpp>

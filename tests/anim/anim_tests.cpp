@@ -14,7 +14,7 @@
 #include "ecs/world.hpp"
 #include "ecs/world_hash.hpp"
 #include "reflect/registry.hpp"
-#include "scene/asset/model_loader.hpp"
+#include "asset/model_loader.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 

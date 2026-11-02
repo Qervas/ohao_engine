@@ -63,7 +63,7 @@ RULES: list[tuple[str, list[str]]] = [
     ("ohao/core/log.*", ["log_tests", "reflect_tests"]),
     # The renderer: every GPU suite.
     ("ohao/render/*", ["label:gpu"]), ("ohao/gpu/*", ["label:gpu"]), ("shaders/*", ["label:gpu", "check_doctor"]),
-    ("ohao/scene/*", ["label:gpu", "scene_tests"]),
+    ("ohao/asset/*", ["label:gpu", "scene_tests", "anim_tests"]),
     ("ohao/render/material/*", ["material_tests", "openpbr_tables_current", "label:gpu"]),
     # Content.
     ("assets/scenes/*", ["check_cli_cpu", "check_cli", "check_scene_schema"]),

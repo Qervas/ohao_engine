@@ -4,7 +4,7 @@
 #include "ecs/components.hpp"
 #include "ecs/arms_anim.hpp"
 #include "ecs/enemy_anim.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <algorithm>
 #include <chrono>

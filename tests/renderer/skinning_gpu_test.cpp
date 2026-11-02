@@ -30,7 +30,7 @@
 #include "ohao/render_host.hpp"
 #include "reflect/registry.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <cmath>
 #include <cstdio>

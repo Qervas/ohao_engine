@@ -4,8 +4,8 @@
 
 #include "render/scene/model_upload.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/asset/model.hpp"
-#include "scene/asset/primitive_mesh_generator.hpp"
+#include "asset/model.hpp"
+#include "asset/primitive_mesh_generator.hpp"
 
 #include <ankerl/unordered_dense.h>
 

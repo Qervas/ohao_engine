@@ -34,8 +34,8 @@
 #include "render/camera/camera.hpp"
 #include "render/scene/render_scene.hpp"
 #include "runtime/image.hpp"
-#include "scene/asset/model.hpp"
-#include "scene/asset/primitive_mesh_generator.hpp"
+#include "asset/model.hpp"
+#include "asset/primitive_mesh_generator.hpp"
 
 #include <algorithm>
 #include <cstdio>

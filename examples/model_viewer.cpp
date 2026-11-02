@@ -13,7 +13,7 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
-#include "scene/asset/model_loader.hpp"
+#include "asset/model_loader.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/instantiate.hpp"

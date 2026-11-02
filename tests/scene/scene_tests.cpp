@@ -24,9 +24,9 @@
 #include "gpu/shared_layout.hpp"
 #include "render/scene/meshlet_builder.hpp"
 #include "render/scene/model_upload.hpp"
-#include "scene/asset/model.hpp"
-#include "scene/asset/model_loader.hpp"
-#include "scene/asset/primitive_mesh_generator.hpp"
+#include "asset/model.hpp"
+#include "asset/model_loader.hpp"
+#include "asset/primitive_mesh_generator.hpp"
 
 #include <array>
 

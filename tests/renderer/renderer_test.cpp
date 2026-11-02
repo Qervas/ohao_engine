@@ -14,7 +14,7 @@
 #include "ecs/spawn.hpp"
 #include "render/camera/camera.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
 

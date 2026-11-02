@@ -1,7 +1,7 @@
 #include "render/scene/model_upload.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <algorithm>
 #include <array>

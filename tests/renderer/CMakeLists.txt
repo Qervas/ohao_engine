@@ -14,12 +14,12 @@ target_link_libraries(renderer_test PRIVATE ohao_test_harness)
 
 if(MSVC)
     target_link_libraries(renderer_test PRIVATE
-        ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+        ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_asset ohao_physics ohao_audio ohao_core
         ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 else()
     target_link_libraries(renderer_test PRIVATE
         -Wl,--start-group
-        ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+        ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_asset ohao_physics ohao_audio ohao_core
         -Wl,--end-group
         ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 endif()
@@ -53,7 +53,7 @@ target_compile_features(instantiate_gpu_test PRIVATE cxx_std_20)
 target_include_directories(instantiate_gpu_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS})
 target_compile_definitions(instantiate_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(instantiate_gpu_test PRIVATE
-    ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+    ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_asset ohao_physics ohao_audio ohao_core
     ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 if(TARGET Jolt)
     target_link_libraries(instantiate_gpu_test PRIVATE Jolt)
@@ -71,7 +71,7 @@ target_include_directories(scene_view_gpu_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao 
     ${CMAKE_SOURCE_DIR}/tools ${Vulkan_INCLUDE_DIRS})
 target_compile_definitions(scene_view_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(scene_view_gpu_test PRIVATE
-    ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+    ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_asset ohao_physics ohao_audio ohao_core
     ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator ohao_test_harness)
 if(TARGET Jolt)
     target_link_libraries(scene_view_gpu_test PRIVATE Jolt)

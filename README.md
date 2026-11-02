@@ -155,7 +155,7 @@ ohao/
   gpu/vulkan/  9,639 LOC  device, memory, descriptors, dispatch
   render/     25,748 LOC  scene/ (RenderScene), rt/, deferred/, graph/, ibl/, particles/, picking/, async/
   ecs/           707 LOC  EnTT world, transform system, render extract, spawn helpers
-  scene/asset/ 2,556 LOC  loaders (gltf/obj/fbx via Assimp)
+  asset/       2,556 LOC  loaders (gltf/obj/fbx via Assimp)
   physics/    11,083 LOC  Jolt 5.1 backend behind IPhysicsBackend plugin
   audio/         476 LOC  miniaudio backend
 shaders/      17,058 LOC  125 files, mostly rt/, core/, postprocess/, compute/

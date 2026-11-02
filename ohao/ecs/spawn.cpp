@@ -1,6 +1,6 @@
 #include "ecs/spawn.hpp"
 #include "render/scene/model_upload.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <cmath>
 #include <utility>

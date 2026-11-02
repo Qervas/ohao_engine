@@ -13,7 +13,7 @@
 #include "ecs/spawn.hpp"
 #include "ecs/world.hpp"
 #include "render/camera/scene_framer.hpp"
-#include "scene/asset/model.hpp"
+#include "asset/model.hpp"
 
 #include <algorithm>
 #include <cstdint>
