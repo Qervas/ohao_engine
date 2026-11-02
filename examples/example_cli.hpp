@@ -4,7 +4,7 @@
  * Shared CLI helpers for OHAO examples (C++20 art bar).
  */
 
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/rt_meta.hpp"
 

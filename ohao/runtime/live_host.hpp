@@ -28,7 +28,7 @@
 #include "core/timeline.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "runtime/audio_player.hpp"
 #include "runtime/click_capture.hpp"
 #include "runtime/clock.hpp"

@@ -6,7 +6,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
 #include "asset/model.hpp"

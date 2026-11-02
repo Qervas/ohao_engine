@@ -14,22 +14,11 @@ target_include_directories(ohao_gpu_vulkan PUBLIC
 target_compile_features(ohao_gpu_vulkan PUBLIC cxx_std_20)
 
 target_link_libraries(ohao_gpu_vulkan PUBLIC
-    ohao_asset
     ohao_core
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}
 )
-
-# Phase 5 — DLSS. device_setup.cpp adds the NGX-required instance/device
-# extensions under OHAO_DLSS_ENABLED, and this lib instantiates PathTracer's
-# layout (via rt_profile_renderer.hpp) which carries an OHAO_DLSS_ENABLED-guarded
-# member. Defining the macro here keeps that layout ODR-consistent with
-# ohao_renderer. No NGX headers/link needed here — device_setup uses only Vulkan
-# extension-name macros; the NGX calls live entirely in ohao_renderer.
-if(OHAO_DLSS AND TARGET ngx_dlss)
-    target_compile_definitions(ohao_gpu_vulkan PRIVATE OHAO_DLSS_ENABLED)
-endif()
 
 # NRD's NRI_VK.lib carries its own VMA build with the same global symbols. Under
 # /FORCE:MULTIPLE whichever object the linker pulls first wins, and NRI's VMA paired

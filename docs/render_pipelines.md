@@ -18,7 +18,7 @@ Deferred  RTRealtime    RTOffline
 (raster)  (path trace)  (path trace)
 ```
 
-`RenderMode` (`ohao/gpu/vulkan/renderer.hpp`):
+`RenderMode` (`ohao/render/renderer/vulkan_renderer.hpp`):
 
 | Mode | Role |
 |------|------|

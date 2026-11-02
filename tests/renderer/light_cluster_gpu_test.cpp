@@ -27,7 +27,7 @@
 #include "ecs/spawn.hpp"
 #include "ecs/world.hpp"
 #include "gpu/shared_layout.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "ohao/render_host.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/light_clusters.hpp"

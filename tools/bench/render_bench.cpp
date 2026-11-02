@@ -39,7 +39,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "gpu_calibration.hpp"
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"

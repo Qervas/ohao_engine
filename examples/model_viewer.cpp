@@ -12,7 +12,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "asset/model_loader.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "ecs/asset_resolver.hpp"

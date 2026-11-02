@@ -5,7 +5,7 @@
 #include "ecs/components.hpp"
 #include "ecs/instantiate.hpp"
 #include "ecs/scene_view.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/scene/render_scene.hpp"

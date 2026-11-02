@@ -8,7 +8,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"
 #include "ecs/render_extract.hpp"

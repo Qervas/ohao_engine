@@ -14,7 +14,7 @@
 #include "ecs/world_hash.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "level/gltf_structure.hpp"
 #include "level/level_hints.hpp"
 #include "level/level_system.hpp"

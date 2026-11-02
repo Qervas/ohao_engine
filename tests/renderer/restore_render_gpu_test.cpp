@@ -18,7 +18,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "ohao/render_host.hpp"
 #include "render/scene/render_scene.hpp"
 

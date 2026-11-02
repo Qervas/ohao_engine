@@ -24,7 +24,7 @@
 #include "render/frame/pass_registry.hpp"
 #include "gpu/layout_meta.hpp"
 #include "gpu/vulkan/vk_utils.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "render/camera/camera.hpp"
 #include "physics/backend/physics_backend.hpp"
 #include "render/deferred/post_processing_pipeline.hpp"
@@ -819,7 +819,7 @@ static void runHeadlessDeferredTests() {
 //      by CAPABILITY rather than by index -- so the probe takes the first
 //      that advertises VK_KHR_ray_tracing_pipeline instead of devices[0].
 //   2. THE EXTENSION LIST AND FEATURE CHAIN, taken from
-//      ohao/gpu/vulkan/device_setup.cpp rather than guessed: acceleration
+//      ohao/render/renderer/device_setup.cpp rather than guessed: acceleration
 //      structure, ray tracing pipeline, deferred host operations, buffer
 //      device address, descriptor indexing, SPIR-V 1.4, shader float
 //      controls.
@@ -1045,7 +1045,7 @@ static void runHeadlessPathTracerTests() {
 //     the whole image.
 //
 // THE SOURCE LAYOUT IS VK_IMAGE_LAYOUT_GENERAL, which is what the engine's own
-// readbacks in ohao/gpu/vulkan/renderer.cpp use for compute-written images and
+// readbacks in ohao/render/renderer/vulkan_renderer.cpp use for compute-written images and
 // what the final output is left in.
 //
 // VALIDATION IS NOT ENABLED HERE. Running this path with the validation layers

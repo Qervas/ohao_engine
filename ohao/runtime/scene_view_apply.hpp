@@ -4,7 +4,7 @@
 // RenderHost and the window's LiveHost. Header-only.
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_view.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "render/camera/camera.hpp"
 
 #include <string>

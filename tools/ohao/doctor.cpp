@@ -5,7 +5,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "reflect/json_writer.hpp"
 
 #include <vulkan/vulkan.h>

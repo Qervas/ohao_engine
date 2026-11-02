@@ -338,7 +338,7 @@ OFF-build smoke: `./build-nonrd/cornell_box ...` produces `Saved:` line
 with no `[NRD]` log lines — probe is fully `#ifdef`-guarded out.
 
 Deviations from plan:
-- Plan spec'd probe in `ohao/gpu/vulkan/renderer.cpp`. Moved to
+- Plan spec'd probe in `ohao/render/renderer/vulkan_renderer.cpp`. Moved to
   `ohao/render/rt/path_tracer.cpp` (specifically `PathTracer::init`
   tail, after SBT creation) because NRD is linked to `ohao_renderer`,
   not `ohao_gpu_vulkan` — T1 review surfaced this split-lib constraint.

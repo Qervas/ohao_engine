@@ -29,7 +29,7 @@
 #include "ecs/vfx.hpp"
 #include "ecs/vfx_draw.hpp"
 #include "ecs/world.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "level/level_system.hpp"
 #include "ohao/render_host.hpp"
 #include "render/deferred/deferred_renderer.hpp"

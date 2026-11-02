@@ -20,7 +20,7 @@
 #include "ecs/scene_types.hpp"
 #include "ecs/scene_view.hpp"
 #include "example_scenes.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "runtime/scene_view_apply.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"

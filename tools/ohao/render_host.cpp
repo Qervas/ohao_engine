@@ -3,7 +3,7 @@
 #include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/vfx_draw.hpp"
-#include "gpu/vulkan/renderer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"
 
