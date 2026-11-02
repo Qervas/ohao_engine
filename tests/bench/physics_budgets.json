@@ -1,11 +1,13 @@
 {
-  "comment": "Specs docs/specs/2026-10-26-player-physics-design.md, docs/specs/2026-10-27-combat-design.md, docs/specs/2026-10-27-feel-design.md and docs/specs/2026-10-28-animation-design.md and docs/specs/2026-10-28-vfx-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat, feelStep for feel, animStep for animation, vfxStep for vfx). Changing a budget needs Frank's OK; the animation ones are the spec's proposals, OPEN ruling 16; vfx_step_ms is the vfx spec's proposal.",
+  "comment": "Specs docs/specs/2026-10-26-player-physics-design.md, docs/specs/2026-10-27-combat-design.md, docs/specs/2026-10-27-feel-design.md and docs/specs/2026-10-28-animation-design.md, docs/specs/2026-10-28-vfx-design.md and docs/specs/2026-11-02-ragdoll-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat, feelStep for feel, animStep for animation, vfxStep for vfx, ragdollStep for joints and ragdolls). Changing a budget needs Frank's OK; the animation ones are the spec's proposals, OPEN ruling 16; vfx_step_ms is the vfx spec's proposal; joints_step_ms is the ragdoll spec's proposal, OPEN ruling 8, measured before it gates.",
   "currentStep": 5,
   "combatStep": 3,
   "feelStep": 3,
   "animStep": 2,
   "vfxStep": 2,
+  "ragdollStep": 1,
   "budgets": {
+    "joints_step_ms": { "max": 0.10, "gatedFrom": 2 },
     "vfx_step_ms": { "max": 0.02, "gatedFrom": 1 },
     "vfx_sync_ms": { "max": 0.03, "gatedFrom": 2 },
     "anim_step_ms": { "max": 0.01, "gatedFrom": 2 },

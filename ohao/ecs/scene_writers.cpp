@@ -353,6 +353,41 @@ void writeFields(const RigidBody& v, const RigidBody* omit, FieldSink& out) {
     if (!omit || !same(v.restitution, omit->restitution)) t.f32("\"restitution\"", v.restitution);
 }
 
+void writeFields(const Joint& v, const Joint* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.type != omit->type) {
+        static constexpr std::string_view kTypes[] = {"\"Fixed\"", "\"Point\"", "\"Hinge\"",
+                                                      "\"Slider\"", "\"SwingTwist\"", "\"Distance\""};
+        const auto raw = static_cast<uint8_t>(v.type);
+        if (raw < std::size(kTypes)) {
+            t.token("\"type\"", kTypes[raw]);
+        } else {
+            t.fail("value " + std::to_string(static_cast<int64_t>(raw)) + " is not registered in enum JointType");
+            t.null("\"type\"");
+        }
+    }
+    if (!omit || v.other != omit->other) {
+        // A dead target, or one without an id, is written as null (the world).
+        const uint64_t id = out.world.idOf(v.other);
+        if (id) t.hex64("\"other\"", id);
+        else t.null("\"other\"");
+    }
+    if (!omit || !same(v.anchor, omit->anchor)) vec3(t, "\"anchor\"", v.anchor);
+    if (!omit || !same(v.axis, omit->axis)) vec3(t, "\"axis\"", v.axis);
+    // omitDefault: 0 is never written, so files without them keep their bytes.
+    if (v.limitMin != 0.0f) t.f32("\"limitMin\"", v.limitMin);
+    if (v.limitMax != 0.0f) t.f32("\"limitMax\"", v.limitMax);
+    if (v.swingDeg != 0.0f) t.f32("\"swingDeg\"", v.swingDeg);
+    if (v.springHz != 0.0f) t.f32("\"springHz\"", v.springHz);
+    if (v.springDamping != 0.0f) t.f32("\"springDamping\"", v.springDamping);
+    if (v.breakForce != 0.0f) t.f32("\"breakForce\"", v.breakForce);
+    if (v.breakTorque != 0.0f) t.f32("\"breakTorque\"", v.breakTorque);
+}
+
+void writeFields(const JointState& v, const JointState* omit, FieldSink& out) {
+    if (!omit || v.broken != omit->broken) out.tree.boolean("\"broken\"", v.broken);
+}
+
 void writeFields(const SpawnPoint& v, const SpawnPoint* omit, FieldSink& out) {
     if (!omit || v.tag != omit->tag) out.tree.string("\"tag\"", v.tag);
 }

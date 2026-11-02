@@ -262,7 +262,7 @@ enum class ConstraintType {
     POINT,        // Ball-and-socket
     HINGE,
     SLIDER,       // Prismatic
-    CONE_TWIST,
+    SWING_TWIST,  // Ragdoll joint: a swing cone about the twist axis and a twist range
     DISTANCE,
     SIX_DOF
 };
@@ -272,15 +272,20 @@ struct ConstraintSettings {
     BodyHandle body1 = INVALID_BODY;
     BodyHandle body2 = INVALID_BODY; // INVALID_BODY = attach to world
 
-    // Anchor points (local space of each body)
+    // Where anchors and axes are given: Local, each in its own body's space (its origin and rotation,
+    // not its centre of mass; body2's in the world's when body2 is INVALID_BODY), or World.
+    enum class Space { Local, World };
+    Space space = Space::Local;
+
+    // Anchor points
     glm::vec3 anchor1{0.0f};
     glm::vec3 anchor2{0.0f};
 
-    // Axis (for hinge, slider, cone)
+    // Axis (hinge axis, slider axis, swing-twist's twist axis)
     glm::vec3 axis1{0.0f, 1.0f, 0.0f};
     glm::vec3 axis2{0.0f, 1.0f, 0.0f};
 
-    // Limits (hinge: radians, slider: meters, cone: radians)
+    // Limits (hinge: radians, slider: meters, swing-twist: its twist, radians)
     bool enableLimits = false;
     float limitMin = 0.0f;
     float limitMax = 0.0f;
@@ -295,11 +300,26 @@ struct ConstraintSettings {
     float springFrequency = 1.0f;   // Hz
     float springDamping = 0.1f;     // 0..1
 
+    // Swing-twist: the swing cone's half angles about the axis normal to `axis` and in its plane
+    // (radians); the twist range is limitMin..limitMax (always limited)
+    float swingNormalHalfCone = 0.0f;
+    float swingPlaneHalfCone = 0.0f;
+
     // Distance constraint specific
     float minDistance = 0.0f;
     float maxDistance = -1.0f; // -1 = auto-detect from current positions
 
-    // Breaking threshold (0 = unbreakable)
+    // Whether the two bodies still collide with each other (false: their contacts are rejected while
+    // the constraint exists, as PhysX and Unity do; a ragdoll's neighbouring parts overlap at the joint)
+    bool collideConnected = false;
+
+    // Solver iterations for the island this constraint is in (0: the system's default); the island
+    // runs the largest of its bodies' and constraints'. Long chains and ragdolls need more.
+    uint32_t velocitySteps = 0;
+    uint32_t positionSteps = 0;
+
+    // Breaking threshold (0 = unbreakable): a step whose impulse passes it disables the constraint
+    // and reports it (getAndClearBrokenConstraints); only destroyConstraint removes one
     float breakingForce = 0.0f;
     float breakingTorque = 0.0f;
 
@@ -403,9 +423,10 @@ public:
 
     // === SIMULATION STATE (snapshots) ===
     // Everything the next step depends on: every body's pose, velocities and sleep, the contact
-    // cache (the impulses the solver warm-starts with), each character. restoreState needs the
-    // same bodies and characters as at saveState (the caller checks the bodies; a character set
-    // that differs is refused before anything changes) and returns false otherwise.
+    // cache (the impulses the solver warm-starts with), each character, every constraint's enabled
+    // flag. restoreState needs the same bodies, characters and constraints as at saveState (the
+    // caller checks the bodies; a character set or a constraint list, in the solver's order, that
+    // differs is refused before anything changes) and returns false otherwise.
     [[nodiscard]] virtual std::string saveState() const = 0;
     virtual bool restoreState(const std::string& state) = 0;
 
@@ -475,6 +496,7 @@ public:
     virtual void destroyConstraint(ConstraintHandle handle) = 0;
     [[nodiscard]] virtual bool isValidConstraint(ConstraintHandle handle) const = 0;
     virtual void setConstraintEnabled(ConstraintHandle handle, bool enabled) = 0;
+    [[nodiscard]] virtual bool isConstraintEnabled(ConstraintHandle handle) const = 0;
     virtual void setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) = 0;
     virtual void setConstraintLimits(ConstraintHandle handle, float min, float max) = 0;
     virtual size_t getConstraintCount() const = 0;
@@ -590,6 +612,7 @@ public:
     void destroyConstraint(ConstraintHandle) override {}
     [[nodiscard]] bool isValidConstraint(ConstraintHandle) const override { return false; }
     void setConstraintEnabled(ConstraintHandle, bool) override {}
+    [[nodiscard]] bool isConstraintEnabled(ConstraintHandle) const override { return false; }
     void setConstraintMotorState(ConstraintHandle, bool, float, float) override {}
     void setConstraintLimits(ConstraintHandle, float, float) override {}
     size_t getConstraintCount() const override { return 0; }

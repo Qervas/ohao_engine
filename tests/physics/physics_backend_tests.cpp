@@ -15,6 +15,8 @@
 #include <vector>
 #include <memory>
 #include <cmath>
+#include <cstdio>
+#include <algorithm>
 #include <thread>
 #include <chrono>
 
@@ -960,27 +962,214 @@ bool testConstraintDistance() {
     return true;
 }
 
-bool testConstraintCone() {
-    TEST_BEGIN("Cone twist constraint (world-anchored)");
+bool testConstraintSwingTwist() {
+    TEST_BEGIN("Swing-twist constraint holds its swing cone (sub-project 13)");
     if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
 
-    auto b1 = createDynamicBox(glm::vec3(0, 5, 0), 1.0f);
+    // A box hanging 1 m below a world anchor, its twist axis down, a 20 degree cone, kicked sideways.
+    const glm::vec3 pivot(100, 10, 0);
+    auto b1 = createDynamicBox(pivot - glm::vec3(0, 1, 0), 1.0f);
 
     ConstraintSettings settings;
-    settings.type = ConstraintType::CONE_TWIST;
+    settings.type = ConstraintType::SWING_TWIST;
     settings.body1 = b1;
-    settings.body2 = INVALID_BODY; // World anchor
-    settings.anchor1 = glm::vec3(0, 0, 0);
-    settings.anchor2 = glm::vec3(0, 5, 0);
+    settings.body2 = INVALID_BODY;
+    settings.anchor1 = glm::vec3(0, 1, 0);   // the box's local space: 1 m above its centre
+    settings.anchor2 = pivot;                // the world's
     settings.axis1 = glm::vec3(0, -1, 0);
     settings.axis2 = glm::vec3(0, -1, 0);
-    settings.limitMax = glm::radians(30.0f);
+    settings.swingNormalHalfCone = glm::radians(20.0f);
+    settings.swingPlaneHalfCone = glm::radians(20.0f);
+    settings.limitMin = glm::radians(-10.0f);
+    settings.limitMax = glm::radians(10.0f);
 
     auto ch = g_backend->createConstraint(settings);
     EXPECT_NE(ch, INVALID_CONSTRAINT);
+    g_backend->setLinearVelocity(b1, glm::vec3(3, 0, 0));
+    g_backend->setAngularVelocity(b1, glm::vec3(0, 8, 0));
+    float worstSwing = 0.0f;
+    float worstAnchor = 0.0f;
+    for (int i = 0; i < 120; ++i) {
+        g_backend->step(1.0f / 60.0f);
+        const glm::vec3 down = g_backend->getRotation(b1) * glm::vec3(0, -1, 0);
+        worstSwing = std::max(worstSwing, glm::degrees(std::acos(std::clamp(-down.y, -1.0f, 1.0f))));
+        const glm::vec3 anchor = g_backend->getPosition(b1) + g_backend->getRotation(b1) * glm::vec3(0, 1, 0);
+        worstAnchor = std::max(worstAnchor, glm::length(anchor - pivot));
+    }
+    std::printf("    swing-twist: worst swing %.2f deg, worst anchor %.4f m\n", worstSwing, worstAnchor);
+    EXPECT_TRUE(worstSwing > 10.0f);      // the kick swung it
+    EXPECT_TRUE(worstSwing < 22.0f);      // within the cone and the solver's softness
+    EXPECT_TRUE(worstAnchor < 0.02f);
 
     g_backend->destroyConstraint(ch);
     g_backend->destroyBody(b1);
+    TEST_PASS();
+    return true;
+}
+
+bool testConstraintChainHangs() {
+    TEST_BEGIN("A chain of 20 point joints hangs together (sub-project 13)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    const glm::vec3 hook(140, 10.125f, 0);
+    std::vector<BodyHandle> links;
+    std::vector<ConstraintHandle> joints;
+    for (int i = 0; i < 20; ++i) {
+        BodyCreationInfo info;
+        info.position = glm::vec3(140, 10.0f - 0.25f * float(i), 0);
+        info.motionType = MotionType::DYNAMIC;
+        info.mass = 1.0f;
+        info.shape.type = ShapeInfo::Type::BOX;
+        info.shape.halfExtents = glm::vec3(0.1f);
+        const BodyHandle b = g_backend->createBody(info);
+        ConstraintSettings cs;
+        cs.type = ConstraintType::POINT;
+        cs.space = ConstraintSettings::Space::World;
+        cs.body1 = b;
+        cs.body2 = links.empty() ? INVALID_BODY : links.back();
+        cs.anchor1 = cs.anchor2 = info.position + glm::vec3(0, 0.125f, 0);
+        joints.push_back(g_backend->createConstraint(cs));
+        links.push_back(b);
+    }
+    const auto gaps = [&] {
+        float t = 0.0f;
+        for (std::size_t k = 0; k < links.size(); ++k) {
+            const glm::vec3 top = g_backend->getPosition(links[k]) + g_backend->getRotation(links[k]) * glm::vec3(0, 0.125f, 0);
+            const glm::vec3 above = k == 0 ? hook
+                : g_backend->getPosition(links[k - 1]) + g_backend->getRotation(links[k - 1]) * glm::vec3(0, -0.125f, 0);
+            t += glm::length(top - above);
+        }
+        return t;
+    };
+    for (int i = 0; i < 240; ++i) g_backend->step(1.0f / 60.0f);
+    const float settled = gaps();
+    std::printf("    backend chain: settled gaps %.4f m, link 19 at y %.4f\n", settled, g_backend->getPosition(links.back()).y);
+    EXPECT_TRUE(settled < 0.004f * 20.0f);   // Jolt's defaults (10 velocity, 2 position steps): 2.6 mm a joint
+
+    for (ConstraintHandle c : joints) g_backend->destroyConstraint(c);
+    for (BodyHandle b : links) g_backend->destroyBody(b);
+    TEST_PASS();
+    return true;
+}
+
+bool testConstraintLocalAnchors() {
+    TEST_BEGIN("Local anchors: a hinge on a rotated body keeps its own edge (sub-project 13)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    // A door: a box rotated 90 degrees about Y, hinged to the world at its local +X face's edge.
+    BodyCreationInfo info;
+    info.position = glm::vec3(110, 5, 0);
+    info.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+    info.motionType = MotionType::DYNAMIC;
+    info.mass = 10.0f;
+    info.shape.type = ShapeInfo::Type::BOX;
+    info.shape.halfExtents = glm::vec3(0.5f, 1.0f, 0.05f);
+    auto door = g_backend->createBody(info);
+    const glm::vec3 hingeLocal(0.5f, 0.0f, 0.0f);
+    const glm::vec3 hingeWorld = info.position + info.rotation * hingeLocal;
+
+    ConstraintSettings settings;
+    settings.type = ConstraintType::HINGE;
+    settings.body1 = door;
+    settings.body2 = INVALID_BODY;
+    settings.anchor1 = hingeLocal;
+    settings.anchor2 = hingeWorld;
+    settings.axis1 = glm::vec3(0, 1, 0);
+    settings.axis2 = glm::vec3(0, 1, 0);
+    auto ch = g_backend->createConstraint(settings);
+    EXPECT_NE(ch, INVALID_CONSTRAINT);
+
+    g_backend->setAngularVelocity(door, glm::vec3(0, 2, 0));
+    float worst = 0.0f;
+    for (int i = 0; i < 60; ++i) {
+        g_backend->step(1.0f / 60.0f);
+        const glm::vec3 edge = g_backend->getPosition(door) + g_backend->getRotation(door) * hingeLocal;
+        worst = std::max(worst, glm::length(edge - hingeWorld));
+    }
+    // It swung about its edge (the centre moved) and the edge stayed (gravity along the axis).
+    EXPECT_TRUE(glm::length(g_backend->getPosition(door) - info.position) > 0.1f);
+    EXPECT_TRUE(worst < 0.01f);
+
+    g_backend->destroyConstraint(ch);
+    g_backend->destroyBody(door);
+    TEST_PASS();
+    return true;
+}
+
+bool testConstraintBreakDisables() {
+    TEST_BEGIN("A broken constraint is disabled, kept and reported once (sub-project 13)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto b1 = createDynamicBox(glm::vec3(120, 5, 0), 50.0f);
+    ConstraintSettings settings;
+    settings.type = ConstraintType::POINT;
+    settings.body1 = b1;
+    settings.body2 = INVALID_BODY;
+    settings.anchor1 = glm::vec3(0, 0.5f, 0);
+    settings.anchor2 = glm::vec3(120, 5.5f, 0);
+    settings.breakingForce = 1.0f;   // 50 kg under gravity is ~8 N s a step
+    auto ch = g_backend->createConstraint(settings);
+    EXPECT_NE(ch, INVALID_CONSTRAINT);
+    const std::size_t before = g_backend->getConstraintCount();
+
+    std::vector<ConstraintHandle> broken;
+    for (int i = 0; i < 10; ++i) {
+        g_backend->step(1.0f / 60.0f);
+        for (ConstraintHandle h : g_backend->getAndClearBrokenConstraints()) broken.push_back(h);
+    }
+    EXPECT_EQ(broken.size(), 1u);
+    if (!broken.empty()) EXPECT_EQ(broken[0], ch);
+    EXPECT_TRUE(g_backend->isValidConstraint(ch));
+    EXPECT_FALSE(g_backend->isConstraintEnabled(ch));
+    EXPECT_EQ(g_backend->getConstraintCount(), before);
+    EXPECT_TRUE(g_backend->getPosition(b1).y < 4.99f);   // falling free
+
+    g_backend->destroyConstraint(ch);
+    g_backend->destroyBody(b1);
+    TEST_PASS();
+    return true;
+}
+
+bool testConstraintStateRestore() {
+    TEST_BEGIN("Constraints in the saved state: exact across a disable, refused across a removal (sub-project 13)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto a = createDynamicBox(glm::vec3(130, 5, 0), 1.0f);
+    auto b = createDynamicBox(glm::vec3(131, 5, 0), 1.0f);
+    ConstraintSettings settings;
+    settings.type = ConstraintType::POINT;
+    settings.body1 = a;
+    settings.body2 = INVALID_BODY;
+    settings.anchor1 = glm::vec3(0, 1, 0);
+    settings.anchor2 = glm::vec3(130, 6, 0);
+    auto ca = g_backend->createConstraint(settings);
+    settings.body1 = b;
+    settings.anchor2 = glm::vec3(131, 6, 0);
+    auto cb = g_backend->createConstraint(settings);
+    g_backend->setLinearVelocity(a, glm::vec3(2, 0, 1));
+
+    for (int i = 0; i < 10; ++i) g_backend->step(1.0f / 60.0f);
+    const std::string saved = g_backend->saveState();
+    for (int i = 0; i < 20; ++i) g_backend->step(1.0f / 60.0f);
+    const glm::vec3 a20 = g_backend->getPosition(a);
+    const glm::vec3 b20 = g_backend->getPosition(b);
+
+    // Disable one, run on, restore: the saved enabled flag comes back and the run repeats exactly.
+    g_backend->setConstraintEnabled(cb, false);
+    for (int i = 0; i < 5; ++i) g_backend->step(1.0f / 60.0f);
+    EXPECT_TRUE(g_backend->restoreState(saved));
+    EXPECT_TRUE(g_backend->isConstraintEnabled(cb));
+    for (int i = 0; i < 20; ++i) g_backend->step(1.0f / 60.0f);
+    EXPECT_TRUE(g_backend->getPosition(a) == a20);
+    EXPECT_TRUE(g_backend->getPosition(b) == b20);
+
+    // A removed constraint changes the list: refused.
+    g_backend->destroyConstraint(ca);
+    EXPECT_FALSE(g_backend->restoreState(saved));
+
+    g_backend->destroyConstraint(cb);
+    g_backend->destroyBody(a);
+    g_backend->destroyBody(b);
     TEST_PASS();
     return true;
 }
@@ -1770,7 +1959,11 @@ void runAllTests() {
     testConstraintSlider();
     testConstraintPoint();
     testConstraintDistance();
-    testConstraintCone();
+    testConstraintSwingTwist();
+    testConstraintLocalAnchors();
+    testConstraintChainHangs();
+    testConstraintBreakDisables();
+    testConstraintStateRestore();
     testConstraintMotor();
     testConstraintEnableDisable();
     testConstraintTwoBody();

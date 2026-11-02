@@ -49,6 +49,14 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .value("Static", Motion::Static, "Never moves")
         .value("Dynamic", Motion::Dynamic, "Moved by the simulation; writes its entity's Transform each step")
         .value("Kinematic", Motion::Kinematic, "Moved by its transform; dynamic bodies collide with it");
+    r.enumeration<JointType>("JointType")
+        .doc("What a joint lets its two bodies do.")
+        .value("Fixed", JointType::Fixed, "Nothing: welded as they were built")
+        .value("Point", JointType::Point, "Turn freely about the anchor (ball and socket)")
+        .value("Hinge", JointType::Hinge, "Turn about the axis through the anchor (a door)")
+        .value("Slider", JointType::Slider, "Slide along the axis without turning")
+        .value("SwingTwist", JointType::SwingTwist, "Swing within a cone about the axis and twist about it (a shoulder)")
+        .value("Distance", JointType::Distance, "Keep the anchors within a distance (a rope, a chain link)");
 
     // ---- authoring components (saved in scene files) -----------------------------------
 
@@ -369,6 +377,32 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("mass", &RigidBody::mass).doc("Mass of a dynamic body").unit("kg").min(0.001)
         .field("friction", &RigidBody::friction).doc("Surface friction").unitless().min(0.0).max(1.0)
         .field("restitution", &RigidBody::restitution).doc("Bounciness: 0 none, 1 elastic").unitless().min(0.0).max(1.0);
+    r.type<Joint>("Joint").component().host(makeComponentOps<Joint>())
+        .doc("A joint between the body this entity is part of (its own, else its nearest ancestor's) and another's, or "
+             "the world. Anchor and axis are in this entity's frame; the other side is the same world point and axis "
+             "when the joint is built, except a Distance joint's, which is the other entity's origin. Several joints "
+             "on one body: child entities with a Joint each.")
+        .field("type", &Joint::type).doc("What the joint lets the bodies do")
+        .field("other", &Joint::other).doc("The other body's entity (its own body, else its nearest ancestor's); null: the world")
+        .field("anchor", &Joint::anchor).doc("The joint's point in this entity's frame").unit("m")
+        .field("axis", &Joint::axis).doc("Hinge axis, slider axis or swing-twist's twist axis, in this entity's frame").unitless()
+        .field("limitMin", &Joint::limitMin)
+            .doc("Hinge: degrees this entity turns about the axis (right-handed) from the built pose, relative to the "
+                 "other; slider: m along the axis; swing-twist: twist degrees; distance: m. With limitMax 0 too: free "
+                 "(hinge, slider), the built distance (distance)")
+            .unitless().omitDefault()
+        .field("limitMax", &Joint::limitMax).doc("The limit's other end, as limitMin").unitless().omitDefault()
+        .field("swingDeg", &Joint::swingDeg).doc("Swing-twist: the swing cone's half angle about the axis")
+            .unit("deg").angle().min(0.0).max(180.0).omitDefault()
+        .field("springHz", &Joint::springHz).doc("Distance: a soft range's frequency; 0 is rigid").unit("Hz").min(0.0).omitDefault()
+        .field("springDamping", &Joint::springDamping).doc("Distance: the soft range's damping ratio").unitless().min(0.0).omitDefault()
+        .field("breakForce", &Joint::breakForce).doc("The impulse in one step that breaks it; 0 never").unit("N s").min(0.0).omitDefault()
+        .field("breakTorque", &Joint::breakTorque).doc("The angular impulse in one step that breaks it; 0 never")
+            .unit("N m s").min(0.0).omitDefault();
+    r.type<JointState>("JointState").component().host(makeComponentOps<JointState>())
+        .doc("The joint broke: its constraint stays built and does nothing. The physics step adds it; a restore from "
+             "before the break makes the joint whole.")
+        .field("broken", &JointState::broken).doc("The joint is broken; false makes it whole again");
 
     r.type<Health>("Health").component().host(makeComponentOps<Health>())
         .doc("Hit points. Damage (a weapon's round, combat.damage) takes current down to 0, which is dead: the dead "

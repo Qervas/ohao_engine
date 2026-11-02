@@ -16,6 +16,10 @@
 #include "reflect/registry.hpp"
 
 #include <glm/gtc/quaternion.hpp>
+#ifndef GLM_ENABLE_EXPERIMENTAL
+#define GLM_ENABLE_EXPERIMENTAL
+#endif
+#include <glm/gtx/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -1666,6 +1670,335 @@ static bool drop(const std::string& dir) {
     return ok;
 }
 
+// ---- test 36: joints as scene data (sub-project 13 step 1) -------------------------------------------
+// docs/specs/2026-11-02-ragdoll-design.md, "Test plan". A Joint makes one constraint between the body
+// its entity is part of and another's (or the world), built after the bodies; a break disables it;
+// snapshots replay a swinging chain and a break exactly.
+
+namespace {
+
+struct JointWorld {
+    World world;
+    FileAssetResolver files{OHAO_SOURCE_DIR};
+    PhysicsScene* physics{nullptr};
+    JointWorld() {
+        world.seedIds(36);
+        physics = &installPhysics(world, files);
+    }
+    entt::entity box(const char* name, glm::vec3 pos, glm::vec3 half, float mass = 1.0f,
+                     glm::quat rot = glm::quat(1, 0, 0, 0), Motion motion = Motion::Dynamic) {
+        const entt::entity e = world.create(name, Transform{pos, rot, glm::vec3(1.0f)});
+        auto& reg = world.registry();
+        reg.emplace<Collider>(e, Collider{ColliderShape::Box, half});
+        reg.emplace<RigidBody>(e, RigidBody{motion, mass});
+        return e;
+    }
+    Joint& joint(entt::entity e, JointType type, glm::vec3 anchor, entt::entity other = entt::null,
+                 glm::vec3 axis = glm::vec3(0, 1, 0)) {
+        Joint j;
+        j.type = type;
+        j.anchor = anchor;
+        j.other = other;
+        j.axis = axis;
+        return world.registry().emplace<Joint>(e, j);
+    }
+    void kick(entt::entity e, glm::vec3 linear, glm::vec3 angular) {
+        auto& be = physics->backend();
+        const auto h = physics->bodyOf(e);
+        be.setAwake(h, true);
+        be.setLinearVelocity(h, linear);
+        be.setAngularVelocity(h, angular);
+    }
+    [[nodiscard]] glm::mat4 worldOf(entt::entity e) const { return world.registry().get<WorldTransform>(e).world; }
+    [[nodiscard]] glm::vec3 point(entt::entity e, glm::vec3 local) const {
+        return glm::vec3(worldOf(e) * glm::vec4(local, 1.0f));
+    }
+};
+
+// A door 1 m wide, 2 m tall, turned 90 degrees about Y, hinged at its local +X edge.
+entt::entity makeDoor(JointWorld& w, float limitMin = 0.0f, float limitMax = 0.0f) {
+    const entt::entity door = w.box("Door", glm::vec3(2, 1.5f, 0), glm::vec3(0.5f, 1.0f, 0.05f), 10.0f,
+                                    glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0)));
+    Joint& j = w.joint(door, JointType::Hinge, glm::vec3(0.5f, 0, 0));
+    j.limitMin = limitMin;
+    j.limitMax = limitMax;
+    return door;
+}
+
+// Its yaw from the built pose, degrees, unwrapped from the last.
+float doorTurn(const JointWorld& w, entt::entity door, float last) {
+    const glm::vec3 x = glm::vec3(w.worldOf(door)[0]);   // the built pose's local +X is world -Z
+    float deg = glm::degrees(std::atan2(-x.x, -x.z));   // + is right-handed about +Y
+    while (deg - last > 180.0f) deg -= 360.0f;
+    while (deg - last < -180.0f) deg += 360.0f;
+    return deg;
+}
+
+// 20 boxes hanging in a line from the world, each on a point joint to the one above.
+std::vector<entt::entity> makeChain(JointWorld& w) {
+    std::vector<entt::entity> links;
+    for (int i = 0; i < 20; ++i) {
+        const std::string name = "Link" + std::to_string(i);
+        const entt::entity e = w.box(name.c_str(), glm::vec3(0, 10.0f - 0.25f * float(i), 0), glm::vec3(0.1f), 1.0f);
+        w.joint(e, JointType::Point, glm::vec3(0, 0.125f, 0), links.empty() ? entt::entity{entt::null} : links.back());
+        links.push_back(e);
+    }
+    return links;
+}
+
+std::vector<Transform> posesOf(const World& w, const std::vector<entt::entity>& es) {
+    std::vector<Transform> out;
+    for (const entt::entity e : es) out.push_back(w.registry().get<Transform>(e));
+    return out;
+}
+
+bool samePoses(const std::vector<Transform>& a, const std::vector<Transform>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (a[i].position != b[i].position || a[i].rotation != b[i].rotation) return false;
+    return true;
+}
+
+} // namespace
+
+static void t36_hinge_anchor_in_local_space() {
+    JointWorld w;
+    const entt::entity door = makeDoor(w);
+    w.world.sync();
+    const glm::vec3 hinge = w.point(door, glm::vec3(0.5f, 0, 0));
+    const glm::vec3 centre = glm::vec3(w.worldOf(door)[3]);
+    CHECK(w.physics->info().joints == 1, "one Joint, one constraint");
+    w.kick(door, glm::vec3(0.0f), glm::vec3(0, 2, 0));
+    float worst = 0.0f;
+    for (int i = 0; i < 30; ++i) {
+        (void)runSteps(w.world, 1);
+        worst = std::max(worst, glm::length(w.point(door, glm::vec3(0.5f, 0, 0)) - hinge));
+    }
+    const float moved = glm::length(glm::vec3(w.worldOf(door)[3]) - centre);
+    std::printf("\n      the door's centre moved %.3f m; its hinge edge at most %.5f m", moved, worst);
+    CHECK(moved > 0.1f, "the door swung");
+    CHECK(worst < 0.01f, "about its own edge: the anchor is in the door's frame, the door turned 90 degrees");
+}
+
+static void t36_hinge_limits_hold() {
+    for (const float spin : {4.0f, -4.0f}) {
+        JointWorld w;
+        const entt::entity door = makeDoor(w, 0.0f, 110.0f);
+        w.world.sync();
+        w.kick(door, glm::vec3(0.0f), glm::vec3(0, spin, 0));
+        float turn = 0.0f, lo = 0.0f, hi = 0.0f;
+        for (int i = 0; i < 180; ++i) {
+            (void)runSteps(w.world, 1);
+            turn = doorTurn(w, door, turn);
+            lo = std::min(lo, turn);
+            hi = std::max(hi, turn);
+        }
+        std::printf("\n      spun at %.0f rad/s: the door's turn stayed in [%.2f, %.2f] degrees", spin, lo, hi);
+        CHECK(lo > -2.0f && hi < 112.0f, "held within 0 to 110 degrees (2 degrees for the solver)");
+        CHECK(spin > 0.0f ? hi > 100.0f : lo > -2.0f, "opened right-handed about +Y to its open stop; shut at 0");
+    }
+}
+
+static void t36_pendulum_period() {
+    JointWorld w;
+    const float L = 1.0f, theta = glm::radians(5.0f);
+    const glm::vec3 pivot(0, 5, 0);
+    const glm::quat tilt = glm::angleAxis(theta, glm::vec3(0, 0, 1));
+    const entt::entity bob = w.box("Bob", pivot + L * glm::vec3(std::sin(theta), -std::cos(theta), 0.0f),
+                                   glm::vec3(0.06f), 1.0f, tilt);
+    w.joint(bob, JointType::Point, glm::vec3(0, L, 0));
+    w.world.sync();
+    // Downward crossings of x = pivot.x (right to left), as steps with a linear fraction.
+    std::vector<double> crossings;
+    float lastX = glm::vec3(w.worldOf(bob)[3]).x - pivot.x;
+    for (int i = 1; i <= 600; ++i) {
+        (void)runSteps(w.world, 1);
+        const float x = glm::vec3(w.worldOf(bob)[3]).x - pivot.x;
+        if (lastX > 0.0f && x <= 0.0f) crossings.push_back(double(i - 1) + double(lastX / (lastX - x)));
+        lastX = x;
+    }
+    const double expected = 2.0 * 3.14159265358979 * std::sqrt(double(L) / 9.81);
+    double period = 0.0;
+    if (crossings.size() >= 2)
+        period = (crossings.back() - crossings.front()) / double(crossings.size() - 1) / 60.0;
+    std::printf("\n      %zu swings: period %.4f s, 2 pi sqrt(L/g) %.4f s", crossings.size(), period, expected);
+    CHECK(crossings.size() >= 4 && std::fabs(period - expected) / expected < 0.01, "a 1 m pendulum's period within 1%");
+}
+
+static void t36_swing_twist_cone() {
+    JointWorld w;
+    const glm::vec3 pivot(0, 5, 0);
+    const entt::entity limb = w.box("Limb", pivot - glm::vec3(0, 1, 0), glm::vec3(0.1f, 0.5f, 0.1f), 2.0f);
+    Joint& j = w.joint(limb, JointType::SwingTwist, glm::vec3(0, 1, 0), entt::null, glm::vec3(0, -1, 0));
+    j.swingDeg = 20.0f;
+    j.limitMin = -10.0f;
+    j.limitMax = 10.0f;
+    w.world.sync();
+    w.kick(limb, glm::vec3(3, 0, 0), glm::vec3(0, 6, 0));
+    float worstSwing = 0.0f, worstTwist = 0.0f;
+    for (int i = 0; i < 120; ++i) {
+        (void)runSteps(w.world, 1);
+        const glm::mat4 m = w.worldOf(limb);
+        const glm::vec3 down = -glm::normalize(glm::vec3(m[1]));
+        worstSwing = std::max(worstSwing, glm::degrees(std::acos(std::clamp(-down.y, -1.0f, 1.0f))));
+        // Twist: the limb's X about its own long axis against world X projected the same way.
+        const glm::quat r = glm::quat_cast(glm::mat3(m));
+        const glm::quat swing = glm::rotation(glm::vec3(0, -1, 0), down);
+        const glm::quat twist = glm::inverse(swing) * r;
+        worstTwist = std::max(worstTwist, std::fabs(glm::degrees(2.0f * std::atan2(twist.y, twist.w))));
+    }
+    std::printf("\n      kicked: worst swing %.2f degrees (cone 20), worst twist %.2f (range 10)", worstSwing, worstTwist);
+    CHECK(worstSwing > 10.0f && worstSwing < 22.0f, "the swing held within its 20 degree cone (2 for the solver)");
+    CHECK(worstTwist > 5.0f && worstTwist < 12.0f, "the twist held within 10 degrees (2 for the solver)");
+}
+
+static void t36_chain_holds_together() {
+    JointWorld w;
+    const auto links = makeChain(w);
+    w.world.sync();
+    CHECK(w.physics->info().joints == 20, "20 joints");
+    // A joint's gap: the link's top against the bottom of the one above (the world hook for the first).
+    const auto gap = [&](std::size_t k) {
+        const glm::vec3 above = k == 0 ? glm::vec3(0, 10.125f, 0) : w.point(links[k - 1], glm::vec3(0, -0.125f, 0));
+        return glm::length(w.point(links[k], glm::vec3(0, 0.125f, 0)) - above);
+    };
+    const auto total = [&] {
+        float t = 0.0f;
+        for (std::size_t k = 0; k < links.size(); ++k) t += gap(k);
+        return t;
+    };
+    (void)runSteps(w.world, 240);
+    const float settled = total();
+    w.kick(links.back(), glm::vec3(1, 0, 0), glm::vec3(0.0f));
+    float worstJoint = 0.0f;
+    for (int i = 0; i < 180; ++i) {
+        (void)runSteps(w.world, 1);
+        for (std::size_t k = 0; k < links.size(); ++k) worstJoint = std::max(worstJoint, gap(k));
+    }
+    std::printf("\n      settled, the 20 gaps sum to %.4f m; swinging from a 1 m/s kick, the worst joint opened %.4f m",
+                settled, worstJoint);
+    // Jolt's solver at its defaults (10 velocity, 2 position steps) does not carry 20 links' weight
+    // through in one step: the bare backend's chain measures the same (physics_backend_tests).
+    CHECK(settled < 0.004f * 20.0f, "settled, each joint within 4 mm on average (measured 2.6)");
+    CHECK(worstJoint < 0.06f, "swinging, no joint opens 6 cm (measured 4.6)");
+}
+
+static void t36_a_joint_breaks_at_its_force() {
+    JointWorld w;
+    const entt::entity weak = w.box("Weak", glm::vec3(0, 5, 0), glm::vec3(0.5f), 200.0f);
+    w.joint(weak, JointType::Fixed, glm::vec3(0, 0.5f, 0)).breakForce = 10.0f;     // 200 kg: 32.7 N s a step
+    const entt::entity strong = w.box("Strong", glm::vec3(3, 5, 0), glm::vec3(0.5f), 200.0f);
+    w.joint(strong, JointType::Fixed, glm::vec3(0, 0.5f, 0)).breakForce = 100.0f;
+    w.world.sync();
+    const auto events = runSteps(w.world, 30);
+    auto& reg = w.world.registry();
+    const auto* st = reg.try_get<JointState>(weak);
+    const PhysicsEvent* brk = nullptr;
+    int breaks = 0;
+    for (const PhysicsEvent& e : events)
+        if (e.kind == Kind::JointBreak) ++breaks, brk = brk ? brk : &e;
+    std::printf("\n      the weak joint broke in step %llu", brk ? (unsigned long long)brk->step : 0ull);
+    CHECK(st && st->broken, "the weak joint broke (JointState)");
+    CHECK(breaks == 1 && brk && brk->aId == w.world.idOf(weak) && brk->step <= 2,
+          "one joint_break event in the first steps, the Joint's entity");
+    CHECK(!reg.all_of<JointState>(strong), "the strong one held");
+    CHECK(glm::vec3(w.worldOf(weak)[3]).y < 4.0f && near(glm::vec3(w.worldOf(strong)[3]).y, 5.0f, 0.01f),
+          "the weak box fell (1.2 m in half a second); the strong one hangs where it was");
+    const PhysicsInfo info = w.physics->info();
+    CHECK(info.joints == 2 && info.brokenJoints == 1, "physics.info: 2 joints, 1 broken (kept, disabled)");
+}
+
+static void t36_removing_a_body_removes_its_joints() {
+    JointWorld w;
+    const auto links = makeChain(w);
+    w.world.sync();
+    (void)runSteps(w.world, 5);
+    w.world.destroy(links[10]);
+    (void)runSteps(w.world, 1);
+    // Link 10's own joint (to 9) and link 11's (to 10) are gone; the rest stay.
+    CHECK(w.physics->info().joints == 18, "the destroyed link's joint and the one to it are gone");
+    CHECK(w.physics->backend().getConstraintCount() == 18, "and their constraints");
+    (void)runSteps(w.world, 30);
+    CHECK(glm::vec3(w.worldOf(links[19])[3]).y < 10.0f - 0.25f * 19.0f - 1.0f, "the lower part of the chain fell away");
+}
+
+static void t36_warnings() {
+    JointWorld w;
+    const entt::entity loose = w.world.create("Loose", Transform{glm::vec3(0, 1, 0)});
+    w.joint(loose, JointType::Point, glm::vec3(0.0f));
+    const entt::entity wall = w.box("Wall", glm::vec3(5, 1, 0), glm::vec3(1.0f), 1.0f, glm::quat(1, 0, 0, 0), Motion::Static);
+    w.joint(wall, JointType::Hinge, glm::vec3(0.0f));
+    const entt::entity self = w.box("Self", glm::vec3(9, 1, 0), glm::vec3(0.5f));
+    w.joint(self, JointType::Point, glm::vec3(0.0f), self);
+    w.world.sync();
+    std::vector<std::string> codes;
+    for (const PhysicsWarning& wn : w.physics->warnings()) codes.push_back(wn.code);
+    const auto has = [&](const char* c) { return std::find(codes.begin(), codes.end(), c) != codes.end(); };
+    CHECK(has("W_JOINT_NO_BODY") && has("W_JOINT_STATIC") && has("W_JOINT_SELF"),
+          "a joint without a body, between two still ones, and to itself: warned, not built");
+    CHECK(w.physics->info().joints == 0, "no constraint");
+}
+
+static void t36_restore_mid_swing_is_exact() {
+    JointWorld w;
+    const auto links = makeChain(w);
+    w.world.sync();
+    w.kick(links.back(), glm::vec3(3, 0, 1), glm::vec3(0.0f));
+    (void)runSteps(w.world, 20);
+    const Snapshot mid = takeSnapshot(w.world, engineTypes());
+    const uint64_t midHash = hashOf(w.world);
+    (void)runSteps(w.world, 60);
+    const auto first = posesOf(w.world, links);
+    const uint64_t hash1 = hashOf(w.world);
+    restoreSnapshot(w.world, mid);
+    CHECK(hashOf(w.world) == midHash, "restored to the snapshot's hash");
+    (void)runSteps(w.world, 60);
+    CHECK(samePoses(first, posesOf(w.world, links)) && hashOf(w.world) == hash1,
+          "the same 60 steps of a swinging chain from the snapshot: the same poses and hash, bit for bit");
+}
+
+static void t36_restore_before_a_break_is_whole_and_exact() {
+    JointWorld w;
+    const entt::entity weak = w.box("Weak", glm::vec3(0, 5, 0), glm::vec3(0.5f), 20.0f);
+    Joint& j = w.joint(weak, JointType::Point, glm::vec3(0, 0.5f, 0));
+    j.breakForce = 4.0f;   // holds 20 kg hanging (3.27 N s a step), breaks when kicked down
+    w.world.sync();
+    (void)runSteps(w.world, 10);
+    CHECK(!w.world.registry().all_of<JointState>(weak), "holds while it hangs");
+    const Snapshot before = takeSnapshot(w.world, engineTypes());
+    w.kick(weak, glm::vec3(0, -3, 0), glm::vec3(0.0f));
+    const Snapshot kicked = takeSnapshot(w.world, engineTypes());
+    (void)runSteps(w.world, 30);
+    const auto* st = w.world.registry().try_get<JointState>(weak);
+    CHECK(st && st->broken, "a downward kick breaks it");
+    const Transform first = w.world.registry().get<Transform>(weak);
+    const uint64_t hash1 = hashOf(w.world);
+
+    restoreSnapshot(w.world, before);
+    (void)runSteps(w.world, 1);
+    CHECK(!w.world.registry().all_of<JointState>(weak) && w.physics->info().brokenJoints == 0 &&
+              w.physics->backend().getConstraintCount() == 1,
+          "restored from before the break: whole again, the same constraint");
+    restoreSnapshot(w.world, kicked);
+    (void)runSteps(w.world, 30);
+    const auto* st2 = w.world.registry().try_get<JointState>(weak);
+    CHECK(st2 && st2->broken && samePoses({first}, {w.world.registry().get<Transform>(weak)}) && hashOf(w.world) == hash1,
+          "and replayed from the kick: it breaks again and falls the same, bit for bit");
+}
+
+static void t36_two_runs_are_identical() {
+    std::vector<Transform> runs[2];
+    for (auto& out : runs) {
+        JointWorld w;
+        const auto links = makeChain(w);
+        w.world.sync();
+        w.kick(links.back(), glm::vec3(2, 0, -1), glm::vec3(0.0f));
+        (void)runSteps(w.world, 120);
+        out = posesOf(w.world, links);
+    }
+    CHECK(samePoses(runs[0], runs[1]), "two runs of the chain: the same poses, bit for bit");
+}
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string(argv[1]) == "--drop") return drop(argv[2]) ? 0 : 1;
     if (argc == 3 && std::string(argv[1]) == "--look") return look(argv[2]) ? 0 : 1;
@@ -1730,5 +2063,16 @@ int main(int argc, char** argv) {
     RUN(sp9_t19_no_lead_lockstep_dead_or_enemy);
     RUN(sp9_t19_rotation_drawn_from_newest_step);
     RUN(sp9_t19_lead_across_placement);
+    RUN(t36_hinge_anchor_in_local_space);
+    RUN(t36_hinge_limits_hold);
+    RUN(t36_pendulum_period);
+    RUN(t36_swing_twist_cone);
+    RUN(t36_chain_holds_together);
+    RUN(t36_a_joint_breaks_at_its_force);
+    RUN(t36_removing_a_body_removes_its_joints);
+    RUN(t36_warnings);
+    RUN(t36_restore_mid_swing_is_exact);
+    RUN(t36_restore_before_a_break_is_whole_and_exact);
+    RUN(t36_two_runs_are_identical);
     return ohao::test::finish("level_physics_tests");
 }

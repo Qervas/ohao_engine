@@ -42,7 +42,7 @@
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
-#include <Jolt/Physics/Constraints/ConeConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 
@@ -194,10 +194,12 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
     explicit JoltContactListenerImpl(JoltPhysicsBackend* b) : backend(b) {}
 
     JPH::ValidateResult OnContactValidate(
-        const JPH::Body& /*inBody1*/, const JPH::Body& /*inBody2*/,
+        const JPH::Body& inBody1, const JPH::Body& inBody2,
         JPH::RVec3Arg /*inBaseOffset*/,
         const JPH::CollideShapeResult& /*inCollisionResult*/) override
     {
+        if (!backend->pairCollides(inBody1.GetID(), inBody2.GetID()))
+            return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
         return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
     }
 
@@ -433,14 +435,14 @@ void JoltPhysicsBackend::step(float deltaTime) {
 
         m_physicsSystem->Update(deltaTime, m_collisionSteps, m_tempAllocator.get(), m_jobSystem.get());
 
-        // Check constraint breaking thresholds
-        m_brokenConstraints.clear();
-        std::erase_if(m_constraints, [&](auto& entry) {
-            auto& data = entry.second;
-            if (data.breakingForce <= 0.0f && data.breakingTorque <= 0.0f) {
-                return false;
-            }
+        // Constraint breaking: a step whose impulse passes a threshold disables the constraint (kept,
+        // so the constraint list, which the solver and the saved state order by, stays the same).
+        // Reported until getAndClearBrokenConstraints, in handle order within a step.
+        const std::size_t brokenBefore = m_brokenConstraints.size();
+        for (auto& [handle, data] : m_constraints) {
+            if (data.breakingForce <= 0.0f && data.breakingTorque <= 0.0f) continue;
             JPH::Constraint* c = data.constraint.GetPtr();
+            if (!c->GetEnabled()) continue;
             float linearImpulse  = 0.0f;
             float angularImpulse = 0.0f;
             switch (data.type) {
@@ -467,10 +469,11 @@ void JoltPhysicsBackend::step(float deltaTime) {
                     angularImpulse = sc->GetTotalLambdaRotation().Length();
                     break;
                 }
-                case ConstraintType::CONE_TWIST: {
-                    auto* cc = static_cast<JPH::ConeConstraint*>(c);
-                    linearImpulse  = cc->GetTotalLambdaPosition().Length();
-                    angularImpulse = std::abs(cc->GetTotalLambdaRotation());
+                case ConstraintType::SWING_TWIST: {
+                    auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+                    linearImpulse  = st->GetTotalLambdaPosition().Length();
+                    angularImpulse = JPH::Vec3(st->GetTotalLambdaTwist(), st->GetTotalLambdaSwingY(),
+                                               st->GetTotalLambdaSwingZ()).Length();
                     break;
                 }
                 case ConstraintType::DISTANCE: {
@@ -484,17 +487,15 @@ void JoltPhysicsBackend::step(float deltaTime) {
                     angularImpulse = sc->GetTotalLambdaRotation().Length();
                     break;
                 }
-                default: break;
             }
-            bool broken = (data.breakingForce  > 0.0f && linearImpulse  > data.breakingForce) ||
-                          (data.breakingTorque > 0.0f && angularImpulse > data.breakingTorque);
+            const bool broken = (data.breakingForce  > 0.0f && linearImpulse  > data.breakingForce) ||
+                                (data.breakingTorque > 0.0f && angularImpulse > data.breakingTorque);
             if (broken) {
-                m_brokenConstraints.push_back(entry.first);
-                m_physicsSystem->RemoveConstraint(data.constraint);
-                return true;
+                c->SetEnabled(false);
+                m_brokenConstraints.push_back(handle);
             }
-            return false;
-        });
+        }
+        std::sort(m_brokenConstraints.begin() + static_cast<std::ptrdiff_t>(brokenBefore), m_brokenConstraints.end());
 
         // Dispatch contact events to user listener
         if (m_userContactListener) {
@@ -664,6 +665,9 @@ std::string JoltPhysicsBackend::saveState() const {
     JPH::StateRecorderImpl rec;
     rec.Write(static_cast<uint32_t>(handles.size()));
     for (const CharacterHandle h : handles) rec.Write(h);
+    const std::vector<ConstraintHandle> order = constraintOrder();
+    rec.Write(static_cast<uint32_t>(order.size()));
+    for (const ConstraintHandle h : order) rec.Write(h);
     m_physicsSystem->SaveState(rec, JPH::EStateRecorderState::All);
     for (const CharacterHandle h : handles) m_characters.at(h).character->SaveState(rec);
     return rec.GetData();
@@ -681,6 +685,11 @@ bool JoltPhysicsBackend::restoreState(const std::string& state) {
     if (count != m_characters.size()) return false;
     for (const CharacterHandle h : handles)
         if (!m_characters.contains(h)) return false;
+    uint32_t constraints = 0;
+    rec.Read(constraints);
+    std::vector<ConstraintHandle> order(constraints);
+    for (ConstraintHandle& h : order) rec.Read(h);
+    if (rec.IsFailed() || order != constraintOrder()) return false;
     if (!m_physicsSystem->RestoreState(rec)) return false;
     for (const CharacterHandle h : handles) m_characters.at(h).character->RestoreState(rec);
     return !rec.IsFailed();
@@ -1143,8 +1152,26 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
 
     JPH::Ref<JPH::Constraint> constraint;
 
+    // Jolt gets world space: a local anchor or axis is placed by its body's origin and rotation
+    // (Jolt's own local space is relative to the centre of mass, which a compound body moves).
+    ConstraintSettings settingsW = settings;
+    if (settings.space == ConstraintSettings::Space::Local) {
+        const JPH::BodyInterface& bi = m_physicsSystem->GetBodyInterfaceNoLock();
+        const auto place = [&](JPH::BodyID id, glm::vec3& anchor, glm::vec3& axis) {
+            const glm::vec3 p = toGLM(bi.GetPosition(id));
+            const glm::quat r = toGLM(bi.GetRotation(id));
+            anchor = p + r * anchor;
+            axis = r * axis;
+        };
+        place(bodyId1, settingsW.anchor1, settingsW.axis1);
+        if (!body2IsWorld) place(bodyId2, settingsW.anchor2, settingsW.axis2);
+    }
+    const ConstraintSettings& sw = settingsW;
+
     // Helper: lock bodies and create constraint from settings
     auto lockAndCreate = [&](JPH::TwoBodyConstraintSettings& cs) -> JPH::Ref<JPH::Constraint> {
+        cs.mNumVelocityStepsOverride = std::min(sw.velocitySteps, 255u);
+        cs.mNumPositionStepsOverride = std::min(sw.positionSteps, 255u);
         if (body2IsWorld) {
             JPH::BodyLockWrite lock1(m_physicsSystem->GetBodyLockInterface(), bodyId1);
             if (!lock1.Succeeded()) return nullptr;
@@ -1160,36 +1187,36 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
     };
 
     try {
-        switch (settings.type) {
+        switch (sw.type) {
             case ConstraintType::FIXED: {
                 JPH::FixedConstraintSettings cs;
                 cs.mAutoDetectPoint = true;
-                cs.mPoint1 = toJoltR(settings.anchor1);
-                cs.mPoint2 = toJoltR(settings.anchor2);
+                cs.mPoint1 = toJoltR(sw.anchor1);
+                cs.mPoint2 = toJoltR(sw.anchor2);
                 constraint = lockAndCreate(cs);
                 break;
             }
             case ConstraintType::POINT: {
                 JPH::PointConstraintSettings cs;
-                cs.mPoint1 = toJoltR(settings.anchor1);
-                cs.mPoint2 = toJoltR(settings.anchor2);
+                cs.mPoint1 = toJoltR(sw.anchor1);
+                cs.mPoint2 = toJoltR(sw.anchor2);
                 constraint = lockAndCreate(cs);
                 break;
             }
             case ConstraintType::HINGE: {
                 JPH::HingeConstraintSettings cs;
-                cs.mPoint1 = toJoltR(settings.anchor1);
-                cs.mHingeAxis1 = toJolt(glm::normalize(settings.axis1));
-                cs.mNormalAxis1 = toJolt(computeNormalAxis(settings.axis1));
-                cs.mPoint2 = toJoltR(settings.anchor2);
-                cs.mHingeAxis2 = toJolt(glm::normalize(settings.axis2));
-                cs.mNormalAxis2 = toJolt(computeNormalAxis(settings.axis2));
-                if (settings.enableLimits) {
-                    cs.mLimitsMin = settings.limitMin;
-                    cs.mLimitsMax = settings.limitMax;
+                cs.mPoint1 = toJoltR(sw.anchor1);
+                cs.mHingeAxis1 = toJolt(glm::normalize(sw.axis1));
+                cs.mNormalAxis1 = toJolt(computeNormalAxis(sw.axis1));
+                cs.mPoint2 = toJoltR(sw.anchor2);
+                cs.mHingeAxis2 = toJolt(glm::normalize(sw.axis2));
+                cs.mNormalAxis2 = toJolt(computeNormalAxis(sw.axis2));
+                if (sw.enableLimits) {
+                    cs.mLimitsMin = sw.limitMin;
+                    cs.mLimitsMax = sw.limitMax;
                 }
-                if (settings.enableMotor) {
-                    cs.mMotorSettings = JPH::MotorSettings(settings.motorMaxForce, 0.0f);
+                if (sw.enableMotor) {
+                    cs.mMotorSettings = JPH::MotorSettings(sw.motorMaxForce, 0.0f);
                 }
                 constraint = lockAndCreate(cs);
                 break;
@@ -1197,61 +1224,64 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
             case ConstraintType::SLIDER: {
                 JPH::SliderConstraintSettings cs;
                 cs.mAutoDetectPoint = true;
-                cs.mSliderAxis1 = toJolt(glm::normalize(settings.axis1));
-                cs.mNormalAxis1 = toJolt(computeNormalAxis(settings.axis1));
-                cs.mSliderAxis2 = toJolt(glm::normalize(settings.axis2));
-                cs.mNormalAxis2 = toJolt(computeNormalAxis(settings.axis2));
-                if (settings.enableLimits) {
-                    cs.mLimitsMin = settings.limitMin;
-                    cs.mLimitsMax = settings.limitMax;
+                cs.mSliderAxis1 = toJolt(glm::normalize(sw.axis1));
+                cs.mNormalAxis1 = toJolt(computeNormalAxis(sw.axis1));
+                cs.mSliderAxis2 = toJolt(glm::normalize(sw.axis2));
+                cs.mNormalAxis2 = toJolt(computeNormalAxis(sw.axis2));
+                if (sw.enableLimits) {
+                    cs.mLimitsMin = sw.limitMin;
+                    cs.mLimitsMax = sw.limitMax;
                 }
-                if (settings.enableMotor) {
-                    cs.mMotorSettings = JPH::MotorSettings(settings.motorMaxForce, 0.0f);
+                if (sw.enableMotor) {
+                    cs.mMotorSettings = JPH::MotorSettings(sw.motorMaxForce, 0.0f);
                 }
                 constraint = lockAndCreate(cs);
                 break;
             }
-            case ConstraintType::CONE_TWIST: {
-                JPH::ConeConstraintSettings cs;
-                cs.mPoint1 = toJoltR(settings.anchor1);
-                cs.mTwistAxis1 = toJolt(glm::normalize(settings.axis1));
-                cs.mPoint2 = toJoltR(settings.anchor2);
-                cs.mTwistAxis2 = toJolt(glm::normalize(settings.axis2));
-                if (settings.enableLimits) {
-                    cs.mHalfConeAngle = settings.limitMax;
-                }
+            case ConstraintType::SWING_TWIST: {
+                JPH::SwingTwistConstraintSettings cs;
+                cs.mPosition1 = toJoltR(sw.anchor1);
+                cs.mTwistAxis1 = toJolt(glm::normalize(sw.axis1));
+                cs.mPlaneAxis1 = toJolt(computeNormalAxis(sw.axis1));
+                cs.mPosition2 = toJoltR(sw.anchor2);
+                cs.mTwistAxis2 = toJolt(glm::normalize(sw.axis2));
+                cs.mPlaneAxis2 = toJolt(computeNormalAxis(sw.axis2));
+                cs.mNormalHalfConeAngle = sw.swingNormalHalfCone;
+                cs.mPlaneHalfConeAngle = sw.swingPlaneHalfCone;
+                cs.mTwistMinAngle = sw.limitMin;
+                cs.mTwistMaxAngle = sw.limitMax;
                 constraint = lockAndCreate(cs);
                 break;
             }
             case ConstraintType::DISTANCE: {
                 JPH::DistanceConstraintSettings cs;
-                cs.mPoint1 = toJoltR(settings.anchor1);
-                cs.mPoint2 = toJoltR(settings.anchor2);
-                if (settings.maxDistance >= 0.0f) {
-                    cs.mMinDistance = settings.minDistance;
-                    cs.mMaxDistance = settings.maxDistance;
+                cs.mPoint1 = toJoltR(sw.anchor1);
+                cs.mPoint2 = toJoltR(sw.anchor2);
+                if (sw.maxDistance >= 0.0f) {
+                    cs.mMinDistance = sw.minDistance;
+                    cs.mMaxDistance = sw.maxDistance;
                 }
-                if (settings.enableSpring) {
-                    cs.mLimitsSpringSettings.mFrequency = settings.springFrequency;
-                    cs.mLimitsSpringSettings.mDamping = settings.springDamping;
+                if (sw.enableSpring) {
+                    cs.mLimitsSpringSettings.mFrequency = sw.springFrequency;
+                    cs.mLimitsSpringSettings.mDamping = sw.springDamping;
                 }
                 constraint = lockAndCreate(cs);
                 break;
             }
             case ConstraintType::SIX_DOF: {
                 JPH::SixDOFConstraintSettings cs;
-                cs.mPosition1 = toJoltR(settings.anchor1);
-                cs.mPosition2 = toJoltR(settings.anchor2);
-                cs.mAxisX1 = toJolt(glm::normalize(settings.axis1));
-                cs.mAxisY1 = toJolt(computeNormalAxis(settings.axis1));
-                cs.mAxisX2 = toJolt(glm::normalize(settings.axis2));
-                cs.mAxisY2 = toJolt(computeNormalAxis(settings.axis2));
+                cs.mPosition1 = toJoltR(sw.anchor1);
+                cs.mPosition2 = toJoltR(sw.anchor2);
+                cs.mAxisX1 = toJolt(glm::normalize(sw.axis1));
+                cs.mAxisY1 = toJolt(computeNormalAxis(sw.axis1));
+                cs.mAxisX2 = toJolt(glm::normalize(sw.axis2));
+                cs.mAxisY2 = toJolt(computeNormalAxis(sw.axis2));
                 for (int i = 0; i < 6; i++) {
                     auto axis = static_cast<JPH::SixDOFConstraintSettings::EAxis>(i);
-                    if (settings.axisMode[i] == 1)
+                    if (sw.axisMode[i] == 1)
                         cs.MakeFixedAxis(axis);
-                    else if (settings.axisMode[i] == 2)
-                        cs.SetLimitedAxis(axis, settings.axisLimitMin[i], settings.axisLimitMax[i]);
+                    else if (sw.axisMode[i] == 2)
+                        cs.SetLimitedAxis(axis, sw.axisLimitMin[i], sw.axisLimitMax[i]);
                     else
                         cs.MakeFreeAxis(axis);
                 }
@@ -1269,7 +1299,12 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
     m_physicsSystem->AddConstraint(constraint);
 
     ConstraintHandle handle = m_nextConstraintHandle++;
-    m_constraints[handle] = { constraint, settings.type, settings.breakingForce, settings.breakingTorque };
+    uint64_t noCollide = 0;
+    if (!settings.collideConnected && !body2IsWorld) {
+        noCollide = bodyPairKey(bodyId1, bodyId2);
+        ++m_noCollidePairs[noCollide];
+    }
+    m_constraints[handle] = { constraint, settings.type, settings.breakingForce, settings.breakingTorque, noCollide };
     return handle;
 }
 
@@ -1280,7 +1315,37 @@ void JoltPhysicsBackend::destroyConstraint(ConstraintHandle handle) {
     if (m_physicsSystem) {
         m_physicsSystem->RemoveConstraint(it->second.constraint);
     }
+    if (const uint64_t key = it->second.noCollideKey) {
+        const auto p = m_noCollidePairs.find(key);
+        if (p != m_noCollidePairs.end() && --p->second == 0) m_noCollidePairs.erase(p);
+    }
     m_constraints.erase(it);
+}
+
+uint64_t JoltPhysicsBackend::bodyPairKey(JPH::BodyID a, JPH::BodyID b) noexcept {
+    const uint32_t x = a.GetIndex(), y = b.GetIndex();
+    return (uint64_t(std::min(x, y)) << 32) | std::max(x, y);
+}
+
+bool JoltPhysicsBackend::pairCollides(JPH::BodyID a, JPH::BodyID b) const {
+    return m_noCollidePairs.empty() || !m_noCollidePairs.contains(bodyPairKey(a, b));
+}
+
+bool JoltPhysicsBackend::isConstraintEnabled(ConstraintHandle handle) const {
+    const auto it = m_constraints.find(handle);
+    return it != m_constraints.end() && it->second.constraint->GetEnabled();
+}
+
+std::vector<ConstraintHandle> JoltPhysicsBackend::constraintOrder() const {
+    std::vector<ConstraintHandle> out;
+    if (!m_physicsSystem) return out;
+    std::unordered_map<const JPH::Constraint*, ConstraintHandle> handleOf;
+    for (const auto& [h, d] : m_constraints) handleOf[d.constraint.GetPtr()] = h;
+    for (const JPH::Ref<JPH::Constraint>& c : m_physicsSystem->GetConstraints()) {
+        const auto it = handleOf.find(c.GetPtr());
+        out.push_back(it == handleOf.end() ? INVALID_CONSTRAINT : it->second);
+    }
+    return out;
 }
 
 bool JoltPhysicsBackend::isValidConstraint(ConstraintHandle handle) const {
@@ -1332,6 +1397,16 @@ void JoltPhysicsBackend::setConstraintLimits(ConstraintHandle handle, float min,
     }
     else if (it->second.type == ConstraintType::SLIDER) {
         static_cast<JPH::SliderConstraint*>(c)->SetLimits(min, max);
+    }
+    else if (it->second.type == ConstraintType::SWING_TWIST) {
+        auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+        st->SetTwistMinAngle(min);
+        st->SetTwistMaxAngle(max);
+    }
+    else {
+        static bool logged = false;
+        if (!logged) OHAO_LOG(Warn, physics, "Jolt: setConstraintLimits: this constraint type has no limits to set");
+        logged = true;
     }
 }
 

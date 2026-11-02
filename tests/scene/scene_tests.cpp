@@ -305,6 +305,8 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<LevelDirty>(r, checked);
     ok &= complete<Collider>(r, checked);
     ok &= complete<RigidBody>(r, checked);
+    ok &= complete<Joint>(r, checked);
+    ok &= complete<JointState>(r, checked);
     ok &= complete<ColliderPart>(r, checked);
     ok &= complete<CollisionMesh>(r, checked);
     ok &= complete<PhysicsBody>(r, checked);
@@ -347,7 +349,7 @@ static void t01_authoring_and_runtime_split() {
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "Material", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
-                              "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
+                              "Collider", "RigidBody", "Joint", "JointState", "PlayerController", "Health", "Weapon", "WeaponState",
                               "WeaponTrigger", "Muzzle", "ViewModel", "MoveIntent", "Enemy", "EnemyState", "Round",
                               "SkinnedMesh", "Animator", "JointAttach", "AudioMix", "ReverbZone", "VfxSet",
                               "VfxEmitter"}) {

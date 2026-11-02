@@ -269,6 +269,39 @@ struct PhysicsBody { uint32_t handle{UINT32_MAX}; };
 // system moves the body to it.
 struct PhysicsMoved {};
 
+// ---- joints (sub-project 13; ecs/physics_scene.hpp builds one constraint per Joint) -----------
+
+enum class JointType : uint8_t { Fixed, Point, Hinge, Slider, SwingTwist, Distance };
+
+// A constraint between the body this entity is part of (its own, else its nearest ancestor's) and
+// `other`'s (likewise; null: the world). The anchor and axis are in this entity's frame; the other
+// side is the same world point and axis when the joint is built (at load, or when either body or
+// the Joint is rebuilt), except a Distance joint's, which is `other`'s origin (a rope from a hook).
+// Several joints on one body: child entities with a Joint each.
+struct Joint {
+    JointType type{JointType::Hinge};
+    entt::entity other{entt::null};
+    glm::vec3 anchor{0.0f};                  // m, in this entity's frame
+    glm::vec3 axis{0.0f, 1.0f, 0.0f};        // hinge, slider and swing-twist's twist axis, this entity's frame
+    // Hinge: degrees this entity turns (right-handed about the axis) from the pose it was built in,
+    // relative to the other; slider: m it moves along the axis; swing-twist:
+    // the twist's degrees; distance: the distance's range in m. Both 0: free (hinge, slider) or the
+    // built distance (distance). Swing-twist always limits its twist.
+    float limitMin{0.0f};
+    float limitMax{0.0f};
+    float swingDeg{0.0f};                    // swing-twist: the swing cone's half angle about the axis
+    float springHz{0.0f};                    // distance: a soft range (0: rigid)
+    float springDamping{0.0f};
+    float breakForce{0.0f};                  // N s a step that breaks it (0: never)
+    float breakTorque{0.0f};                 // N m s a step (0: never)
+};
+
+// A Joint that broke: its constraint stays built but does nothing (a restore of a snapshot from
+// before the break makes it whole, exactly). The physics step adds it, with a joint_break event.
+struct JointState {
+    bool broken{true};
+};
+
 // ---- the player (sub-project 6; the physics system moves it, ecs/physics_scene.hpp) -----------
 
 // A first-person player: a Jolt CharacterVirtual capsule standing on its Transform's position

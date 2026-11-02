@@ -158,6 +158,7 @@ int main(int argc, char** argv) {
     int feelStep = 0;                       // feel's (9): the occlusion ray
     int animStep = 0;                       // animation's (10): the animator step and pose
     int vfxStep = 0;                        // vfx's (12): the spawn records' step
+    int ragdollStep = 0;                    // joints and ragdolls' (13)
     double maxSlowdown = 1.25, maxExternal = 50.0;
     if (!checkPath.empty()) {
         std::ifstream f(checkPath);
@@ -176,6 +177,7 @@ int main(int argc, char** argv) {
         feelStep = doc.value("feelStep", 0);
         animStep = doc.value("animStep", 0);
         vfxStep = doc.value("vfxStep", 0);
+        ragdollStep = doc.value("ragdollStep", 0);
         if (doc.contains("noise")) {
             maxSlowdown = doc["noise"].value("maxCalibrationSlowdown", maxSlowdown);
             maxExternal = doc["noise"].value("maxExternalCorePct", maxExternal);
@@ -662,6 +664,44 @@ int main(int argc, char** argv) {
         failures.push_back("vfx: " + std::to_string(vfxWritten) + " records written, explosion " +
                            (vfxExploded ? "seen" : "missing") + " (want records and the explosion)");
 
+    // 13. Joints (sub-project 13 step 1, gated by the budgets' `ragdollStep`): joints.scene.json's whole
+    // physics step while its chain and lamp swing and the crate breaks the plank (14 joints, 18 dynamic
+    // bodies). joints_step_ms: PhysicsScene's step, N rounds of 180 steps; the chain must swing and the
+    // plank break.
+    std::vector<double> jointsMs;
+    bool jointsMoved = true;
+    for (int r = 0; r < rounds + 1; ++r) {
+        ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+        ecs::World w;
+        w.seedIds(7);
+        ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+        if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/joints.scene.json", engineTypes())) {
+            failures.push_back("joints: joints.scene.json did not load");
+            jointsMoved = false;
+            break;
+        }
+        w.sync();
+        entt::entity link = entt::null;
+        for (auto [e, n] : w.registry().view<const ecs::Name>().each())
+            if (n.value == "ChainLink9") link = e;
+        const glm::vec3 start = link == entt::null ? glm::vec3(0.0f) : w.registry().get<ecs::Transform>(link).position;
+        float farthest = 0.0f;
+        for (int step = 0; step < 180; ++step) {
+            w.simulate(kDt);
+            w.sync();
+            if (r > 0) jointsMs.push_back(physics.lastStepTiming().totalMs);
+            if (link != entt::null)
+                farthest = std::max(farthest, glm::length(w.registry().get<ecs::Transform>(link).position - start));
+        }
+        const ecs::PhysicsInfo info = physics.info();
+        if (farthest < 0.5f || info.joints != 14 || info.brokenJoints != 2) {
+            std::printf("  joints round %d: the chain's end swung %.3f m at most; %u joints, %u broken\n", r, farthest,
+                        info.joints, info.brokenJoints);
+            jointsMoved = false;
+        }
+    }
+    if (!jointsMoved) failures.push_back("joints: the chain did not swing or the plank's two joints did not break");
+
     const bool hunted = enemyRounds > 0 && chased > 0.5f;
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
@@ -727,7 +767,10 @@ int main(int argc, char** argv) {
     std::printf("  vfx_sync_ms             median %8.4f   p95 %8.4f   (%zu frames, up to %zu effects drawn)\n", svs.median,
                 svs.p95, vfxSyncMs.size(), vfxDrawn);
     const Verdict vvs = judge(budgets, vfxStep, "vfx_sync_ms", svs.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp, &vvx, &vvs})
+    const Stats sjn = stats(jointsMs);
+    std::printf("  joints_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sjn.median, sjn.p95, jointsMs.size());
+    const Verdict vjn = judge(budgets, ragdollStep, "joints_step_ms", sjn.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp, &vvx, &vvs, &vjn})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
                         v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
@@ -736,7 +779,7 @@ int main(int argc, char** argv) {
             name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
             name != "round_restart_ms" && name != "occlusion_ray_us" && name != "anim16_step_ms" &&
             name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms" && name != "vfx_step_ms" &&
-            name != "vfx_sync_ms")
+            name != "vfx_sync_ms" && name != "joints_step_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -778,6 +821,8 @@ int main(int argc, char** argv) {
                           {"written", vfxWritten}, {"verdict", vvx.verdict}};
     out["vfx_sync_ms"] = {{"median", svs.median}, {"p95", svs.p95}, {"min", svs.min}, {"frames", vfxSyncMs.size()},
                           {"drawn", vfxDrawn}, {"verdict", vvs.verdict}};
+    out["joints_step_ms"] = {{"median", sjn.median}, {"p95", sjn.p95}, {"min", sjn.min}, {"steps", jointsMs.size()},
+                             {"verdict", vjn.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -794,7 +839,7 @@ int main(int argc, char** argv) {
 
     const bool wrong =
         !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought || !hunted ||
-        !restarted || !vfxFought;   // no machine excuses these
+        !restarted || !vfxFought || !jointsMoved;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",

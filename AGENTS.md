@@ -975,6 +975,21 @@ deferred, reference, path traced); two the transparency scene,
     bodies wake apart. Removing a body ends its pairs in the next step's events.
   - Jolt's penetration slop is 5 mm (its 2 cm default left dropped crates visibly in the
     floor): a resting body sits up to 5 mm into each support.
+  - **Joints** (sub-project 13, `docs/changes/2026-11-02-ragdoll-step1.md`): a saved `Joint` is one
+    constraint between the body its entity is part of (its own, else its nearest ancestor's: several
+    joints on a body are child entities) and `other`'s, or the world. Anchor and axis are in the Joint
+    entity's frame; the other side is the same world point at build (a Distance joint's is `other`'s
+    origin). Limits are this entity's turn or travel relative to the other, right-handed about the
+    axis (Jolt measures the other against this one: the scene negates them). Joints are built after
+    the bodies, in creation order, and a body rebuilt destroys and rebuilds its joints. **A break
+    disables the constraint, never removes it** (`JointState {broken}`, a `joint_break` event):
+    Jolt's solver and its saved state are ordered by the constraint list, and a removal moves the
+    last constraint into the gap, so nothing may add or remove a constraint mid-round if snapshots
+    are to restore. Jointed bodies never collide with each other (`collideConnected` false, rejected
+    in `OnContactValidate`). The backend takes local anchors from a body's origin, not its centre of
+    mass (Jolt's own local space), and saves its constraint list in Jolt's order. A 20-link chain
+    stretches 2.6 mm a joint at Jolt's default iterations; more velocity iterations steady it hanging
+    but stretch it more swinging (not understood yet).
   - The player (`PlayerController`, saved; `PlayerState`, runtime): a Jolt `CharacterVirtual`
     whose position is the feet, moved in the step before Jolt's substeps by the actions it
     names (`move_forward`, `move_right`, `jump`, `sprint`, `look_x`, `look_y`; mouse look

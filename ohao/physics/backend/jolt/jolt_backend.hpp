@@ -121,6 +121,7 @@ public:
     void destroyConstraint(ConstraintHandle handle) override;
     [[nodiscard]] bool isValidConstraint(ConstraintHandle handle) const override;
     void setConstraintEnabled(ConstraintHandle handle, bool enabled) override;
+    [[nodiscard]] bool isConstraintEnabled(ConstraintHandle handle) const override;
     void setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) override;
     void setConstraintLimits(ConstraintHandle handle, float min, float max) override;
     size_t getConstraintCount() const override;
@@ -198,11 +199,21 @@ private:
         ConstraintType type;
         float breakingForce  = 0.0f; // 0 = disabled
         float breakingTorque = 0.0f; // 0 = disabled
+        uint64_t noCollideKey = 0;   // the pair it keeps apart in m_noCollidePairs, 0 = none
     };
     std::unordered_map<ConstraintHandle, ConstraintData> m_constraints;
+    // Body pairs whose contacts are rejected (a constraint between them without collideConnected),
+    // by Jolt body index pair, counted (two joints may join the same pair)
+    std::unordered_map<uint64_t, uint32_t> m_noCollidePairs;
+    [[nodiscard]] static uint64_t bodyPairKey(JPH::BodyID a, JPH::BodyID b) noexcept;
+    [[nodiscard]] bool pairCollides(JPH::BodyID a, JPH::BodyID b) const;
     ConstraintHandle m_nextConstraintHandle = 0;
 
-    // Constraints broken during the last step() call (cleared each step)
+    // Our handles in Jolt's constraint order (the solver's and its state's): saveState writes it,
+    // restoreState refuses a different one
+    [[nodiscard]] std::vector<ConstraintHandle> constraintOrder() const;
+
+    // Constraints broken during the last step() call (cleared each step), by handle
     std::vector<ConstraintHandle> m_brokenConstraints;
 
     // Character controller management

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 090832d4c694cdf6. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 02603021c07743cf. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -48,6 +48,8 @@
         "Socket": { "$ref": "#/$defs/Socket" },
         "Collider": { "$ref": "#/$defs/Collider" },
         "RigidBody": { "$ref": "#/$defs/RigidBody" },
+        "Joint": { "$ref": "#/$defs/Joint" },
+        "JointState": { "$ref": "#/$defs/JointState" },
         "Health": { "$ref": "#/$defs/Health" },
         "Weapon": { "$ref": "#/$defs/Weapon" },
         "WeaponState": { "$ref": "#/$defs/WeaponState" },
@@ -171,6 +173,10 @@
     "Motion": {
       "description": "How a rigid body moves.",
       "enum": ["Static", "Dynamic", "Kinematic"]
+    },
+    "JointType": {
+      "description": "What a joint lets its two bodies do.",
+      "enum": ["Fixed", "Point", "Hinge", "Slider", "SwingTwist", "Distance"]
     },
     "EnemyMode": {
       "description": "What an enemy is doing.",
@@ -1245,6 +1251,84 @@
           "description": "Bounciness: 0 none, 1 elastic",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Joint": {
+      "description": "A joint between the body this entity is part of (its own, else its nearest ancestor's) and another's, or the world. Anchor and axis are in this entity's frame; the other side is the same world point and axis when the joint is built, except a Distance joint's, which is the other entity's origin. Several joints on one body: child entities with a Joint each.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "What the joint lets the bodies do",
+          "default": "Hinge",
+          "allOf": [{ "$ref": "#/$defs/JointType" }]
+        },
+        "other": {
+          "description": "The other body's entity (its own body, else its nearest ancestor's); null: the world",
+          "default": null,
+          "allOf": [{ "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/EntityId" }] }]
+        },
+        "anchor": {
+          "description": "The joint's point in this entity's frame",
+          "default": [0, 0, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "axis": {
+          "description": "Hinge axis, slider axis or swing-twist's twist axis, in this entity's frame",
+          "default": [0, 1, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "limitMin": {
+          "description": "Hinge: degrees this entity turns about the axis (right-handed) from the built pose, relative to the other; slider: m along the axis; swing-twist: twist degrees; distance: m. With limitMax 0 too: free (hinge, slider), the built distance (distance)",
+          "default": 0,
+          "allOf": [{ "type": "number" }]
+        },
+        "limitMax": {
+          "description": "The limit's other end, as limitMin",
+          "default": 0,
+          "allOf": [{ "type": "number" }]
+        },
+        "swingDeg": {
+          "description": "Swing-twist: the swing cone's half angle about the axis",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 180 }]
+        },
+        "springHz": {
+          "description": "Distance: a soft range's frequency; 0 is rigid",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "springDamping": {
+          "description": "Distance: the soft range's damping ratio",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "breakForce": {
+          "description": "The impulse in one step that breaks it; 0 never",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "breakTorque": {
+          "description": "The angular impulse in one step that breaks it; 0 never",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "JointState": {
+      "description": "The joint broke: its constraint stays built and does nothing. The physics step adds it; a restore from before the break makes the joint whole.",
+      "type": "object",
+      "properties": {
+        "broken": {
+          "description": "The joint is broken; false makes it whole again",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
         }
       },
       "additionalProperties": false

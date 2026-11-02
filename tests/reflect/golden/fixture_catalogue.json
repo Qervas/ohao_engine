@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "1344548cf6f83062",
+  "schemaHash": "e454ea22eecf0993",
   "units": [
     "m",
     "m/s",
@@ -14,6 +14,8 @@
     "kg",
     "N",
     "px",
+    "N s",
+    "N m s",
     "linear-rgb",
     "srgb",
     "lux",

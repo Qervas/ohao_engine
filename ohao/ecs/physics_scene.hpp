@@ -85,7 +85,8 @@ struct RayHit {
 };
 
 struct PhysicsWarning {
-    std::string code;   // W_LEVEL_DYNAMIC_MESH, W_COLLIDER_NO_MESH, W_COLLIDER_SCALE, W_PHYSICS_PARENT_SCALE
+    std::string code;   // W_LEVEL_DYNAMIC_MESH, W_COLLIDER_NO_MESH, W_COLLIDER_SCALE, W_PHYSICS_PARENT_SCALE,
+                        // W_JOINT_NO_BODY, W_JOINT_SELF, W_JOINT_STATIC, W_JOINT_FAILED
     entt::entity entity{entt::null};
     std::string message;
 };
@@ -93,11 +94,12 @@ struct PhysicsWarning {
 // Something physics decided in one step (spec "Events"), or a player's footstep or landing
 // (spec "Footsteps").
 struct PhysicsEvent {
-    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit, Footstep, Land };
+    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit, Footstep, Land, JointBreak };
     Kind kind{Kind::ContactBegin};
     // Contacts: a has the lower entity id. Triggers: a is the trigger, b the body. Footsteps and
     // landings: a is the player, b the ground's entity (null when it has none). The entities
-    // may be gone by the time the event is read; the ids are kept.
+    // may be gone by the time the event is read; the ids are kept. A joint's break: a is the
+    // Joint's entity, b the other body's entity (null: the world), point its anchor.
     entt::entity a{entt::null}, b{entt::null};
     uint64_t aId{0}, bId{0};
     glm::vec3 point{0.0f};    // world; an end repeats its begin's; a footstep's or landing's: the feet
@@ -145,6 +147,8 @@ struct PhysicsInfo {
     uint32_t triggers{0};   // sensor bodies
     uint32_t contacts{0};   // body pairs in contact now (triggers' overlaps included)
     uint32_t players{0};    // PlayerControllers with a character
+    uint32_t joints{0};     // Joints with a constraint
+    uint32_t brokenJoints{0};   // of those, broken (JointState)
 };
 
 // A player's look after a turn of `delta` look units (the mouse's movement, a look axis): yaw about
