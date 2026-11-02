@@ -11,6 +11,9 @@
   t3_every_test_executable_is_registered: every test executable the main build produced
   (*_test, *_tests, *_bench in build/Release) runs as a CTest test, and every registered
   test carries exactly one known label.
+  changed_*: tools/check_changed.py, the rules behind check.py --changed: every rule names a
+  registered test or label; a saved component's file selects the schema's suites; a renderer file
+  the GPU label; a spec selects nothing; a path no rule covers selects the whole default set.
   sp2b_t02_* (sub-project 2b, test 2): render_bench --evaluate on fixture results
   (tests/check/render_bench): a pending budget is reported with its measurement and not
   gated; a missed gated budget fails by scene and pass name; a noisy run (busy CPU or a slow
@@ -249,6 +252,41 @@ def t3_every_test_executable_is_registered():
     assert not bad, f"tests without exactly one known label: {bad}"
 
 
+def main_labels():
+    ctest = check.find_ctest(check.find_cmake())
+    return check.test_labels(ctest, MAIN_BUILD, "Release")
+
+
+def changed_rules():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import check_changed
+    return check_changed
+
+
+def changed_every_rule_names_a_test():
+    cc, labels = changed_rules(), main_labels()
+    known = {l for ls in labels.values() for l in ls}
+    bad = sorted({t for _, ts in cc.RULES for t in ts
+                  if (t[len("label:"):] not in known if t.startswith("label:") else t not in labels)})
+    assert not bad, f"rule targets that are no registered test or label: {bad}"
+
+
+def changed_selections_follow_reach():
+    cc, labels = changed_rules(), main_labels()
+    gpu = {n for n, ls in labels.items() if "gpu" in ls}
+    default = {n for n, ls in labels.items() if any(l in check.DEFAULT_LABELS for l in ls)}
+    names, _ = cc.select(["ohao/ecs/components.hpp"], labels, check.DEFAULT_LABELS)
+    assert {"scene_tests", "reflect_tests", "check_serve", "check_cli"} <= set(names), \
+        f"a saved component reaches the schema's suites: {names}"
+    names, _ = cc.select(["ohao/render/rt/path_tracer.cpp"], labels, check.DEFAULT_LABELS)
+    assert gpu <= set(names), f"a renderer file reaches every GPU suite: missing {sorted(gpu - set(names))}"
+    names, _ = cc.select(["docs/specs/x.md", "site/a.html"], labels, check.DEFAULT_LABELS)
+    assert names == [], f"a spec and the frozen site reach nothing: {names}"
+    names, why = cc.select(["somewhere/new.cpp"], labels, check.DEFAULT_LABELS)
+    assert why["somewhere/new.cpp"] == "unmapped" and default <= set(names), \
+        "a path no rule covers runs the default set"
+
+
 def main():
     print("check_tests (tools/check.py)")
     try:
@@ -264,6 +302,8 @@ def main():
                    t3_an_unknown_label_is_an_environment_error):
             run(fn)
     run(t3_every_test_executable_is_registered)
+    run(changed_every_rule_names_a_test)
+    run(changed_selections_follow_reach)
     for fn in (sp2b_t02_a_pending_budget_is_reported_not_gated, sp2b_t02_a_missed_gated_budget_names_its_pass,
                sp2b_t02_a_noisy_run_is_never_a_pass):
         run(fn)

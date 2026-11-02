@@ -66,6 +66,12 @@ failures, tail}], counts}`), plus `build/check/junit.xml` and the logs beside th
 failing test's entry carries the last 40 lines of its output. Exit 0 = all passed, 1 =
 something failed, 2 = the environment is wrong (the message says how).
 
+- **While iterating, `python tools/check.py --changed [REF]`** builds and runs only the tests the
+  files changed since REF (default HEAD: the working tree and untracked files) reach, by the rules in
+  `tools/check_changed.py` (by reach, not directory: a saved component's files select every suite that
+  records the schema hash; a renderer or shader file the whole `gpu` label; a path no rule covers the
+  default set). Close a build step with the full run. A new suite or path family gets a rule there
+  (`check_tests` fails on a rule naming no test).
 - **Labels** (one per test, `cmake/ohao_tests.cmake`): `quick` (CPU), `gpu`, `docs` — the
   default set — and `golden`, `bench`, `slow`, which `--all` adds (`monograph`, the frozen
   site's checks, only by name). `--labels gpu,docs`

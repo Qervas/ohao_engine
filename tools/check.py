@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """check.py -- build OHAO and run its tests from one command, with one verdict.
 
-    python tools/check.py [--labels quick,gpu,docs] [--all] [--jobs 6] [--config Release]
+    python tools/check.py [--labels quick,gpu,docs] [--all] [--changed [REF]] [--jobs 6] [--config Release]
                           [--no-build] [--no-doctor] [--build-dir build] [--out DIR] [--ctest-jobs 4]
+
+--changed [REF] runs only the tests the files changed since REF (default HEAD: the working tree,
+staged or not, and untracked files) reach, by tools/check_changed.py's rules; a path no rule covers
+runs the default labels. For iterating; close a build step with the full run.
 
 Steps (sub-project 4 spec, "One entry point"):
   1. preflight: the CMake to use (never conda's) and the Python modules the harnesses need;
@@ -280,6 +284,8 @@ def main(argv=None):
     ap.add_argument("--no-doctor", action="store_true", help="skip `ohao doctor`")
     ap.add_argument("--build-dir", default="build")
     ap.add_argument("--out", default=None, help="where check.json, junit.xml and logs go (default <build>/check)")
+    ap.add_argument("--changed", nargs="?", const="HEAD", default=None, metavar="REF",
+                    help="only the tests the files changed since REF (default HEAD) reach (tools/check_changed.py)")
     args = ap.parse_args(argv)
 
     labels = ALL_LABELS if args.all else [l for l in args.labels.split(",") if l]
@@ -321,6 +327,28 @@ def main(argv=None):
         if not result["build"]["ok"]:
             return finish(result, out)
 
+    selected = None
+    if args.changed is not None:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import check_changed
+        labels_of = test_labels(ctest, build_dir, args.config)
+        try:
+            paths = check_changed.changed_paths(ROOT, args.changed)
+        except RuntimeError as e:
+            result["error"] = str(e)
+            return finish(result, out, code=2)
+        selected, why = check_changed.select(paths, labels_of, DEFAULT_LABELS)
+        result["changed"] = {"ref": args.changed, "paths": why, "tests": selected}
+        for p, t in why.items():
+            print(f"check: changed {p} -> {'every default test (no rule)' if t == 'unmapped' else ', '.join(t) or 'nothing'}",
+                  flush=True)
+        print(f"check: {len(selected)} test(s): {' '.join(selected) or '(none)'}", flush=True)
+        if not selected:
+            result["ok"] = result["build"]["ok"]
+            return finish(result, out)
+        labels = sorted({l for n in selected for l in labels_of.get(n, [])})   # the doctor's GPU check follows them
+        result["labels"] = labels
+
     if not args.no_doctor:
         result["doctor"] = run_doctor(build_dir, args.config, labels, out)
         if result["doctor"] is not None:
@@ -333,10 +361,15 @@ def main(argv=None):
     junit = out / "junit.xml"
     if junit.exists():
         junit.unlink()
-    regex = "^(" + "|".join(labels) + ")$"
-    cmd = [str(ctest), "--test-dir", str(build_dir), "-C", args.config, "-L", regex,
+    if selected is not None:
+        regex = "^(" + "|".join(re.escape(n) for n in selected) + ")$"
+        select_args = ["-R", regex]
+    else:
+        regex = "^(" + "|".join(labels) + ")$"
+        select_args = ["-L", regex]
+    cmd = [str(ctest), "--test-dir", str(build_dir), "-C", args.config, *select_args,
            "--output-junit", str(junit), "--no-tests=error", "-j", str(max(1, args.ctest_jobs))] + OUTPUT_FLAGS
-    print(f"check: ctest -L '{regex}'", flush=True)
+    print(f"check: ctest {' '.join(select_args[:1])} '{regex}'", flush=True)
     run_logged(cmd, out / "ctest.log", True)
     labels_of = test_labels(ctest, build_dir, args.config)
     result["tests"] = summarize(junit, labels_of)
