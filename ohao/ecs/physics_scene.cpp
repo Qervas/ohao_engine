@@ -4,7 +4,6 @@
 #include "ecs/instantiate.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
-#include "physics/world/physics_world.hpp"
 #include "scene/asset/model.hpp"
 
 #include <ankerl/unordered_dense.h>
@@ -447,7 +446,7 @@ struct PhysicsScene::Impl {
         if (!backend) {
             // Single-threaded: a level's bodies build and step the same way on every machine,
             // and no worker threads start for a world that only ray-casts.
-            physics::PhysicsWorldConfig config;
+            pb::BackendConfig config;
             config.enableMultithreading = false;
             config.maxBodies = 65536;
             backend = pb::createPhysicsBackend("jolt");

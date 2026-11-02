@@ -38,7 +38,7 @@ RULES: list[tuple[str, list[str]]] = [
     ("ohao/ecs/scene_io.*", SCHEMA), ("ohao/ecs/world_hash.*", SCHEMA), ("ohao/reflect/*", SCHEMA),
     ("shaders/shared/layout.json", ["check_layout", "label:gpu"]),
     # Physics, levels, combat.
-    ("ohao/physics/*", PHYSICS + ["force_generator_tests", "physics_bench"]),
+    ("ohao/physics/*", PHYSICS + ["physics_bench"]),
     ("ohao/ecs/physics_scene.*", PHYSICS + ["check_cli", "physics_bench"]),
     ("ohao/level/*", PHYSICS + ["check_level_assets", "check_cli"]),
     ("ohao/ecs/combat*", ["combat_tests", "api_tests", "audio_schedule_tests", "vfx_tests", "physics_bench"]),
@@ -80,7 +80,6 @@ RULES: list[tuple[str, list[str]]] = [
     ("tests/api/*", ["api_tests"]), ("tests/rpc/*", ["rpc_tests"]), ("tests/runtime/*", ["runtime_tests"]),
     ("tests/log/*", ["log_tests"]), ("tests/ecs/*", ["ecs_tests"]), ("tests/systems/*", ["systems_tests"]),
     ("tests/engine/*", ["engine_tests"]), ("tests/material/*", ["material_tests"]),
-    ("tests/force_generators/*", ["force_generator_tests"]),
     ("tests/cli/*", ["check_cli_cpu", "check_cli"]), ("tests/serve/*", ["check_serve", "check_live", "e2e_mcp"]),
     ("tests/doctor/*", ["check_doctor", "check_doctor_gpu"]), ("tests/layout/*", ["check_layout"]),
     ("tests/golden/*", ["test_golden_diff", "render_golden"]), ("tests/validation/*", ["check_validation"]),
@@ -104,12 +103,18 @@ def changed_paths(root: Path, ref: str) -> list[str]:
     return sorted(set(git("diff", "--name-only", ref)) | set(git("ls-files", "--others", "--exclude-standard")))
 
 
-def select(paths: list[str], labels_of: dict[str, list[str]], default_labels: list[str]):
-    """(test names, why: {path: targets or 'unmapped'}). Unknown names in the rules are dropped."""
+def select(paths: list[str], labels_of: dict[str, list[str]], default_labels: list[str], root: Path | None = None):
+    """(test names, why: {path: targets or 'unmapped'}). Unknown names in the rules are dropped. With
+    `root`, a deleted file under tests/ selects only check_tests (a removed suite cannot fail; its
+    registration can)."""
     names: set[str] = set()
     why: dict[str, object] = {}
     unmapped = False
     for p in paths:
+        if root is not None and p.startswith("tests/") and not (root / p).exists():
+            why[p] = ["check_tests"]
+            names.add("check_tests")
+            continue
         hit = [targets for glob, targets in RULES if fnmatch.fnmatch(p, glob)]
         if not hit:
             unmapped = True

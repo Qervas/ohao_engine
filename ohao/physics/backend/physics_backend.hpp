@@ -8,8 +8,7 @@
  * - NullPhysicsBackend: graceful fallback (no physics, but no crashes)
  * - JoltPhysicsBackend: production backend (Jolt Physics, MIT license)
  *
- * All external APIs (OhaoPhysicsBody, GDScript) are unchanged.
- * PhysicsWorld delegates to whichever backend is active.
+ * The ECS reaches it through ecs/physics_scene.hpp (PhysicsScene), which owns one.
  *
  * Features:
  *   - Rigid body lifecycle, transform, velocity, forces, properties, sleep, shape
@@ -36,11 +35,15 @@
 
 namespace ohao {
 namespace physics {
-
-// Forward declarations
-struct PhysicsWorldConfig;
-
 namespace backend {
+
+// What a backend starts with.
+struct BackendConfig {
+    glm::vec3 gravity{0.0f, -9.81f, 0.0f};
+    bool enableMultithreading{true};   // false: no worker threads (the engine's: a step is the same on every machine)
+    int workerThreads{0};              // 0: one fewer than the hardware's
+    std::size_t maxBodies{10000};
+};
 
 // ============================================================================
 // Handle types
@@ -399,7 +402,7 @@ public:
     virtual ~IPhysicsBackend() = default;
 
     // === LIFECYCLE ===
-    [[nodiscard]] virtual bool initialize(const PhysicsWorldConfig& config) = 0;
+    [[nodiscard]] virtual bool initialize(const BackendConfig& config) = 0;
     virtual void shutdown() = 0;
     [[nodiscard]] virtual bool isInitialized() const = 0;
 
@@ -543,7 +546,7 @@ public:
 
 class NullPhysicsBackend : public IPhysicsBackend {
 public:
-    [[nodiscard]] bool initialize(const PhysicsWorldConfig&) override { m_initialized = true; return true; }
+    [[nodiscard]] bool initialize(const BackendConfig&) override { m_initialized = true; return true; }
     void shutdown() override { m_initialized = false; }
     [[nodiscard]] bool isInitialized() const override { return m_initialized; }
 

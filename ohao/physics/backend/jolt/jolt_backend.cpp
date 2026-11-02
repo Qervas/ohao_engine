@@ -3,7 +3,6 @@
 
 #include "jolt_backend.hpp"
 #include "jolt_helpers.hpp"
-#include "physics/world/physics_world.hpp"
 
 // Jolt includes
 #include <Jolt/RegisterTypes.h>
@@ -51,6 +50,7 @@
 #include <Jolt/Physics/StateRecorderImpl.h>
 
 #include "core/log.hpp"
+#include <glm/gtx/norm.hpp>   // length2 (GLM_ENABLE_EXPERIMENTAL is the target's)
 #include <thread>
 #include <cstring>
 #include <cmath>
@@ -299,7 +299,7 @@ JoltPhysicsBackend::~JoltPhysicsBackend() {
 // Initialize
 // ============================================================================
 
-bool JoltPhysicsBackend::initialize(const PhysicsWorldConfig& config) {
+bool JoltPhysicsBackend::initialize(const BackendConfig& config) {
     try {
         ensureJoltGlobalInit();
 

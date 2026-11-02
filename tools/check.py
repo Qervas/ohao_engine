@@ -337,7 +337,7 @@ def main(argv=None):
         except RuntimeError as e:
             result["error"] = str(e)
             return finish(result, out, code=2)
-        selected, why = check_changed.select(paths, labels_of, DEFAULT_LABELS)
+        selected, why = check_changed.select(paths, labels_of, DEFAULT_LABELS, ROOT)
         result["changed"] = {"ref": args.changed, "paths": why, "tests": selected}
         for p, t in why.items():
             print(f"check: changed {p} -> {'every default test (no rule)' if t == 'unmapped' else ', '.join(t) or 'nothing'}",

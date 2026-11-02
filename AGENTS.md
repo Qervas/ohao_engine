@@ -111,7 +111,6 @@ $ build/Release/systems_tests.exe > /dev/null
 $ build/Release/physics_backend_tests.exe > /dev/null
 $ build/Release/audio_system_tests.exe > /dev/null
 $ build/Release/audio_schedule_tests.exe > /dev/null
-$ build/Release/force_generator_tests.exe > /dev/null
 $ build/Release/env_cdf_test.exe > /dev/null
 $ build/Release/env_sun_test.exe > /dev/null
 $ build/Release/denoise_parse_test.exe > /dev/null
@@ -443,7 +442,8 @@ deferred, reference, path traced); two the transparency scene,
   every hole. Windows' `OPAQUE` macro is gone from this path (the enum is `Opaque`).
 - `GLM_ENABLE_EXPERIMENTAL` before any `<glm/gtx/...>` include.
 - Jolt: `dynamic_cast` on Jolt types crashes (no RTTI); `SetMotionQuality` lives on
-  `BodyInterface`. `PhysicsWorld(cfg)`, `stepOnce()` not `step(dt)`; bodies need a shape.
+  `BodyInterface`. The engine's physics is `physics/backend` (Jolt) and `ecs/physics_scene`; bodies
+  need a shape.
 - `ohao::physics::math::AABB` is (center, halfExtents); render bounds (`MeshInfo`,
   `DrawRecord`) are (min, max). A box passed between them needs converting.
 - ECS writes: `Transform`, `MeshRenderer` and `Light` reach the

@@ -34,7 +34,7 @@ public:
     ~JoltPhysicsBackend() override;
 
     // === IPhysicsBackend - Lifecycle ===
-    [[nodiscard]] bool initialize(const PhysicsWorldConfig& config) override;
+    [[nodiscard]] bool initialize(const BackendConfig& config) override;
     void shutdown() override;
     [[nodiscard]] bool isInitialized() const override { return m_initialized; }
 

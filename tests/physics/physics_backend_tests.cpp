@@ -21,8 +21,6 @@
 #include <chrono>
 
 #include "physics/backend/physics_backend.hpp"
-#include "physics/world/physics_world.hpp"
-#include "physics/collision/shapes/box_shape.hpp"
 
 #include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
 
@@ -120,7 +118,7 @@ static std::unique_ptr<IPhysicsBackend> g_backend;
 static bool g_joltAvailable = false;
 
 static bool initBackend() {
-    PhysicsWorldConfig config;
+    BackendConfig config;
     config.gravity = glm::vec3(0, -9.81f, 0);
     config.maxBodies = 1024;
 
@@ -1443,7 +1441,7 @@ bool testNullBackend() {
     TEST_BEGIN("Null backend graceful degradation");
 
     NullPhysicsBackend null;
-    PhysicsWorldConfig config;
+    BackendConfig config;
     EXPECT_TRUE(null.initialize(config));
     EXPECT_TRUE(null.isInitialized());
     EXPECT_EQ(std::string(null.getName()), std::string("null"));
@@ -1538,39 +1536,6 @@ bool testGravityScale() {
     return true;
 }
 
-// --- Round 1: Radial impulse (via PhysicsWorld) ---
-bool testRadialImpulse() {
-    TEST_BEGIN("Radial impulse (applyRadialImpulse)");
-    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
-
-    PhysicsWorldConfig cfg;
-    cfg.gravity = glm::vec3(0, 0, 0); // no gravity — isolate impulse
-    auto world = std::make_unique<PhysicsWorld>(cfg);
-
-    // Add a dynamic body at (2, 0, 0) — needs a collision shape for backend creation
-    auto body = std::make_shared<dynamics::RigidBody>();
-    body->setPosition(glm::vec3(2, 0, 0));
-    body->setMass(1.0f);
-    body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(body);
-    world->flushPendingBodies();
-
-    glm::vec3 preVel = world->getBackend()->getLinearVelocity(body->getBackendHandle());
-    EXPECT_NEAR(glm::length(preVel), 0.0f, 0.01f);
-
-    world->applyRadialImpulse(glm::vec3(0, 0, 0), 100.0f, 5.0f, 0 /*LINEAR*/);
-
-    // Step once so Jolt processes the impulse
-    world->stepOnce();
-
-    glm::vec3 postVel = world->getBackend()->getLinearVelocity(body->getBackendHandle());
-    EXPECT_TRUE(glm::length(postVel) > 1.0f); // body got kicked
-
-    world->shutdown();
-    TEST_PASS();
-    return true;
-}
-
 // --- Round 2: Gravity scale == 0 stays still (reuses testGravityScale logic) ---
 bool testLinearDampingBackend() {
     TEST_BEGIN("Linear damping reduces velocity");
@@ -1586,72 +1551,6 @@ bool testLinearDampingBackend() {
     EXPECT_TRUE(xSpeed < 5.0f); // X velocity should have been damped significantly
 
     g_backend->destroyBody(h);
-    TEST_PASS();
-    return true;
-}
-
-// --- Round 2: Wind via PhysicsWorld ForceRegistry ---
-bool testWindForce() {
-    TEST_BEGIN("Wind force (PhysicsWorld::setWind)");
-    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
-
-    PhysicsWorldConfig cfg;
-    cfg.gravity = glm::vec3(0, 0, 0);
-    auto world = std::make_unique<PhysicsWorld>(cfg);
-
-    auto body = std::make_shared<dynamics::RigidBody>();
-    body->setPosition(glm::vec3(0, 0, 0));
-    body->setMass(1.0f);
-    body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(body);
-    world->flushPendingBodies();
-
-    world->setWind(glm::vec3(1, 0, 0), 500.0f, 0.0f); // strong wind in X
-
-    for (int i = 0; i < 30; i++) world->stepOnce();
-
-    float xVel = world->getBackend()->getLinearVelocity(body->getBackendHandle()).x;
-    EXPECT_TRUE(xVel > 1.0f); // wind pushed body in +X
-
-    world->clearWind();
-    world->shutdown();
-    TEST_PASS();
-    return true;
-}
-
-// --- Round 2: Force volume ---
-bool testForceVolume() {
-    TEST_BEGIN("Force volume (createForceVolumeBox)");
-    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
-
-    PhysicsWorldConfig cfg;
-    cfg.gravity = glm::vec3(0, 0, 0);
-    auto world = std::make_unique<PhysicsWorld>(cfg);
-
-    auto bodyIn  = std::make_shared<dynamics::RigidBody>();
-    bodyIn->setPosition(glm::vec3(0, 0, 0));
-    bodyIn->setMass(1.0f);
-    bodyIn->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(bodyIn);
-
-    auto bodyOut = std::make_shared<dynamics::RigidBody>();
-    bodyOut->setPosition(glm::vec3(100, 0, 0)); // outside volume
-    bodyOut->setMass(1.0f);
-    bodyOut->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(bodyOut);
-    world->flushPendingBodies();
-
-    // Box volume centered at origin, force = +Y 500
-    (void)world->createForceVolumeBox(glm::vec3(0,0,0), glm::vec3(5,5,5), glm::vec3(0,500,0));
-
-    for (int i = 0; i < 30; i++) world->stepOnce();
-
-    float inY  = world->getBackend()->getLinearVelocity(bodyIn->getBackendHandle()).y;
-    float outY = world->getBackend()->getLinearVelocity(bodyOut->getBackendHandle()).y;
-    EXPECT_TRUE(inY  > 1.0f);  // inside volume — pushed up
-    EXPECT_NEAR(outY, 0.0f, 0.5f); // outside — not affected
-
-    world->shutdown();
     TEST_PASS();
     return true;
 }
@@ -1690,46 +1589,6 @@ bool testCollisionLayerAssignment() {
     return true;
 }
 
-// --- Round 3: Spring via PhysicsWorld ---
-bool testSpringForce() {
-    TEST_BEGIN("Spring force (createSpring)");
-    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
-
-    PhysicsWorldConfig cfg;
-    cfg.gravity = glm::vec3(0, 0, 0);
-    auto world = std::make_unique<PhysicsWorld>(cfg);
-
-    auto bodyA = std::make_shared<dynamics::RigidBody>();
-    bodyA->setPosition(glm::vec3(-2, 0, 0));
-    bodyA->setMass(1.0f);
-    bodyA->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(bodyA);
-
-    auto bodyB = std::make_shared<dynamics::RigidBody>();
-    bodyB->setPosition(glm::vec3(2, 0, 0));
-    bodyB->setMass(1.0f);
-    bodyB->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(bodyB);
-    world->flushPendingBodies();
-
-    int handle = world->createSpring(bodyA.get(), bodyB.get(), 50.0f, 1.0f, 0.5f);
-    EXPECT_TRUE(handle > 0);
-
-    // Spring should pull bodies toward rest length = 1m (they're 4m apart)
-    for (int i = 0; i < 60; i++) world->stepOnce();
-
-    float distAfter = glm::length(
-        world->getBackend()->getPosition(bodyB->getBackendHandle()) -
-        world->getBackend()->getPosition(bodyA->getBackendHandle()));
-    // Distance should decrease from 4m toward rest length 1m
-    EXPECT_TRUE(distAfter < 3.5f);
-
-    world->destroySpring(handle);
-    world->shutdown();
-    TEST_PASS();
-    return true;
-}
-
 // --- Round 4: Velocity getters ---
 bool testVelocityGetters() {
     TEST_BEGIN("Velocity getters (getLinearVelocity/getAngularVelocity)");
@@ -1760,36 +1619,6 @@ bool testCCDToggleRuntime() {
     g_backend->setCCDEnabled(h, false);
 
     g_backend->destroyBody(h);
-    TEST_PASS();
-    return true;
-}
-
-// --- Round 4: Axis lock ---
-bool testAxisLock() {
-    TEST_BEGIN("Axis lock (freeze linear Y via PhysicsWorld)");
-    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
-
-    PhysicsWorldConfig cfg;
-    cfg.gravity = glm::vec3(0, -9.81f, 0);
-    auto world = std::make_unique<PhysicsWorld>(cfg);
-
-    auto body = std::make_shared<dynamics::RigidBody>();
-    body->setPosition(glm::vec3(0, 5, 0));
-    body->setMass(1.0f);
-    body->setFreezeLinearAxes(2); // bit1 = Y axis frozen
-    body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
-    world->addRigidBodyForTesting(body);
-    world->flushPendingBodies();
-
-    float startY = world->getBackend()->getPosition(body->getBackendHandle()).y;
-
-    for (int i = 0; i < 60; i++) world->stepOnce();
-
-    float endY = world->getBackend()->getPosition(body->getBackendHandle()).y;
-    // Y velocity is zeroed each step so body shouldn't fall significantly
-    EXPECT_NEAR(endY, startY, 1.0f);
-
-    world->shutdown();
     TEST_PASS();
     return true;
 }
@@ -1830,7 +1659,7 @@ bool testSingleThreadedStep() {
     TEST_BEGIN("Single-threaded backend with 65,536 max bodies steps a box onto a floor");
     if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
 
-    PhysicsWorldConfig cfg;
+    BackendConfig cfg;
     cfg.enableMultithreading = false;
     cfg.maxBodies = 65536;
     auto backend = createPhysicsBackend("jolt");
@@ -1995,22 +1824,17 @@ void runAllTests() {
     std::cout << "\n\033[1m--- Round 1: Gravity Scale + Radial Impulse ---\033[0m" << std::endl;
     testGravityScale();
     testGravityScaleCreation();
-    testRadialImpulse();
 
     std::cout << "\n\033[1m--- Round 2: Damping + Wind + Force Volume ---\033[0m" << std::endl;
     testLinearDampingBackend();
-    testWindForce();
-    testForceVolume();
 
     std::cout << "\n\033[1m--- Round 3: Sleep/Wake + Layer + Spring ---\033[0m" << std::endl;
     testSleepWake();
     testCollisionLayerAssignment();
-    testSpringForce();
 
     std::cout << "\n\033[1m--- Round 4: Velocity Getters + CCD + Axis Lock ---\033[0m" << std::endl;
     testVelocityGetters();
     testCCDToggleRuntime();
-    testAxisLock();
 
     std::cout << "\n\033[1m--- Level collision: single-threaded stepping, compound shapes ---\033[0m" << std::endl;
     testSingleThreadedStep();

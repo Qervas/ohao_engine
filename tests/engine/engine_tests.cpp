@@ -27,8 +27,6 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "render/camera/camera.hpp"
 #include "physics/backend/physics_backend.hpp"
-#include "physics/common/physics_constants.hpp"
-#include "physics/world/physics_world.hpp"
 #include "render/deferred/post_processing_pipeline.hpp"
 #include "render/graph/resource_handle.hpp"
 #include "render/hud/hud_list.hpp"
@@ -552,21 +550,6 @@ void runMetaTests() {
         shape.setMesh(verts, inds);
         EXPECT(shape.type == ShapeInfo::Type::MESH, "mesh type");
         EXPECT(shape.meshVertexCount == 3u && shape.meshIndexCount == 3u, "mesh counts");
-
-        EXPECT(isSimulating(ohao::physics::SimulationState::RUNNING), "running");
-        EXPECT(!isSimulating(ohao::physics::SimulationState::PAUSED), "paused");
-        auto moon = ohao::physics::PhysicsConfig::moon();
-        EXPECT(moon.gravity.y < -1.f && moon.gravity.y > -3.f, "moon g");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("a rigid body exists without any scene component and is named");
-    {
-        ohao::physics::PhysicsWorld world;
-        auto body = world.createRigidBody("crate");
-        EXPECT(body != nullptr, "createRigidBody(name) returns a body");
-        EXPECT(body->getName() == "crate", "the body carries its name");
-        EXPECT_EQ(world.getBodyCount(), size_t{1}, "the world owns it");
         TEST_PASS();
     }
 }

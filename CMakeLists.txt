@@ -109,13 +109,6 @@ add_subdirectory(shaders)
 add_subdirectory(ohao)
 add_subdirectory(examples)
 
-# Python bindings for testing (optional)
-option(BUILD_PYTHON_BINDINGS "Build Python bindings for physics testing" OFF)
-if(BUILD_PYTHON_BINDINGS)
-    message(STATUS "Building Python bindings for physics tests")
-    add_subdirectory(tests/python)
-endif()
-
 # Renderer pipeline tests
 option(BUILD_RENDERER_TESTS "Build renderer pipeline tests" ON)
 if(BUILD_RENDERER_TESTS)
@@ -135,21 +128,6 @@ option(BUILD_AUDIO_TESTS "Build audio system tests" ON)
 if(BUILD_AUDIO_TESTS)
     message(STATUS "Building audio system tests")
     add_subdirectory(tests/audio)
-endif()
-
-# Force generator tests
-option(BUILD_FORCE_TESTS "Build force generator tests" ON)
-if(BUILD_FORCE_TESTS)
-    message(STATUS "Building force generator tests")
-    add_subdirectory(tests/force_generators)
-endif()
-
-# Shadow system tests — OFF until renderer/lighting/ headers are implemented
-# (tests/shadow_system/ references unified_light.hpp, shader_bindings.hpp, ohao_vk_descriptor_builder.hpp)
-option(BUILD_SHADOW_TESTS "Build shadow system tests" OFF)
-if(BUILD_SHADOW_TESTS)
-    message(STATUS "Building shadow system tests")
-    add_subdirectory(tests/shadow_system)
 endif()
 
 # Engine subsystem tests (EventBus, CommandHistory, Scene, SceneSerializer)
