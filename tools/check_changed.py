@@ -90,6 +90,9 @@ RULES: list[tuple[str, list[str]]] = [
     ("tools/audio/*", ["grenade_spatial", "audio_bench"]), ("tools/gen_layout.py", ["check_layout"]),
     ("tools/level/*", ["check_level_assets"]), ("tools/anim/*", ["check_level_assets"]),
     ("tools/vfx/*", ["check_level_assets"]),
+    # The path tracer's sampling modules and their CPU twins.
+    ("shaders/sampling/*", ["sobol_test", "vmf_test"]), ("tools/sampling/*", ["sobol_test", "vmf_test"]),
+    ("tests/renderer/sobol_test.cpp", ["sobol_test"]), ("tests/renderer/vmf_test.cpp", ["vmf_test"]),
 ]
 
 

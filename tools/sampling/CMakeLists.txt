@@ -18,3 +18,22 @@ target_compile_features(ohao_sobol_cpu PUBLIC cxx_std_20)
 target_include_directories(ohao_sobol_cpu
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE ${CMAKE_BINARY_DIR}/sampling)
+
+# The path guiding's lobes on the CPU (sub-project 23): shaders/sampling/vmf.slang through
+# vmf_kernel.slang, for tests/renderer/vmf_test.
+set(OHAO_VMF_KERNEL_CPP ${CMAKE_BINARY_DIR}/sampling/vmf_kernel.cpp)
+add_custom_command(
+    OUTPUT ${OHAO_VMF_KERNEL_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sampling
+    COMMAND ${SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/vmf_kernel.slang -I ${CMAKE_SOURCE_DIR}/shaders
+            -target cpp -entry run -stage compute -o ${OHAO_VMF_KERNEL_CPP}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/vmf_kernel.slang ${OHAO_SAMPLING_SLANG}
+    COMMENT "slangc: the path guiding's lobes to C++"
+    VERBATIM)
+
+add_library(ohao_vmf_cpu STATIC vmf_cpu.cpp ${OHAO_VMF_KERNEL_CPP})
+set_source_files_properties(${OHAO_VMF_KERNEL_CPP} PROPERTIES HEADER_FILE_ONLY TRUE)
+target_compile_features(ohao_vmf_cpu PUBLIC cxx_std_20)
+target_include_directories(ohao_vmf_cpu
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE ${CMAKE_BINARY_DIR}/sampling)
