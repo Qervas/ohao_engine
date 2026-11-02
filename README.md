@@ -151,14 +151,21 @@ All live in `ohao/render/rt/denoise/`.
 
 ```
 ohao/
-  core/          828 LOC  logging, events, commands
-  gpu/vulkan/  9,639 LOC  device, memory, descriptors, dispatch
-  render/     25,748 LOC  scene/ (RenderScene), rt/, deferred/, graph/, ibl/, particles/, picking/, async/
-  ecs/           707 LOC  EnTT world, transform system, render extract, spawn helpers
-  asset/       2,556 LOC  loaders (gltf/obj/fbx via Assimp)
-  physics/    11,083 LOC  Jolt 5.1 backend behind IPhysicsBackend plugin
-  audio/         476 LOC  miniaudio backend
-shaders/      17,058 LOC  125 files, mostly rt/, core/, postprocess/, compute/
+  core/        1,431 LOC  logging, time, input, events, commands
+  reflect/     5,003 LOC  type registry, schemas, the JSON codec
+  asset/       2,274 LOC  model loaders (glTF/OBJ/FBX through Assimp, ufbx), procedural meshes
+  gpu/vulkan/  2,951 LOC  the Vulkan layer: swapchain, present waiting, bindless textures, allocator
+  render/     43,690 LOC  renderer/ (VulkanRenderer), scene/ (RenderScene), deferred/, rt/ (path tracer,
+                          ReSTIR DI, RT GI), graph/, display/, sky/, material/ (OpenPBR), vfx/, hud/
+  ecs/        12,118 LOC  World, components, systems, scene files, snapshots, physics_scene*, gameplay
+  physics/     2,813 LOC  the Jolt 5.1 backend behind IPhysicsBackend
+  anim/        1,731 LOC  skins, clips, animation graphs
+  audio/       2,276 LOC  the mixer, banks, reverb (miniaudio)
+  vfx/         1,035 LOC  effect sets, closed-form particles
+  level/       1,373 LOC  glTF level structure and hints
+  api/, rpc/   6,802 LOC  the agent API, JSON-RPC/MCP server
+  runtime/     2,740 LOC  window host, frame timing, captures, audio player
+shaders/      10,272 LOC  51 Slang files: rt/, core/, cull/, material/, display/, postprocess/, vfx/, ...
 ```
 
 ## Build

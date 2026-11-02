@@ -39,7 +39,7 @@ RULES: list[tuple[str, list[str]]] = [
     ("shaders/shared/layout.json", ["check_layout", "label:gpu"]),
     # Physics, levels, combat.
     ("ohao/physics/*", PHYSICS + ["physics_bench"]),
-    ("ohao/ecs/physics_scene.*", PHYSICS + ["check_cli", "physics_bench"]),
+    ("ohao/ecs/physics_scene*", PHYSICS + ["check_cli", "check_serve", "physics_bench"]),
     ("ohao/level/*", PHYSICS + ["check_level_assets", "check_cli"]),
     ("ohao/ecs/combat*", ["combat_tests", "api_tests", "audio_schedule_tests", "vfx_tests", "physics_bench"]),
     ("ohao/ecs/enemy_*", ["combat_tests", "anim_tests", "api_tests"]),
