@@ -182,6 +182,10 @@ add_executable(env_sun_test env_sun_test.cpp   # the environment's sun, found an
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_sun.cpp
 )
 target_link_libraries(env_sun_test PRIVATE glm)
+add_executable(caustic_casters_test caustic_casters_test.cpp   # caustics: casters, disks, the origins' density
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/caustic_casters.cpp
+)
+target_link_libraries(caustic_casters_test PRIVATE glm)
 add_executable(sobol_test sobol_test.cpp   # the path tracer's sampler against its CPU twin
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/sobol_generator.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
@@ -199,7 +203,7 @@ add_executable(sky_test sky_test.cpp   # the physical sky (Hillaire 2020) on the
 target_link_libraries(sky_test PRIVATE glm)
 add_executable(display_test display_test.cpp)   # the display transform: the module against its C++ twin
 target_link_libraries(display_test PRIVATE ohao_display_cpu)
-foreach(t env_cdf_test env_sun_test sobol_test vmf_test denoise_parse_test display_test sky_test)
+foreach(t env_cdf_test env_sun_test caustic_casters_test sobol_test vmf_test denoise_parse_test display_test sky_test)
     target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
     target_link_libraries(${t} PRIVATE ohao_gtest_main)
     if(UNIX)

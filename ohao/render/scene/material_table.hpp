@@ -1,5 +1,6 @@
 #pragma once
 #include "render/scene/render_scene_types.hpp"
+#include "render/rt/caustic_casters.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
 #include <array>
@@ -38,6 +39,10 @@ public:
     [[nodiscard]] bool emissive(uint32_t index) const noexcept {
         return index < m_emissive.size() && m_emissive[index] != 0;
     }
+    // Host copy of what decides whether a material can hold a smooth lobe (caustics' casters).
+    [[nodiscard]] MaterialSmoothness smoothness(uint32_t index) const noexcept {
+        return index < m_smoothness.size() ? m_smoothness[index] : MaterialSmoothness{};
+    }
     // Whether any material has OpenPBR's layers (a coat, a fuzz, specular anisotropy, a thin film or
     // transmission). A frame without them runs RT direct light's shading without the layers' code
     // (its registers).
@@ -60,6 +65,7 @@ private:
     std::vector<uint8_t> m_doubleSided;   // host only: the draw table's face-culling flag
     std::vector<uint8_t> m_alphaMode;     // host only: AlphaMode
     std::vector<uint8_t> m_emissive;      // host only: emits
+    std::vector<MaterialSmoothness> m_smoothness;   // host only: caustics' casters
     uint32_t m_layered{0};                // materials with layers (layered())
     std::set<uint32_t> m_dirty;
 };

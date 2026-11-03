@@ -93,6 +93,9 @@ RULES: list[tuple[str, list[str]]] = [
     # The path tracer's sampling modules and their CPU twins.
     ("shaders/sampling/*", ["sobol_test", "vmf_test"]), ("tools/sampling/*", ["sobol_test", "vmf_test"]),
     ("tests/renderer/sobol_test.cpp", ["sobol_test"]), ("tests/renderer/vmf_test.cpp", ["vmf_test"]),
+    # Caustics (sub-project 24): the casters on the CPU, the pass on the GPU.
+    ("ohao/render/rt/caustic_*", ["caustic_casters_test", "check_caustics"]),
+    ("tests/renderer/caustic_casters_test.cpp", ["caustic_casters_test"]),
 ]
 
 
