@@ -139,7 +139,7 @@ Then play the slice, render a frame, or open a live session:
 $ build/Release/ohao_game.exe assets/scenes/blockout_play.scene.json
 $ build/Release/ohao.exe run assets/scenes/sponza_night.scene.json --render night.png --mode deferred --frames 30
 $ build/Release/ohao.exe run assets/scenes/glass.scene.json --render glass.png --mode rt_offline --spp 256
-$ build/Release/ohao.exe serve --window assets/scenes/blockout_play.scene.json
+$ build/Release/ohao.exe serve --window 1280x720 assets/scenes/blockout_play.scene.json
 ```
 
 In the slice, WASD walks, Shift sprints, Space jumps, the left mouse button fires, the right one aims, R reloads, G throws a test grenade, Enter restarts and Esc frees the mouse. NRD is fetched at configure time. DLSS Ray Reconstruction turns on when `python tools/fetch_dlss.py` has placed the SDK in `external/DLSS`. OIDN is used if CMake finds it.
