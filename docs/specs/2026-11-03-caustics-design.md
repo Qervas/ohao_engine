@@ -1,6 +1,7 @@
 # Sub-project 24 — Caustics: light traced from the sun, then manifold sampling
 
-Status: written 2026-11-03 (documents only; no code), on Frank's ruling that day. He rejected the lossy fixes for the
+Status: accepted by Frank 2026-11-03 ("go"; the OPEN rulings start at their recommendations, C1 and C4 to be ruled on
+step 1's measurements); written the same day (documents only; no code), on Frank's ruling that day. He rejected the lossy fixes for the
 showcase's bright dots ("oidn will make it like oil paint, not sharp as a real photo. we need real solution, not
 approximation") and chose this route over VCM ("i like your new plan"). Judgment calls are written under "Rulings for
 Frank" as **PROVISIONAL** (recommended; the design follows them) or **OPEN**. The spec is binding once Frank accepts it.
