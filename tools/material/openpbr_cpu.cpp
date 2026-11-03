@@ -37,7 +37,7 @@ void run(std::span<Item> items, std::span<const float> tables) {
         set(b[8], m.coatWeight, m.coatRoughness, m.coatRoughnessAnisotropy, m.coatIor);
         set(b[9], m.coatColor[0], m.coatColor[1], m.coatColor[2], m.coatDarkening);
         set(b[10], m.fuzzColor[0], m.fuzzColor[1], m.fuzzColor[2], m.fuzzWeight);
-        set(b[11], m.fuzzRoughness, m.specularRoughnessAnisotropy, 0.0f, 0.0f);
+        set(b[11], m.fuzzRoughness, m.specularRoughnessAnisotropy, it.cut, 0.0f);
         set(b[12], m.transmissionColor[0], m.transmissionColor[1], m.transmissionColor[2], m.transmissionWeight);
         set(b[13], m.thinWalled ? 1.0f : 0.0f, m.thinFilmWeight, m.thinFilmThickness, m.thinFilmIor);
         set(b[14], m.subsurfaceColor[0], m.subsurfaceColor[1], m.subsurfaceColor[2], m.subsurfaceWeight);

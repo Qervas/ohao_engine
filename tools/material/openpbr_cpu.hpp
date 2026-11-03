@@ -12,7 +12,8 @@ namespace ohao::material {
 
 enum class Op : uint32_t {
     Eval = 0, Sample = 1, Pdf = 2, Albedo = 3, Tables = 4, Fresnel = 5, Lobes = 6, Aniso = 7, Glass = 8, Film = 9, Ior = 10,
-    VanDeHulst = 11, LtcDensity = 12, LtcQuad = 13
+    VanDeHulst = 11, LtcDensity = 12, LtcQuad = 13,
+    Parts = 14, SampleSmooth = 15, PdfSmooth = 16   // caustics: the smooth/rough split at Item::cut
 };
 
 using Float3 = std::array<float, 3>;
@@ -57,6 +58,7 @@ struct Item {
     Float3 v{0.0f, 0.0f, 1.0f};
     Float4 r0{};   // the result
     Float4 r1{};
+    float cut{0.25f};   // Parts, SampleSmooth, PdfSmooth: lobes rougher than this are the rough part
 };
 
 // Runs every item through the kernel; `tables` is the energy tables (kOpenPBRTables), or empty

@@ -43,6 +43,9 @@
 //   10 ior      6.x = dispersedIor(wo.x, wo.y, wo.z, v.x)
 //   11 vdh      6.rgb = subsurfaceSingleScatter(wo)
 //   12 ltc      6.x = the fitted LTC's density at direction v for the view wo and specular_roughness
+//   14 parts    6.rgb = the smooth part, 7.rgb = the rough part at cut 11.z (caustics)
+//   15 smooth   sampleSmooth at cut 11.z, laid out as sample (6 = (wi, pdf), 7 = (weight, lobe))
+//   16 psmooth  6.x = pdfSmooth at cut 11.z
 //   13 quad     6.x = ltcQuad at the view wo and specular_roughness over the quad z = v.z, x and y from
 //               coat_weight, coat_roughness (lower corner) to v.x, v.y (upper)
 import material.openpbr;
@@ -189,6 +192,23 @@ void run(uint3 id : SV_DispatchThreadID)
         const float4 m = t.Ltc(wo.z, mi.specularRoughness);
         const float x0 = io[b + 8u].x, y0 = io[b + 8u].y;
         r0.x = ltcQuad(m, float3(x0, y0, v.z), float3(v.x, y0, v.z), float3(v.x, v.y, v.z), float3(x0, v.y, v.z));
+    }
+    else if (op == 14u)
+    {
+        float3 sm, ro;
+        surface.evalParts(wo, v, t, io[b + 11u].z, sm, ro);
+        r0.xyz = sm;
+        r1.xyz = ro;
+    }
+    else if (op == 15u)
+    {
+        const BsdfSample s = surface.sampleSmooth(wo, v, t, io[b + 11u].z);
+        r0 = float4(s.wi, s.pdf);
+        r1 = float4(s.weight, float(s.lobe));
+    }
+    else if (op == 16u)
+    {
+        r0.x = surface.pdfSmooth(wo, v, t, io[b + 11u].z);
     }
     else if (op == 6u)
     {

@@ -1567,6 +1567,144 @@ struct OpenPBRSurface
         return specular + diffuse;
     }
 
+    // ---- the smooth and rough parts (sub-project 24, caustics) ----
+    // eval() split by lobe roughness: the smooth part holds the base's specular reflection and
+    // refraction while the base's roughness is under cut, and the coat's lobe while the coat's is;
+    // the rough part holds everything else eval() holds (the diffuse, the fuzz, and either specular
+    // at or over the cut). smooth + rough = eval() in every case (the same arithmetic, not a call of
+    // it, so eval()'s own code and bits stay as they are). Light traced from a light follows only
+    // smooth parts and reaches the camera only through rough ones; the camera side drops exactly
+    // those terms (docs/specs/2026-11-03-caustics-design.md, "The split").
+    void evalParts(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 smooth, out float3 rough)
+    {
+        float3 s, d;
+        float3 c = float3(0.0);
+        if (base.transmissive() && wo.z < 0.0)
+        {
+            // Inside a solid, or a thin wall from its back: the base alone, as eval() takes it.
+            if (base.thinWalled) base.evalLobes(base.flipZ(wo), base.flipZ(wi), t, s, d);
+            else base.evalLobes(wo, wi, t, s, d);
+        }
+        else
+        {
+            baseAt(wo, t).evalLobes(wo, wi, t, s, d);
+            if (layered && wo.z > 0.0 && wi.z < 0.0)
+            {
+                s *= baseScale(coatPathDiffuse(), wo, t);
+            }
+            else if (layered && wo.z > 0.0 && wi.z > 0.0)
+            {
+                const float3 k = baseScale(coatPath(wi.z), wo, t);
+                const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
+                s = k * s;
+                c = float3(fuzzOver * coatWeight * coat.eval(wo, wi, t));
+                d = k * d + fuzzWeight * fuzzColor * fuzz.albedo(wo.z) * fuzz.D(wo, wi);
+            }
+        }
+        const bool bs = base.rough < cut;
+        const bool cs = coatWeight > 0.0 && coat.rough < cut;
+        smooth = (bs ? s : float3(0.0)) + (cs ? c : float3(0.0));
+        rough = d + (bs ? float3(0.0) : s) + (cs ? float3(0.0) : c);
+    }
+
+    // Whether any lobe can be smooth at cut.
+    bool hasSmooth(float cut) { return base.rough < cut || (coatWeight > 0.0 && coat.rough < cut); }
+
+    // The chances of the smooth lobes from wo, by the luminance of their albedos: (the base's
+    // reflection, the base's refraction, the coat). 0 when nothing is smooth.
+    float3 smoothShares(float3 wo, OpenPBRTables t, float cut)
+    {
+        const bool bs = base.rough < cut;
+        const bool cs = coatWeight > 0.0 && coat.rough < cut;
+        float3 w = float3(0.0);
+        if (base.transmissive() && wo.z < 0.0)
+        {
+            if (!bs) return w;
+            if (!base.thinWalled)
+            {
+                const float pr = base.insideReflection(wo, t);
+                return float3(pr, 1.0 - pr, 0.0);
+            }
+            const float4 p = base.transmissiveShares(base.flipZ(wo), t);
+            w = float3(p.x, p.z, 0.0);
+        }
+        else
+        {
+            if (wo.z <= 0.0) return w;
+            const OpenPBRBase b = baseAt(wo, t);
+            if (bs)
+            {
+                w.x = pbrLuminance(baseScale(coatPath(wo.z), wo, t) * b.specularAlbedo(wo, t));
+                w.y = pbrLuminance(baseScale(coatPathDiffuse(), wo, t) * b.transmissionAlbedo(wo, t));
+            }
+            if (cs) w.z = coatAlbedo(wo, t);
+        }
+        const float total = w.x + w.y + w.z;
+        return total > 0.0 ? w / total : float3(0.0);
+    }
+
+    // The density sampleSmooth() draws wi with.
+    float pdfSmooth(float3 wo, float3 wi, OpenPBRTables t, float cut)
+    {
+        if (wo.z == 0.0 || wi.z == 0.0) return 0.0;
+        const float3 p = smoothShares(wo, t, cut);
+        if (base.transmissive() && wo.z < 0.0)
+        {
+            const float3 o = base.flipZ(wo), i = base.flipZ(wi);
+            if (base.thinWalled)
+                return i.z > 0.0 ? p.x * base.pdfSpecular(o, i) : p.y * base.pdfSpecular(o, base.flipZ(i));
+            return i.z > 0.0 ? p.x * ggxPdfBoundedAniso(o, i, base.alphaXY)
+                             : p.y * ggxRefractPdf(o, i, base.alphaXY, 1.0 / base.eta);
+        }
+        if (wo.z < 0.0) return 0.0;
+        if (wi.z > 0.0) return p.x * base.pdfSpecular(wo, wi) + p.z * coat.pdf(wo, wi);
+        return p.y * (base.thinWalled ? base.pdfSpecular(wo, base.flipZ(wi)) : ggxRefractPdf(wo, wi, base.alphaXY, base.eta));
+    }
+
+    // A direction from the smooth lobes alone, weighed by the smooth part over pdfSmooth() (a lobe
+    // drawn by smoothShares; lobe 0 the base's reflection, 4 its refraction, 2 the coat).
+    BsdfSample sampleSmooth(float3 wo, float3 u, OpenPBRTables t, float cut)
+    {
+        BsdfSample s;
+        s.wi = float3(0.0, 0.0, 1.0);
+        s.weight = float3(0.0);
+        s.pdf = 0.0;
+        s.lobe = 0u;
+        const float3 p = smoothShares(wo, t, cut);
+        if (!(p.x + p.y + p.z > 0.0)) return s;
+        const bool inside = base.transmissive() && wo.z < 0.0;
+        const float3 o = inside ? base.flipZ(wo) : wo;
+        float3 i;
+        if (u.x < p.x)
+        {
+            i = inside && !base.thinWalled ? reflect(-o, ggxSampleBoundedAniso(o, base.alphaXY, u.yz))
+                                           : reflect(-o, base.sampleSpecular(o, u.yz));
+            if (i.z <= 0.0) return s;
+        }
+        else if (u.x < p.x + p.y)
+        {
+            if (base.thinWalled) i = base.flipZ(reflect(-o, base.sampleSpecular(o, u.yz)));
+            else if (!refractThrough(o, ggxSampleVisible(o, base.alphaXY, u.yz), inside ? 1.0 / base.eta : base.eta, i)) return s;
+            s.lobe = 4u;
+            if (i.z >= 0.0) return s;
+        }
+        else
+        {
+            i = reflect(-o, coat.sampleNormal(o, u.yz));
+            s.lobe = 2u;
+            if (i.z <= 0.0) return s;
+        }
+        s.wi = inside ? base.flipZ(i) : i;
+        s.pdf = pdfSmooth(wo, s.wi, t, cut);
+        if (s.pdf > 0.0)
+        {
+            float3 sm, ro;
+            evalParts(wo, s.wi, t, cut, sm, ro);
+            s.weight = sm / s.pdf;
+        }
+        return s;
+    }
+
     // The refraction's albedo toward wo, through the layers.
     float3 transmissionAlbedo(float3 wo, OpenPBRTables t)
     {
