@@ -1,256 +1,192 @@
-# OHAO Engine
+# OHAO
 
-A solo **Vulkan 1.3** hybrid renderer in **C++20**: KHR path tracing for ground truth and indirect light, deferred raster for real-time, shared scene / materials / TLAS. No editor host.
-
-<p align="center">
-  <!-- GitHub README strips <video>; animated GIF autoplays inline. Click opens the full MP4 on GitHub's video player. -->
-  <a href="https://github.com/Qervas/ohao_engine/blob/master/docs/media/helmet_orbit.mp4">
-    <img src="docs/media/helmet_orbit.gif" width="640" alt="OHAO Engine — real-time path-traced helmet orbiting in an outdoor HDRI scene (click for full MP4)" />
-  </a>
-</p>
+**A C++20 / Vulkan game engine that AI agents can drive, with a real-time renderer checked against its own path tracer.**
 
 <p align="center">
-  <a href="https://github.com/Qervas/ohao_engine/blob/master/docs/media/helmet_orbit.mp4">
-    <strong>▶ Play full-quality orbit (MP4)</strong>
-  </a>
-  &nbsp;·&nbsp;
-  <sub><em>Real-time path tracing ~67 fps — DLSS Ray Reconstruction · ReSTIR GI · cinematic grade. GIF loops above; the button opens the repo MP4 in GitHub’s player.</em></sub>
+  <img src="tests/golden/sponza_night_deferred.png" width="100%" alt="Sponza at night, lit by 37 coloured lamps in OHAO's real-time deferred frame">
+  <br>
+  <sub>Sponza at night, lit by 37 lamps with no sun and no sky. Every lamp casts ray-traced shadows through ReSTIR DI, and every bounce comes through RT GI. This is the real-time deferred frame.</sub>
 </p>
 
-## What it is
+## Why OHAO
 
-Built to learn how a modern hybrid renderer is wired end to end. ~54K lines of **C++20** and ~17K lines of GLSL across 125 shaders, with two pipelines that share scene, materials, and acceleration structures. No engine SDK, no editor host. Path tracer is for ground truth. Deferred is for interactive iteration. The hybrid mode runs RT shadows and 1-bounce RT GI on top of the deferred G-buffer.
+Most engines are built around a person sitting in an editor, and agents get access later through plugins that drive that editor. OHAO starts from the agent side. Every authoring operation goes through one typed API with undo. Scenes are canonical JSON files with a published schema. Worlds step deterministically, so an agent can load a level, edit it, play it, capture what it sees and replay the session bit for bit, through the `ohao` CLI or a live engine over MCP. An editor, when there is one, will be another client of that same API.
 
-**Recent focus:** real-time path tracing at ~67 fps (1 spp, 720p) with DLSS Ray
-Reconstruction and ReSTIR GI, and the environment-sampling work that made it
-usable at one sample per pixel — see below.
+The renderer is checked against a reference. A single material model, OpenPBR Surface, runs in both the hybrid deferred frame and the path tracer. The path tracer is held to closed-form results, and the deferred frame is held to the path tracer. On every reference scene, deferred stays within 0.16 stops of the path tracer (the bar is half a stop).
 
+The first game is a first-person combat slice: one level, a player, a rifle, two enemies that see, chase and shoot, and a round that restarts to its first frame bit for bit. Its job is to prove the engine. The standard it aims for is production AAA.
 
-## Headline numbers
+## Showcase
 
-| Metric | Value |
+All of these are render goldens from [`tests/golden/`](tests/golden/manifest.json). The suite re-renders every one of them on each full check.
+
+<table>
+  <tr>
+    <td width="50%"><img src="tests/golden/khronos_sponza_deferred.png" alt="Khronos Sponza by day"></td>
+    <td width="50%"><img src="tests/golden/khronos_flight_helmet_deferred.png" alt="Khronos FlightHelmet"></td>
+  </tr>
+  <tr>
+    <td><sub><b>Sponza by day.</b> The Khronos Sponza under a sun, five atrium lamps and an HDRI sky. The sky lights the scene through RT GI's rays, and specular reflections are RT GI's reflection rays (there is no SSR).</sub></td>
+    <td><sub><b>FlightHelmet.</b> The Khronos model with its blended lenses drawn by the sorted forward pass. Each lamp is also a mesh the camera can see.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="tests/golden/glass_deferred.png" alt="Glass, deferred"></td>
+    <td><img src="tests/golden/glass_pt.png" alt="Glass, path traced"></td>
+  </tr>
+  <tr>
+    <td><sub><b>Glass, deferred.</b> Clear, frosted, amber, a thin-walled bubble with a thin film, and anodised metal. Each fragment traces its way through the solid with ray queries.</sub></td>
+    <td><sub><b>The same glass, path traced</b> at 16 samples per pixel with no denoiser. This is the reference the deferred image is judged against.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="tests/golden/subsurface_deferred.png" alt="Subsurface materials"></td>
+    <td><img src="tests/golden/materials_step2_pt.png" alt="Layered OpenPBR materials, path traced"></td>
+  </tr>
+  <tr>
+    <td><sub><b>Subsurface:</b> skin-like, marble, jade and a diffuse reference. In the deferred frame a Burley profile spreads the diffuse light; the path tracer runs a random walk through the volume.</sub></td>
+    <td><sub><b>OpenPBR's layers, path traced:</b> car paint (coat), velvet (fuzz), brushed metal (anisotropy) and lacquered wood.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="tests/golden/helmet_game_deferred.png" alt="DamagedHelmet in a room"></td>
+    <td><img src="tests/golden/blockout_play_hud.png" alt="The first-person combat slice"></td>
+  </tr>
+  <tr>
+    <td><sub><b>DamagedHelmet</b> in a lit room, with emissive panels, clustered lights, TAA and bloom.</sub></td>
+    <td><sub><b>The slice, 45 steps into the fight:</b> two skinned enemies, the player's arms and rifle, and the HUD. A window and a headless host reach this exact picture.</sub></td>
+  </tr>
+</table>
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    agent(["AI agent"]) --> cli["ohao CLI<br/>validate · apply · run · render"]
+    agent --> serve["ohao serve<br/>JSON-RPC 2.0 · MCP"]
+    human(["player"]) --> live["LiveHost<br/>window · input · audio player"]
+    cli --> api
+    serve --> api
+    live --> api
+    api["ohao/api Session<br/>typed commands · undo · queries · snapshots"] --> world
+
+    subgraph world["World · EnTT · fixed step"]
+        direction LR
+        physics["physics + player<br/>Jolt"] --> combat["combat<br/>weapons · enemy AI · round"]
+        combat --> anim["animation"] --> vfx["vfx records"] --> sched["audio schedule"]
+    end
+
+    world --> extract["render extract"]
+    extract --> rs["RenderScene<br/>instances · OpenPBR materials · lights · TLAS"]
+    rs --> deferred["Deferred hybrid<br/>GPU culling · meshlets<br/>ReSTIR DI · RT GI"]
+    rs --> pt["Path tracer<br/>the reference"]
+    deferred -. "judged against" .-> pt
+    deferred --> display["display transform<br/>EV100 · AgX"]
+    pt --> display
+    sched --> live
+```
+
+Every host runs the same `World`: the CLI, `ohao serve`, the tests and the game window. Its systems run in a fixed order each step: physics, combat, animation, effects, then the audio schedule. Each one writes saved, hashable state or a runtime log that snapshots carry with them. The render extract is the only bridge into the renderer, and the renderer never sees EnTT. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the full map and a recipe for each common change.
+
+## The renderer
+
+**One material model in every renderer.** [OpenPBR Surface 1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) is written once as a Slang module (`shaders/material/openpbr.slang`). It covers EON diffuse, energy-compensated GGX, F82-tint metals, coat, fuzz, anisotropy, glass with dispersion and thin film, and subsurface. The deferred frame, RT GI's hits, the transparent pass and the path tracer all import it. White materials in a white furnace come back within 1%, on the CPU and in both renderers.
+
+**A hybrid frame with ray-traced lighting.** The G-buffer is drawn by GPU-driven indirect draws, with two-pass Hi-Z culling and meshlets through mesh shaders (or their compute fallback). ReSTIR DI shades direct light from any number of lights and emissive triangles, using MegaLights' sample, trace, shade and denoise structure, so every light is shadowed by rays. RT GI carries every bounce through a world-space radiance cache, and its reflection ray provides specular indirect light. There is no SSR and no fill light: indirect light comes from rays, or from the environment when the GPU has no ray tracing.
+
+**A path tracer you can trust.** `shaders/rt/path_tracer.slang` is a correct estimator of OpenPBR. It uses light, environment and BSDF sampling weighted by the power heuristic, emissive triangles as lights chosen by power, and Owen-scrambled Sobol sequences. A real-time profile runs the same tracer at two bounces, terminates paths in a radiance cache, and denoises with DLSS Ray Reconstruction on NVIDIA or NRD elsewhere.
+
+**One way to show a frame.** Every image passes through the same display transform: EV100 exposure, AgX or Khronos PBR Neutral, and the sRGB curve. A physical sky lights scenes that have no HDRI, and bloom moves energy without adding any. A capture looks the same whichever mode produced it.
+
+**Deterministic by default.** Deferred frames are identical bit for bit across runs and processes. Path-traced frames repeat to within a 1-LSB floor that comes from the driver's BVH builds. All shaders are Slang.
+
+## The game
+
+The engine includes the systems a shooter needs, and each of them replays exactly from a snapshot:
+
+- **Physics and the player.** Jolt runs inside the fixed step, with a `CharacterVirtual` player that walks, sprints, jumps, climbs steps and pushes crates. It also provides contact and trigger events, footsteps by surface, and joints as scene data.
+- **Combat.** Hitscan weapons have spread, bloom, recoil, magazines and ADS. Enemies see, chase and fire in bursts. The round restarts to its first `world.hash`.
+- **Animation.** Our own glTF skin and clip reader feeds animation graphs stored as saved integers. GPU skinning feeds the G-buffer, meshlets, motion vectors and a refitted BLAS, so shadows and GI see the deformed mesh.
+- **Audio.** A miniaudio mixer has buses, ducks, snapshots, a Freeverb return per reverb zone and occlusion graded by walls. The step decides every sound through a voice schedule that replays exactly.
+- **VFX.** Effects are spawn records from the step, drawn in closed form. They include lit, soft particles, sorted forward transparency, projected decals, tracers, and smoke that dims RT shadows and GI.
+- **Feel.** The game measures input-to-present latency, and the camera turns every frame by a presentation-only look lead.
+
+Levels are authored in Blender and exported as glTF. Node `extras` become components, and collision is fitted from the meshes.
+
+## Driven by agents
+
+The `ohao` CLI reads, validates, edits, steps and renders scenes without a GPU unless it is asked to render. Its stdout is always JSON, and its diagnostics point into the file with JSON pointers.
+
+```console
+$ build/Release/ohao.exe summary assets/scenes/blockout_play.scene.json --depth 1
+$ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --steps 45 --render fight.png --hud
+```
+
+`ohao serve` exposes the same API as a live session over JSON-RPC 2.0 and MCP, headless or in a window. It provides 39 tools: load, edit with undo, step in lockstep or real time, inject input, record and replay, capture frames inline, read logs, and query physics, combat, animation, audio and VFX. A Claude Code project connects with one `.mcp.json` entry. See [docs/agents/ohao-serve.md](docs/agents/ohao-serve.md) and [docs/agents/ohao-cli.md](docs/agents/ohao-cli.md).
+
+The engine is built to be developed by agents too. [AGENTS.md](AGENTS.md) is the entry point. `python tools/check.py` builds everything and runs every gate (unit suites, GPU tests, validation, render goldens and benchmarks), then writes one machine-readable verdict.
+
+## Quick start
+
+You need Windows with MSVC (the platform in daily use), CMake 3.20 or newer, the Vulkan SDK 1.3 with `slangc` (pinned in `shaders/slangc.version`), Python 3, and a GPU with Vulkan ray tracing for the RT paths. Use a real CMake: if conda's `cmake` comes first on your PATH, call the real one by its full path.
+
+```console
+$ cmake -B build -S .
+$ cmake --build build --config Release -j6
+$ python tools/check.py
+```
+
+Then play the slice, render a frame, or open a live session:
+
+```console
+$ build/Release/ohao_game.exe assets/scenes/blockout_play.scene.json
+$ build/Release/ohao.exe run assets/scenes/sponza_night.scene.json --render night.png --mode deferred --frames 30
+$ build/Release/ohao.exe run assets/scenes/glass.scene.json --render glass.png --mode rt_offline --spp 256
+$ build/Release/ohao.exe serve --window assets/scenes/blockout_play.scene.json
+```
+
+In the slice, WASD walks, Shift sprints, Space jumps, the left mouse button fires, the right one aims, R reloads, G throws a test grenade, Enter restarts and Esc frees the mouse. NRD is fetched at configure time. DLSS Ray Reconstruction turns on when `python tools/fetch_dlss.py` has placed the SDK in `external/DLSS`. OIDN is used if CMake finds it.
+
+## Roadmap
+
+The full table, with specs and change records, is in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+| | |
 |---|---|
-| Language | **C++20** |
-| C++ source | ~54K LOC across `ohao/` |
-| GLSL shaders | ~17K LOC across 125 files |
-| Render code | ~26K LOC |
-| GPU/Vulkan layer | ~10K LOC |
-| Physics (Jolt) | ~11K LOC |
-| ECS + asset loaders | ~3K LOC |
-| Denoise backends | 3 (Intel OIDN, NVIDIA NRD, NVIDIA DLSS-RR) |
+| **Built** | Runtime shell; ECS world and persistent GPU scene; reflection, canonical scene files and the CLI; the agent control surface (`ohao serve`); the GPU-driven renderer upgrade; the level pipeline; the player; combat; OpenPBR materials (all four steps); the frontier renderer (one path tracer, ReSTIR DI, multi-bounce RT GI, the physical display chain, Slang everywhere) |
+| **Built, awaiting hand test** | Feel (latency, look lead, view-model), animation, audio, VFX and transparency |
+| **In progress** | **Path guiding** (23): Markov chain path guiding in the offline tracer, off by default while it is measured. **Caustics** (24): light traced from the sun through smooth surfaces, then specular manifold sampling for caustics seen through glass, being built on a branch. **Joints and ragdolls** (13): joints are scene data; death ragdolls are next |
+| **Next** | Destruction (19), cloth and soft bodies (20), simulated GPU particles (21), then fluids (22) when needed. Gameplay physics stays on the CPU and replays bit for bit, and GPU simulation is presentation only. Not yet ordered: the game module with hot reload (14) and the asset database (15). Scheduled when needed: rendering to a budget (16) and OpenUSD interop (8) |
 
-## Real-time path tracing — and the firefly that taught me the most
+## Acknowledgements
 
-The most recent stretch pushed the `RTRealtime` path from noisy preview to real-time path tracing at 67 fps (1 spp, 720p), denoised with NVIDIA DLSS Ray Reconstruction and stabilized with ReSTIR GI. The fix I got the most out of, though, was the smallest one.
+OHAO implements these published techniques. Each one is our own code unless the note says otherwise.
 
-![Outdoor HDRI scene, graded](docs/images/hero_outdoor_graded.jpg)
+| Where | Work |
+|---|---|
+| Materials | **OpenPBR Surface 1.1.1** (Academy Software Foundation; reference implementation in MaterialX) |
+| | Portsmouth, Kutz & Hill, *EON: A practical energy-preserving rough diffuse BRDF*, JCGT 2025: ported from the authors' listings (MIT, [`LICENSE-EON.md`](shaders/material/LICENSE-EON.md)) |
+| | Zeltner, Burley & Chiang, *Practical Multiple-Scattering Sheen Using Linearly Transformed Cosines*, SIGGRAPH Talks 2022: the fits ported from MaterialX (Apache-2.0, [`LICENSE-MaterialX.md`](shaders/material/LICENSE-MaterialX.md)) |
+| | Kutz 2021 (the F82-tint Fresnel); Kulla & Conty 2017 and Turquin 2019 (energy compensation); Heitz 2014 (height-correlated Smith); Eto & Tokuyoshi 2023 (bounded VNDF sampling); Walter et al. 2007 (rough refraction); Belcour & Barla 2017 (*A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence*); van de Hulst's albedo inversion |
+| | Chiang, Kutz & Burley 2016 (random-walk subsurface); Christensen & Burley 2015 (normalized diffusion profile); Jimenez et al. 2015 (the pre- and post-scatter split) |
+| Area lights | Heitz, Dupuy, Hill & Neubelt 2016 (linearly transformed cosines) with Heitz 2017's edge integral; Karis 2013 (representative-point sphere lights) |
+| Direct light | Bitterli et al., *Spatiotemporal reservoir resampling for real-time ray tracing with dynamic direct lighting*, SIGGRAPH 2020 (ReSTIR DI); Bitterli 2022, thesis §5.8 (pairwise MIS); Narkowicz & Costa, *MegaLights*, SIGGRAPH 2025 (the frame's structure); Schied et al. 2017 (SVGF's luminance-guided filter) |
+| Indirect light | NVIDIA's SHaRC design, built as our own code (RTXGI's licence does not allow vendoring), after Binder et al., *Fast Path Space Filtering by Jittered Spatial Hashing*, SIGGRAPH 2019 talks, and Gautron, SIGGRAPH 2020; Walker 1977 and Vose 1991 (alias tables) |
+| Sampling | Burley, *Practical Hash-based Owen Scrambling*, JCGT 2020; Duff et al. 2017 (orthonormal bases); Steele, Lea & Flood 2014 (splitmix64) |
+| Path guiding | Alber, Hanika & Dachsbacher, *Real-Time Markov Chain Path Guiding for Global Illumination and Single Scattering*, 2025: implemented from the paper (the authors' code is GPL-2.0 and is not read, copied or linked). Also Dittebrandt et al., CGF 2023; Ruppert, Herholz & Lensch, SIGGRAPH 2020; Banerjee et al. 2005; Jakob 2012; West et al. 2020 |
+| Caustics (in progress) | Zeltner, Georgiev & Jakob, *Specular Manifold Sampling for Rendering High-Frequency Caustics and Glints*, SIGGRAPH 2020; Hanika, Droske & Fascione 2015 (manifold next-event estimation); Veach 1996 (non-symmetric scattering) |
+| Display and sky | Hillaire, *A Scalable and Production Ready Sky and Atmosphere Rendering Technique*, EGSR 2020, with Bruneton's transmittance parametrisation; Lagarde & de Rousiers, *Moving Frostbite to PBR*, SIGGRAPH 2014 (physical exposure); AgX (Sobotka), as fit by Wrensch's *Minimal AgX* 2023; Khronos PBR Neutral 2024; Jimenez 2014 (bloom pyramid); Salvi 2016 (TAA variance clipping) |
+| Audio | Jezar's Freeverb (public domain), written as our own node |
 
-### The 1-spp firefly storm — importance sampling + MIS
+### Libraries
 
-**Symptom.** At one sample per pixel, metal and ground sparkled: bright pixels flashing at random every frame. Denoising couldn't touch it — the denoiser was being fed garbage.
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) 5.1 · [EnTT](https://github.com/skypjack/entt) 3.13 · [miniaudio](https://github.com/mackron/miniaudio) 0.11.21 · [simdjson](https://github.com/simdjson/simdjson) · [fast_float](https://github.com/fastfloat/fast_float) · [nlohmann/json](https://github.com/nlohmann/json) · [Assimp](https://github.com/assimp/assimp) 5.4.3 · [ufbx](https://github.com/ufbx/ufbx) · [GLFW](https://github.com/glfw/glfw) 3.4 · [glm](https://github.com/g-truc/glm) · [stb](https://github.com/nothings/stb) · [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) · [unordered_dense](https://github.com/martinus/unordered_dense) · [Slang](https://github.com/shader-slang/slang) (from the Vulkan SDK) · [NVIDIA NRD](https://github.com/NVIDIAGameWorks/RayTracingDenoiser) 4.17 with NRI (fetched at configure time) · [Intel Open Image Denoise](https://github.com/RenderKit/oidn) (optional) · [GoogleTest](https://github.com/google/googletest) and [Boost.PFR](https://github.com/boostorg/pfr) (tests only). Each one is used under its own licence.
 
-**Cause.** The real-time integrator reached the bright HDRI environment *only* through random BSDF bounces. A rare ray that happened to land on the sun returned `radiance / (tiny pdf)` — a colossal spike. That's unbounded Monte-Carlo variance, by construction. The offline path already importance-sampled the environment; the real-time fork I'd split off didn't.
+**NVIDIA DLSS** Ray Reconstruction is used under the NVIDIA RTX SDKs licence. It is never committed to this repository: `tools/fetch_dlss.py` downloads the pinned SDK into the git-ignored `external/DLSS`. NVIDIA, DLSS and the DLSS logo are trademarks of NVIDIA Corporation.
 
-**Fix.** Importance-sample the environment by its own luminance (marginal + conditional CDF), shadow-trace, and MIS-weight against BSDF sampling with the balance heuristic:
+### Assets
 
-```glsl
-// shaders/rt/pt_raygen_realtime.rgen
-sampleEnvMap(u1, u2, ..., out envDir, out envPdf);   // sample the sky where it's bright
-if (dot(N, envDir) > 0.0 && envPdf > 0.0) {
-    traceRayEXT(...);                                 // visibility toward the sampled dir
-    if (payload.hitDist < 0.0) {                      // ray escaped -> it saw the env
-        float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
-        radiance += envRadiance * (diff + spec) * NdotL * w / envPdf;   // /envPdf cancels the spike
-    }
-}
-```
+- From the Khronos glTF-Sample-Models ([`assets/khronos/`](assets/khronos/README.md), with full credits): Sponza (Crytek's public donation), Flight Helmet (CC0, donated by Microsoft) and Metal-Rough Spheres (CC BY 4.0, © 2017 Analytical Graphics, Inc.).
+- The enemy is "Character Enemy" from Quaternius' Toon Shooter Game Kit (CC0), rebuilt by `tools/anim/make_enemy.py`.
+- The blockout level, the player's arms and rifle, and every sound and VFX texture are generated by scripts in `tools/` and are MIT.
 
-**Lesson.** Variance isn't noise you denoise away — it's a sampling problem you solve at the source. A denoiser can only reconstruct a signal whose variance is already low. Every later win was the same move: cut variance *before* the denoiser, not after.
+## Licence
 
-### The flicker that wasn't where it looked
-
-Chrome on a test helmet flickered frame to frame. I built two plausible fixes — feeding DLSS the specular hit-distance guide, then swapping the glossy sampler for GGX VNDF importance sampling (Heitz 2018) — measured both with a drift-controlled A/B, and both came back *not* fixing it. The control gave it away: a diffuse wall that should read a temporal std of ~3 measured ~27. The ReSTIR-GI reservoir was still boiling, and the metal was just reflecting it — and a reflection is view-dependent, so the denoiser can't reproject the boil away the way it does on the walls.
-
-| scene | metal flicker (temporal std) | fps (1 spp) |
-|---|---|---|
-| enclosed room | ~15 | ~35 |
-| open HDRI scene | **0.69** | **67** |
-
-The fix was the scene, not the sampler: an open environment reflects a stable sky instead of boiling GI, and one importance-sampled HDRI replaces four noisy area lights — ~20× less flicker and ~2× faster. Same lesson: ask *what* the pixel reflects before *how* the ray is aimed.
-
-<p>
-  <img src="docs/images/flicker_map.jpg" width="49%" alt="per-pixel temporal variance map — metal bright, diffuse walls dark">
-  <img src="docs/images/indoor_before.jpg" width="49%" alt="the enclosed room the flicker came from">
-</p>
-
-*Left: a per-pixel temporal-standard-deviation map — bright = flickering. The metal glows; the diffuse walls are black, which is what pointed at the reflection. Right: the enclosed room the flicker came from.*
-
-I also tried **ReSTIR DI** for the direct lighting and reverted it — the weight calculation introduced more noise than it removed. Measuring that honestly and backing it out was the right call; ReSTIR GI on the indirect bounce stayed, and does the real variance reduction (3.2× less boil, unbiased).
-
-## Architecture
-
-Two pipelines, one scene. Both consume the same bindless texture array, the same material SSBO, the same TLAS. Switch at runtime via `--denoise=` and the example app argv.
-
-```
-                         scene + materials + lights
-                                    |
-                  +-----------------+-----------------+
-                  |                                   |
-            Path Tracer (rt/)                Deferred (deferred/)
-            VK_KHR_ray_tracing_pipeline      G-buffer + lighting
-            NEE + MIS + env-map IS           CSM, SSAO, SSR, SSS
-            Sobol + Owen scramble            TAA, bloom, ACES
-            OIDN / NRD / DLSS-RR denoise     (RT shadow + RT GI plug in here)
-                  |                                   |
-                  +----------------+------------------+
-                                   |
-                            output (PNG / swapchain)
-```
-
-### Path tracing
-
-Lives in `ohao/render/rt/`. Vulkan KHR ray tracing pipeline. Files are split: `path_tracer.cpp` for the orchestrator, `path_tracer_descriptors.cpp` for the 30-binding descriptor layout, `path_tracer_images.cpp` for the AOV images, `path_tracer_pipeline.cpp` for the SBT, `path_tracer_render.cpp` for dispatch.
-
-- The reference (offline) path tracer is `shaders/rt/path_tracer.slang`: a correct estimator of OpenPBR Surface's base (`shaders/material/openpbr.slang`: EON diffuse, GGX with bounded VNDF sampling, exact dielectric Fresnel, F82-tint metals, Kulla-Conty energy compensation), held to closed forms (`tests/renderer/check_material.py`, `check_analytic.py`)
-- Next-event estimation to lights and the environment, weighed against BSDF sampling by the power heuristic; Russian roulette
-- Environment map importance sampling: a 2D CDF (marginal, then each row's conditional) built CPU-side in `env_cdf.cpp`, in device-local memory
-- Bindless textures (base colour, normal in the vertex tangents' frame, rough/metal, emissive, KHR specular)
-- Alpha transparency via the any-hit shader for foliage and hair cards
-- Both profiles run this tracer: the realtime one at 2 bounces, one sample a frame, denoised by NRD (or DLSS RR where the SDK is present)
-
-### Denoising (three backends, runtime switchable)
-
-All live in `ohao/render/rt/denoise/`.
-
-| Backend | Files | Use |
-|---|---|---|
-| Intel OIDN 2.x | `oidn_denoise.cpp` | CPU post-process for offline reference |
-| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp` | Realtime REBLUR diffuse + specular, the vendor-neutral realtime default |
-| NVIDIA DLSS-RR | `dlss_rr.cpp` | Ray Reconstruction, the realtime default on NVIDIA (SDK fetched by `tools/fetch_dlss.py`) |
-
-`--denoise=optix` is still parsed and falls back to OIDN with a warning; that backend was removed in `0873766`.
-
-### Deferred raster
-
-`ohao/render/deferred/`. G-buffer with position, normal, albedo, rough/metal, emissive. Lighting pass uses the same bindless texture array as RT.
-
-- Cascaded shadow maps (CSM) with skinned variant for animated meshes
-- SSAO, SSR (screen-space reflections), SSS (subsurface scattering)
-- TAA with Halton jitter, bloom, ACES tonemapping
-- HDR environment reflection, Fresnel-weighted
-
-### Hybrid composite
-
-`render/rt/rt_shadow_technique.*` and `render/rt/rt_gi_technique.*` plug into the deferred G-buffer. RT shadows are traced from the G-buffer's reconstructed world position. RT GI is 1-bounce indirect with temporal blending (see header comment in `rt_gi_technique.hpp`). Both run on the same TLAS the path tracer uses.
-
-### Acceleration structures
-
-`rt_acceleration_structure.cpp` handles BLAS/TLAS lifecycle.
-
-### Subsystem map
-
-```
-ohao/
-  core/        1,431 LOC  logging, time, input, events, commands
-  reflect/     5,003 LOC  type registry, schemas, the JSON codec
-  asset/       2,274 LOC  model loaders (glTF/OBJ/FBX through Assimp, ufbx), procedural meshes
-  gpu/vulkan/  2,951 LOC  the Vulkan layer: swapchain, present waiting, bindless textures, allocator
-  render/     43,690 LOC  renderer/ (VulkanRenderer), scene/ (RenderScene), deferred/, rt/ (path tracer,
-                          ReSTIR DI, RT GI), graph/, display/, sky/, material/ (OpenPBR), vfx/, hud/
-  ecs/        12,118 LOC  World, components, systems, scene files, snapshots, physics_scene*, gameplay
-  physics/     2,813 LOC  the Jolt 5.1 backend behind IPhysicsBackend
-  anim/        1,731 LOC  skins, clips, animation graphs
-  audio/       2,276 LOC  the mixer, banks, reverb (miniaudio)
-  vfx/         1,035 LOC  effect sets, closed-form particles
-  level/       1,373 LOC  glTF level structure and hints
-  api/, rpc/   6,802 LOC  the agent API, JSON-RPC/MCP server
-  runtime/     2,740 LOC  window host, frame timing, captures, audio player
-shaders/      10,272 LOC  51 Slang files: rt/, core/, cull/, material/, display/, postprocess/, vfx/, ...
-```
-
-## Build
-
-```bash
-cmake -B build -S . -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
-cmake --build build -j8
-cmake --build build --target shaders   # shaders only
-```
-
-Requires CMake 3.20+, Vulkan SDK 1.3+ with RT extensions, a **C++20** compiler. Tested on Linux with GCC/Clang and on Windows with MSVC.
-
-## Run
-
-```bash
-./build/cornell_box       output.png 1024                 # 1024 spp path-traced reference
-./build/cornell_box       output.png 1   deferred         # deferred + RT hybrid
-./build/model_viewer      model.glb  output.png 256       # GLB in Cornell box, OIDN denoised
-./build/model_viewer      model.fbx  output.png 1 deferred # FBX geometry via Assimp
-./build/env_demo          model.glb  env.hdr output.png 256
-./build/turntable         model.glb  mirror 256 480       # turntable video frames
-./build/renderer_test                                      # smoke test
-```
-
-All examples accept `--denoise=none|oidn|nrd|dlss`; `rt_realtime` selects the real-time path tracer, which denoises with NRD's REBLUR_DIFFUSE_SPECULAR or DLSS-RR.
-
-The game host renders the **Deferred** raster path (with RT shadows and RT GI where the GPU supports them) straight to a window:
-
-```bash
-./build/Release/ohao_game.exe            # windowed: WASD/QE move, right-drag look, Shift fast, Esc quits, --vsync
-OHAO_VALIDATION=1 ./build/Release/ohao_game.exe --frames 600 --resize-at 200   # presentation gate: exit 0 = no validation messages, no readbacks
-```
-
-## Dependencies
-
-- Vulkan SDK 1.3+ with RT extensions
-- GLFW 3.x (`ohao_game` window and input)
-- Intel OpenImageDenoise 2.x
-- NVIDIA NRD (RayTracingDenoiser) v4.17, fetched via FetchContent. Pure Vulkan, no CUDA. Opt out with `-DOHAO_NRD=OFF`.
-- Jolt Physics 5.1.0, Assimp 5.4.3, stb, glm, VMA, nlohmann/json (all FetchContent)
-
-## Project status
-
-See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, golden harness). High points:
-
-- Real-time path tracing with **DLSS-RR**, **ReSTIR GI**, and outdoor HDRI showcase (see [above](#real-time-path-tracing--and-the-firefly-that-taught-me-the-most)).
-- **NRD** REBLUR + cinematic post is shippable for interactive quality (`--denoise=nrd`).
-- Pre-push **golden-image** regression (`tests/golden/`).
-- ReSTIR DI was tried and reverted (added more noise than it removed).
-
-**Moved out or removed**, listed because the README described some of it long
-after the fact:
-
-- **Differentiable and inverse rendering are not part of this engine.** The
-  differentiable renderer moved out to its own repository; the
-  inverse-rendering lab was removed in `e0a260b`. This is a game engine.
-- **Animation, the OptiX denoiser, the tscn loader and scene serialization**
-  were removed in `0873766`. `--denoise=optix` is still accepted on the command
-  line and falls back to OIDN with a warning.
-- **The GLSL realtime path tracer** (`pt_raygen_realtime.rgen`) and its ReSTIR GI,
-  internal spatial denoiser and pre-OpenPBR BRDF were removed on 2026-10-30
-  (`docs/specs/2026-10-30-frontier-renderer-design.md`, step F1): both path tracer
-  profiles run the OpenPBR reference tracer. The real-time path tracing write-up
-  above describes that earlier tracer.
-
-Deeper docs: `docs/render_pipelines.md`, `docs/bugs_solved/`, and the monograph in `site/`.
-
-## Known build gotchas
-
-These bit me, listed so they don't bite you:
-
-- Linux: `#ifdef _WIN32` guards around Vulkan external memory extensions
-- GCC: `-Wl,--start-group ... --end-group` for circular static lib deps
-- GCC strict mode: missing `<cstring>` and `<algorithm>` includes in some upstream headers
-- stbi duplicate symbols: `--allow-multiple-definition` on Linux, `/FORCE:MULTIPLE` on MSVC
-- Shutdown order matters: the ECS world and RenderScene before VulkanRenderer, PathTracer before VkDevice
-
-## Third-party SDKs
-
-- **NVIDIA DLSS** (Ray Reconstruction) is used under the NVIDIA RTX SDKs licence. It is not part
-  of this repository: `python tools/fetch_dlss.py` downloads the pinned SDK files into the
-  git-ignored `external/DLSS`, and the build turns DLSS on when they are present. The realtime
-  path tracer uses it on NVIDIA GPUs; elsewhere it uses NRD. NVIDIA, DLSS and the DLSS logo are
-  trademarks of NVIDIA Corporation.
-
-## License
-
-MIT, see [LICENSE](LICENSE). Built by Frank Yin ([@Qervas](https://github.com/Qervas)).
+MIT. See [LICENSE](LICENSE). Built by Frank Yin ([@Qervas](https://github.com/Qervas)).
