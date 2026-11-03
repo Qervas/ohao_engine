@@ -461,6 +461,7 @@ void VulkanRenderer::applyRTRenderSettings() {
     }
     if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;
     if (m_guidingOverride) m_rtSettings.guiding = *m_guidingOverride;
+    if (m_causticsOverride) m_rtSettings.caustics = *m_causticsOverride;
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }

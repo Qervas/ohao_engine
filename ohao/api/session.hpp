@@ -106,6 +106,7 @@ struct RenderRequest {
     bool timings{false};                            // the last frame's pass list in the outcome
     bool hud{false};                                // draw the combat HUD over the frame (deferred)
     bool guiding{false};                            // path guiding (path-traced modes)
+    bool caustics{false};                           // light traced from the sun (rt_offline)
     // The call's cancel flag and progress (frames rendered of frames), checked between whole
     // frames; null outside a protocol call.
     const CallControl* control{nullptr};

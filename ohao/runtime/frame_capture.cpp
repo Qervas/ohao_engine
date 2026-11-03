@@ -217,6 +217,13 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
         ~RestoreGuiding() { renderer.setGuidingOverride(before); }
     } restoreGuiding{renderer, renderer.guidingOverride()};
     if (mode != RenderMode::Deferred) renderer.setGuidingOverride(r.guiding);
+    // caustics: the same, for this capture only.
+    struct RestoreCaustics {
+        VulkanRenderer& renderer;
+        std::optional<bool> before;
+        ~RestoreCaustics() { renderer.setCausticsOverride(before); }
+    } restoreCaustics{renderer, renderer.causticsOverride()};
+    if (mode != RenderMode::Deferred) renderer.setCausticsOverride(r.caustics);
     renderer.setRenderQuality(r.quality == "reference" ? RenderQuality::Reference : RenderQuality::Realtime);
     if (mode == RenderMode::Deferred && renderer.getDeferredRenderer()) {
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {

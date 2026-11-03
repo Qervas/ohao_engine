@@ -13,7 +13,7 @@
 //   ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
 //                  [--denoise X] [--size WxH] [--post bloom,taa] [--ev100 EV] [--tonemap agx|neutral]
-//                  [--quality realtime|reference] [--hud] [--guiding] [--hdr out.pfm]]
+//                  [--quality realtime|reference] [--hud] [--guiding] [--caustics] [--hdr out.pfm]]
 //                 [--save out.scene.json]
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
 //   ohao doctor  [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
@@ -578,7 +578,7 @@ int cmdRun(const Args& a) {
     if (has(a, "--dt") && !has(a, "--steps")) return usage("--dt needs --steps");
     const bool render = has(a, "--render");
     for (const char* o : {"--mode", "--spp", "--bounces", "--frames", "--denoise", "--size", "--post", "--ev100",
-                          "--tonemap", "--quality", "--hud", "--guiding", "--hdr"})
+                          "--tonemap", "--quality", "--hud", "--guiding", "--caustics", "--hdr"})
         if (has(a, o) && !render) return usage(std::string(o) + " needs --render");
     std::string width = "1920", height = "1080";
     if (has(a, "--size")) {
@@ -676,6 +676,7 @@ int cmdRun(const Args& a) {
         if (has(a, "--quality")) p.emplace_back("quality", jsonString(opt(a, "--quality")));
         if (has(a, "--hud")) p.emplace_back("hud", "true");
         if (has(a, "--guiding")) p.emplace_back("guiding", "true");
+        if (has(a, "--caustics")) p.emplace_back("caustics", "true");
         if (has(a, "--hdr")) p.emplace_back("hdr", jsonString(opt(a, "--hdr")));
         if (!step("render.capture", c.session->call("render.capture", params(p)))) return worst;
     }
@@ -891,7 +892,7 @@ int run(int argc, char** argv) {
         return a.error.empty() ? cmdSummary(a) : usage(a.error);
     }
     if (cmd == "run") {
-        const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding"},
+        const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding", "--caustics"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
                                   "--frames", "--denoise", "--size", "--post", "--ev100", "--tonemap", "--quality", "--hdr", "--save",
                                   "--root"});

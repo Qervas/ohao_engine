@@ -340,6 +340,12 @@ public:
         applyRTRenderSettings();
     }
     [[nodiscard]] std::optional<bool> guidingOverride() const { return m_guidingOverride; }
+    // Caustics in place of the profile's (a capture's `caustics`); nullopt: the profile's.
+    void setCausticsOverride(std::optional<bool> caustics) {
+        m_causticsOverride = caustics;
+        applyRTRenderSettings();
+    }
+    [[nodiscard]] std::optional<bool> causticsOverride() const { return m_causticsOverride; }
 
     // Returns the motion vector AOV image view from the active RT profile,
     // or VK_NULL_HANDLE if no RT profile is active.
@@ -561,6 +567,7 @@ private:
     bool                         m_denoiseModeOverridden{false}; // true = setDenoiseMode() called; blocks applyRTRenderSettings from resetting it
     std::optional<uint32_t>      m_maxBouncesOverride;   // setMaxBouncesOverride
     std::optional<bool>          m_guidingOverride;      // setGuidingOverride
+    std::optional<bool>          m_causticsOverride;     // setCausticsOverride
     // The requested frame, denoised on the CPU (OIDN) or read from NRD's tonemapped
     // output: what readback() returns for those modes, until the next render().
     std::vector<uint8_t>         m_denoisedPixelBuffer;
