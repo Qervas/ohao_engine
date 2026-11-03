@@ -366,9 +366,13 @@ void PathTracer::destroy() {
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
     if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }
+    if (m_causticsSbtBuffer) { vkDestroyBuffer(m_device, m_causticsSbtBuffer, nullptr); m_causticsSbtBuffer = VK_NULL_HANDLE; }
+    if (m_causticsSbtMemory) { vkFreeMemory(m_device, m_causticsSbtMemory, nullptr); m_causticsSbtMemory = VK_NULL_HANDLE; }
 
     // Pipeline
     if (m_rtPipeline) { vkDestroyPipeline(m_device, m_rtPipeline, nullptr); m_rtPipeline = VK_NULL_HANDLE; }
+    if (m_causticsPipeline) { vkDestroyPipeline(m_device, m_causticsPipeline, nullptr); m_causticsPipeline = VK_NULL_HANDLE; }
+    m_causticsPipelineFailed = false;
     if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
 
     // Descriptors

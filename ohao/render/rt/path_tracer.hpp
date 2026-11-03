@@ -72,6 +72,11 @@ struct PathTracerShaderSet {
     const char* anyHitEntry{"anyHit"};
     const char* cacheUpdateSpv{"bin/shaders/rt_path_tracer.slang.cacheUpdate.spv"};   // the radiance cache's update
     const char* cacheUpdateEntry{"cacheUpdate"};
+    // Caustics (sub-project 24): raygen with the split compiled in, and the light pass.
+    const char* raygenCausticsSpv{"bin/shaders/rt_path_tracer.slang.raygenCaustics.spv"};
+    const char* raygenCausticsEntry{"raygenCaustics"};
+    const char* causticTraceSpv{"bin/shaders/rt_path_tracer.slang.causticTrace.spv"};
+    const char* causticTraceEntry{"causticTrace"};
 };
 
 class PathTracer {
@@ -222,6 +227,16 @@ private:
     [[nodiscard]] bool createDescriptorResources();
     [[nodiscard]] bool createRTPipeline();
     [[nodiscard]] bool createShaderBindingTable();
+    // A program: raygen, the miss, the hit group and a second raygen, on the shared layout.
+    [[nodiscard]] VkPipeline buildRtPipeline(const char* rgenSpv, const char* rgenEntry, const char* extraSpv,
+                                             const char* extraEntry, const char* cacheName);
+    [[nodiscard]] bool buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffer, VkDeviceMemory& sbtMemory,
+                                               VkStridedDeviceAddressRegionKHR& rgenRegion,
+                                               VkStridedDeviceAddressRegionKHR& missRegion,
+                                               VkStridedDeviceAddressRegionKHR& hitRegion,
+                                               VkStridedDeviceAddressRegionKHR& extraRegion);
+    // Caustics' program, made the first time a frame needs it (minutes cold, as the default one).
+    [[nodiscard]] bool ensureCausticsPipeline();
     [[nodiscard]] bool loadFunctionPointers();
 
     void destroyImages();
@@ -435,6 +450,16 @@ private:
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
     VkStridedDeviceAddressRegionKHR m_callRegion{};  // empty, not used
     VkStridedDeviceAddressRegionKHR m_cacheRgenRegion{};   // the radiance cache's update raygen
+
+    // Caustics' program (ensureCausticsPipeline): raygenCaustics and the light pass, causticTrace.
+    VkPipeline m_causticsPipeline = VK_NULL_HANDLE;
+    bool m_causticsPipelineFailed = false;
+    VkBuffer m_causticsSbtBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_causticsSbtMemory = VK_NULL_HANDLE;
+    VkStridedDeviceAddressRegionKHR m_causticsRgenRegion{};
+    VkStridedDeviceAddressRegionKHR m_causticsMissRegion{};
+    VkStridedDeviceAddressRegionKHR m_causticsHitRegion{};
+    VkStridedDeviceAddressRegionKHR m_causticTraceRegion{};
 
     // Push constants — 256 bytes (Vulkan max on most RT GPUs)
     struct PTPushConstants {

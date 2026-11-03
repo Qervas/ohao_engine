@@ -37,6 +37,8 @@ constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 constexpr uint32_t kPTFlagRadianceCache = 1u << 5;
 // Path guiding (sub-project 23): rt/path_tracer.slang's kFlagGuiding.
 constexpr uint32_t kPTFlagGuiding = 1u << 6;
+// Caustics (sub-project 24): rt/path_tracer.slang's kFlagCaustics (bits 7-9 are guiding's debug).
+constexpr uint32_t kPTFlagCaustics = 1u << 10;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -547,6 +549,11 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const bool cacheOn = m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u;
     if (cacheOn) pc.control.x |= kPTFlagRadianceCache;
     if (guideOn) pc.control.x |= kPTFlagGuiding;
+    // Caustics: offline only (the realtime profile's paths end in the radiance cache), on its own
+    // program (raygenCaustics; the default raygen has none of its code).
+    const bool causticsOn = m_renderSettings.caustics && m_renderSettings.profile == RTRenderProfile::Offline &&
+                            ensureCausticsPipeline();
+    if (causticsOn) pc.control.x |= kPTFlagCaustics;
     static const char* guideDebug = std::getenv("OHAO_GUIDE_DEBUG");
     if (guideOn && guideDebug) pc.control.x |= (1u << 7) | ((uint32_t(std::atoi(guideDebug)) & 3u) << 8u);   // kFlagGuideDebug, its mode
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
@@ -582,8 +589,14 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // --- Trace rays! ---
     if (cacheOn) timePass("pt.trace");
     if (guideOn) m_guiding.recordBeginFrame(cmd);
-    vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
-                      m_width, m_height, 1);
+    if (causticsOn) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_causticsPipeline);
+        vkCmdTraceRaysKHR(cmd, &m_causticsRgenRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
+                          m_width, m_height, 1);
+    } else {
+        vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
+                          m_width, m_height, 1);
+    }
     if (guideOn) {
         // What this frame's paths found becomes the grid the next frame reads.
         timePass("pt.guide.update");

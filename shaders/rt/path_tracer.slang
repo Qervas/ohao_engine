@@ -88,6 +88,7 @@ static const uint kFlagDLSSRR = 16u;
 static const uint kFlagCache = 32u;   // realtime: paths end in the radiance cache
 static const uint kFlagGuiding = 64u; // path guiding (sub-project 23): bounces drawn from the BSDF and learned lobes
 static const uint kFlagGuideDebug = 128u;   // OHAO_GUIDE_DEBUG: the first hit's lobes instead of light
+static const uint kFlagCaustics = 1024u;    // caustics (sub-project 24): the light pass owns sun -> smooth chain -> first hit
 // A guided bounce's coin, lobe pick and vMF direction: Sobol group kGuideGroup + depth (outside the
 // bounce groups 1 + 3d to 3 + 3d, whose sequences stay as they are).
 static const uint kGuideGroup = 0x4000u;
@@ -460,8 +461,10 @@ float4 nrdPackRadianceHitDist(float3 radiance, float hitDist, float viewZ, float
 
 // ---- ray generation -------------------------------------------------------------------------
 
-[shader("raygeneration")]
-void raygen()
+// The camera's path through one pixel. CAUSTICS compiles in caustics' split (sub-project 24): its own
+// entry and pipeline (raygenCaustics), so the default raygen carries none of its code. In the default
+// one, behind a flag, it measured 8.5% of pt.trace on helmet_rt_1080p with the flag off (69.0 -> 75.0 ms).
+void tracePixel<let CAUSTICS : bool>()
 {
     const uint2 pixel = DispatchRaysIndex().xy;
     const uint2 size = pc.params.xy;
@@ -530,6 +533,14 @@ void raygen()
     // BSDF drew away from every lobe weighs up to 1 / (1 - share) its BSDF weight, and roulette by
     // the BSDF's throughput alone grew such paths 2x a bounce: fireflies). 1 at every unguided vertex.
     float rrRatio = 1.0;
+    // Caustics (sub-project 24, docs/specs/2026-11-03-caustics-design.md, "The split"): the light pass
+    // estimates every term sun -> smooth parts -> the rough part of the camera ray's first hit, so this
+    // side drops exactly those. chainThroughput is the throughput of those terms alone: at the first hit
+    // the bounce's rough part over its density, then each later bounce's smooth part over its density,
+    // and every other factor throughput takes (roulette, absorption, the dispersion channel). A
+    // directional light's sample past the first hit subtracts chainThroughput x the smooth part there.
+    const bool caustics = CAUSTICS && (flags & kFlagCaustics) != 0u;
+    float3 chainThroughput = float3(0.0);
     WalkRng wr;
     wr.state = 0u;
 #define walkWeight misOrigin
@@ -601,7 +612,12 @@ void raygen()
                 --depth;   // the camera ray again (the loop's ++depth brings it back to 0)
                 continue;
             }
-            if (insideVolume) throughput *= exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
+            if (insideVolume)
+            {
+                const float3 absorbed = exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
+                throughput *= absorbed;
+                chainThroughput *= absorbed;
+            }
             float3 add = float3(0.0);
             bool stop = false;
             if ((hit.flags & kHit) == 0u)
@@ -749,7 +765,9 @@ void raygen()
             {
                 const uint h = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ 0x51ED270Bu)));
                 channel = int(min(float(h >> 8u) * (3.0 / 16777216.0), 2.0));
-                throughput *= float3(channel == 0 ? 3.0 : 0.0, channel == 1 ? 3.0 : 0.0, channel == 2 ? 3.0 : 0.0);
+                const float3 pick = float3(channel == 0 ? 3.0 : 0.0, channel == 1 ? 3.0 : 0.0, channel == 2 ? 3.0 : 0.0);
+                throughput *= pick;
+                chainThroughput *= pick;
             }
             mi.specularIor = dispersedIor(mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
         }
@@ -845,7 +863,14 @@ void raygen()
                     w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
                 }
                 const float3 le = ls.radiance * vis1 * w;
-                const float3 c = throughput * f * le;
+                float3 c = throughput * f * le;
+                if (caustics && depth > 0u && ls.pdf == 0.0 && any(chainThroughput > 0.0))
+                {
+                    // A directional light through an all-smooth chain from the first hit: the light pass's.
+                    float3 sm, ro;
+                    base.evalParts(wo, wi, tables, kCausticRough, sm, ro);
+                    c -= chainThroughput * sm * le;
+                }
                 radiance += c;
                 // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
                 if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
@@ -900,6 +925,7 @@ void raygen()
                 const float q = min(max(tr.r, max(tr.g, tr.b)), 0.95);
                 if (rng.next() >= q) break;
                 throughput /= q;
+                chainThroughput /= q;
             }
             continue;
         }
@@ -968,6 +994,7 @@ void raygen()
         {
             // Into the volume: the walk decides where the light leaves, and the path goes on from
             // there; what it meets counts in full (light sampling at the entry did not see it).
+            chainThroughput = float3(0.0);
             walkMaterial = hit.material;
             wr.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ pcg(depth ^ 0xA511E9B3u))));
             origin = hit.position - hit.geoNormal * 1e-3;
@@ -987,6 +1014,12 @@ void raygen()
         if (depth == 0u) firstLobe = s.lobe;
         lastLobe = s.lobe;
         lastRough = s.lobe == 2u ? mi.coatRoughness : s.lobe == 3u ? 1.0 : hit.specularRoughness;
+        if (caustics)
+        {
+            float3 sm, ro;
+            base.evalParts(wo, s.wi, tables, kCausticRough, sm, ro);
+            chainThroughput = depth == 0u ? throughput * ro / s.pdf : chainThroughput * sm / s.pdf;
+        }
         throughput *= s.weight;
         // A ray that crossed the surface could not have been drawn by light sampling there (it
         // samples above the surface only): what it meets counts in full, not by MIS (a huge pdf). A
@@ -1025,6 +1058,7 @@ void raygen()
             const float q = min(max(tr.r, max(tr.g, tr.b)), 0.95);
             if (rng.next() >= q) break;
             throughput /= q;
+            chainThroughput /= q;
         }
     }
 
@@ -1058,6 +1092,25 @@ void raygen()
 #undef walkWeight
 #undef walkDist
 #undef walkMaterial
+
+[shader("raygeneration")]
+void raygen()
+{
+    tracePixel<false>();
+}
+
+[shader("raygeneration")]
+void raygenCaustics()
+{
+    tracePixel<true>();
+}
+
+// Caustics' light pass (sub-project 24): rays from each directional light through smooth surfaces,
+// splatted where they reach a matte surface the camera sees (the plan's task 5 builds it).
+[shader("raygeneration")]
+void causticTrace()
+{
+}
 
 // ---- the radiance cache's update ------------------------------------------------------------
 //
