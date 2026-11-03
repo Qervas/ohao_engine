@@ -27,6 +27,7 @@
 
 #include "render/material/openpbr_tables_buffer.hpp"
 #include "render/rt/path_guiding.hpp"
+#include "render/rt/caustic_pass.hpp"
 #include "render/rt/radiance_cache.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
@@ -237,6 +238,13 @@ private:
                                                VkStridedDeviceAddressRegionKHR& extraRegion);
     // Caustics' program, made the first time a frame needs it (minutes cold, as the default one).
     [[nodiscard]] bool ensureCausticsPipeline();
+public:
+    // Caustics' counters once a frame has run the light pass (render.stats `caustics`).
+    [[nodiscard]] std::optional<render::CausticsStats> causticsStats() const {
+        if (!m_causticsRan) return std::nullopt;
+        return render::CausticsStats{m_caustics.casterCount(), m_caustics.clamped()};
+    }
+private:
     [[nodiscard]] bool loadFunctionPointers();
 
     void destroyImages();
@@ -310,6 +318,10 @@ private:
     // Path guiding (bindings 46, 49, 50; render/rt/path_guiding.hpp): placeholders until a frame
     // first guides, then the grid and a pixel's proposals.
     render::PathGuiding m_guiding;
+    // Caustics' light pass (bindings 51-53; render/rt/caustic_pass.hpp).
+    render::CausticPass m_caustics;
+    bool m_causticsRan = false;
+    const render::RenderScene* m_scene = nullptr;   // setSceneBuffers': its casters, when a frame has caustics
     // The emissive triangle lights (bindings 42-45), from the scene's emissive instances.
     render::EmissiveLights* m_emissive = nullptr;   // the renderer's (setEmissiveLights)
     VkDescriptorSet m_textureSet = VK_NULL_HANDLE;   // the bindless texture table's set (the collect pass's)

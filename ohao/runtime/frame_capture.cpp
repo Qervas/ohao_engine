@@ -409,6 +409,7 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
             overflow->frame <= frames.back().frame)
             st->lightsOverflow = overflow->lights;
         st->ev100 = renderer.meteredEv100();
+        if (const auto c = renderer.causticsStats()) st->caustics = api::RenderStats::Caustics{c->casters, c->clamped};
     }
     if (const auto& k = renderer.renderScene().stats().skinning; k.instances > 0)
         st->skinning = api::RenderStats::Skinning{k.instances, k.skinned, k.vertices, k.blasRefits, k.blasRebuilds};

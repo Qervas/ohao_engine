@@ -34,6 +34,7 @@ import rt.radiance_cache;
 import rt.path_guiding;
 import sampling.vmf;
 import rt.lights;
+import rt.caustics;
 import display.display;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
@@ -67,6 +68,11 @@ import display.display;
 [[vk::binding(46, 0)]] StructuredBuffer<GuideState> guideStates;
 [[vk::binding(49, 0)]] RWStructuredBuffer<GuideProposal> guideProposals;
 [[vk::binding(50, 0)]] RWStructuredBuffer<float4> guidePixel;
+// Caustics (rt/caustics.slang, render/rt/caustic_pass.hpp): the lights' disks, the light pass's splats
+// (3 words a pixel, fixed point, read and cleared by raygenCaustics), and its count of clamped splats.
+[[vk::binding(51, 0)]] StructuredBuffer<float4> causticCasters;
+[[vk::binding(52, 0)]] RWStructuredBuffer<uint> causticSplat;
+[[vk::binding(53, 0)]] RWStructuredBuffer<uint> causticStats;
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -1062,6 +1068,18 @@ void tracePixel<let CAUSTICS : bool>()
         }
     }
 
+    if (caustics)
+    {
+        // What the light pass splatted on this pixel this frame (the terms the split left to it).
+        const uint c = pixelIndex * 3u;
+        const float3 light = float3(float(causticSplat[c]), float(causticSplat[c + 1u]), float(causticSplat[c + 2u])) *
+                             (1.0 / kCausticSplatScale);
+        causticSplat[c] = 0u;
+        causticSplat[c + 1u] = 0u;
+        causticSplat[c + 2u] = 0u;
+        radiance += light;
+        diffuseOut += light;
+    }
     if (guiding) guidePixel[pixelIndex] = float4(radiance, asfloat(guideProposed));
     if ((flags & kFlagGuideDebug) != 0u) radiance = guideDebugColor;
 
@@ -1105,11 +1123,193 @@ void raygenCaustics()
     tracePixel<true>();
 }
 
-// Caustics' light pass (sub-project 24): rays from each directional light through smooth surfaces,
-// splatted where they reach a matte surface the camera sees (the plan's task 5 builds it).
+// Whether the camera sees p first along its ray (the camera's mask and its pass through culled back
+// faces, as raygen's camera ray): the light pass connects only where the camera ray would meet p.
+bool causticSeen(float3 camPos, float3 p)
+{
+    const float3 v = p - camPos;
+    const float d = length(v);
+    const float3 w = v / d;
+    float3 o = camPos;
+    float travelled = 0.0;
+    for (uint k = 0u; k <= kCullSkips; ++k)
+    {
+        const PathPayload h = trace(o, w, kRayMaskCamera, d * 1.001 + 1e-3 - travelled);
+        if ((h.flags & kHit) == 0u) return false;
+        if ((h.flags & kHitCulled) != 0u && k < kCullSkips)
+        {
+            travelled += h.t;
+            o = h.position;
+            continue;
+        }
+        return abs(travelled + h.t - d) <= 1e-3 * d + 1e-3;
+    }
+    return false;
+}
+
+// Caustics' light pass (sub-project 24, docs/specs/2026-11-03-caustics-design.md, "The light pass"):
+// rays from each directional light, aimed at the casters' disks (rt/caustics.slang), follow smooth parts
+// only and, past at least one smooth bounce, connect to the camera through the rough part of each
+// surface they reach, splatting onto its pixel. Every weight is in the camera side's roles (OpenPBR is
+// not reciprocal): a vertex the light reaches along wl (toward the light) and leaves along we weighs
+// f_smooth(wo = we, wi = wl) |we.Ng| / (|wl.Ng| pdf), which carries Veach's shading-normal correction;
+// the connection f_rough(wo = to the camera, wi = wl) |wc.Ng| / (|wl.Ng| d^2) x the pixel's importance.
+// A pane passes light straight, times its transmission, as shadow rays take it (ruling O14): a null
+// event, never a vertex.
 [shader("raygeneration")]
 void causticTrace()
 {
+    const uint3 id = DispatchRaysIndex();
+    const uint3 dims = DispatchRaysDimensions();
+    const uint2 size = pc.params.xy;
+    const uint index = (id.z * dims.y + id.y) * dims.x + id.x;
+    const float paths = float(dims.x) * float(dims.y) * float(dims.z);
+    WalkRng r;
+    r.state = pcg(index ^ pcg(pc.params.z ^ 0xC4057C1Bu));
+    CausticOrigin start = causticOrigin(causticCasters, float4(r.next(), r.next(), r.next(), r.next()));
+    if (!start.valid) return;
+
+    OpenPBRTables tables;
+    tables.data = openpbrTables;
+    const float3 camPos = pc.invView[3].xyz;
+    const float3 fwd = -pc.invView[2].xyz;
+    const float3 right = pc.invView[0].xyz;
+    const float3 up = pc.invView[1].xyz;
+    const float tanY = abs(pc.invProj[1].y);
+    const float tanX = tanY * float(size.x) / float(size.y);
+    const uint bounces = pc.params.w & 0xFFFFu;
+
+    float3 origin = start.origin;
+    float3 dir = start.dir;
+    float3 beta = start.weight;
+    const float beta0 = max(beta.r, max(beta.g, beta.b));
+    uint smoothBounces = 0u;   // the chain's smooth vertices so far (a pane's straight pass is none)
+    uint crossings = 0u;       // glass events (refractions, reflections inside), as raygen counts them
+    uint firstCross = 0u;      // whether the light's first smooth vertex was one (raygen never counts it:
+                               // that vertex is the last of its path, where it samples the light)
+    bool insideVolume = false;
+    float3 sigmaA = float3(0.0);
+    int channel = -1;
+    float tMin = 1e-4;
+    for (uint k = 0u; k < bounces + kCrossings + 64u; ++k)
+    {
+        const PathPayload hit = trace(origin, dir, kPathMask | kTlasMaskEmitter, 1.0e4, tMin);
+        tMin = 1e-4;
+        if ((hit.flags & kHit) == 0u || (hit.flags & kHitEmitter) != 0u) break;
+        if (insideVolume) beta *= exp(-sigmaA * hit.t);
+
+        MaterialInputs mi = inputsOf(hit);
+        const bool transmissive = mi.transmissionWeight > 0.0 && mi.baseMetalness < 1.0;
+        const bool fromInside = transmissive && !mi.thinWalled && (hit.flags & kHitBack) != 0u;
+        const float3 n = fromInside ? -hit.normal : hit.normal;
+        float3 t, b;
+        if (dot(hit.tangent, hit.tangent) > 0.0)
+        {
+            t = hit.tangent;
+            b = cross(n, t);
+        }
+        else
+        {
+            basisOf(n, t, b);
+        }
+        const float3 wl = toLocal(-dir, t, b, n);
+        const float4 row13 = materials[hit.material * kMaterialRows + kTransmissionRowFirst + 1u];
+        if (transmissive && row13.z > 0.0)
+        {
+            if (channel < 0)
+            {
+                channel = int(min(r.next() * 3.0, 2.0));
+                beta *= float3(channel == 0 ? 3.0 : 0.0, channel == 1 ? 3.0 : 0.0, channel == 2 ? 3.0 : 0.0);
+            }
+            mi.specularIor = dispersedIor(mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
+        }
+        const OpenPBRSurface base = OpenPBRSurface(mi);
+        const float3 ng = hit.geoNormal;   // facing the side the light came from
+        const float cosL = max(abs(dot(dir, ng)), 1e-6);
+
+        // Connect: a term of the light pass ends at a rough part the camera sees, after a smooth bounce,
+        // and only a term raygen's path would reach: its j-th vertex is processed while j minus the
+        // crossings at vertices before it is at most `bounces` (and those crossings at most kCrossings),
+        // which over the chain is largest at its last vertex, the light's first.
+        if (smoothBounces > 0u && smoothBounces - (crossings - firstCross) <= bounces && crossings - firstCross <= kCrossings)
+        {
+            const float3 v = hit.position - camPos;
+            const float zc = dot(v, fwd);
+            if (zc > 0.0)
+            {
+                const float2 ndc = float2(dot(v, right) / (zc * tanX), -dot(v, up) / (zc * tanY));
+                const float2 pix = (ndc * 0.5 + 0.5) * float2(size) - pc.jitter.xy;
+                if (all(pix >= 0.0) && all(pix < float2(size)))
+                {
+                    const float d = length(v);
+                    const float3 wc = -v / d;
+                    float3 sm, ro;
+                    base.evalParts(toLocal(wc, t, b, n), wl, tables, kCausticRough, sm, ro);
+                    if (any(ro > 0.0) && causticSeen(camPos, hit.position))
+                    {
+                        const float3 value = beta * ro * abs(dot(wc, ng)) / (cosL * d * d) *
+                                             causticPixelImportance(zc / d, tanX, tanY, size) / paths;
+                        const uint c = (uint(pix.y) * size.x + uint(pix.x)) * 3u;
+                        [unroll] for (uint ch = 0u; ch < 3u; ++ch)
+                        {
+                            bool clamped;
+                            const uint q = causticQuantize(value[ch], r.next(), clamped);
+                            uint before;
+                            if (q > 0u) InterlockedAdd(causticSplat[c + ch], q, before);
+                            else before = 0u;
+                            if (clamped || before > 0xFFFFFFFFu - q) InterlockedAdd(causticStats[0], 1u);
+                        }
+                    }
+                }
+            }
+        }
+
+        // On through the smooth part, or straight through a pane.
+        const float3 shares = base.smoothShares(wl, tables, kCausticRough);
+        const float u0 = r.next();
+        if (mi.thinWalled && transmissive && paneMaterial(hit.material) && u0 >= shares.x)
+        {
+            if (!(shares.y > 0.0)) break;
+            const float cs = clamp(cosL, 1e-4, 1.0);
+            beta *= base.transmissionAlbedo(float3(sqrt(1.0 - cs * cs), 0.0, cs), tables) / shares.y;
+            origin = hit.position;
+            tMin = 1e-3;
+            continue;
+        }
+        const BsdfSample s = base.sampleSmooth(wl, float3(u0, r.next(), r.next()), tables, kCausticRough);
+        if (!(s.pdf > 0.0)) break;
+        float3 sm, ro;
+        base.evalParts(s.wi, wl, tables, kCausticRough, sm, ro);
+        const float3 next = toWorld(s.wi, t, b, n);
+        beta *= sm * abs(dot(next, ng)) / (cosL * s.pdf);
+        if (!all(isfinite(beta)) || !any(beta > 0.0)) break;
+        const bool crosses = dot(next, ng) < 0.0;
+        ++smoothBounces;
+        if (crosses || fromInside)
+        {
+            ++crossings;
+            if (smoothBounces == 1u) firstCross = 1u;
+        }
+        if (smoothBounces - (crossings - firstCross) > bounces || crossings - firstCross > kCrossings) break;
+        origin = hit.position + (crosses ? -ng : ng) * 1e-3;
+        dir = next;
+        if (crosses && !mi.thinWalled)
+        {
+            insideVolume = !fromInside;
+            sigmaA = float3(0.0);
+            if (insideVolume && row13.x > 0.0)
+            {
+                const float3 c = materials[hit.material * kMaterialRows + kTransmissionRowFirst].rgb;
+                sigmaA = -log(max(c, float3(1e-4))) / row13.x;
+            }
+        }
+        if (k >= 2u)
+        {
+            const float q = min(max(beta.r, max(beta.g, beta.b)) / beta0, 0.95);
+            if (r.next() >= q) break;
+            beta /= q;
+        }
+    }
 }
 
 // ---- the radiance cache's update ------------------------------------------------------------

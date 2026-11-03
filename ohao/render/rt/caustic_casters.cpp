@@ -68,6 +68,7 @@ CausticCasters buildCausticCasters(std::span<const CausticCasterInput> casters,
         out.lightFirst.push_back(static_cast<uint32_t>(out.disks.size()));
         out.lightDirection.push_back(len > 0.0f ? li.direction / len : glm::vec3(0.0f, -1.0f, 0.0f));
         out.lightIrradiance.push_back(li.irradiance);
+        out.lightRgb.push_back(li.rgb);
         out.lightArea.push_back(static_cast<float>(area));
         lightPower.push_back(double(std::max(li.irradiance, 0.0f)) * area);
         total += lightPower.back();

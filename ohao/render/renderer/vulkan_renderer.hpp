@@ -295,6 +295,8 @@ public:
     // froxels past 256, the froxels that left any out, the largest froxel count).
     // Collects finished frames first.
     [[nodiscard]] std::optional<LightClusters::Overflow> lightsOverflow();
+    // Caustics' counters (the offline path tracer's), once a frame has run its light pass.
+    [[nodiscard]] std::optional<render::CausticsStats> causticsStats() const;
     // Auto exposure: the newest finished frame's metered EV100, if it metered.
     [[nodiscard]] std::optional<float> meteredEv100();
     // Seconds since the last frame (a window's), for auto exposure's adaptation speed.

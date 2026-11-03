@@ -47,6 +47,7 @@ struct CausticCasterInput {
 struct CausticLightInput {
     glm::vec3 direction;
     float irradiance;
+    glm::vec3 rgb{1.0f};   // the irradiance itself (colour x intensity)
 };
 
 struct CausticDisk {
@@ -61,6 +62,7 @@ struct CausticCasters {
     std::vector<uint32_t> lightFirst;   // lights + 1 entries
     std::vector<glm::vec3> lightDirection;
     std::vector<float> lightIrradiance;
+    std::vector<glm::vec3> lightRgb;
     std::vector<float> lightArea;       // the sum of the light's disks' areas
     std::vector<float> lightCdf;        // cumulative p(l), by irradiance x area
     float totalPower{0.0f};             // sum of irradiance x area; 0: nothing to trace

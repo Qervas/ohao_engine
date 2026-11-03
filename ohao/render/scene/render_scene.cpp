@@ -951,6 +951,10 @@ uint32_t RenderScene::materialIndexFor(uint32_t slot, uint32_t materialSlot) con
     return m->instances.materialIndexFor(slot, materialSlot);
 }
 
+MaterialSmoothness RenderScene::materialSmoothness(uint32_t materialIndex) const {
+    return m->materials.smoothness(materialIndex);
+}
+
 bool RenderScene::rtSupported() const noexcept { return m->rt(); }
 RTAccelerationStructure* RenderScene::rtAccel() const noexcept { return m->rt() ? m->rtAccel.get() : nullptr; }
 

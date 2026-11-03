@@ -714,6 +714,11 @@ void VulkanRenderer::setFrameDeltaTime(float dt) {
         if (PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing()) pp->setFrameDeltaTime(dt);
 }
 
+std::optional<render::CausticsStats> VulkanRenderer::causticsStats() const {
+    const IRTRendererProfile* offline = getRTRenderer(RenderMode::RTOffline);
+    return offline ? offline->causticsStats() : std::nullopt;
+}
+
 std::optional<LightClusters::Overflow> VulkanRenderer::lightsOverflow() {
     if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
     LightClusters* clusters = m_deferredRenderer->lightClusters();
