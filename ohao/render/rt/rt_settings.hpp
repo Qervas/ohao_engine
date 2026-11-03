@@ -24,6 +24,9 @@ struct RTRenderSettings {
     DenoiseMode denoiseMode{DenoiseMode::None};
     // Paths end in the radiance cache past their first vertex (render/rt/radiance_cache.hpp).
     bool radianceCache{false};
+    // Path guiding (sub-project 23, render/rt/path_guiding.hpp): bounces drawn from the BSDF and
+    // learned lobes by their exact mixture density (the estimate stays the same).
+    bool guiding{false};
 };
 
 inline constexpr RTRenderSettings kRealtimeRTSettings{

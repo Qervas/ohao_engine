@@ -210,6 +210,13 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     } restoreBounces{renderer, renderer.maxBouncesOverride()};
     if (r.bounces && mode != RenderMode::Deferred)
         renderer.setMaxBouncesOverride(static_cast<uint32_t>(*r.bounces));
+    // guiding: the path tracer's for this capture only, the profile's back when it returns.
+    struct RestoreGuiding {
+        VulkanRenderer& renderer;
+        std::optional<bool> before;
+        ~RestoreGuiding() { renderer.setGuidingOverride(before); }
+    } restoreGuiding{renderer, renderer.guidingOverride()};
+    if (mode != RenderMode::Deferred) renderer.setGuidingOverride(r.guiding);
     renderer.setRenderQuality(r.quality == "reference" ? RenderQuality::Reference : RenderQuality::Realtime);
     if (mode == RenderMode::Deferred && renderer.getDeferredRenderer()) {
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {

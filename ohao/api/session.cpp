@@ -744,6 +744,7 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     if (quality == Quality::reference) r.quality = "reference";
     r.timings = p.timings;
     r.hud = p.hud;
+    r.guiding = p.guiding;
     r.inlineImage = p.inlineImage;
     r.format = p.format == ImageFormat::png ? "png" : "jpeg";
     r.maxSize = p.maxSize;

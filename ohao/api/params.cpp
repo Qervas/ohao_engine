@@ -184,7 +184,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("tonemap", &RenderCaptureParams::tonemap).doc("The display curve; absent: render.settings'")
         .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; absent: render.settings'")
         .field("timings", &RenderCaptureParams::timings).doc("Add the capture frame's per-pass GPU times")
-        .field("hud", &RenderCaptureParams::hud).doc("Draw the combat HUD over the frame, as a window shows it (deferred)");
+        .field("hud", &RenderCaptureParams::hud).doc("Draw the combat HUD over the frame, as a window shows it (deferred)")
+        .field("guiding", &RenderCaptureParams::guiding)
+            .doc("Path guiding (path-traced modes): bounces also drawn toward where the grid learned light arrives "
+                 "from; the same estimate, less noise from light reflected off surfaces");
     r.enumeration<TraceResolution>("TraceResolution").doc("A realtime ray-traced technique's resolution")
         .value("half", TraceResolution::half, "Half the frame's size, upsampled (the budgeted frame)")
         .value("full", TraceResolution::full, "The frame's size");

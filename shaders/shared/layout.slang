@@ -49,6 +49,16 @@ static const uint kAlphaMask = 1u;
 static const uint kAlphaBlend = 2u;
 // float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (specular_roughness, base_metalness, normalTex, emissiveTex), 2 (roughMetalTex, emission_luminance, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha), 4 (specular_color, specular_weight), 5 (specular_ior, base_diffuse_roughness, base_weight, specularTex), 6 (emission_color, specularColorTex), 7 (coat_color, coat_weight), 8 (coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening), 9 (fuzz_color, fuzz_weight), 10 (fuzz_roughness, specular_roughness_anisotropy, geometry_tangent_rotation, 0), 11 (coatTex, coatRoughnessTex, fuzzColorTex, fuzzRoughnessTex), 12 (transmission_color, transmission_weight), 13 (transmission_depth, geometry_thin_walled, transmission_dispersion_scale, transmission_dispersion_abbe_number), 14 (thin_film_weight, thin_film_thickness, thin_film_ior, 0), 15 (subsurface_color, subsurface_radius), 16 (subsurface_radius_scale, subsurface_scatter_anisotropy): material/material_layers.slang reads 7-16
 static const uint kMaterialRows = 17u;
+// path guiding (sub-project 23, rt/path_guiding.slang): states a grid buffer holds (a power of two; 32 bytes each), the adaptive and static grids' keys sharing it
+static const uint kGuideCapacity = 1048576u;
+// path guiding: 32-bit words a state takes (sampling/vmf.slang's GuideState)
+static const uint kGuideStateWords = 8u;
+// path guiding: guided vertices a pixel proposes to the grid each frame (its first ones)
+static const uint kGuideTrainVertices = 2u;
+// path guiding: 32-bit words a proposal takes (rt/path_guiding.slang's GuideProposal)
+static const uint kGuideProposalWords = 16u;
+// path guiding's update passes (rt/path_guiding_update.slang): proposals a workgroup handles, one a thread
+static const uint kGuideGroupSize = 64u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
 static const uint kVfxGroupSize = 64u;
 // vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order
@@ -374,6 +384,13 @@ struct TracerVertexGpu
     float4 pos;   // xyz the world position; w unused
     float4 uv;   // x across the tracer, -1 to 1; y along it, 0 at the tail and 1 at the head; z, w unused
     float4 color;   // rgb the tracer's colour times its HDR intensity (linear); a unused
+};
+
+// path guiding's update passes (rt/path_guiding_update.slang) push constants
+struct GuidePush
+{
+    float4 camera;   // xyz the frame's camera position (the adaptive grid's levels), w unused
+    uint4 config;   // x the frame (the tracer's sample index), y proposals (kGuideTrainVertices a pixel), z the pass (0 update, 1 owner, 2 write), w the lobes' prior (float bits)
 };
 
 // tracer draws (vfx/tracer.slang) push constants

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -34,6 +35,8 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 // The realtime profile: paths end in the radiance cache (rt/radiance_cache.slang).
 constexpr uint32_t kPTFlagRadianceCache = 1u << 5;
+// Path guiding (sub-project 23): rt/path_tracer.slang's kFlagGuiding.
+constexpr uint32_t kPTFlagGuiding = 1u << 6;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -44,6 +47,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
         !m_instances || !m_materialRefs || !m_lightBuffer || !m_emissive) return;   // the renderer's tables
     const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
+    // Path guiding's buffers before this frame's set is written (the first guided frame allocates them).
+    const bool guideOn = m_renderSettings.guiding && m_guiding.ensure(m_width * m_height);
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
     timePass("emissive.lights");
@@ -144,7 +149,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
 
-    VkWriteDescriptorSet writes[48] = {};
+    VkWriteDescriptorSet writes[56] = {};
     uint32_t writeCount = 0;
     const auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info) {
         VkWriteDescriptorSet& w = writes[writeCount++];
@@ -190,7 +195,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
         {38, m_openpbrTables.buffer()}, {39, m_radianceCache.keys()}, {40, m_radianceCache.accum()},
         {41, m_radianceCache.resolved()}, {42, m_emissive->lightBuffer()}, {44, m_emissive->rangeBuffer(frameSlot)},
-        {45, m_emissive->firstBuffer(frameSlot)},
+        {45, m_emissive->firstBuffer(frameSlot)}, {46, m_guiding.states()}, {49, m_guiding.proposals()},
+        {50, m_guiding.pixel()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -529,7 +535,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     pc.prevViewProj = m_prevViewProj;
     // A moved view restarts the trace's running mean (not the denoisers' history).
     if (m_viewChangedThisFrame) m_accumFrames = 0;
-    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces);
+    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces | (m_guiding.depths() << 16u));
     pc.control = glm::uvec4(0u);
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
     // The firefly clamp (biased) only protects a temporal denoiser fed one sample a frame; a running
@@ -540,6 +546,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) pc.control.x |= kPTFlagDLSSRR;
     const bool cacheOn = m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u;
     if (cacheOn) pc.control.x |= kPTFlagRadianceCache;
+    if (guideOn) pc.control.x |= kPTFlagGuiding;
+    static const char* guideDebug = std::getenv("OHAO_GUIDE_DEBUG");
+    if (guideOn && guideDebug) pc.control.x |= (1u << 7) | ((uint32_t(std::atoi(guideDebug)) & 3u) << 8u);   // kFlagGuideDebug, its mode
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
     // denoiser takes), and whether last frame's view gives motion vectors.
     pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;
@@ -547,7 +556,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     pc.control.w = m_envWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envHeight), m_displayExposure,
                           std::bit_cast<float>(static_cast<uint32_t>(m_displayCurve)));
-    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, 0.0f, 0.0f);
+    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, m_guiding.share(), m_guiding.prior());
 
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;
@@ -572,8 +581,14 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // --- Trace rays! ---
     if (cacheOn) timePass("pt.trace");
+    if (guideOn) m_guiding.recordBeginFrame(cmd);
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
+    if (guideOn) {
+        // What this frame's paths found becomes the grid the next frame reads.
+        timePass("pt.guide.update");
+        m_guiding.recordLearn(cmd, m_width * m_height, m_sampleIndex, glm::vec3(pc.invView[3]));
+    }
     timePass("pt.denoise");
 
     bool dlssRan   = false;  // Phase 5: set when DLSS-RR tonemap wrote m_outputImage via COMPUTE

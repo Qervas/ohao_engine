@@ -71,8 +71,8 @@ GuideStateCpu guideUpdate(const GuideStateCpu& s, const Vec3& x, const Vec3& tar
     return r;
 }
 
-bool guideLobe(const GuideStateCpu& s, const Vec3& x, Vec3& mu, float& kappa) {
-    const auto o = runItem({f4(5, 0, 0, 0), stateRow1(s), stateRow2(s, 0.0f), f4(x[0], x[1], x[2], 0)});
+bool guideLobe(const GuideStateCpu& s, const Vec3& x, float n0, Vec3& mu, float& kappa) {
+    const auto o = runItem({f4(5, 0, 0, 0), stateRow1(s), stateRow2(s, 0.0f), f4(x[0], x[1], x[2], n0)});
     mu = {o[4].x, o[4].y, o[4].z};
     kappa = o[4].w;
     return o[5].x != 0.0f;

@@ -31,6 +31,8 @@ import material.openpbr;
 import material.material_layers;
 import sampling.sobol;
 import rt.radiance_cache;
+import rt.path_guiding;
+import sampling.vmf;
 import rt.lights;
 import display.display;
 
@@ -60,6 +62,11 @@ import display.display;
 [[vk::binding(39, 0)]] RWStructuredBuffer<uint> cacheKeys;      // the radiance cache (rt/radiance_cache.slang)
 [[vk::binding(40, 0)]] RWStructuredBuffer<uint4> cacheAccum;
 [[vk::binding(41, 0)]] RWStructuredBuffer<uint4> cacheResolved;
+// Path guiding (rt/path_guiding.slang): the states frame N-1 left, this frame's proposals and each
+// pixel's sample radiance and proposal count (rt/path_guiding_update.slang reads them after).
+[[vk::binding(46, 0)]] StructuredBuffer<GuideState> guideStates;
+[[vk::binding(49, 0)]] RWStructuredBuffer<GuideProposal> guideProposals;
+[[vk::binding(50, 0)]] RWStructuredBuffer<float4> guidePixel;
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -67,10 +74,10 @@ struct PushConstants
     float4 invView[4];
     float4 invProj[4];
     float4 prevViewProj[4];
-    uint4 params;    // x width, y height, z sample index, w bounces (low 16)
+    uint4 params;    // x width, y height, z sample index, w bounces (low 16) and guided vertices (high 16, 0: all)
     uint4 control;   // x flags, y frames already in the running mean, z motion vectors valid, w the environment map's width
     float4 tuning;   // x firefly clamp, y the environment map's height, z the display exposure, w the display curve (bits)
-    float4 jitter;   // xy NRD's sub-pixel offset
+    float4 jitter;   // xy NRD's sub-pixel offset, z path guiding's share of a guided bounce, w its lobes' prior (samples)
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> pc;
 
@@ -79,6 +86,11 @@ static const uint kFlagFireflyClamp = 4u;
 static const uint kFlagAccumulateAOVs = 8u;
 static const uint kFlagDLSSRR = 16u;
 static const uint kFlagCache = 32u;   // realtime: paths end in the radiance cache
+static const uint kFlagGuiding = 64u; // path guiding (sub-project 23): bounces drawn from the BSDF and learned lobes
+static const uint kFlagGuideDebug = 128u;   // OHAO_GUIDE_DEBUG: the first hit's lobes instead of light
+// A guided bounce's coin, lobe pick and vMF direction: Sobol group kGuideGroup + depth (outside the
+// bounce groups 1 + 3d to 3 + 3d, whose sequences stay as they are).
+static const uint kGuideGroup = 0x4000u;
 static const uint kVertexFloats = 25u;
 static const uint kNoTex = 0xFFFFFFFFu;
 
@@ -503,6 +515,21 @@ void raygen()
     // in the last vertex's MIS state, which means nothing during a walk and which its exit sets:
     // misOrigin holds the walk's weight, lastPdf its step's distance, lastLobe the walked material.
     uint walkSteps = kNoWalk;   // scattering events so far (kWalkSteps: the cap's ray)
+    // Path guiding: the proposals written (at most kGuideTrainVertices) and the one whose ray the
+    // next trace is (its end point is written after it).
+    const bool guiding = (flags & kFlagGuiding) != 0u;
+    const uint pixelIndex = pixel.y * size.x + pixel.x;
+    uint guideProposed = 0u;
+    uint guidePending = kGuideNoSlot;
+    float3 guideDebugColor = float3(0.0);
+    // Russian roulette's throughput is the path's as the BSDF alone would have drawn it: a guided
+    // bounce toward a small bright source has a large density, so a small weight, and roulette by
+    // the true throughput killed exactly the paths guiding aimed well (guided error fell 2.4x at two
+    // bounces and nothing from the third, where roulette starts). Any survival probability keeps the
+    // estimate unbiased; this one never kills more than the true throughput's would (a bounce the
+    // BSDF drew away from every lobe weighs up to 1 / (1 - share) its BSDF weight, and roulette by
+    // the BSDF's throughput alone grew such paths 2x a bounce: fireflies). 1 at every unguided vertex.
+    float rrRatio = 1.0;
     WalkRng wr;
     wr.state = 0u;
 #define walkWeight misOrigin
@@ -515,6 +542,11 @@ void raygen()
         const bool walking = walkSteps != kNoWalk;
         const uint mask = walking ? kRayMaskScene : depth == 0u ? kRayMaskCamera : (kPathMask | kTlasMaskEmitter);
         const PathPayload hit = trace(origin, dir, mask, walking ? walkDist : 1.0e4, walking ? 0.0 : 1e-4);
+        if (guidePending != kGuideNoSlot)
+        {
+            guideProposals[guidePending].xnext = (hit.flags & kHit) != 0u ? hit.position : origin + dir * kGuideFar;
+            guideProposals[guidePending].flags = kGuideHasNext;
+        }
         bool walkExitVertex = false;
         float3 exitN = float3(0.0);
         if (walking)
@@ -602,6 +634,14 @@ void raygen()
             }
             if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;
             radiance += add;
+            if (guidePending != kGuideNoSlot)
+            {
+                // The light guiding learns is what this hit reflects: what it emits (a light's mesh,
+                // an emissive triangle, the sky) light sampling already finds at the last vertex, and
+                // learning it too moved that light from light sampling to the lobes through MIS.
+                guideProposals[guidePending].rk = radiance;
+                guidePending = kGuideNoSlot;
+            }
             if (depth > 0u)
             {
                 if (firstLobe == 1u) diffuseOut += add;
@@ -736,6 +776,38 @@ void raygen()
         // just outside; its draws come from the walk's stream.
         const float3 p = walkExitVertex ? origin : hit.position + hit.geoNormal * 1e-3;
         const float3 ng = walkExitVertex ? n : hit.geoNormal;
+        // Path guiding (sub-project 23, ruling G4): at an opaque surface's reflection, the lobes the
+        // grid holds near here; the bounce and light sampling's weights use their mixture's density.
+        GuideMixture gm;
+        gm.g = 0.0;
+        gm.total = 0.0;
+        // A guidable vertex proposes what it learned even while the grid holds nothing here (its
+        // bounce is then the BSDF's alone): that is how the grid fills.
+        const uint guideDepths = pc.params.w >> 16u;   // vertices guided from the camera's (0: every one)
+        const bool guidable = guiding && !walkExitVertex && !transmissive && !mi.thinWalled && !(mi.subsurfaceWeight > 0.0) &&
+                              (guideDepths == 0u || depth < guideDepths);
+        if (guidable)
+            gm = guideRead(guideStates, hit.position, hit.geoNormal, camPos,
+                           pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ pcg(depth ^ 0x6A09E667u)))), pc.jitter.w,
+                           pc.jitter.z);
+        if (depth == 0u && (flags & kFlagGuideDebug) != 0u)
+        {
+            // What the grid holds at the first hit, shown instead of the light (the path still runs
+            // and trains): red the share of states read, green the strongest lobe's sharpness
+            // (kappa / (kappa + 10)), blue its weight (w / (w + 1)).
+            // OHAO_GUIDE_DEBUG=2: the first hit's position; 3: the strongest lobe's mean direction.
+            float valid = 0.0, best = 0.0, sharp = 0.0;
+            float3 bestMu = float3(0.0);
+            if (guidable)
+                [unroll] for (uint i = 0u; i < kGuideCandidates; ++i)
+                    if (gm.w[i] > 0.0)
+                    {
+                        valid += 1.0 / float(kGuideCandidates);
+                        if (gm.w[i] > best) { best = gm.w[i]; sharp = gm.kappa[i] / (gm.kappa[i] + 10.0); bestMu = gm.mu[i]; }
+                    }
+            const uint mode = pc.control.x >> 8u & 3u;
+            guideDebugColor = mode == 2u ? hit.position : mode == 3u ? bestMu : float3(valid, sharp, best / (best + 1.0));
+        }
 
         // Next-event estimation: a light, then the environment, each weighed against the BSDF.
         float lu0, lu1, lu2;
@@ -769,7 +841,7 @@ void raygen()
                 if (ls.pdf > 0.0)
                 {
                     float bsdfPdf = fd.x;
-                    if (ls.mis && !walkExitVertex) bsdfPdf = base.pdf(wo, wi, tables);
+                    if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, base.pdf(wo, wi, tables));
                     w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
                 }
                 const float3 le = ls.radiance * vis1 * w;
@@ -800,7 +872,7 @@ void raygen()
             if (pdfL > 0.0 && any(f > 0.0) && dot(L, ng) > 0.0 && visible(p, L, 1.0e4, vis2))
             {
                 float bsdfPdf = fd.x;
-                if (!walkExitVertex) bsdfPdf = base.pdf(wo, wi, tables);
+                if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, base.pdf(wo, wi, tables));
                 const float3 le = envRadiance(L) * vis2 * powerHeuristic(pdfL, bsdfPdf) / pdfL;
                 const float3 c = throughput * f * le;
                 radiance += c;
@@ -824,16 +896,73 @@ void raygen()
             --depth;
             if (depth >= 2u)
             {
-                const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);
+                const float3 tr = throughput * max(rrRatio, 1.0);
+                const float q = min(max(tr.r, max(tr.g, tr.b)), 0.95);
                 if (rng.next() >= q) break;
                 throughput /= q;
             }
             continue;
         }
 
-        // The next direction.
-        rng.group(3u + 3u * depth);
-        const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+        // The next direction: the BSDF's sample, or at a guided vertex the mixture's (a lobe with
+        // probability gm.g), weighed by f cos over the mixture's exact density either way.
+        BsdfSample s;
+        uint guideSlot = kGuideNoSlot;
+        if (guidable)
+        {
+            rng.group(kGuideGroup + depth);
+            const float4 gu = float4(rng.next(), rng.next(), rng.next(), rng.next());
+            rng.group(3u + 3u * depth);
+            const float3 bu = float3(rng.next(), rng.next(), rng.next());   // the BSDF's draws (Russian roulette follows them)
+            if (gu.x < gm.g)
+            {
+                const uint i = guidePick(gm, gu.y);
+                guideSlot = gm.slot[i];
+                const float3 d = vmfSample(gm.mu[i], gm.kappa[i], gu.zw);
+                s.wi = toLocal(d, t, b, n);
+                float3 fs, fd;
+                base.evalLobes(wo, s.wi, tables, fs, fd);
+                const float bsdfPdf = base.pdf(wo, s.wi, tables);
+                s.pdf = guidePdf(gm, d, bsdfPdf);
+                s.weight = s.pdf > 0.0 ? (fs + fd) / s.pdf : float3(0.0);
+                if (bsdfPdf > 0.0) rrRatio *= s.pdf / bsdfPdf;
+                s.lobe = luminance(fd) >= luminance(fs) ? 1u : 0u;
+            }
+            else
+            {
+                s = base.sample(wo, bu, tables);
+                if (s.pdf > 0.0)
+                {
+                    const float q = guidePdf(gm, toWorld(s.wi, t, b, n), s.pdf);
+                    s.weight *= s.pdf / q;
+                    rrRatio *= q / s.pdf;
+                    s.pdf = q;
+                }
+            }
+            if (s.pdf > 0.0 && guideProposed < kGuideTrainVertices)
+            {
+                // A proposal for the grid: this vertex, the light the path had before the bounce and the
+                // throughput reaching it; the ray's end is written after the next trace.
+                const uint pi = pixelIndex * kGuideTrainVertices + guideProposed;
+                GuideProposal gp;
+                gp.x = hit.position;
+                gp.normal = guideOctPack(hit.geoNormal);
+                gp.xnext = float3(0.0);
+                gp.flags = 0u;
+                gp.rk = radiance;
+                gp.meanW = gm.total / float(kGuideCandidates);
+                gp.beta = throughput;
+                gp.srcSlot = guideSlot;
+                guideProposals[pi] = gp;
+                guidePending = pi;
+                ++guideProposed;
+            }
+        }
+        else
+        {
+            rng.group(3u + 3u * depth);
+            s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+        }
         if (!(s.pdf > 0.0)) break;
         if (s.lobe == 5u)
         {
@@ -892,11 +1021,15 @@ void raygen()
         }
         if (depth >= 2u)
         {
-            const float q = min(max(throughput.r, max(throughput.g, throughput.b)), 0.95);
+            const float3 tr = throughput * max(rrRatio, 1.0);
+            const float q = min(max(tr.r, max(tr.g, tr.b)), 0.95);
             if (rng.next() >= q) break;
             throughput /= q;
         }
     }
+
+    if (guiding) guidePixel[pixelIndex] = float4(radiance, asfloat(guideProposed));
+    if ((flags & kFlagGuideDebug) != 0u) radiance = guideDebugColor;
 
     if ((flags & kFlagFireflyClamp) != 0u && pc.tuning.x > 0.0)
     {

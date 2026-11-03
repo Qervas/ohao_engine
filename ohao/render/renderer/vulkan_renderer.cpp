@@ -460,6 +460,7 @@ void VulkanRenderer::applyRTRenderSettings() {
         m_rtSettings.denoiseMode = m_denoiseMode;
     }
     if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;
+    if (m_guidingOverride) m_rtSettings.guiding = *m_guidingOverride;
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }

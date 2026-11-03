@@ -705,6 +705,16 @@ deferred, reference, path traced); two the transparency scene,
   emission (lights, emissive surfaces, the sky) goes to its own guide (binding 13) and never
   through NRD: `nrd_compose` adds it to diffuse x albedo + specular. The first hit's direct light
   is split by lobe (`evalLobes`). NGX logs through the engine's logger (stdout is the protocol's).
+- **Path guiding** (sub-project 23, `docs/specs/2026-11-02-path-guiding-design.md`; in progress, **off by default**:
+  `ohao run --guiding`, `render.capture {guiding}`). Alber, Hanika and Dachsbacher 2025's Markov chain states in a hash
+  grid (`shaders/rt/path_guiding.slang`, `render/rt/path_guiding.*`), read at an opaque vertex into a mixture of vMF lobes
+  (`sampling/vmf.slang`) that the bounce draws from with probability `OHAO_GUIDE_PROB` (0.5) and weighs by the mixture's
+  exact density, so any grid content is unbiased; learned after the trace from the path's own light
+  (`path_guiding_update.slang`: update, owner, write; deterministic). The paper's authors' code is GPL-2.0: never read it.
+  **Russian roulette at a guided vertex uses `throughput * max(rrRatio, 1)`**, `rrRatio` the product of `q / p_bsdf`:
+  roulette by the true throughput killed exactly the paths guiding aimed at a small source (a large `q`, a small weight).
+  Unguided, `rrRatio` is exactly 1 and the tracer is bit for bit what it was. Measured: the spot-lit patch room 1.8x lower
+  error at full depth; the Sponza showcase about 1.4x higher (typical pixels), so it stays off.
 - **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
   frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
   transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any

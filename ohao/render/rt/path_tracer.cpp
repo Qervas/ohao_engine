@@ -105,6 +105,11 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
+    if (!m_guiding.create(m_device, m_physicalDevice)) {
+        OHAO_LOG(Error, render, "PathTracer: failed to create path guiding's buffers");
+        return false;
+    }
+
     if (!createDescriptorResources()) {
         OHAO_LOG(Error, render, "PathTracer: failed to create descriptor resources");
         return false;
@@ -196,6 +201,7 @@ void PathTracer::resetAccumulation() {
     m_viewChangedThisFrame = false;
     m_hasPreviousView = false;
     m_radianceCache.clear();   // a capture after a reset starts from an empty cache in any host
+    m_guiding.clear();         // and from an empty guiding grid (ruling G7)
 
     // Sub-plan 4.E T2: keep NRD's prev matrices in sync with frameIndex=0
     // bootstrap. Leaving them stale across a view change / resize could
@@ -355,6 +361,7 @@ void PathTracer::destroy() {
 
     m_openpbrTables.destroy();
     m_radianceCache.destroy();
+    m_guiding.destroy();
 
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }

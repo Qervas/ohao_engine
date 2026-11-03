@@ -9,7 +9,8 @@
 //   3 meanCos  row 1.x kappa                                       -> row 4.x
 //   4 update   row 1 (w, y), row 2 (r, nt bits, check bits, frame), row 3 (x, f), row 0.yzw target
 //                                                                  -> row 4 (w, y), row 5 (r, nt bits)
-//   5 lobe     row 1 (w, y), row 2 (r, nt bits), row 3.xyz x       -> row 4 (mu, kappa), row 5.x valid
+//   5 lobe     row 1 (w, y), row 2 (r, nt bits), row 3.xyz x, row 3.w the prior n0
+//                                                                  -> row 4 (mu, kappa), row 5.x valid
 import sampling.vmf;
 
 RWStructuredBuffer<float4> io;
@@ -47,7 +48,7 @@ void run(uint3 id : SV_DispatchThreadID)
     {
         float3 mu;
         float kappa;
-        const bool ok = guideLobe(stateOf(r1, r2), r3.xyz, mu, kappa);
+        const bool ok = guideLobe(stateOf(r1, r2), r3.xyz, r3.w, mu, kappa);
         o4 = float4(mu, kappa);
         o5.x = ok ? 1.0 : 0.0;
     }

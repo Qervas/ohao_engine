@@ -161,6 +161,15 @@ thin-walled; a walk's exit and a glass crossing never), before next-event estima
    group's other dimensions; Jakob 2012's stable form). The weight is `f(wi) cos / q(wi)`: the BSDF branch's
    `s.weight * s.pdf / q`, the lobe branch's `evalLobes` over `q`. `lastPdf = q(wi)` for the next hit's MIS against
    light sampling.
+5. **Russian roulette** survives with `min(max(beta * max(rho, 1)), 0.95)`, where `rho` is the product over the path's
+   guided vertices of `q(wi) / p_bsdf(wi)` (1 at every unguided vertex, so an unguided path is today's bit for bit).
+   Any survival probability keeps the estimate unbiased; this one never kills more than today's. Measured (the
+   spot-lit ceiling-patch room, 256 spp, error against 16,384 spp): by the true throughput alone, a guided bounce
+   toward a small bright source has a large `q`, so a small weight, and roulette killed exactly the paths guiding had
+   aimed well: guided noise fell 2.4x at two bounces and 1.4x at three, where roulette starts. By `beta * rho` (the
+   unguided tracer's throughput) a bounce the BSDF drew away from every lobe, which weighs up to `1 / (1 - g)` its
+   BSDF weight, doubled its throughput every bounce: single samples 350x the pixel's mean. With `max(rho, 1)`: 2.8x at
+   three bounces, 2.1x at ten, relMSE 0.410 -> 0.225 at full depth.
 
 A vertex that does not guide runs exactly today's code.
 
@@ -173,7 +182,10 @@ estimate comes from the path itself (PROVISIONAL G1): at a guided vertex `k` the
 had gathered (`R_k`, after the vertex's own light sampling) and the throughput arriving there (`beta_k`); when the path
 ends, `(R_end - R_k) / beta_k` is the one-sample estimate of `f cos L_i / q` along the drawn direction, the paper's
 `<L_i>` times `f cos / q`, and `f_mc` is its luminance. Its light sampling at later vertices is included with its MIS
-weights, so a chain learns most where light sampling helps least.
+weights, so a chain learns most where light sampling helps least. **Only reflected light is learned:** `R_k` is
+rewritten after the next hit adds what it emits (a light's mesh, an emissive triangle, the sky), so a chain never learns
+a light that light sampling at vertex `k` already finds. Learning it (the first build) moved the mixture's density
+toward the lights, which took MIS weight away from light sampling, the better estimator there, and cancelled the gain.
 
 Raygen does not hold these across its traces (every word raygen keeps across a trace is spilled by every pixel): it
 writes each guided vertex's **proposal** (`R_k`, `beta_k`, the drawn direction's end point, the vertex, the resampled
@@ -187,14 +199,21 @@ and its final `R_end` beside them. A compute pass (`pt.guide.update`) then does,
   (`dot(dir, mu) > rbar`) and found far less (`f_mc < kGuideDiscard w`, OPEN G5: 1/16) is written with `w = 0`, so a
   light that went away stops drawing samples;
 - the write goes to a **new** slot: the cell of a fresh jittered read at the vertex, as the paper writes (so states
-  spread).
+  spread), **but only if the slot is empty or a coin `u w_occupant < w_new` says so** (a departure from the paper, whose
+  last writer always wins). A CPU simulation of one vertex under a small bright patch (`tools/guiding/mcpg_sim.py`):
+  with the paper's replacement every frame's many dim samples overwrote the few states that had found the patch, and 1
+  run in 8 learned it (the estimator's variance 21 to 105); with the occupant's weight against the new one's, 8 in 8
+  (variance 4 to 15).
 
 **Deterministic commit** (PROVISIONAL G2). The paper writes states in place without synchronization, accepting that
 races perturb the chains (their equilibrium absorbs it and the estimator does not care). Here a race would make two
 captures differ, which every test of this renderer assumes they do not. So writes happen in two passes: every
-accepted proposal does `InterlockedMax` of a 64-bit key `(hash(frame, proposal) << 32 | proposal index)` on its target
-slot's priority word; then the proposal whose key won writes its state to `write`. One write a slot a frame, chosen by
-a hash, is the paper's "a random last writer wins", repeatable.
+accepted proposal does `InterlockedMax` of a 32-bit key on its target
+slot's claim word; the key is `u^(1/w)` of a PCG coin `u` as float bits (Efraimidis and Spirakis: the largest wins with
+probability by weight; positive floats order as their bits), so a 32-bit `InterlockedMax` suffices and no 64-bit atomics
+are needed. A second pass (`owner`) breaks ties of keys by the lowest proposal index (`InterlockedMax` of `~index`), and
+a third (`write`) lets the owner write its state to `write`, which is then copied over `read`. One write a slot a
+frame, chosen by weight and a hash, repeatable.
 
 ### What it costs (estimates to be replaced by measurements)
 
@@ -214,8 +233,8 @@ too much). The paper measured 13.1 to 15.3 ms (+17%) for its whole pipeline on a
 ## Determinism
 
 - Guiding off: bit-identical to today (no draw, buffer or branch of the existing path changes).
-- Guiding on: reads from last frame's buffer, PCG and Sobol seeded as above, integer-free but order-free commits (the
-  64-bit max), a fixed proposal order: two captures in one process are the same bits; across processes the BVH floor
+- Guiding on: reads from last frame's buffer, PCG and Sobol seeded as above, order-free commits (the
+  32-bit max of a key, then of the owner), a fixed proposal order: two captures in one process are the same bits; across processes the BVH floor
   (a ray on a shared edge may take either triangle) applies as today, and a flipped hit can change what a chain learns,
   so the floor may spread further than today's few pixels. Measured in step 1 and stated, never hidden.
 

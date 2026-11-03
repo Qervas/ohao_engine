@@ -103,9 +103,10 @@ uint guideCount(GuideState s) { return s.nt & 0xFFFFu; }
 uint guideFrame(GuideState s) { return s.nt >> 16u; }
 
 // The state's lobe seen from x (Algorithm 2, lines 6-8): toward the mean point, its mean cosine
-// pulled toward 0 by a prior that weighs 1 / distance^2 (a far, small light sharpens fast).
+// pulled toward 0 by a prior of n0 + 1 / distance^2 samples (the paper's is 1 / distance^2 alone: a
+// far, small light sharpens fast; n0 keeps a state of one sample from being a needle).
 // False when the state is empty.
-bool guideLobe(GuideState s, float3 x, out float3 mu, out float kappa)
+bool guideLobe(GuideState s, float3 x, float n0, out float3 mu, out float kappa)
 {
     mu = float3(0.0, 0.0, 1.0);
     kappa = 0.0;
@@ -115,7 +116,7 @@ bool guideLobe(GuideState s, float3 x, out float3 mu, out float kappa)
     if (!(d2 > 1e-12)) return false;
     mu = d * rsqrt(d2);
     const float n = float(guideCount(s));
-    const float np = 1.0 / d2;
+    const float np = n0 + 1.0 / d2;
     const float rbar = (n * n * (s.r / s.w)) / (n * n + np);
     kappa = vmfKappa(rbar);
     return true;

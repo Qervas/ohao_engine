@@ -23,7 +23,7 @@ Vec3 vmfSample(const Vec3& mu, float kappa, float u0, float u1);
 float vmfKappa(float meanCosine);
 float vmfMeanCosine(float kappa);
 GuideStateCpu guideUpdate(const GuideStateCpu& s, const Vec3& x, const Vec3& target, float f, uint32_t frame);
-// The lobe seen from x; false when the state is empty.
-bool guideLobe(const GuideStateCpu& s, const Vec3& x, Vec3& mu, float& kappa);
+// The lobe seen from x with a prior of n0 + 1/d^2 samples; false when the state is empty.
+bool guideLobe(const GuideStateCpu& s, const Vec3& x, float n0, Vec3& mu, float& kappa);
 
 } // namespace ohao::sampling

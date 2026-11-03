@@ -25,7 +25,7 @@ CLI and serve expectations (the new params); `tools/check_changed.py` rules; AGE
   `pdf` within 0.1%; the mean cosine of samples against `A3(kappa) = coth(kappa) - 1/kappa` and `vmfKappa` inverting
   it within 1%; a state from samples of a known lobe recovering it. Registered `quick`.
 - [ ] **Step 2: the grid on the host.** `PathGuiding` (as `RadianceCache`): two state buffers (32 B a state, 2^20),
-  the priority words (u64), the proposal buffer (2 a pixel, resized with the tracer), device-local; `clear()` at
+  the claim words (two u32: the key, the owner), the proposal buffer (2 a pixel, resized with the tracer), device-local; `clear()` at
   `resetAccumulation`; created on first use, so a renderer that never guides allocates nothing. Bindings 46 (read),
   47 (write), 48 (priority), 49 (proposals), 50 (per-pixel sample radiance `R_end`).
 - [ ] **Step 3: guided bounces.** `kFlagGuiding` (1 << 6). At a guidable vertex (spec G4): the resample, `q`, NEE's
@@ -34,7 +34,7 @@ CLI and serve expectations (the new params); `tools/check_changed.py` rules; AGE
   Sobol groups and code path of today). Measure raygen's stack (`OHAO_PIPELINE_STATS=1`) and `pt.trace` off/on.
 - [ ] **Step 4: the update and commit passes** (`pt.guide.update`, `pt.guide.commit`): `write = read`; per proposal,
   `f_mc`, the acceptance, the ML step, the discard rule, the target slot, `InterlockedMax` of the key; then winners
-  write; the buffers swap. Needs `shaderBufferInt64Atomics` (checked; without it guiding refuses with a log line).
+  write; the written buffer is copied over the read one. 32-bit atomics only (the spec's deterministic commit).
 - [ ] **Step 5: the surface.** `render.settings`/`render.capture` `guiding`, `ohao run --guiding on|off`,
   `render.stats` `guiding {states, accepted, discarded}` (a counter buffer read with the timings). Expectations updated
   after looking at the diff.

@@ -164,7 +164,7 @@ TEST(Vmf, g1_StateLearnsALobe) {
         }
         Vec3 mu;
         float kappa = 0.0f;
-        ASSERT_TRUE(guideLobe(s, x, mu, kappa));
+        ASSERT_TRUE(guideLobe(s, x, 0.0f, mu, kappa));
         const double angle = std::acos(std::clamp(double(dot(mu, mu0)), -1.0, 1.0)) * 180.0 / kPi;
         const double bar = 3.5 * std::sqrt(2.0 / kappa0) / std::sqrt(99.0) * 180.0 / kPi;
         EXPECT_LT(angle, bar) << "kappa " << kappa0;
@@ -179,10 +179,14 @@ TEST(Vmf, g1_EmptyAndFirstSample) {
     const Vec3 x = {0.0f, 0.0f, 0.0f};
     Vec3 mu;
     float kappa = 0.0f;
-    EXPECT_FALSE(guideLobe(GuideStateCpu{}, x, mu, kappa));
+    EXPECT_FALSE(guideLobe(GuideStateCpu{}, x, 0.0f, mu, kappa));
     const GuideStateCpu s = guideUpdate(GuideStateCpu{}, x, {0.0f, 0.0f, 5.0f}, 2.0f, 7);
     EXPECT_FLOAT_EQ(s.w, 2.0f);
-    ASSERT_TRUE(guideLobe(s, x, mu, kappa));
+    ASSERT_TRUE(guideLobe(s, x, 0.0f, mu, kappa));
     EXPECT_NEAR(mu[2], 1.0f, 1e-6f);
-    EXPECT_GT(kappa, 10.0f);   // one sample at 5 m: a sharp lobe (the prior weighs 1/25)
+    EXPECT_GT(kappa, 10.0f);   // one sample at 5 m: a sharp lobe (the paper's prior weighs 1/25)
+    // A prior of one more sample pulls the one-sample lobe's mean cosine to about half: broad.
+    float broad = 0.0f;
+    ASSERT_TRUE(guideLobe(s, x, 1.0f, mu, broad));
+    EXPECT_LT(broad, 3.0f);
 }

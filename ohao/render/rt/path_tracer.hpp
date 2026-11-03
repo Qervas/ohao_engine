@@ -26,6 +26,7 @@
 //   pt.resize(newWidth, newHeight);
 
 #include "render/material/openpbr_tables_buffer.hpp"
+#include "render/rt/path_guiding.hpp"
 #include "render/rt/radiance_cache.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
@@ -291,6 +292,9 @@ private:
     // The radiance cache (bindings 39-41): full size for the realtime profile, which ends its paths
     // in it, one cell otherwise (the shaders bind it either way). setRadianceCacheCapacity before init.
     render::RadianceCache m_radianceCache;
+    // Path guiding (bindings 46, 49, 50; render/rt/path_guiding.hpp): placeholders until a frame
+    // first guides, then the grid and a pixel's proposals.
+    render::PathGuiding m_guiding;
     // The emissive triangle lights (bindings 42-45), from the scene's emissive instances.
     render::EmissiveLights* m_emissive = nullptr;   // the renderer's (setEmissiveLights)
     VkDescriptorSet m_textureSet = VK_NULL_HANDLE;   // the bindless texture table's set (the collect pass's)

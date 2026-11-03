@@ -105,6 +105,7 @@ struct RenderRequest {
     std::optional<std::array<int32_t, 4>> region;   // [x, y, w, h] of the frame, before scaling
     bool timings{false};                            // the last frame's pass list in the outcome
     bool hud{false};                                // draw the combat HUD over the frame (deferred)
+    bool guiding{false};                            // path guiding (path-traced modes)
     // The call's cancel flag and progress (frames rendered of frames), checked between whole
     // frames; null outside a protocol call.
     const CallControl* control{nullptr};

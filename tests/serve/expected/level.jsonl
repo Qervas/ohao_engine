@@ -13,4 +13,4 @@
 {"jsonrpc":"2.0","id":13,"result":{"hash":"11424da2b8adbf86","frame":0}}
 {"jsonrpc":"2.0","id":14,"result":{"entity":"5c0b10c000000005","path":"assets/levels/blockout_room.glb","nodes":18,"meshes":14,"uniqueMeshes":14,"triangles":164,"colliders":{"box":13,"mesh":1},"bodies":{"static":12,"dynamic":2},"spawns":[{"tag":"enemy","entity":"4ab39b557083d07b","pos":[-2.5,0.3,-2],"yawDeg":180},{"tag":"enemy","entity":"2e31f6fd3f3f41d8","pos":[3,0.5,-2],"yawDeg":180},{"tag":"player","entity":"e001e120491d4633","pos":[1.5,0,2.2],"yawDeg":0}],"lights":0,"cameras":1,"warnings":[],"loadMs":0}}
 {"jsonrpc":"2.0","id":15,"result":{"hash":"11424da2b8adbf86","frame":0}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":23,"frame":0,"schemaHash":"4e2b3c338104f368","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":23,"frame":0,"schemaHash":"1351482b468c6df5","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}

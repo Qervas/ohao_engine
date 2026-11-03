@@ -87,6 +87,9 @@ bool PathTracer::createDescriptorResources() {
     add(43, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RGEN);   // their power image (every level),
     add(44, BUFFER, RGEN);  // their header and instance ranges,
     add(45, BUFFER, HIT);   // each instance slot's first light (a bounce that meets one)
+    add(46, BUFFER, RGEN);  // path guiding: the grid's states (render/rt/path_guiding.hpp),
+    add(49, BUFFER, RGEN);  // this frame's proposals,
+    add(50, BUFFER, RGEN);  // each pixel's sample radiance and proposal count
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -108,7 +111,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 19 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 * kSets},   // the emissive lights' power 43
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
