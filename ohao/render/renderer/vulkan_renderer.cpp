@@ -461,6 +461,7 @@ void VulkanRenderer::applyRTRenderSettings() {
     }
     if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;
     if (m_guidingOverride) m_rtSettings.guiding = *m_guidingOverride;
+    if (m_causticsOverride) m_rtSettings.caustics = *m_causticsOverride;
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }
@@ -711,6 +712,11 @@ std::optional<float> VulkanRenderer::meteredEv100() {
 void VulkanRenderer::setFrameDeltaTime(float dt) {
     if (m_deferredRenderer)
         if (PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing()) pp->setFrameDeltaTime(dt);
+}
+
+std::optional<render::CausticsStats> VulkanRenderer::causticsStats() const {
+    const IRTRendererProfile* offline = getRTRenderer(RenderMode::RTOffline);
+    return offline ? offline->causticsStats() : std::nullopt;
 }
 
 std::optional<LightClusters::Overflow> VulkanRenderer::lightsOverflow() {

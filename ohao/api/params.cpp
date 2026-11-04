@@ -187,7 +187,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("hud", &RenderCaptureParams::hud).doc("Draw the combat HUD over the frame, as a window shows it (deferred)")
         .field("guiding", &RenderCaptureParams::guiding)
             .doc("Path guiding (path-traced modes): bounces also drawn toward where the grid learned light arrives "
-                 "from; the same estimate, less noise from light reflected off surfaces");
+                 "from; the same estimate, less noise from light reflected off surfaces")
+        .field("caustics", &RenderCaptureParams::caustics)
+            .doc("Caustics (rt_offline): light traced from each directional light through smooth surfaces onto "
+                 "matte ones the camera sees; the same estimate, without the bright dots of sun glints");
     r.enumeration<TraceResolution>("TraceResolution").doc("A realtime ray-traced technique's resolution")
         .value("half", TraceResolution::half, "Half the frame's size, upsampled (the budgeted frame)")
         .value("full", TraceResolution::full, "The frame's size");

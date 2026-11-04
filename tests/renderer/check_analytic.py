@@ -207,6 +207,8 @@ def main():
         for mode, args in (("deferred", deferred), ("rt_offline", ["--spp", "256", "--denoise", "none"])):
             cmd = [OHAO, "run", rel + ".scene.json", "--render", "%s.%s.png" % (rel, mode), "--hdr",
                    "%s.%s.pfm" % (rel, mode), "--mode", mode, "--size", "%dx%d" % (W, H)] + args
+            if "--no-caustics" in sys.argv and mode == "rt_offline":
+                cmd.append("--no-caustics")   # without caustics' light pass (sub-project 24); the bars unchanged
             r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
             checks += 1
             if r.returncode != 0:

@@ -3,6 +3,7 @@
 // Push-constant flag constants (kPTFlag*) moved here since this TU is their sole consumer.
 
 #include "path_tracer.hpp"
+#include "gpu/shared_layout.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -37,6 +38,8 @@ constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 constexpr uint32_t kPTFlagRadianceCache = 1u << 5;
 // Path guiding (sub-project 23): rt/path_tracer.slang's kFlagGuiding.
 constexpr uint32_t kPTFlagGuiding = 1u << 6;
+// Caustics (sub-project 24): rt/path_tracer.slang's kFlagCaustics (bits 7-9 are guiding's debug).
+constexpr uint32_t kPTFlagCaustics = 1u << 10;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -49,6 +52,15 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
     // Path guiding's buffers before this frame's set is written (the first guided frame allocates them).
     const bool guideOn = m_renderSettings.guiding && m_guiding.ensure(m_width * m_height);
+    // Caustics (sub-project 24): offline only (the realtime profile's paths end in the radiance
+    // cache), on its own program (raygenCaustics; the default raygen has none of its code), when a
+    // directional light and a smooth-capable caster are in the scene. OHAO_CAUSTICS_SPLIT_ONLY=1
+    // drops the light pass's terms without running it (check_caustics' c1_split_only).
+    const bool causticsWanted = m_renderSettings.caustics && m_renderSettings.profile == RTRenderProfile::Offline;
+    if (causticsWanted && m_scene) m_caustics.setScene(*m_scene, gpu::shared::kCausticRough);
+    const bool causticsOn = causticsWanted && m_caustics.active() && m_caustics.ensure(m_width * m_height) &&
+                            ensureCausticsPipeline();
+    static const bool causticsSplitOnly = std::getenv("OHAO_CAUSTICS_SPLIT_ONLY") != nullptr;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
     timePass("emissive.lights");
@@ -57,7 +69,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                         m_materialRefs},
                        m_textureSet);
     // The frame's setup is timed with its first trace.
-    timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update" : "pt.trace");
+    timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update"
+             : causticsOn                                                     ? "pt.caustics"
+                                                                              : "pt.trace");
 
 #ifdef OHAO_DLSS_ENABLED
     // --- Phase 1: lazy DLSS-RR NGX init + feature creation ---
@@ -196,7 +210,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         {38, m_openpbrTables.buffer()}, {39, m_radianceCache.keys()}, {40, m_radianceCache.accum()},
         {41, m_radianceCache.resolved()}, {42, m_emissive->lightBuffer()}, {44, m_emissive->rangeBuffer(frameSlot)},
         {45, m_emissive->firstBuffer(frameSlot)}, {46, m_guiding.states()}, {49, m_guiding.proposals()},
-        {50, m_guiding.pixel()},
+        {50, m_guiding.pixel()}, {51, m_caustics.table()}, {52, m_caustics.splat()}, {53, m_caustics.stats()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -547,6 +561,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const bool cacheOn = m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u;
     if (cacheOn) pc.control.x |= kPTFlagRadianceCache;
     if (guideOn) pc.control.x |= kPTFlagGuiding;
+    if (causticsOn) {
+        pc.control.x |= kPTFlagCaustics;
+        m_causticsRan = true;
+    }
     static const char* guideDebug = std::getenv("OHAO_GUIDE_DEBUG");
     if (guideOn && guideDebug) pc.control.x |= (1u << 7) | ((uint32_t(std::atoi(guideDebug)) & 3u) << 8u);   // kFlagGuideDebug, its mode
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
@@ -582,8 +600,29 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // --- Trace rays! ---
     if (cacheOn) timePass("pt.trace");
     if (guideOn) m_guiding.recordBeginFrame(cmd);
-    vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
-                      m_width, m_height, 1);
+    if (causticsOn) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_causticsPipeline);
+        m_caustics.recordBeginFrame(cmd);
+        if (!causticsSplitOnly) {
+            // kCausticRaysPerPixel light paths a pixel; OHAO_CAUSTIC_RAYS (any positive number) overrides it for
+            // tuning (ruling C3). The pass counts its paths from the dispatch's size.
+            static const float raysPerPixel = [] {
+                const char* s = std::getenv("OHAO_CAUSTIC_RAYS");
+                const float v = s ? std::strtof(s, nullptr) : 0.0f;
+                return v > 0.0f ? v : float(gpu::shared::kCausticRaysPerPixel);
+            }();
+            const uint32_t rows = std::max(1u, uint32_t(std::lround(double(m_height) * raysPerPixel)));
+            vkCmdTraceRaysKHR(cmd, &m_causticTraceRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
+                              m_width, rows, 1);
+            m_caustics.recordAfterTrace(cmd);
+        }
+        timePass("pt.trace");
+        vkCmdTraceRaysKHR(cmd, &m_causticsRgenRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
+                          m_width, m_height, 1);
+    } else {
+        vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
+                          m_width, m_height, 1);
+    }
     if (guideOn) {
         // What this frame's paths found becomes the grid the next frame reads.
         timePass("pt.guide.update");

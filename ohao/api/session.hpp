@@ -106,6 +106,7 @@ struct RenderRequest {
     bool timings{false};                            // the last frame's pass list in the outcome
     bool hud{false};                                // draw the combat HUD over the frame (deferred)
     bool guiding{false};                            // path guiding (path-traced modes)
+    bool caustics{true};                            // light traced from the sun (rt_offline; ruling C1)
     // The call's cancel flag and progress (frames rendered of frames), checked between whole
     // frames; null outside a protocol call.
     const CallControl* control{nullptr};
@@ -152,6 +153,12 @@ struct RenderStats {
         uint64_t vertices{0}, blasRefits{0}, blasRebuilds{0};
     };
     std::optional<Skinning> skinning;
+    // Sub-project 24 (absent until a frame ran caustics' light pass): the casters the newest frame traced
+    // toward, and the splats clamped since the last reset (0 on every test scene).
+    struct Caustics {
+        uint32_t casters{0}, clamped{0};
+    };
+    std::optional<Caustics> caustics;
     // Sub-project 12 (absent when the host has no deferred renderer): the newest frame's effects. Particles
     // are the lit slots expanded; objectsSorted the transparent objects drawn; decalsDrawn the decal records
     // in view; proxies the smoke spheres the traces may read; particlesSortedMax the largest sorted batch.

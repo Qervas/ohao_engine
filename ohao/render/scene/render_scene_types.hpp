@@ -126,6 +126,10 @@ struct MaterialDesc {
     float subsurfaceRadius{1.0f};
     glm::vec3 subsurfaceRadiusScale{1.0f, 0.5f, 0.25f};
     float subsurfaceAnisotropy{0.0f};
+    // The smallest roughness each roughness texture holds (G over 255; 1 without one), measured at
+    // upload: caustics' casters (render/rt/caustic_casters.hpp) ask whether a lobe can be smooth.
+    float roughTexMin{1.0f};
+    float coatRoughTexMin{1.0f};
 };
 
 struct InstanceDesc {

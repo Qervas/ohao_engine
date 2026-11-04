@@ -1,6 +1,7 @@
 #pragma once
 #include "render/scene/render_scene_types.hpp"
 #include "render/scene/vfx_frame.hpp"
+#include "render/rt/caustic_casters.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
@@ -128,6 +129,8 @@ public:
 
     [[nodiscard]] const MeshInfo* meshInfo(MeshHandle h) const;
     [[nodiscard]] uint32_t materialIndexFor(uint32_t slot, uint32_t materialSlot) const;
+    // What decides whether a material can hold a smooth lobe (caustics' casters; MaterialTable::smoothness).
+    [[nodiscard]] MaterialSmoothness materialSmoothness(uint32_t materialIndex) const;
     [[nodiscard]] bool rtSupported() const noexcept;
     // The RenderScene's own acceleration structures (BLAS per mesh, TLAS over the
     // instance table). Null when RT is unavailable.

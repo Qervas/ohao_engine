@@ -1,11 +1,15 @@
-// Extracted from path_tracer.cpp — RT pipeline + shader binding table creation.
-// Kept as members of class PathTracer; no behavior change.
-// The file-local readFile() helper is relocated here since this TU is its only caller.
+// The path tracer's ray tracing pipelines and their shader binding tables. Two programs share the
+// layout, the miss and the hit group: the default one (raygen, then the radiance cache's update
+// raygen) and caustics' (sub-project 24: raygenCaustics, then causticTrace), made the first time a
+// frame needs it, so the default raygen carries none of caustics' code and compiles as before.
 
 #include "path_tracer.hpp"
 #include "pipeline_disk_cache.hpp"
 #include "render/rt/rt_compute.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -36,16 +40,40 @@ static std::vector<char> readFile(const std::string& path) {
 }  // namespace
 
 bool PathTracer::createRTPipeline() {
-    // Load shader SPVs
-    auto rgenCode = readFile(m_shaderSet.raygenSpv);
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(PTPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+
+    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+        OHAO_LOG(Error, render, "PathTracer: failed to create pipeline layout");
+        return false;
+    }
+    m_rtPipeline = buildRtPipeline(m_shaderSet.raygenSpv, m_shaderSet.raygenEntry, m_shaderSet.cacheUpdateSpv,
+                                   m_shaderSet.cacheUpdateEntry, "path_tracer");
+    if (!m_rtPipeline) return false;
+    OHAO_LOG(Debug, render, "PathTracer: RT pipeline created");
+    return true;
+}
+
+VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntry, const char* extraSpv,
+                                       const char* extraEntry, const char* cacheName) {
+    auto rgenCode = readFile(rgenSpv);
     auto rmissCode = readFile(m_shaderSet.missSpv);
     auto rchitCode = readFile(m_shaderSet.closestHitSpv);
     auto rahitCode = readFile(m_shaderSet.anyHitSpv);
-    auto cacheCode = readFile(m_shaderSet.cacheUpdateSpv);
+    auto extraCode = readFile(extraSpv);
 
-    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty() || cacheCode.empty()) {
-        OHAO_LOG(Error, render, "PathTracer: failed to load RT shader SPVs");
-        return false;
+    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty() || extraCode.empty()) {
+        OHAO_LOG(Error, render, "PathTracer: failed to load RT shader SPVs ({})", cacheName);
+        return VK_NULL_HANDLE;
     }
     bool hasAnyHit = !rahitCode.empty();
 
@@ -63,19 +91,17 @@ bool PathTracer::createRTPipeline() {
     VkShaderModule rmissModule = createModule(rmissCode);
     VkShaderModule rchitModule = createModule(rchitCode);
     VkShaderModule rahitModule = hasAnyHit ? createModule(rahitCode) : VK_NULL_HANDLE;
-    VkShaderModule cacheModule = createModule(cacheCode);
+    VkShaderModule extraModule = createModule(extraCode);
 
-    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional), then the radiance
-    // cache's update raygen.
-    const uint32_t cacheStage = hasAnyHit ? 4 : 3;
-    uint32_t stageCount = cacheStage + 1;
+    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional), then the second raygen.
+    const uint32_t extraStage = hasAnyHit ? 4 : 3;
+    uint32_t stageCount = extraStage + 1;
     VkPipelineShaderStageCreateInfo stages[5] = {};
 
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     stages[0].module = rgenModule;
-    stages[0].pName = m_shaderSet.raygenEntry;
-
+    stages[0].pName = rgenEntry;
 
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
@@ -93,12 +119,12 @@ bool PathTracer::createRTPipeline() {
         stages[3].module = rahitModule;
         stages[3].pName = m_shaderSet.anyHitEntry;
     }
-    stages[cacheStage].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[cacheStage].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    stages[cacheStage].module = cacheModule;
-    stages[cacheStage].pName = m_shaderSet.cacheUpdateEntry;
+    stages[extraStage].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[extraStage].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    stages[extraStage].module = extraModule;
+    stages[extraStage].pName = extraEntry;
 
-    // Shader groups: raygen, miss, the hit group (closest-hit + any-hit), the cache's update raygen
+    // Shader groups: raygen, miss, the hit group (closest-hit + any-hit), the second raygen
     VkRayTracingShaderGroupCreateInfoKHR groups[4] = {};
 
     groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
@@ -125,34 +151,11 @@ bool PathTracer::createRTPipeline() {
 
     groups[3].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-    groups[3].generalShader = cacheStage;
+    groups[3].generalShader = extraStage;
     groups[3].closestHitShader = VK_SHADER_UNUSED_KHR;
     groups[3].anyHitShader = VK_SHADER_UNUSED_KHR;
     groups[3].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(PTPushConstants);
-
-    VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushRange;
-
-    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "PathTracer: failed to create pipeline layout");
-        vkDestroyShaderModule(m_device, rgenModule, nullptr);
-        vkDestroyShaderModule(m_device, rmissModule, nullptr);
-        vkDestroyShaderModule(m_device, rchitModule, nullptr);
-        if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
-        vkDestroyShaderModule(m_device, cacheModule, nullptr);
-        return false;
-    }
-
-    // Create RT pipeline
     VkRayTracingPipelineCreateInfoKHR pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
     pipelineInfo.stageCount = stageCount;
@@ -165,9 +168,18 @@ bool PathTracer::createRTPipeline() {
 
     // Minutes cold: kept in a file so the next process (a headless host beside a window) loads it.
     PipelineDiskCache cache;
-    cache.open(m_device, m_physicalDevice, "path_tracer");
+    const std::vector<char>* modules[] = {&rgenCode, &rmissCode, &rchitCode, &rahitCode, &extraCode};
+    std::vector<std::vector<char>> keyed;
+    for (const auto* m : modules) keyed.push_back(*m);
+    cache.open(m_device, m_physicalDevice, cacheName, pipelineContentKey(keyed));
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    // Timed: minutes cold. A driver's deferred operation joined by up to 6 threads measured no faster (209 s on
+    // 1 thread, 212 s on 5, for the caustics program on 2026-11-04): one huge raygen compiles on one core.
+    const auto compileStart = std::chrono::steady_clock::now();
     VkResult result = vkCreateRayTracingPipelinesKHR(
-        m_device, VK_NULL_HANDLE, cache.handle(), 1, &pipelineInfo, nullptr, &m_rtPipeline);
+        m_device, VK_NULL_HANDLE, cache.handle(), 1, &pipelineInfo, nullptr, &pipeline);
+    OHAO_LOG(Info, render, "PathTracer: {} pipeline in {:.1f} s", cacheName,
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - compileStart).count());
     if (result == VK_SUCCESS) cache.save();
 
     // Cleanup shader modules (no longer needed after pipeline creation)
@@ -175,30 +187,56 @@ bool PathTracer::createRTPipeline() {
     vkDestroyShaderModule(m_device, rmissModule, nullptr);
     vkDestroyShaderModule(m_device, rchitModule, nullptr);
     if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
-    vkDestroyShaderModule(m_device, cacheModule, nullptr);
+    vkDestroyShaderModule(m_device, extraModule, nullptr);
 
     if (result != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline (err={})", static_cast<int>(result));
-        return false;
+        OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline {} (err={})", cacheName, static_cast<int>(result));
+        return VK_NULL_HANDLE;
     }
 
     if (rtc::pipelineStats()) {
         // The driver may report no executables for a ray tracing pipeline (NVIDIA's does not); the
         // raygen group's stack is what raygen's live state spills across each trace.
-        rtc::logPipelineStats(m_device, m_rtPipeline, "path_tracer");
+        rtc::logPipelineStats(m_device, pipeline, cacheName);
         const auto stackSize = reinterpret_cast<PFN_vkGetRayTracingShaderGroupStackSizeKHR>(
             vkGetDeviceProcAddr(m_device, "vkGetRayTracingShaderGroupStackSizeKHR"));
         const VkDeviceSize raygenStack =
-            stackSize ? stackSize(m_device, m_rtPipeline, 0, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
-        OHAO_LOG(Info, render, "pipeline stats path_tracer: raygen stack {} bytes", raygenStack);
+            stackSize ? stackSize(m_device, pipeline, 0, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
+        const VkDeviceSize extraStack =
+            stackSize ? stackSize(m_device, pipeline, 3, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
+        OHAO_LOG(Info, render, "pipeline stats {}: raygen stack {} bytes, second raygen {} bytes", cacheName,
+                 raygenStack, extraStack);
     }
-    OHAO_LOG(Debug, render, "PathTracer: RT pipeline created");
+    return pipeline;
+}
+
+bool PathTracer::ensureCausticsPipeline() {
+    if (m_causticsPipeline) return true;
+    if (m_causticsPipelineFailed) return false;
+    m_causticsPipeline = buildRtPipeline(m_shaderSet.raygenCausticsSpv, m_shaderSet.raygenCausticsEntry,
+                                         m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry, "path_tracer_caustics");
+    if (!m_causticsPipeline ||
+        !buildShaderBindingTable(m_causticsPipeline, m_causticsSbtBuffer, m_causticsSbtMemory, m_causticsRgenRegion,
+                                 m_causticsMissRegion, m_causticsHitRegion, m_causticTraceRegion)) {
+        OHAO_LOG(Error, render, "PathTracer: caustics' pipeline unavailable: caustics stay off");
+        m_causticsPipelineFailed = true;
+        return false;
+    }
     return true;
 }
 
 // ─── Shader Binding Table ────────────────────────────────────────────
 
 bool PathTracer::createShaderBindingTable() {
+    return buildShaderBindingTable(m_rtPipeline, m_sbtBuffer, m_sbtMemory, m_rgenRegion, m_missRegion, m_hitRegion,
+                                   m_cacheRgenRegion);
+}
+
+bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffer, VkDeviceMemory& sbtMemory,
+                                         VkStridedDeviceAddressRegionKHR& rgenRegion,
+                                         VkStridedDeviceAddressRegionKHR& missRegion,
+                                         VkStridedDeviceAddressRegionKHR& hitRegion,
+                                         VkStridedDeviceAddressRegionKHR& extraRegion) {
     // Query RT pipeline properties for handle size/alignment
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps{};
     rtProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
@@ -214,12 +252,12 @@ bool PathTracer::createShaderBindingTable() {
     // Aligned handle size (each entry in the SBT must be aligned)
     uint32_t handleSizeAligned = (handleSize + handleAlignment - 1) & ~(handleAlignment - 1);
 
-    // 4 groups: rgen, miss, closest-hit, the cache's update rgen
+    // 4 groups: rgen, miss, closest-hit, the second rgen
     uint32_t groupCount = 4;
 
     // Get shader group handles from the pipeline
     std::vector<uint8_t> handles(groupCount * handleSize);
-    if (vkGetRayTracingShaderGroupHandlesKHR(m_device, m_rtPipeline, 0, groupCount,
+    if (vkGetRayTracingShaderGroupHandlesKHR(m_device, pipeline, 0, groupCount,
                                               handles.size(), handles.data()) != VK_SUCCESS) {
         OHAO_LOG(Error, render, "PathTracer: failed to get shader group handles");
         return false;
@@ -229,7 +267,7 @@ bool PathTracer::createShaderBindingTable() {
     uint32_t rgenSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t missSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t hitSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t totalSize = rgenSize + missSize + hitSize + rgenSize;   // the cache's update rgen last
+    uint32_t totalSize = rgenSize + missSize + hitSize + rgenSize;   // the second rgen last
 
     // Create SBT buffer
     VkBufferCreateInfo bufInfo{};
@@ -239,10 +277,10 @@ bool PathTracer::createShaderBindingTable() {
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &m_sbtBuffer) != VK_SUCCESS) return false;
+    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &sbtBuffer) != VK_SUCCESS) return false;
 
     VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, m_sbtBuffer, &memReqs);
+    vkGetBufferMemoryRequirements(m_device, sbtBuffer, &memReqs);
 
     VkMemoryAllocateFlagsInfo allocFlags{};
     allocFlags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
@@ -255,12 +293,12 @@ bool PathTracer::createShaderBindingTable() {
     allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_sbtMemory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(m_device, m_sbtBuffer, m_sbtMemory, 0);
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &sbtMemory) != VK_SUCCESS) return false;
+    vkBindBufferMemory(m_device, sbtBuffer, sbtMemory, 0);
 
     // Write handles into SBT buffer
     void* mapped;
-    vkMapMemory(m_device, m_sbtMemory, 0, totalSize, 0, &mapped);
+    vkMapMemory(m_device, sbtMemory, 0, totalSize, 0, &mapped);
     memset(mapped, 0, totalSize);
 
     uint8_t* dst = static_cast<uint8_t*>(mapped);
@@ -270,31 +308,31 @@ bool PathTracer::createShaderBindingTable() {
     memcpy(dst + rgenSize, handles.data() + 1 * handleSize, handleSize);
     // Closest-hit at offset rgenSize + missSize
     memcpy(dst + rgenSize + missSize, handles.data() + 2 * handleSize, handleSize);
-    // The cache's update raygen after the hit group
+    // The second raygen after the hit group
     memcpy(dst + rgenSize + missSize + hitSize, handles.data() + 3 * handleSize, handleSize);
 
-    vkUnmapMemory(m_device, m_sbtMemory);
+    vkUnmapMemory(m_device, sbtMemory);
 
     // Set up strided device address regions
-    VkDeviceAddress sbtAddr = getBufferDeviceAddress(m_sbtBuffer);
+    VkDeviceAddress sbtAddr = getBufferDeviceAddress(sbtBuffer);
 
-    m_rgenRegion.deviceAddress = sbtAddr;
+    rgenRegion.deviceAddress = sbtAddr;
     // A raygen region holds exactly one record, and the spec requires its size
     // to equal its stride (VUID-vkCmdTraceRaysKHR-size-04023).
-    m_rgenRegion.stride = rgenSize;
-    m_rgenRegion.size = rgenSize;
+    rgenRegion.stride = rgenSize;
+    rgenRegion.size = rgenSize;
 
-    m_missRegion.deviceAddress = sbtAddr + rgenSize;
-    m_missRegion.stride = handleSizeAligned;
-    m_missRegion.size = missSize;
+    missRegion.deviceAddress = sbtAddr + rgenSize;
+    missRegion.stride = handleSizeAligned;
+    missRegion.size = missSize;
 
-    m_hitRegion.deviceAddress = sbtAddr + rgenSize + missSize;
-    m_hitRegion.stride = handleSizeAligned;
-    m_hitRegion.size = hitSize;
+    hitRegion.deviceAddress = sbtAddr + rgenSize + missSize;
+    hitRegion.stride = handleSizeAligned;
+    hitRegion.size = hitSize;
 
-    m_cacheRgenRegion.deviceAddress = sbtAddr + rgenSize + missSize + hitSize;
-    m_cacheRgenRegion.stride = rgenSize;
-    m_cacheRgenRegion.size = rgenSize;
+    extraRegion.deviceAddress = sbtAddr + rgenSize + missSize + hitSize;
+    extraRegion.stride = rgenSize;
+    extraRegion.size = rgenSize;
 
     m_callRegion = {};  // not used
 

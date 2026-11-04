@@ -53,6 +53,7 @@ inline constexpr PassInfo kPasses[] = {
     {"readback", PassKind::Transfer, "headless: the final image copied to the frame's staging buffer"},
     {"pt.cache.update", PassKind::RayTracing, "the realtime path tracer: the radiance cache's sparse update trace (and the frame's setup)"},
     {"pt.cache.resolve", PassKind::Compute, "the realtime path tracer: the radiance cache's blend and eviction"},
+    {"pt.caustics", PassKind::RayTracing, "caustics: rays from each directional light through smooth surfaces, splatted where they land on a matte surface the camera sees"},
     {"pt.trace", PassKind::RayTracing, "the path tracer's trace: a sample a pixel, accumulated or handed to the denoiser"},
     {"pt.guide.update", PassKind::Compute, "path guiding: the frame's proposals learned into the grid the next frame reads (update, owner, write, the copy)"},
     {"pt.denoise", PassKind::Compute, "the path tracer's denoiser (NRD, DLSS RR) and display transform"},

@@ -1,6 +1,8 @@
 #include "pipeline_disk_cache.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -51,7 +53,48 @@ bool headerMatches(const std::vector<char>& data, const VkPhysicalDeviceProperti
 
 }  // namespace
 
-void PipelineDiskCache::open(VkDevice device, VkPhysicalDevice physicalDevice, const std::string& name) {
+uint64_t pipelineContentKey(std::span<const std::vector<char>> modules) {
+    uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](uint8_t b) {
+        h ^= b;
+        h *= 1099511628211ull;
+    };
+    for (const std::vector<char>& m : modules) {
+        const uint64_t n = m.size();
+        for (int i = 0; i < 8; ++i) mix(static_cast<uint8_t>(n >> (8 * i)));
+        for (char c : m) mix(static_cast<uint8_t>(c));
+    }
+    return h;
+}
+
+std::string pipelineCacheFileName(const std::string& name, uint64_t key, uint32_t vendor, uint32_t device,
+                                  uint32_t driver) {
+    char hex[17];
+    std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(key));
+    return name + "@" + hex + "-" + std::to_string(vendor) + "-" + std::to_string(device) + "-" + std::to_string(driver) +
+           ".bin";
+}
+
+void prunePipelineCaches(const std::filesystem::path& dir, const std::string& name, const std::string& deviceSuffix,
+                         const std::filesystem::path& keep, int older) {
+    std::error_code ec;
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> others;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        const std::string f = entry.path().filename().string();
+        if (f.size() < deviceSuffix.size() || f.compare(f.size() - deviceSuffix.size(), deviceSuffix.size(), deviceSuffix) != 0)
+            continue;
+        if (f == name + deviceSuffix) {   // named before versions were
+            std::filesystem::remove(entry.path(), ec);
+            continue;
+        }
+        if (f.rfind(name + "@", 0) != 0 || entry.path() == keep) continue;
+        others.emplace_back(std::filesystem::last_write_time(entry.path(), ec), entry.path());
+    }
+    std::sort(others.begin(), others.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (size_t i = static_cast<size_t>(std::max(older, 0)); i < others.size(); ++i) std::filesystem::remove(others[i].second, ec);
+}
+
+void PipelineDiskCache::open(VkDevice device, VkPhysicalDevice physicalDevice, const std::string& name, uint64_t key) {
     destroy();
     m_device = device;
 
@@ -60,8 +103,10 @@ void PipelineDiskCache::open(VkDevice device, VkPhysicalDevice physicalDevice, c
 
     std::vector<char> data;
     if (const std::filesystem::path dir = cacheDirectory(); !dir.empty()) {
-        m_file = dir / (name + "-" + std::to_string(props.vendorID) + "-" + std::to_string(props.deviceID) + "-" +
-                        std::to_string(props.driverVersion) + ".bin");
+        m_file = dir / pipelineCacheFileName(name, key, props.vendorID, props.deviceID, props.driverVersion);
+        m_name = name;
+        m_deviceSuffix = "-" + std::to_string(props.vendorID) + "-" + std::to_string(props.deviceID) + "-" +
+                         std::to_string(props.driverVersion) + ".bin";
         std::error_code ec;
         const std::uintmax_t size = std::filesystem::file_size(m_file, ec);
         if (!ec && size > 0 && size <= kMaxCacheBytes) {
@@ -117,6 +162,7 @@ void PipelineDiskCache::save() {
         return;
     }
     OHAO_LOG(Debug, gpu, "pipeline cache: saved {} bytes to {}", data.size(), m_file.string());
+    prunePipelineCaches(m_file.parent_path(), m_name, m_deviceSuffix, m_file, 1);
 }
 
 void PipelineDiskCache::destroy() {

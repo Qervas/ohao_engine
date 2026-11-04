@@ -27,6 +27,10 @@ struct RTRenderSettings {
     // Path guiding (sub-project 23, render/rt/path_guiding.hpp): bounces drawn from the BSDF and
     // learned lobes by their exact mixture density (the estimate stays the same).
     bool guiding{false};
+    // Caustics (sub-project 24, render/rt/caustic_casters.hpp): light traced from each directional
+    // light through smooth surfaces onto matte ones the camera sees (rt_offline; the same estimate). On by
+    // default (ruling C1, Frank 2026-11-04).
+    bool caustics{true};
 };
 
 inline constexpr RTRenderSettings kRealtimeRTSettings{

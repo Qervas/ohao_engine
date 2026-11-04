@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "path_tracer.hpp"
 
 namespace ohao {
@@ -7,6 +9,7 @@ namespace ohao {
 class IRTRendererProfile {
 public:
     virtual ~IRTRendererProfile() = default;
+    [[nodiscard]] virtual std::optional<render::CausticsStats> causticsStats() const { return std::nullopt; }
 
     virtual const char* getName() const = 0;
     virtual RTRenderProfile getProfile() const = 0;
@@ -176,6 +179,11 @@ public:
 
 protected:
     PathTracer m_pathTracer;
+
+public:
+    [[nodiscard]] std::optional<render::CausticsStats> causticsStats() const override { return m_pathTracer.causticsStats(); }
+
+protected:
     RTRenderSettings m_settings;
     PathTracerShaderSet m_shaderSet;
 };

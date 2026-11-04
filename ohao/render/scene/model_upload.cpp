@@ -1,6 +1,7 @@
 #include "render/scene/model_upload.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
+#include "render/rt/caustic_casters.hpp"
 #include "asset/model.hpp"
 
 #include <algorithm>
@@ -75,6 +76,11 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
             if (h.valid()) {
                 mats[mi].*field = h.index;
                 ++loaded;
+                // Roughness in G: its smallest texel, for caustics' casters.
+                if (field == &MaterialDesc::roughMetalTex)
+                    mats[mi].roughTexMin = textureChannelMin(std::span<const uint8_t>(td.pixels), td.width, td.height, 1);
+                else if (field == &MaterialDesc::coatRoughnessTex)
+                    mats[mi].coatRoughTexMin = textureChannelMin(std::span<const uint8_t>(td.pixels), td.width, td.height, 1);
             }
         }
     };

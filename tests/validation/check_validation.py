@@ -89,6 +89,10 @@ SCENES = [
     ("play rt_realtime dlss",
      ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
+    # sub-project 24: caustics' light pass (its own pipeline, the splat buffer and its barriers).
+    ("caustics rt_offline",
+     ["build/Release/ohao.exe", "run", "assets/scenes/caustics.scene.json", "--render", "{out}",
+      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     # sub-project 12: the doorway's smoke (a VfxEmitter's spheres in the shadow and GI traces, its particles
     # and the forward pass), through the raster and both path-traced modes.
     ("smoke doorway deferred",

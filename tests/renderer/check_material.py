@@ -57,12 +57,19 @@ def write_white_hdr(path, w=16, h=8):
         f.write(bytes([128, 128, 128, 129]) * (w * h))
 
 
+# rt_offline captures run caustics' light pass (sub-project 24, on by default); --no-caustics: without it.
+# Each case's bar is the same either way.
+NO_CAUSTICS = "--no-caustics" in sys.argv
+
+
 def capture(name, scene, mode, args):
     rel = "%s/%s" % (OUT, name)
     with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
         json.dump(scene, f, indent=1)
     cmd = [OHAO, "run", rel + ".scene.json", "--render", "%s.%s.png" % (rel, mode), "--hdr", "%s.%s.pfm" % (rel, mode),
            "--mode", mode, "--size", "%dx%d" % (W, H)] + args
+    if NO_CAUSTICS and mode == "rt_offline":
+        cmd.append("--no-caustics")
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if r.returncode != 0:
         return None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:])

@@ -1,0 +1,351 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "Light": 1,
+    "Material": 1,
+    "MeshSource": 1,
+    "Name": 1,
+    "Transform": 1
+  },
+  "entities": [
+    {
+      "id": "7a00000000000001",
+      "Name": {
+        "value": "MainCamera"
+      },
+      "Transform": {
+        "position": [
+          4.5,
+          1.0,
+          -1.1
+        ],
+        "rotation": [
+          -0.006694,
+          0.828786,
+          0.009917,
+          0.559438
+        ]
+      },
+      "Camera": {
+        "fovDeg": 50.0
+      }
+    },
+    {
+      "id": "7a00000000000002",
+      "Name": {
+        "value": "Environment"
+      },
+      "Environment": {
+        "sky": true
+      }
+    },
+    {
+      "id": "7a00000000000003",
+      "Name": {
+        "value": "Sponza"
+      },
+      "MeshSource": {
+        "source": {
+          "ModelAsset": {
+            "asset": {
+              "path": "assets/khronos/Sponza/Sponza.gltf"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "7a00000000000004",
+      "Name": {
+        "value": "Sun"
+      },
+      "Transform": {
+        "position": [
+          0,
+          20,
+          0
+        ],
+        "rotation": [
+          -0.394542,
+          0.550977,
+          0.33106,
+          0.656628
+        ]
+      },
+      "Light": {
+        "type": "Directional",
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "intensity": 6.0
+      }
+    },
+    {
+      "id": "7a00000000000005",
+      "Name": {
+        "value": "Plinth"
+      },
+      "MeshSource": {
+        "source": {
+          "BoxPrim": {
+            "lo": [
+              1.12,
+              0,
+              -0.030000000000000027
+            ],
+            "hi": [
+              1.88,
+              0.55,
+              0.73
+            ],
+            "color": [
+              0.8,
+              0.78,
+              0.74
+            ]
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          0.82,
+          0.8,
+          0.76
+        ],
+        "specular_roughness": 0.35,
+        "coat_weight": 1,
+        "coat_roughness": 0.04
+      }
+    },
+    {
+      "id": "7a00000000000006",
+      "Name": {
+        "value": "Helmet"
+      },
+      "Transform": {
+        "position": [
+          1.5,
+          0.968,
+          0.35
+        ],
+        "scale": [
+          0.44,
+          0.44,
+          0.44
+        ],
+        "rotation": [
+          0,
+          0.829038,
+          0,
+          0.559193
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "ModelAsset": {
+            "asset": {
+              "path": "assets/test_models/DamagedHelmet.glb"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "7a00000000000007",
+      "Name": {
+        "value": "Glass"
+      },
+      "Transform": {
+        "position": [
+          1.95,
+          0.17,
+          -0.4
+        ],
+        "scale": [
+          0.34,
+          0.34,
+          0.34
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 96,
+            "stacks": 48
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          1,
+          1,
+          1
+        ],
+        "specular_roughness": 0.0,
+        "transmission_weight": 1
+      }
+    },
+    {
+      "id": "7a00000000000008",
+      "Name": {
+        "value": "Amber"
+      },
+      "Transform": {
+        "position": [
+          1.15,
+          0.14,
+          -0.5
+        ],
+        "scale": [
+          0.28,
+          0.28,
+          0.28
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 96,
+            "stacks": 48
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          1,
+          1,
+          1
+        ],
+        "specular_roughness": 0.03,
+        "transmission_weight": 1,
+        "transmission_color": [
+          0.95,
+          0.55,
+          0.12
+        ],
+        "transmission_depth": 0.3
+      }
+    },
+    {
+      "id": "7a00000000000009",
+      "Name": {
+        "value": "Gold"
+      },
+      "Transform": {
+        "position": [
+          2.35,
+          0.08,
+          0.0
+        ],
+        "scale": [
+          0.16,
+          0.16,
+          0.16
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 96,
+            "stacks": 48
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          1.0,
+          0.78,
+          0.34
+        ],
+        "base_metalness": 1,
+        "specular_roughness": 0.1
+      }
+    },
+    {
+      "id": "7a0000000000000a",
+      "Name": {
+        "value": "CarPaint"
+      },
+      "Transform": {
+        "position": [
+          1.3,
+          0.18,
+          0.97
+        ],
+        "scale": [
+          0.36,
+          0.36,
+          0.36
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 96,
+            "stacks": 48
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          0.32,
+          0.02,
+          0.03
+        ],
+        "base_metalness": 1,
+        "specular_roughness": 0.4,
+        "coat_weight": 1,
+        "coat_roughness": 0.02
+      }
+    },
+    {
+      "id": "7a0000000000000b",
+      "Name": {
+        "value": "Bubble"
+      },
+      "Transform": {
+        "position": [
+          1.65,
+          0.1,
+          -0.9
+        ],
+        "scale": [
+          0.2,
+          0.2,
+          0.2
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 96,
+            "stacks": 48
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          1,
+          1,
+          1
+        ],
+        "specular_roughness": 0.0,
+        "transmission_weight": 1,
+        "geometry_thin_walled": true,
+        "thin_film_weight": 1,
+        "thin_film_thickness": 0.45,
+        "thin_film_ior": 1.33
+      }
+    }
+  ]
+}

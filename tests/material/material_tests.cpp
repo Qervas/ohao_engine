@@ -328,7 +328,16 @@ std::vector<Case> layeredCases() {
 }
 
 // sphere: mu's bins cover [-1, 1] (transmission), else [0, 1].
-void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = false) {
+// The ops a sampling test draws, densities and weighs with: the whole BSDF (Sample, Pdf, Eval) or
+// its smooth part (SampleSmooth, PdfSmooth, Parts' r0) at `cut`.
+struct SamplingOps {
+    Op sample{Op::Sample};
+    Op pdf{Op::Pdf};
+    Op eval{Op::Eval};
+    float cut{0.25f};
+};
+
+void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = false, SamplingOps ops = {}) {
     // Over the sphere twice the polar bins, so each spans what a hemisphere's does.
     const unsigned kTheta = sphere ? 64u : 32u, kSub = sphere ? 12u : 6u;
     constexpr unsigned kPhi = 64, kN = 1u << 20;
@@ -348,7 +357,8 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = f
                         const float phi = static_cast<float>(2.0 * kPi) * (p + (j + 0.5f) / kSub) / kPhi - static_cast<float>(kPi);
                         const float s = std::sqrt(std::max(0.0f, 1.0f - mu * mu));
                         Item it;
-                        it.op = Op::Pdf;
+                        it.op = ops.pdf;
+                        it.cut = ops.cut;
                         it.material = c.m;
                         it.wo = view(c.mu, c.phi);
                         it.v = {s * std::cos(phi), s * std::sin(phi), mu};
@@ -361,7 +371,8 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = f
         // Observed counts, and each sample's weight against eval / pdf.
         std::vector<Item> samples(kN);
         for (Item& it : samples) {
-            it.op = Op::Sample;
+            it.op = ops.sample;
+            it.cut = ops.cut;
             it.material = c.m;
             it.wo = view(c.mu, c.phi);
             it.v = {rnd(seed), rnd(seed), rnd(seed)};
@@ -369,8 +380,10 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = f
         ohao::material::run(samples, kTables);
         std::vector<double> observed(kTheta * kPhi, 0.0);
         std::vector<Item> checks;
+        unsigned drawn = 0;
         for (const Item& it : samples) {
             if (!(it.r0[3] > 0.0f)) continue;
+            ++drawn;
             const float mu = std::clamp(it.r0[2], muLo, 0.999999f);
             float phi = std::atan2(it.r0[1], it.r0[0]);
             const unsigned t = std::min(static_cast<unsigned>((mu - muLo) / muSpan * kTheta), kTheta - 1);
@@ -378,7 +391,8 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = f
             observed[t * kPhi + p] += 1.0;
             if (checks.size() < 4096) {
                 Item e;
-                e.op = Op::Eval;
+                e.op = ops.eval;
+                e.cut = ops.cut;
                 e.material = c.m;
                 e.wo = view(c.mu, c.phi);
                 e.v = {it.r0[0], it.r0[1], it.r0[2]};
@@ -386,6 +400,7 @@ void samplingChi2(const std::vector<Case>& cases, uint32_t seed, bool sphere = f
                 checks.push_back(e);
             }
         }
+        CHECK(drawn > kN / 4, ("the sampler draws (most samples have a density): " + describe(c.m, c.mu)).c_str());
         std::vector<Item> evals = checks;
         ohao::material::run(evals, kTables);
         for (size_t k = 0; k < evals.size(); ++k) {
@@ -869,6 +884,157 @@ void t5_ltc_quad() {
             }
 }
 
+// ---- caustics (sub-project 24, T1): the smooth and rough parts ----------------------------------
+
+// Every family the module has, from both sides where it transmits.
+std::vector<Case> partsCases() {
+    std::vector<Case> cases;
+    for (const Case& c : lobeCases()) cases.push_back(c);
+    for (const Case& c : layeredCases()) cases.push_back(c);
+    for (const Case& c : glassCases()) cases.push_back(c);
+    Material plinth;   // the showcase's plinth: a rough base under a smooth coat
+    plinth.baseColor = {0.82f, 0.8f, 0.76f};
+    plinth.specularRoughness = 0.35f;
+    plinth.coatWeight = 1.0f;
+    plinth.coatRoughness = 0.04f;
+    for (float mu : {0.95f, 0.5f, 0.15f}) cases.push_back({plinth, mu});
+    Material mirror;
+    mirror.baseMetalness = 1.0f;
+    mirror.baseColor = {0.9f, 0.9f, 0.9f};
+    mirror.specularRoughness = 0.0f;
+    for (float mu : {0.95f, 0.5f}) cases.push_back({mirror, mu});
+    return cases;
+}
+
+void t6_parts_sum() {
+    uint32_t seed = 61u;
+    for (const Case& c : partsCases())
+        for (float cut : {0.0f, 0.1f, 0.25f, 1.01f}) {
+            std::vector<Item> parts, evals;
+            for (unsigned i = 0; i < 32; ++i)
+                for (unsigned j = 0; j < 32; ++j) {
+                    const float mu = -1.0f + 2.0f * (i + rnd(seed)) / 32.0f;
+                    const float phi = static_cast<float>(2.0 * kPi) * (j + rnd(seed)) / 32.0f;
+                    const float sn = std::sqrt(std::max(0.0f, 1.0f - mu * mu));
+                    Item it;
+                    it.op = Op::Parts;
+                    it.cut = cut;
+                    it.material = c.m;
+                    it.wo = view(c.mu, c.phi);
+                    it.v = {sn * std::cos(phi), sn * std::sin(phi), mu};
+                    parts.push_back(it);
+                    it.op = Op::Eval;
+                    evals.push_back(it);
+                }
+            ohao::material::run(parts, kTables);
+            ohao::material::run(evals, kTables);
+            bool ok = true;
+            for (size_t k = 0; k < parts.size(); ++k)
+                for (int ch = 0; ch < 3; ++ch) {
+                    const float sum = parts[k].r0[ch] + parts[k].r1[ch], want = evals[k].r0[ch];
+                    if (!(std::abs(sum - want) <= 1e-5f * std::max(1e-3f, std::abs(want)))) ok = false;
+                    if (!(parts[k].r0[ch] >= 0.0f && parts[k].r1[ch] >= 0.0f)) ok = false;
+                }
+            if (!ok) std::printf("\n    cut %.2f: %s", cut, describe(c.m, c.mu).c_str());
+            CHECK(ok, "smooth + rough is eval(), each part non-negative");
+        }
+}
+
+void t6_parts_threshold() {
+    // A dielectric exactly at the cut is rough on both sides; just under it, its specular is smooth.
+    const Float3 wo = view(0.7f), wi = {-0.5f, 0.1f, 0.86f};
+    auto parts = [&](float rough) {
+        Material m;
+        m.specularRoughness = rough;
+        Item it;
+        it.op = Op::Parts;
+        it.cut = 0.25f;
+        it.material = m;
+        it.wo = wo;
+        it.v = wi;
+        ohao::material::run(std::span<Item>(&it, 1), kTables);
+        return it;
+    };
+    const Item at = parts(0.25f), below = parts(0.2499f);
+    CHECK(at.r0[0] == 0.0f && at.r0[1] == 0.0f && at.r0[2] == 0.0f, "roughness == cut is all rough");
+    CHECK(below.r0[0] > 0.0f, "roughness just under the cut has a smooth part");
+    CHECK(below.r1[0] > 0.0f && below.r1[0] < at.r1[0], "under the cut the rough part keeps the diffuse alone");
+}
+
+std::vector<Case> smoothCases() {
+    // Lobes the chi-square grid can integrate (6 x 6 points a bin hold roughness >= ~0.2; sharper
+    // peaks fail the grid, not the sampler): a metal, glass from both sides, a coat over a rough base.
+    std::vector<Case> cases;
+    for (float mu : {0.9f, 0.4f}) {
+        Material metal;
+        metal.baseMetalness = 1.0f;
+        metal.baseColor = {0.95f, 0.64f, 0.54f};
+        metal.specularRoughness = 0.2f;
+        cases.push_back({metal, mu});
+        Material dielectric;   // the specular smooth, the diffuse rough
+        dielectric.specularRoughness = 0.2f;
+        cases.push_back({dielectric, mu});
+        Material plinth;
+        plinth.specularRoughness = 0.35f;
+        plinth.coatWeight = 1.0f;
+        plinth.coatRoughness = 0.2f;
+        cases.push_back({plinth, mu});
+    }
+    for (float mu : {0.9f, 0.4f, -0.9f, -0.4f}) {
+        Material glass;
+        glass.transmissionWeight = 1.0f;
+        glass.specularRoughness = 0.2f;
+        cases.push_back({glass, mu});
+        Material thin = glass;
+        thin.thinWalled = true;
+        cases.push_back({thin, mu});
+    }
+    return cases;
+}
+
+void t6_sample_smooth() { samplingChi2(smoothCases(), 67u, true, {Op::SampleSmooth, Op::PdfSmooth, Op::Parts, 0.25f}); }
+
+// A thin wall is the same from either side (OpenPBR: either side is the outside): its parts and eval() at (wo, wi)
+// equal those at both mirrored through the surface, coated and fuzzed too. From the back the module once took the
+// base alone, without the coat's absorption and darkening or the fuzz over it: the light pass, which meets a thin
+// wall from the light's side, then weighed a coated leaf's transmission differently from the camera side.
+void t6_thin_symmetric() {
+    std::vector<Material> mats;
+    Material coated;
+    coated.transmissionWeight = 1.0f;
+    coated.thinWalled = true;
+    coated.specularRoughness = 0.15f;
+    coated.coatWeight = 1.0f;
+    coated.coatRoughness = 0.1f;
+    coated.coatColor = {0.8f, 0.6f, 0.4f};
+    mats.push_back(coated);
+    Material fuzzy = coated;
+    fuzzy.coatWeight = 0.0f;
+    fuzzy.fuzzWeight = 1.0f;
+    fuzzy.fuzzColor = {0.3f, 0.9f, 0.3f};
+    fuzzy.baseColor = {0.2f, 0.6f, 0.2f};
+    fuzzy.transmissionWeight = 0.5f;
+    mats.push_back(fuzzy);
+    uint32_t seed = 71u;
+    for (const Material& m : mats)
+        for (int k = 0; k < 256; ++k) {
+            const float muo = 0.1f + 0.85f * rnd(seed), mui = -0.95f + 1.9f * rnd(seed);
+            const Float3 wo = view(muo, 6.2831853f * rnd(seed));
+            const float si = std::sqrt(std::max(0.0f, 1.0f - mui * mui)), phi = 6.2831853f * rnd(seed);
+            const Float3 wi = {si * std::cos(phi), si * std::sin(phi), mui};
+            const Float3 woB = {wo[0], wo[1], -wo[2]}, wiB = {wi[0], wi[1], -wi[2]};
+            for (Op op : {Op::Parts, Op::Eval}) {
+                Item a = one(op, m, wo, wi), b = one(op, m, woB, wiB);
+                for (int c = 0; c < 3; ++c) {
+                    const bool ok = std::abs(a.r0[c] - b.r0[c]) <= 1e-5f * std::max(1e-3f, std::abs(a.r0[c])) &&
+                                    std::abs(a.r1[c] - b.r1[c]) <= 1e-5f * std::max(1e-3f, std::abs(a.r1[c]));
+                    if (!ok && k < 2) std::printf("\n    front %.5g/%.5g back %.5g/%.5g", a.r0[c], a.r1[c], b.r0[c], b.r1[c]);
+                    CHECK(ok, "a thin wall evaluates the same from either side");
+                }
+            }
+        }
+}
+
 
 int main(int argc, char** argv) {
     std::printf("material_tests (OpenPBR on the CPU)\n");
@@ -903,5 +1069,9 @@ int main(int argc, char** argv) {
     RUN_ONE(t5_ltc_normalized);
     RUN_ONE(t5_ltc_fit);
     RUN_ONE(t5_ltc_quad);
+    RUN_ONE(t6_parts_sum);
+    RUN_ONE(t6_parts_threshold);
+    RUN_ONE(t6_sample_smooth);
+    RUN_ONE(t6_thin_symmetric);
     return ohao::test::finish("material_tests");
 }
