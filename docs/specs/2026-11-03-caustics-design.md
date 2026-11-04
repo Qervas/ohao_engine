@@ -315,14 +315,41 @@ That the split is exact on both sides: `chainThroughput` at the first hit and at
 at a sun sample, the pass's ownership of exactly `sun → S+ → D → camera`. Then the camera importance `W` and the box
 filter, the disks' summed density, panes as null in both, and the integer splat's range.
 
+## Step 1 as built (2026-11-04)
+
+Spec corrections the build made (each in `docs/changes/2026-11-04-caustics-step1.md`):
+- **The camera side cannot render sun through glass at all.** Light sampling looks above a surface only, so a shadow ray
+  through solid glass is blocked, and no bounce ray hits a delta sun. Light through glass onto a matte surface was
+  missing, not only noisy: the pass removes a bias there. `c2` therefore holds the split on reflectors, where the camera
+  side converges alone, and glass is held by closed forms and a ray simulation (`c3_slab`, `c3_sphere`).
+- **The split lives in its own program.** `chainThroughput` behind a flag in raygen cost the default tracer 8.5% of
+  `pt.trace` with caustics off; raygen is now a generic over `CAUSTICS` and `raygenCaustics`, with `causticTrace`, is a
+  second pipeline made the first time a frame needs it.
+- **The pass applies raygen's own bounce limit** (a chain's k-th vertex counts only while k minus the crossings before it
+  is at most `bounces`), or it would count paths the camera side never reaches.
+- **Casters are placed through their instance's transform.** `RenderScene::Draw`'s bounds are the mesh's own; taken raw, a
+  moved caster's rays were aimed at its unmoved mesh (half a glass ball's caustic missing).
+- **A pane** is a null event in the pass with its refraction share's probability (weight T over the share), its reflection
+  a smooth vertex, as shadow rays take panes.
+- **`render.stats` reports `caustics {casters, clamped}`**, not rays and splats (32-bit counts of millions a frame wrap).
+- The splat rounds stochastically (the mean exact however small a splat).
+
+Measured on the showcase (`assets/scenes/caustics_showcase.scene.json`, 480 x 270, against 8192 spp with the pass):
+- **C3, rays a pixel**, the pass at 512 spp against none at 704 (about the same time): 1, 2, 4, 8 and 16 rays gave
+  whole-image relMSE 0.00133, 0.00115, 0.00104, 0.00098, 0.00093 (without: 0.188) and typical-pixel relMSE (worst 0.1%
+  out) 0.000525, 0.000458, 0.000398, 0.000360, 0.000336 (without: 0.000361), at 12.8 to 15.8 s. **8** (14.9 s): as
+  good on typical pixels as no pass, 190x better overall; 16 no better per second.
+- **C2, the cut**: 0.1 left the helmet's glints with the camera side (43x their neighbours; relMSE 0.00254); 0.4 equal to
+  0.25 within noise (0.00094 against 0.00098). **0.25 kept.**
+- The pass at 8 rays costs about 1.4x a frame on the showcase (29 ms against 20 at 480 x 270).
+
 ## Rulings for Frank
 
 - **C1 (OPEN) — the default.** Off until c1-c7 pass, like guiding. Recommendation: on for `rt_offline` after step 1's
   tests pass, since the image converges to the same answer with fewer dots.
-- **C2 (OPEN) — the smooth threshold `kCausticRough`.** Any value is exact; it sets which technique carries which
-  paths. Recommendation: choose by measurement between 0.1 and 0.4 on the showcase, starting at 0.25.
-- **C3 (OPEN) — light paths per pixel.** Recommendation: 1 to start, then the value with the lowest error at equal time
-  on the showcase.
+- **C2 (measured) — the smooth threshold `kCausticRough`.** Any value is exact; it sets which technique carries which
+  paths. Measured 0.1, 0.25, 0.4 on the showcase ("Step 1 as built"): **0.25**.
+- **C3 (measured) — light paths per pixel.** Measured 0.5 to 16 at equal time ("Step 1 as built"): **8**.
 - **C4 (OPEN) — the bar for "no dots"** (c5). Recommendation: with the pass at N spp, no more dots on the shaded floor
   and plinth than without it at 4N, at equal or less time, and zero dots from the objects the ablation names.
 - **C5 (PROVISIONAL) — sun only in step 1.** Lamps and emissive triangles keep their caustics on the camera side; the

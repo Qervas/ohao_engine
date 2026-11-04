@@ -393,6 +393,47 @@ def c4_through_glass(failures):
     return {"off": a, "on": b, "error": err}
 
 
+
+# ---- c5_showcase (--showcase; CTest check_caustics_showcase, label slow) -------------------------
+# Sponza by day with the helmet on its plinth and the glass, amber, gold, car-paint and bubble balls
+# (assets/scenes/caustics_showcase.scene.json) at 480 x 270: a reference with the pass at 8192 spp, then
+# the pass at 512 spp against no pass at 704 (the same time: the pass costs ~1.37x a frame). Dots are pixels
+# over 4x the reference (+0.01): sharp features the reference has are not dots. With the pass the whole
+# image's relMSE is at most a tenth of the one without (ruling C4's measure: 190x lower), no more dots,
+# and the clear ball's dot (295, 261), 1,283x its neighbours without the pass, under 2x.
+
+def c5_showcase(failures):
+    import numpy as np
+    from scipy.ndimage import median_filter
+    global W, H
+    w0, h0 = W, H
+    W, H = 480, 270
+    try:
+        scene = json.load(open(os.path.join(ROOT, "assets", "scenes", "caustics_showcase.scene.json")))
+        ref, _ = render("c5_reference", scene, 8192, ["--caustics"])
+        on, _ = render("c5_with", scene, 512, ["--caustics"])
+        off, _ = render("c5_without", scene, 704)
+    finally:
+        W, H = w0, h0
+    r = ref.mean(2)
+    out = {}
+    for tag, img in (("with", on), ("without", off)):
+        x = img.mean(2)
+        rel = float(((x - r) ** 2 / (r ** 2 + 1e-3)).mean())
+        dots = int((x > 4 * r + 0.01).sum())
+        m5 = median_filter(x, 5)
+        glass = float(x[261, 295] / max(m5[261, 295], 1e-6))
+        out[tag] = {"relMSE": rel, "dots": dots, "glass_dot": glass}
+        print("c5_showcase %s: relMSE %.5f, dots %d, the glass ball's pixel %.1fx its neighbours" % (tag, rel, dots, glass))
+    if not out["with"]["relMSE"] <= 0.1 * out["without"]["relMSE"]:
+        failures.append("c5_showcase: relMSE %.5f with the pass, %.5f without (bar: a tenth)" % (out["with"]["relMSE"], out["without"]["relMSE"]))
+    if not out["with"]["dots"] <= out["without"]["dots"]:
+        failures.append("c5_showcase: %d dots with the pass, %d without" % (out["with"]["dots"], out["without"]["dots"]))
+    if not out["with"]["glass_dot"] < 2.0:
+        failures.append("c5_showcase: the glass ball's dot is %.1fx its neighbours with the pass (bar 2)" % out["with"]["glass_dot"])
+    return out
+
+
 def c6_repeat(failures):
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, "c6.scene.json")
@@ -427,11 +468,15 @@ def c6_repeat(failures):
     return {"identical": same}
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase}
 
 
 def main(argv):
-    names = argv[1:] or list(CASES)
+    # --showcase runs c5 alone (slow: a 8192 spp reference); without arguments every other case.
+    if "--showcase" in argv:
+        names = ["c5_showcase"]
+    else:
+        names = argv[1:] or [n for n in CASES if n != "c5_showcase"]
     failures, results = [], {}
     for n in names:
         results[n] = CASES[n](failures)

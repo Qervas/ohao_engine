@@ -61,8 +61,8 @@ static const uint kGuideProposalWords = 16u;
 static const uint kGuideGroupSize = 64u;
 // caustics (sub-project 24): a lobe rougher than this (or as rough) is the rough part, else the smooth part; any value is exact, it sets which technique carries which paths (ruling C2)
 static const float kCausticRough = 0.25;
-// caustics: light paths traced from the directional lights a frame, per image pixel (ruling C3)
-static const uint kCausticRaysPerPixel = 1u;
+// caustics: light paths traced from the directional lights a frame, per image pixel (ruling C3: on the showcase at equal time 8 had the lowest error per second; 1 to 16 measured)
+static const uint kCausticRaysPerPixel = 8u;
 // caustics: a splat's radiance times this is added as an integer (order-free sums, as the radiance cache's)
 static const float kCausticSplatScale = 1024.0;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread

@@ -126,6 +126,7 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(check_material LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_material.py)
     # Caustics (sub-project 24): light traced from the sun, the camera side's split, their closed forms.
     ohao_add_python_test(check_caustics LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py)
+    ohao_add_python_test(check_caustics_showcase LABEL slow GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py ARGS --showcase)
     if(TARGET ohao_game)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
             COMMAND ohao_game --frames 600 --resize-at 200)
