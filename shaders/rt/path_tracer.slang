@@ -853,7 +853,9 @@ void tracePixel<let CAUSTICS : bool>()
         {
             const float3 wi = toLocal(ls.L, t, b, n);
             float3 fs = float3(0.0), fd;
+            float3 smoothNee = float3(0.0);
             if (walkExitVertex) fd = float3(max(dot(ls.L, n), 0.0) * (1.0 / kPi));
+            else if (CAUSTICS) base.evalLobesSmooth(wo, wi, tables, kCausticRough, fs, fd, smoothNee);
             else base.evalLobes(wo, wi, tables, fs, fd);
             const float3 f = fs + fd;
             float3 vis1;
@@ -873,9 +875,7 @@ void tracePixel<let CAUSTICS : bool>()
                 if (caustics && depth > 0u && ls.pdf == 0.0 && any(chainThroughput > 0.0))
                 {
                     // A directional light through an all-smooth chain from the first hit: the light pass's.
-                    float3 sm, ro;
-                    base.evalParts(wo, wi, tables, kCausticRough, sm, ro);
-                    c -= chainThroughput * sm * le;
+                    c -= chainThroughput * smoothNee * le;
                 }
                 radiance += c;
                 // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
@@ -1284,7 +1284,7 @@ void causticTrace()
         }
         const float u1 = r.next();
         const float u2 = r.next();
-        const BsdfSample s = base.sampleSmooth(wl, float3(u0, u1, u2), tables, kCausticRough);
+        const BsdfSample s = base.sampleSmoothDirection(wl, float3(u0, u1, u2), tables, kCausticRough);
         if (!(s.pdf > 0.0)) break;
         float3 sm, ro;
         base.evalParts(s.wi, wl, tables, kCausticRough, sm, ro);

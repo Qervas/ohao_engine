@@ -1663,7 +1663,9 @@ struct OpenPBRSurface
 
     // A direction from the smooth lobes alone, weighed by the smooth part over pdfSmooth() (a lobe
     // drawn by smoothShares; lobe 0 the base's reflection, 4 its refraction, 2 the coat).
-    BsdfSample sampleSmooth(float3 wo, float3 u, OpenPBRTables t, float cut)
+    // sampleSmooth's direction and density alone (weight left 0): the light pass weighs it itself, in the
+    // camera side's roles, so the smooth part is not evaluated twice.
+    BsdfSample sampleSmoothDirection(float3 wo, float3 u, OpenPBRTables t, float cut)
     {
         BsdfSample s;
         s.wi = float3(0.0, 0.0, 1.0);
@@ -1696,6 +1698,12 @@ struct OpenPBRSurface
         }
         s.wi = inside ? base.flipZ(i) : i;
         s.pdf = pdfSmooth(wo, s.wi, t, cut);
+        return s;
+    }
+
+    BsdfSample sampleSmooth(float3 wo, float3 u, OpenPBRTables t, float cut)
+    {
+        BsdfSample s = sampleSmoothDirection(wo, u, t, cut);
         if (s.pdf > 0.0)
         {
             float3 sm, ro;
@@ -1703,6 +1711,31 @@ struct OpenPBRSurface
             s.weight = sm / s.pdf;
         }
         return s;
+    }
+
+    // evalLobes (the specular and diffuse split light sampling uses) with the smooth part of the same terms:
+    // one evaluation where light sampling needs both (raygenCaustics).
+    void evalLobesSmooth(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 specular, out float3 diffuse,
+                         out float3 smooth)
+    {
+        float3 s, d;
+        float3 c = float3(0.0);
+        baseAt(wo, t).evalLobes(wo, wi, t, s, d);
+        if (layered && wo.z > 0.0 && wi.z < 0.0)
+        {
+            s *= baseScale(coatPathDiffuse(), wo, t);
+        }
+        else if (layered && wo.z > 0.0 && wi.z > 0.0)
+        {
+            const float3 k = baseScale(coatPath(wi.z), wo, t);
+            const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
+            s = k * s;
+            c = float3(fuzzOver * coatWeight * coat.eval(wo, wi, t));
+            d = k * d + fuzzWeight * fuzzColor * fuzz.albedo(wo.z) * fuzz.D(wo, wi);
+        }
+        specular = s + c;
+        diffuse = d;
+        smooth = (base.rough < cut ? s : float3(0.0)) + (coatWeight > 0.0 && coat.rough < cut ? c : float3(0.0));
     }
 
     // The refraction's albedo toward wo, through the layers.

@@ -604,8 +604,16 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_causticsPipeline);
         m_caustics.recordBeginFrame(cmd);
         if (!causticsSplitOnly) {
+            // kCausticRaysPerPixel light paths a pixel; OHAO_CAUSTIC_RAYS (any positive number) overrides it for
+            // tuning (ruling C3). The pass counts its paths from the dispatch's size.
+            static const float raysPerPixel = [] {
+                const char* s = std::getenv("OHAO_CAUSTIC_RAYS");
+                const float v = s ? std::strtof(s, nullptr) : 0.0f;
+                return v > 0.0f ? v : float(gpu::shared::kCausticRaysPerPixel);
+            }();
+            const uint32_t rows = std::max(1u, uint32_t(std::lround(double(m_height) * raysPerPixel)));
             vkCmdTraceRaysKHR(cmd, &m_causticTraceRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
-                              m_width, m_height, gpu::shared::kCausticRaysPerPixel);
+                              m_width, rows, 1);
             m_caustics.recordAfterTrace(cmd);
         }
         timePass("pt.trace");
