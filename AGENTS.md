@@ -715,8 +715,8 @@ deferred, reference, path traced); two the transparency scene,
   roulette by the true throughput killed exactly the paths guiding aimed at a small source (a large `q`, a small weight).
   Unguided, `rrRatio` is exactly 1 and the tracer is bit for bit what it was. Measured: the spot-lit patch room 1.8x lower
   error at full depth; the Sponza showcase about 1.4x higher (typical pixels), so it stays off.
-- **Caustics** (sub-project 24, `docs/specs/2026-11-03-caustics-design.md`; step 1 built, **off by default**: `ohao run
-  --caustics`, `render.capture {caustics}`, `render.stats` `caustics {casters, clamped}`). Light traced from each
+- **Caustics** (sub-project 24, `docs/specs/2026-11-03-caustics-design.md`; step 1 built, **on by default** in `rt_offline` (ruling C1): `ohao run
+  --no-caustics`, `render.capture {caustics: false}`, `render.stats` `caustics {casters, clamped}`). Light traced from each
   directional light (`causticTrace`, `rt/caustics.slang`, `render/rt/caustic_pass.*`) estimates every term sun -> smooth
   parts -> the rough part of the camera ray's first hit, and `raygenCaustics` (raygen compiled with the split) drops
   exactly those. **The camera side cannot render sun through glass at all** (light sampling looks above a surface only,

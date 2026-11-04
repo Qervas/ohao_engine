@@ -10,7 +10,7 @@ R's radiance is
     L = 0.5 / pi * E * F * cos 45,   F = 1 (a white metal's F82 Fresnel is 1 at every angle).
 
 Every path that lights R is one the light pass owns (sun -> mirror -> R -> camera), so:
-  c1_split_only: the camera side alone (--caustics with OHAO_CAUSTICS_SPLIT_ONLY=1, the pass not run)
+  c1_split_only: the camera side alone (OHAO_CAUSTICS_SPLIT_ONLY=1, the pass not run)
                  leaves R at exactly 0;
   c1_mirror:     the pass gives L within 2%.
 
@@ -148,7 +148,7 @@ def r_mean(img):
 
 
 def c1_split_only(failures):
-    img, _ = render("c1_split_only", mirror_scene(), 64, ["--caustics"], {"OHAO_CAUSTICS_SPLIT_ONLY": "1"})
+    img, _ = render("c1_split_only", mirror_scene(), 64, [], {"OHAO_CAUSTICS_SPLIT_ONLY": "1"})
     m = r_mean(img)
     ok = m < 1e-6
     print("c1_split_only: R mean %.3g (want 0)" % m)
@@ -158,10 +158,10 @@ def c1_split_only(failures):
 
 
 def c1_mirror(failures):
-    img, _ = render("c1_mirror", mirror_scene(), 1024, ["--caustics"])
+    img, _ = render("c1_mirror", mirror_scene(), 1024)
     m = r_mean(img)
     want = 0.5 / math.pi * SUN_E * math.cos(math.radians(45))
-    off, _ = render("c1_mirror_off", mirror_scene(), 1024)
+    off, _ = render("c1_mirror_off", mirror_scene(), 1024, ["--no-caustics"])
     m_off = r_mean(off)
     err = abs(m - want) / want
     print("c1_mirror: R %.4f, closed form %.4f (%.2f%%); without the pass %.4f" % (m, want, 100 * err, m_off))
@@ -172,7 +172,7 @@ def c1_mirror(failures):
 
 def c3_slab(failures):
     os.makedirs(OUT, exist_ok=True)
-    img, log = render("c3_slab", slab_scene(), 1024, ["--caustics", "--bounces", "1"])
+    img, log = render("c3_slab", slab_scene(), 1024, ["--bounces", "1"])
     h, w, _ = img.shape
     m = float(img[h // 4:3 * h // 4, w // 4:3 * w // 4].mean())   # the middle half: under the slab's middle
     clamped = clamped_from(log)
@@ -305,7 +305,7 @@ def sphere_reference(w, h):
 def c3_sphere(failures):
     import numpy as np
     w, h = 320, 180
-    img, log = render("c3_sphere", sphere_scene(), 2048, ["--caustics"])
+    img, log = render("c3_sphere", sphere_scene(), 2048)
     lum = img.mean(2)
     lit = float(np.median(lum[5:30, 5:60]))
     got = lum / lit
@@ -350,8 +350,8 @@ def c2_split(failures):
         for tag, mat in (("metal", {"base_color": [0.9, 0.9, 0.9], "base_metalness": 1, "specular_roughness": 0.15}),
                          ("coated", {"base_color": [0.7, 0.7, 0.7], "specular_roughness": 0.35, "coat_weight": 1,
                                      "coat_roughness": 0.15})):
-            ref, _ = render("c2_%s_camera" % tag, c2_scene(mat), 65536)
-            got, _ = render("c2_%s_split" % tag, c2_scene(mat), 4096, ["--caustics"])
+            ref, _ = render("c2_%s_camera" % tag, c2_scene(mat), 65536, ["--no-caustics"])
+            got, _ = render("c2_%s_split" % tag, c2_scene(mat), 4096)
             a, b = r_mean(ref), r_mean(got)
             err = abs(b - a) / max(a, 1e-9)
             print("c2_split %s: camera side alone %.4f, split %.4f (%.2f%%)" % (tag, a, b, 100 * err))
@@ -381,8 +381,8 @@ def c4_scene():
 
 
 def c4_through_glass(failures):
-    off, _ = render("c4_off", c4_scene(), 1024)
-    on, _ = render("c4_on", c4_scene(), 1024, ["--caustics"])
+    off, _ = render("c4_off", c4_scene(), 1024, ["--no-caustics"])
+    on, _ = render("c4_on", c4_scene(), 1024)
     a, b = r_mean(off), r_mean(on)
     if not a > 0.01:
         failures.append("c4_through_glass: R reads %.4g: the scene does not light it, so the test proves nothing" % a)
@@ -410,9 +410,9 @@ def c5_showcase(failures):
     W, H = 480, 270
     try:
         scene = json.load(open(os.path.join(ROOT, "assets", "scenes", "caustics_showcase.scene.json")))
-        ref, _ = render("c5_reference", scene, 8192, ["--caustics"])
-        on, _ = render("c5_with", scene, 512, ["--caustics"])
-        off, _ = render("c5_without", scene, 704)
+        ref, _ = render("c5_reference", scene, 8192)
+        on, _ = render("c5_with", scene, 512)
+        off, _ = render("c5_without", scene, 704, ["--no-caustics"])
     finally:
         W, H = w0, h0
     r = ref.mean(2)
@@ -445,7 +445,7 @@ def c1_emitter(failures):
     # A sun ray reaching the mirror at (0, 1.5, -1) (which lights R's middle) comes from (0, 1.5 + t, -1 + t).
     s["entities"].append(ent(10, Name={"value": "Lamp"}, Transform={"position": [0, 2.5, 0.0]},
                              Light={"type": "Point", "color": [1, 1, 1], "intensity": 1e-4, "range": 10, "radius": 0.3}))
-    img, _ = render("c1_emitter", s, 1024, ["--caustics"])
+    img, _ = render("c1_emitter", s, 1024)
     m = r_mean(img)
     want = 0.5 / math.pi * SUN_E * math.cos(math.radians(45))
     err = abs(m - want) / want

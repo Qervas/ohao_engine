@@ -2,7 +2,7 @@
 
 **Spec:** `docs/specs/2026-11-03-caustics-design.md` ("The split", "The light pass (step 1)", "Step 1 as built")
 **Plan:** `docs/plans/2026-11-03-caustics.md` (tasks 1-7)
-**Status:** built and tested, **off by default** (ruling C1 waits on Frank). Branch `caustics`.
+**Status:** built and tested, **on by default** in `rt_offline` (ruling C1, Frank 2026-11-04; `--no-caustics` turns it off). Merged to master.
 
 ## 1. Summary
 
@@ -27,7 +27,7 @@ good, half the dots, the glass ball's dot (1,283x its neighbours) gone, the helm
 - **OpenPBR's smooth and rough parts** (`shaders/material/openpbr.slang`): `evalParts` (their sum is `eval`),
   `evalLobesSmooth` (light sampling's lobes with their smooth part, one evaluation), `sampleSmoothDirection`,
   `sampleSmooth`, `pdfSmooth`, `smoothShares`, `hasSmooth`; the CPU twin's ops 14-16.
-- **The setting**: `render.capture {caustics}`, `ohao run --caustics`, the renderer's override restored after a capture,
+- **The setting**: `render.capture {caustics}` (default true), `ohao run --no-caustics`, the renderer's override restored after a capture,
   the `pt.caustics` pass, layout constants `kCausticRough` 0.25, `kCausticRaysPerPixel` 8, `kCausticSplatScale` 1024.
 - **Casters** (`render/rt/caustic_casters.*`): instances whose material can be smooth (factor or the roughness
   texture's smallest texel, measured at upload), their world bounding spheres projected along each light to disks; an
@@ -117,7 +117,7 @@ update in `docs/agents/skills/`).
 - **Cold compiles**: the caustics program compiles in about 3.5 minutes cold, and a second process is warm only while
   NVIDIA's own shader cache keeps it. A driver deferred operation on 1 or 5 threads measured the same (209 s, 212 s).
   A smaller raygen is on the roadmap's engine iteration items.
-- **Defaults**: off until Frank rules C1; C4's bar as recommended (`c5_showcase`).
+- **Defaults**: on in `rt_offline` (ruling C1); C4's bar as recommended (`c5_showcase`).
 - **The final review's minors, not fixed**: a coated pane's null-event weight; the bounce limit when the first hit itself
   crosses; a saturated splat is counted, not saturated; under NRD the splat goes to the diffuse guide only; each ray's
   loop over the disks grows with the casters; `setScene` runs every frame; the view model's TLAS mask in the light pass;
@@ -134,7 +134,7 @@ python tests/renderer/check_caustics.py --showcase      # c5 (slow, an 8192 spp 
 build/Release/caustic_casters_test.exe
 build/Release/pipeline_cache_files_test.exe
 build/Release/material_tests.exe t6_parts_sum
-build/Release/ohao.exe run assets/scenes/caustics.scene.json --render caustics.png --mode rt_offline --spp 256 --caustics
+build/Release/ohao.exe run assets/scenes/caustics.scene.json --render caustics.png --mode rt_offline --spp 256
 ```
 
 `OHAO_CAUSTIC_RAYS` overrides the rays a pixel; `OHAO_CAUSTICS_SPLIT_ONLY=1` drops the pass's terms without running it.

@@ -226,7 +226,7 @@ pass's paths and splatting.
 
 ## The agent-facing surface
 
-- `render.settings {caustics: off | on}`, `render.capture {caustics}`, `ohao run --caustics`. Default: ruling C1.
+- `render.settings {caustics: off | on}`, `render.capture {caustics}`, `ohao run --no-caustics`. Default: on in `rt_offline` (ruling C1).
 - `render.stats` reports `pt.caustics`' timing and, when the pass ran, `caustics: {rays, casters, splats, clamped}` for
   the last frame.
 - The schema hash moves with the new setting (every CLI and serve expectation that records it, checked to differ only
@@ -345,8 +345,8 @@ Measured on the showcase (`assets/scenes/caustics_showcase.scene.json`, 480 x 27
 
 ## Rulings for Frank
 
-- **C1 (OPEN) — the default.** Off until c1-c7 pass, like guiding. Recommendation: on for `rt_offline` after step 1's
-  tests pass, since the image converges to the same answer with fewer dots.
+- **C1 (ruled, Frank 2026-11-04) — the default.** **On** for `rt_offline` (step 1's tests pass; the image converges to
+  the same answer with fewer dots). `ohao run --no-caustics`, `render.capture {caustics: false}` turn it off.
 - **C2 (measured) — the smooth threshold `kCausticRough`.** Any value is exact; it sets which technique carries which
   paths. Measured 0.1, 0.25, 0.4 on the showcase ("Step 1 as built"): **0.25**.
 - **C3 (measured) — light paths per pixel.** Measured 0.5 to 16 at equal time ("Step 1 as built"): **8**.
