@@ -187,6 +187,146 @@ def c3_slab(failures):
     return {"floor": m, "closed_form": want, "error": err}
 
 
+
+# ---- c3_sphere: a glass ball's caustic against an independent ray simulation ----------------------
+# A clear ball (radius 0.5, IOR 1.5, roughness 0) moved to (-0.7, 0.5, 0) (a transformed caster: the
+# light pass once aimed at a caster's untransformed mesh and lit half of this caustic), the sun 35
+# degrees up travelling +Z, seen from straight above. The reference traces parallel sun rays through
+# the sphere with numpy (Snell, unpolarised Fresnel at each surface, four internal reflections) onto
+# the floor and bins them into the camera's pixels. In the shadow (eroded 3 pixels, so the edge is
+# no question) the caustic's light over the lit floor's must agree within 5% in total, and the two
+# halves of the render (the scene is mirror-symmetric) within 3% of each other.
+
+SPHERE_C = (-0.7, 0.5, 0.0)
+SPHERE_SUN_Q = [0, 0.953717, 0.3007058, 0]   # yaw 180, pitch -35: the sun travels +Z, 35 degrees up
+SPHERE_CAM = (-0.7, 4.0, 0.6)
+SPHERE_FOV = 40.0
+
+
+def sphere_scene():
+    h = math.radians(-90) / 2
+    return {
+        "format": "ohao.scene", "version": 1,
+        "components": {"Camera": 1, "Environment": 1, "Light": 1, "Material": 1, "MeshSource": 1, "Name": 1,
+                       "Transform": 1},
+        "entities": [
+            ent(1, Name={"value": "Camera"}, Transform={"position": list(SPHERE_CAM), "rotation": [math.sin(h), 0, 0, math.cos(h)]},
+                Camera={"fovDeg": SPHERE_FOV}),
+            ent(2, Name={"value": "Floor"},
+                MeshSource={"source": {"BoxPrim": {"lo": [-8, -0.1, -8], "hi": [8, 0, 8], "color": [0.6, 0.6, 0.6]}}},
+                Material={"base_color": [0.6, 0.6, 0.6], "specular_weight": 0, "specular_roughness": 1.0}),
+            ent(3, Name={"value": "Glass"}, Transform={"position": list(SPHERE_C)},
+                MeshSource={"source": {"SpherePrim": {"radius": 0.5, "sectors": 96, "stacks": 48}}},
+                Material={"base_color": [1, 1, 1], "specular_roughness": 0.0, "transmission_weight": 1}),
+            ent(5, Name={"value": "Sun"}, Transform={"rotation": SPHERE_SUN_Q},
+                Light={"type": "Directional", "color": [1, 1, 1], "intensity": SUN_E}),
+            ent(6, Name={"value": "Environment"}, Environment={"sky": False}),
+        ],
+    }
+
+
+def sphere_reference(w, h):
+    import numpy as np
+    c = np.array(SPHERE_C)
+    rad, n_glass = 0.5, 1.5
+    x, y, z, qw = SPHERE_SUN_Q
+    u = np.array([x, y, z])
+    v = np.array([0.0, 0.0, -1.0])
+    sun = 2 * np.dot(u, v) * u + (qw * qw - np.dot(u, u)) * v + 2 * qw * np.cross(u, v)
+    sun /= np.linalg.norm(sun)
+
+    def fresnel(ci, eta):
+        s2 = (1 - ci ** 2) / eta ** 2
+        ct = np.sqrt(np.clip(1 - s2, 0, 1))
+        rs = (ci - eta * ct) / (ci + eta * ct)
+        rp = (eta * ci - ct) / (eta * ci + ct)
+        return np.where(s2 >= 1, 1.0, 0.5 * (rs * rs + rp * rp)), ct
+
+    def refract(d, nrm, eta, ci, ct):
+        return d / eta + nrm * (ci / eta - ct)[:, None]
+
+    def far(p, d):
+        oc = p - c
+        b = np.sum(oc * d, 1)
+        return p + d * (-b + np.sqrt(np.maximum(b * b - (np.sum(oc * oc, 1) - rad * rad), 0)))[:, None]
+
+    rng = np.random.default_rng(1)
+    n = 4_000_000
+    t1 = np.cross(sun, [0, 1, 0]); t1 /= np.linalg.norm(t1)
+    t2 = np.cross(sun, t1)
+    r = rad * np.sqrt(rng.random(n)); phi = 2 * math.pi * rng.random(n)
+    o = c + t1[None] * (r * np.cos(phi))[:, None] + t2[None] * (r * np.sin(phi))[:, None] - sun * 3
+    d = np.tile(sun, (n, 1))
+    oc = o - c; b = np.sum(oc * d, 1)
+    p = o + d * (-b - np.sqrt(np.maximum(b * b - (np.sum(oc * oc, 1) - rad * rad), 0)))[:, None]
+    nrm = (p - c) / rad
+    ci = -np.sum(d * nrm, 1)
+    f, ct = fresnel(ci, n_glass)
+    wgt = 1 - f
+    d = refract(d, nrm, n_glass, ci, ct)
+    tan_y = math.tan(math.radians(SPHERE_FOV / 2)); tan_x = tan_y * w / h
+    hgt = SPHERE_CAM[1]
+    e = np.zeros((h, w))
+    for _ in range(5):
+        q = far(p, d)
+        nin = -(q - c) / rad
+        ci = -np.sum(d * nin, 1)
+        f, ct = fresnel(ci, 1 / n_glass)
+        out = refract(d, nin, 1 / n_glass, ci, ct)
+        down = out[:, 1] < 0
+        fp = q[down] + out[down] * (-q[down, 1] / out[down, 1])[:, None]
+        px = (((fp[:, 0] - SPHERE_CAM[0]) / (hgt * tan_x)) * 0.5 + 0.5) * w
+        py = (((fp[:, 2] - SPHERE_CAM[2]) / (hgt * tan_y)) * 0.5 + 0.5) * h
+        ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+        np.add.at(e, (py[ok].astype(int), px[ok].astype(int)), (wgt * (1 - f))[down][ok])
+        d = d - 2 * np.sum(d * (-nin), 1)[:, None] * (-nin)
+        p = q
+        wgt = wgt * f
+    e *= (math.pi * rad * rad / n) / ((2 * hgt * tan_x / w) * (2 * hgt * tan_y / h))
+    ref = e / -sun[1]   # over the lit floor's irradiance, E cos
+    # The shadow, by geometry, and the camera's view of the floor not hidden by the ball.
+    yy, xx = np.mgrid[0:h, 0:w]
+    fx = SPHERE_CAM[0] + hgt * ((xx + 0.5) / w * 2 - 1) * tan_x
+    fz = SPHERE_CAM[2] + hgt * ((yy + 0.5) / h * 2 - 1) * tan_y
+    pts = np.stack([fx, np.zeros_like(fx), fz], -1)
+    oc = pts - c; b = np.sum(oc * (-sun), -1); cc = np.sum(oc * oc, -1) - rad * rad
+    shadow = ((b * b - cc) > 0) & ((-b - np.sqrt(np.maximum(b * b - cc, 0))) > 0)
+    for _ in range(3):   # erode
+        shadow = shadow & np.roll(shadow, 1, 0) & np.roll(shadow, -1, 0) & np.roll(shadow, 1, 1) & np.roll(shadow, -1, 1)
+    # Hidden by the ball from the camera: the ball's disc seen from above, with a margin.
+    toc = np.stack([fx - SPHERE_CAM[0], -hgt * np.ones_like(fx), fz - SPHERE_CAM[2]], -1)
+    toc /= np.linalg.norm(toc, axis=-1, keepdims=True)
+    ocam = np.array(SPHERE_CAM) - c
+    bb = np.sum(ocam * toc, -1)
+    hidden = (bb * bb - (np.dot(ocam, ocam) - (rad * 1.05) ** 2)) > 0
+    return ref, shadow & ~hidden
+
+
+def c3_sphere(failures):
+    import numpy as np
+    w, h = 320, 180
+    img, log = render("c3_sphere", sphere_scene(), 2048, ["--caustics"])
+    lum = img.mean(2)
+    lit = float(np.median(lum[5:30, 5:60]))
+    got = lum / lit
+    ref, mask = sphere_reference(w, h)
+    e_ref, e_got = float(ref[mask].sum()), float(got[mask].sum())
+    err = abs(e_got - e_ref) / e_ref
+    # Mirror symmetry about the ball's column (the camera is above it).
+    cx = w // 2
+    left = float(got[:, :cx][mask[:, :cx]].sum())
+    right = float(got[:, cx:][mask[:, cx:]].sum())
+    asym = abs(left - right) / max(left + right, 1e-9) * 2
+    print("c3_sphere: caustic in the shadow %.1f, reference %.1f (%.2f%%); halves %.1f / %.1f (%.2f%%)"
+          % (e_got, e_ref, 100 * err, left, right, 100 * asym))
+    if not err <= 0.05:
+        failures.append("c3_sphere: the caustic's energy %.1f against the ray-simulated %.1f (%.2f%%, bar 5%%)"
+                        % (e_got, e_ref, 100 * err))
+    if not asym <= 0.03:
+        failures.append("c3_sphere: the halves differ by %.2f%% (bar 3%%): a mirror-symmetric scene" % (100 * asym))
+    return {"energy": e_got, "reference": e_ref, "error": err, "asymmetry": asym}
+
+
 def c6_repeat(failures):
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, "c6.scene.json")
@@ -221,7 +361,7 @@ def c6_repeat(failures):
     return {"identical": same}
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c6_repeat": c6_repeat}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat}
 
 
 def main(argv):

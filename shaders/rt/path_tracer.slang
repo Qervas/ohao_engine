@@ -1166,7 +1166,13 @@ void causticTrace()
     const float paths = float(dims.x) * float(dims.y) * float(dims.z);
     WalkRng r;
     r.state = pcg(index ^ pcg(pc.params.z ^ 0xC4057C1Bu));
-    CausticOrigin start = causticOrigin(causticCasters, float4(r.next(), r.next(), r.next(), r.next()));
+    // Each draw its own statement: four mutating calls in one constructor came back as one value (the
+    // origins then lay on a spiral, not the disk: half the light missing).
+    const float o0 = r.next();
+    const float o1 = r.next();
+    const float o2 = r.next();
+    const float o3 = r.next();
+    CausticOrigin start = causticOrigin(causticCasters, float4(o0, o1, o2, o3));
     if (!start.valid) return;
 
     OpenPBRTables tables;
@@ -1276,7 +1282,9 @@ void causticTrace()
             tMin = 1e-3;
             continue;
         }
-        const BsdfSample s = base.sampleSmooth(wl, float3(u0, r.next(), r.next()), tables, kCausticRough);
+        const float u1 = r.next();
+        const float u2 = r.next();
+        const BsdfSample s = base.sampleSmooth(wl, float3(u0, u1, u2), tables, kCausticRough);
         if (!(s.pdf > 0.0)) break;
         float3 sm, ro;
         base.evalParts(s.wi, wl, tables, kCausticRough, sm, ro);

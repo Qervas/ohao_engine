@@ -116,10 +116,20 @@ void CausticPass::setScene(const RenderScene& scene, float cut) {
     glm::vec3 lo(1e30f), hi(-1e30f);
     for (const RenderScene::Draw& d : scene.draws()) {
         if (d.emitter || d.viewModel) continue;
-        lo = glm::min(lo, d.aabbMin);
-        hi = glm::max(hi, d.aabbMax);
+        // A draw's bounds are its mesh's own: to world space through its instance's transform (all
+        // eight corners). Taken raw, a moved caster's rays were aimed where its mesh sits unmoved.
+        glm::vec3 wlo(1e30f), whi(-1e30f);
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? d.aabbMax.x : d.aabbMin.x, (c & 2) ? d.aabbMax.y : d.aabbMin.y,
+                                   (c & 4) ? d.aabbMax.z : d.aabbMin.z);
+            const glm::vec3 w = d.world ? glm::vec3(*d.world * glm::vec4(corner, 1.0f)) : corner;
+            wlo = glm::min(wlo, w);
+            whi = glm::max(whi, w);
+        }
+        lo = glm::min(lo, wlo);
+        hi = glm::max(hi, whi);
         if (canBeSmooth(scene.materialSmoothness(scene.materialIndexFor(d.slot, d.materialSlot)), cut))
-            casters.push_back({d.aabbMin, d.aabbMax, d.slot});
+            casters.push_back({wlo, whi, d.slot});
     }
     std::vector<CausticLightInput> lights;
     for (const LightDesc& l : scene.lights()) {

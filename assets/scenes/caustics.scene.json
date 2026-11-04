@@ -1,0 +1,164 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "Light": 1,
+    "Material": 1,
+    "MeshSource": 1,
+    "Name": 1,
+    "Transform": 1
+  },
+  "entities": [
+    {
+      "id": "c0c5000000000001",
+      "Name": {
+        "value": "Camera"
+      },
+      "Transform": {
+        "position": [
+          0,
+          1.6,
+          4.0
+        ],
+        "rotation": [
+          -0.1822355,
+          0,
+          0,
+          0.9832549
+        ]
+      },
+      "Camera": {
+        "fovDeg": 50
+      }
+    },
+    {
+      "id": "c0c5000000000002",
+      "Name": {
+        "value": "Environment"
+      },
+      "Environment": {}
+    },
+    {
+      "id": "c0c5000000000003",
+      "Name": {
+        "value": "Floor"
+      },
+      "MeshSource": {
+        "source": {
+          "BoxPrim": {
+            "lo": [
+              -8,
+              -0.1,
+              -8
+            ],
+            "hi": [
+              8,
+              0,
+              8
+            ],
+            "color": [
+              0.6,
+              0.6,
+              0.6
+            ]
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "specular_roughness": 1.0
+      }
+    },
+    {
+      "id": "c0c5000000000004",
+      "Name": {
+        "value": "Glass"
+      },
+      "Transform": {
+        "position": [
+          -0.7,
+          0.5,
+          0
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 64,
+            "stacks": 32
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          1,
+          1,
+          1
+        ],
+        "specular_roughness": 0.0,
+        "transmission_weight": 1
+      }
+    },
+    {
+      "id": "c0c5000000000005",
+      "Name": {
+        "value": "Chrome"
+      },
+      "Transform": {
+        "position": [
+          0.7,
+          0.5,
+          0
+        ]
+      },
+      "MeshSource": {
+        "source": {
+          "SpherePrim": {
+            "radius": 0.5,
+            "sectors": 64,
+            "stacks": 32
+          }
+        }
+      },
+      "Material": {
+        "base_color": [
+          0.95,
+          0.95,
+          0.95
+        ],
+        "base_metalness": 1,
+        "specular_roughness": 0.02
+      }
+    },
+    {
+      "id": "c0c5000000000006",
+      "Name": {
+        "value": "Sun"
+      },
+      "Transform": {
+        "rotation": [
+          0,
+          0.953717,
+          0.3007058,
+          0
+        ]
+      },
+      "Light": {
+        "type": "Directional",
+        "color": [
+          1,
+          0.96,
+          0.9
+        ],
+        "intensity": 4
+      }
+    }
+  ]
+}
