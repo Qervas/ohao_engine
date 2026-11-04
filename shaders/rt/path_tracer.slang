@@ -1255,13 +1255,13 @@ void causticTrace()
                     {
                         const float3 value = beta * ro * abs(dot(wc, ng)) / (cosL * d * d) *
                                              causticPixelImportance(zc / d, tanX, tanY, size) / paths;
-                        const uint c = (uint(pix.y) * size.x + uint(pix.x)) * 3u;
-                        [unroll] for (uint ch = 0u; ch < 3u; ++ch)
+                        const uint splatBase = (uint(pix.y) * size.x + uint(pix.x)) * 3u;   // uint words: no float atomic
+                        [unroll] for (uint rgbIx = 0u; rgbIx < 3u; ++rgbIx)
                         {
                             bool clamped;
-                            const uint q = causticQuantize(value[ch], r.next(), clamped);
+                            const uint q = causticQuantize(value[rgbIx], r.next(), clamped);
                             uint before;
-                            if (q > 0u) InterlockedAdd(causticSplat[c + ch], q, before);
+                            if (q > 0u) InterlockedAdd(causticSplat[splatBase + rgbIx], q, before);
                             else before = 0u;
                             if (clamped || before > 0xFFFFFFFFu - q) InterlockedAdd(causticStats[0], 1u);
                         }

@@ -844,6 +844,7 @@ static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_system
     };
     static const Allowed allowed[] = {
         {"ohao/render/scene/render_scene.cpp", "_clock::now", "RenderSceneStats::recordCpuMs, a timing statistic"},
+        {"ohao/render/rt/path_tracer_pipeline.cpp", "_clock::now", "a pipeline compile's duration in the log, a timing statistic"},
         {"ohao/render/renderer/render_dispatch.cpp", "_clock::now",
          "a frame's CPU record + submit time for render.stats (GpuPassTimer::endFrame), a timing statistic"},
         {"ohao/ecs/physics_scene.cpp", "_clock::now", "PhysicsInfo::buildMs, the time spent building bodies, a timing statistic"},
