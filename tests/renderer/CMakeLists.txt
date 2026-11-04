@@ -196,6 +196,8 @@ add_executable(sobol_test sobol_test.cpp   # the path tracer's sampler against i
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
 )
 target_link_libraries(sobol_test PRIVATE ohao_sobol_cpu)
+add_executable(manifold_tests manifold_tests.cpp)   # caustics step 2a: the manifold solver against its CPU twin
+target_link_libraries(manifold_tests PRIVATE ohao_manifold_cpu)
 add_executable(vmf_test vmf_test.cpp)   # path guiding's lobes against their CPU twin
 target_link_libraries(vmf_test PRIVATE ohao_vmf_cpu)
 add_executable(denoise_parse_test denoise_parse_test.cpp
@@ -208,7 +210,7 @@ add_executable(sky_test sky_test.cpp   # the physical sky (Hillaire 2020) on the
 target_link_libraries(sky_test PRIVATE glm)
 add_executable(display_test display_test.cpp)   # the display transform: the module against its C++ twin
 target_link_libraries(display_test PRIVATE ohao_display_cpu)
-foreach(t env_cdf_test env_sun_test caustic_casters_test pipeline_cache_files_test sobol_test vmf_test denoise_parse_test display_test sky_test)
+foreach(t env_cdf_test env_sun_test caustic_casters_test pipeline_cache_files_test sobol_test vmf_test manifold_tests denoise_parse_test display_test sky_test)
     target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
     target_link_libraries(${t} PRIVATE ohao_gtest_main)
     if(UNIX)
