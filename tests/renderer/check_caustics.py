@@ -327,6 +327,72 @@ def c3_sphere(failures):
     return {"energy": e_got, "reference": e_ref, "error": err, "asymmetry": asym}
 
 
+
+# ---- c2_split: every path counted once ----------------------------------------------------------
+# The c1 room with reflectors the camera side can converge on alone: a metal at roughness 0.15 and a
+# rough base (0.35) under a coat at 0.15 (both smooth parts at the cut 0.25). The camera side alone at
+# 2^16 spp against the split with the light pass at 2^12, at 160 x 90: R's mean within 1%.
+
+def c2_scene(material):
+    s = mirror_scene()
+    for e in s["entities"]:
+        if e["Name"]["value"] == "Mirror":
+            e["Material"] = material
+    return s
+
+
+def c2_split(failures):
+    global W, H
+    w0, h0 = W, H
+    W, H = 160, 90
+    out = {}
+    try:
+        for tag, mat in (("metal", {"base_color": [0.9, 0.9, 0.9], "base_metalness": 1, "specular_roughness": 0.15}),
+                         ("coated", {"base_color": [0.7, 0.7, 0.7], "specular_roughness": 0.35, "coat_weight": 1,
+                                     "coat_roughness": 0.15})):
+            ref, _ = render("c2_%s_camera" % tag, c2_scene(mat), 65536)
+            got, _ = render("c2_%s_split" % tag, c2_scene(mat), 4096, ["--caustics"])
+            a, b = r_mean(ref), r_mean(got)
+            err = abs(b - a) / max(a, 1e-9)
+            print("c2_split %s: camera side alone %.4f, split %.4f (%.2f%%)" % (tag, a, b, 100 * err))
+            if not err <= 0.01:
+                failures.append("c2_split %s: the split %.4f against the camera side alone %.4f (%.2f%%, bar 1%%)"
+                                % (tag, b, a, 100 * err))
+            out[tag] = {"camera": a, "split": b, "error": err}
+    finally:
+        W, H = w0, h0
+    return out
+
+
+# ---- c4_through_glass: a matte point seen only through glass is not the light pass's --------------
+# The c1 room with a clear slab (roughness 0) between camera and R: R is seen only through it, so no
+# term lighting it is the light pass's (its first hit is the glass). With caustics on and off R's mean
+# must agree within 1%.
+
+def c4_scene():
+    s = mirror_scene()
+    s["entities"].append(ent(9, Name={"value": "Window"},
+                             # Just under the camera, inside its view cone and clear of the sun's way to the
+                             # mirror (a sun ray to the mirror crosses y = 3.8 at z >= 0.8).
+                             MeshSource={"source": {"BoxPrim": {"lo": [-0.3, 3.8, 0.3], "hi": [0.3, 3.85, 0.7],
+                                                                "color": [1, 1, 1]}}},
+                             Material={"base_color": [1, 1, 1], "specular_roughness": 0.0, "transmission_weight": 1}))
+    return s
+
+
+def c4_through_glass(failures):
+    off, _ = render("c4_off", c4_scene(), 1024)
+    on, _ = render("c4_on", c4_scene(), 1024, ["--caustics"])
+    a, b = r_mean(off), r_mean(on)
+    if not a > 0.01:
+        failures.append("c4_through_glass: R reads %.4g: the scene does not light it, so the test proves nothing" % a)
+    err = abs(b - a) / max(a, 1e-9)
+    print("c4_through_glass: R off %.4f, on %.4f (%.2f%%)" % (a, b, 100 * err))
+    if not err <= 0.01:
+        failures.append("c4_through_glass: R %.4f with caustics against %.4f without (%.2f%%, bar 1%%)" % (b, a, 100 * err))
+    return {"off": a, "on": b, "error": err}
+
+
 def c6_repeat(failures):
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, "c6.scene.json")
@@ -361,7 +427,7 @@ def c6_repeat(failures):
     return {"identical": same}
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass}
 
 
 def main(argv):
