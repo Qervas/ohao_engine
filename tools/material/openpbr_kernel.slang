@@ -46,6 +46,8 @@
 //   14 parts    6.rgb = the smooth part, 7.rgb = the rough part at cut 11.z (caustics)
 //   15 smooth   sampleSmooth at cut 11.z, laid out as sample (6 = (wi, pdf), 7 = (weight, lobe))
 //   16 psmooth  6.x = pdfSmooth at cut 11.z
+//   17 core     6.xyz = evalSmoothCore at cut 11.z, the core's slope^2 11.w (caustics step 2)
+//   18 alphas   6.xy = smoothAlphaBounds at cut 11.z
 //   13 quad     6.x = ltcQuad at the view wo and specular_roughness over the quad z = v.z, x and y from
 //               coat_weight, coat_roughness (lower corner) to v.x, v.y (upper)
 import material.openpbr;
@@ -209,6 +211,14 @@ void run(uint3 id : SV_DispatchThreadID)
     else if (op == 16u)
     {
         r0.x = surface.pdfSmooth(wo, v, t, io[b + 11u].z);
+    }
+    else if (op == 17u)
+    {
+        r0.xyz = surface.evalSmoothCore(wo, v, t, io[b + 11u].z, io[b + 11u].w);
+    }
+    else if (op == 18u)
+    {
+        r0.xy = surface.smoothAlphaBounds(io[b + 11u].z);
     }
     else if (op == 6u)
     {

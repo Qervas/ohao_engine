@@ -1762,6 +1762,70 @@ struct OpenPBRSurface
         smooth = (base.rough < cut ? s : float3(0.0)) + (coatWeight > 0.0 && coat.rough < cut ? c : float3(0.0));
     }
 
+    // ---- the smooth part's core (sub-project 24 step 2, docs/specs/2026-11-04-caustics-step2-design.md) ----
+    // Whether the half vector m (the frame's z up) lies in a lobe's core: its slope stretched by the lobe's
+    // alphas, (m.x / ax)^2 + (m.y / ay)^2 over m.z^2, at most slope2 (GGX holds slope2 / (1 + slope2) of its
+    // normals there). The manifold pass owns a smooth reflection's core; the camera side keeps its tail.
+    static bool inCore(float3 m, float2 a, float slope2)
+    {
+        if (m.z <= 0.0) return false;
+        const float x = m.x / a.x, y = m.y / a.y;
+        return x * x + y * y <= slope2 * m.z * m.z;
+    }
+
+    // evalParts' smooth part for a reflection (wo and wi above; 0 otherwise), each smooth lobe kept only where
+    // the half vector is in its own core (the base's alphaXY, the coat's).
+    float3 evalSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float slope2)
+    {
+        float3 specular, diffuse, smooth, core;
+        evalLobesSmoothCore(wo, wi, t, cut, slope2, specular, diffuse, smooth, core);
+        return core;
+    }
+
+    // evalLobesSmooth and the core of its smooth part, from one evaluation (raygenCaustics' light sample).
+    void evalLobesSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float slope2, out float3 specular,
+                             out float3 diffuse, out float3 smooth, out float3 core)
+    {
+        const bool back = thinBack(wo);
+        const float3 o = back ? mirrored(wo) : wo, i = back ? mirrored(wi) : wi;
+        float3 s, d;
+        float3 c = float3(0.0);
+        baseAt(o, t).evalLobes(o, i, t, s, d);
+        if (layered && o.z > 0.0 && i.z < 0.0)
+        {
+            s *= baseScale(coatPathDiffuse(), o, t);
+        }
+        else if (layered && o.z > 0.0 && i.z > 0.0)
+        {
+            const float3 k = baseScale(coatPath(i.z), o, t);
+            const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(o.z);
+            s = k * s;
+            c = float3(fuzzOver * coatWeight * coat.eval(o, i, t));
+            d = k * d + fuzzWeight * fuzzColor * fuzz.albedo(o.z) * fuzz.D(o, i);
+        }
+        specular = s + c;
+        diffuse = d;
+        const bool bs = base.rough < cut, cs = coatWeight > 0.0 && coat.rough < cut;
+        smooth = (bs ? s : float3(0.0)) + (cs ? c : float3(0.0));
+        core = float3(0.0);
+        if (back || !(o.z > 0.0) || !(i.z > 0.0)) return;
+        const float3 m = normalize(o + i);
+        if (bs && inCore(m, base.alphaXY, slope2)) core += s;
+        if (cs && inCore(m, coat.alphaXY, slope2)) core += c;
+    }
+
+    // Per lobe (the base's specular, the coat), the largest alpha it can have where it is smooth: the larger
+    // of its alphaXY at min(roughness, cut) (0 for a coat of no weight). Built from a material's factors it
+    // bounds every point of the material (a roughness texture only lowers the roughness, and a coat's
+    // widening of the base grows with it); whether a lobe can be smooth at all (a texture may take a rough
+    // factor under the cut) is the host's to say.
+    float2 smoothAlphaBounds(float cut)
+    {
+        const float2 b = ggxAnisoAlpha(min(base.rough, cut), base.anisotropy);
+        const float2 c = ggxAnisoAlpha(min(coat.rough, cut), coat.anisotropy);
+        return float2(max(b.x, b.y), coatWeight > 0.0 ? max(c.x, c.y) : 0.0);
+    }
+
     // The refraction's albedo toward wo, through the layers.
     float3 transmissionAlbedo(float3 wo, OpenPBRTables t)
     {
