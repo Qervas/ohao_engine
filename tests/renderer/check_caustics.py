@@ -434,6 +434,27 @@ def c5_showcase(failures):
     return out
 
 
+
+# ---- c1_emitter: a light's mesh in the sun's way is not a shadow -------------------------------------
+# The c1 room with a point light's sphere (radius 0.3, nearly dark) where the sun's rays to the mirror pass:
+# the camera side's sun shadow ray does not see emitter meshes, so neither may the light pass's first segment,
+# or the pass drops a shadow-shaped piece of a term the camera side subtracted. R's closed form is unchanged.
+
+def c1_emitter(failures):
+    s = mirror_scene()
+    # A sun ray reaching the mirror at (0, 1.5, -1) (which lights R's middle) comes from (0, 1.5 + t, -1 + t).
+    s["entities"].append(ent(10, Name={"value": "Lamp"}, Transform={"position": [0, 2.5, 0.0]},
+                             Light={"type": "Point", "color": [1, 1, 1], "intensity": 1e-4, "range": 10, "radius": 0.3}))
+    img, _ = render("c1_emitter", s, 1024, ["--caustics"])
+    m = r_mean(img)
+    want = 0.5 / math.pi * SUN_E * math.cos(math.radians(45))
+    err = abs(m - want) / want
+    print("c1_emitter: R %.4f, closed form %.4f (%.2f%%)" % (m, want, 100 * err))
+    if not err <= 0.02:
+        failures.append("c1_emitter: R %.4f against %.4f (%.2f%%): a light's mesh shadowed the light pass" % (m, want, 100 * err))
+    return {"r_mean": m, "closed_form": want, "error": err}
+
+
 def c6_repeat(failures):
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, "c6.scene.json")
@@ -468,7 +489,7 @@ def c6_repeat(failures):
     return {"identical": same}
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase}
 
 
 def main(argv):

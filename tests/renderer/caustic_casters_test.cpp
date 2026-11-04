@@ -135,3 +135,20 @@ TEST(CausticCasters, CasterDensity) {
     EXPECT_NEAR(integral, 1.0, 0.03);
     (void)kPi;
 }
+
+// One frame's light paths must not be confined to a block of the seed space: seeded as pcg(index ^ h(frame)),
+// a frame's N paths took the states of one aligned block of N (its top bits h's), so at 1080p x 8 rays (about
+// 2^24 paths) two frames shared almost all their paths one time in 256 and caustic noise stopped falling. The
+// seeds before the PCG walk must spread over the whole range, for any frame.
+TEST(CausticCasters, SeedsSpreadOverTheRange) {
+    for (uint32_t frame : {0u, 7u, 1000u}) {
+        uint32_t lo = 0xFFFFFFFFu, hi = 0u;
+        std::vector<uint32_t> pre;
+        for (uint32_t i = 0; i < (1u << 20); ++i) {
+            const uint32_t s = causticPathSeedInput(i, frame);
+            lo = std::min(lo, s);
+            hi = std::max(hi, s);
+        }
+        EXPECT_GT(hi - lo, 1u << 31) << "frame " << frame << ": the seeds' inputs span only " << (hi - lo);
+    }
+}

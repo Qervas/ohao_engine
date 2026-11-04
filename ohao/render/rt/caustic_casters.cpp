@@ -25,6 +25,19 @@ float textureChannelMin(std::span<const uint8_t> rgba, int width, int height, in
     return static_cast<float>(lo) / 255.0f;
 }
 
+namespace {
+uint32_t pcg(uint32_t v) {
+    const uint32_t state = v * 747796405u + 2891336453u;
+    const uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+}  // namespace
+
+// The index hashed before it meets the frame's hash: index ^ h(frame) kept a frame's paths in one block of the
+// seed space, the same block in another frame one time in N / 2^32.
+uint32_t causticPathSeedInput(uint32_t index, uint32_t frame) { return pcg(index) ^ pcg(frame ^ 0xC4057C1Bu); }
+uint32_t causticPathSeed(uint32_t index, uint32_t frame) { return pcg(causticPathSeedInput(index, frame)); }
+
 void causticBasis(glm::vec3 n, glm::vec3& t, glm::vec3& b) {
     const float s = n.z >= 0.0f ? 1.0f : -1.0f;
     const float a = -1.0f / (s + n.z);

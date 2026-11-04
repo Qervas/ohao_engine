@@ -83,6 +83,11 @@ struct CausticOrigin {
 // through x: p(light) x (the disks covering it) / the light's disk area.
 [[nodiscard]] double causticOriginDensity(const CausticCasters& c, uint32_t light, glm::vec3 x);
 
+// The light pass's random stream for one path: rt/path_tracer.slang's causticTrace seeds its PCG walk with this.
+[[nodiscard]] uint32_t causticPathSeed(uint32_t index, uint32_t frame);
+// What that seed hashes (one PCG step, a permutation): two frames share their paths where these sets meet.
+[[nodiscard]] uint32_t causticPathSeedInput(uint32_t index, uint32_t frame);
+
 // An orthonormal pair perpendicular to n (Duff et al. 2017), the disks' plane's axes.
 void causticBasis(glm::vec3 n, glm::vec3& t, glm::vec3& b);
 

@@ -1165,7 +1165,9 @@ void causticTrace()
     const uint index = (id.z * dims.y + id.y) * dims.x + id.x;
     const float paths = float(dims.x) * float(dims.y) * float(dims.z);
     WalkRng r;
-    r.state = pcg(index ^ pcg(pc.params.z ^ 0xC4057C1Bu));
+    // render/rt/caustic_casters.cpp's causticPathSeed: the index hashed before it meets the frame's hash (as
+    // index ^ hash(frame) a frame's paths filled one block of the seed space, which another frame's often equalled).
+    r.state = pcg(pcg(index) ^ pcg(pc.params.z ^ 0xC4057C1Bu));
     // Each draw its own statement: four mutating calls in one constructor came back as one value (the
     // origins then lay on a spiral, not the disk: half the light missing).
     const float o0 = r.next();
@@ -1199,7 +1201,9 @@ void causticTrace()
     float tMin = 1e-4;
     for (uint k = 0u; k < bounces + kCrossings + 64u; ++k)
     {
-        const PathPayload hit = trace(origin, dir, kPathMask | kTlasMaskEmitter, 1.0e4, tMin);
+        // Until the first smooth bounce the ray stands for the camera side's sun shadow ray (visible(): no emitter
+        // meshes, panes passed); after it, for a bounce ray, which an emitter mesh stops.
+        const PathPayload hit = trace(origin, dir, smoothBounces == 0u ? kPathMask : (kPathMask | kTlasMaskEmitter), 1.0e4, tMin);
         tMin = 1e-4;
         if ((hit.flags & kHit) == 0u || (hit.flags & kHitEmitter) != 0u) break;
         if (insideVolume) beta *= exp(-sigmaA * hit.t);

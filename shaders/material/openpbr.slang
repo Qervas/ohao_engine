@@ -1559,9 +1559,20 @@ struct OpenPBRSurface
         diffuse = k * diffuse + fuzzWeight * fuzzColor * fuzz.albedo(wo.z) * fuzz.D(wo, wi);
     }
 
+    // A thin wall is the same from either side (OpenPBR: either side is the outside): seen from its back it is
+    // evaluated, drawn and weighed as its front, mirrored through the surface. The camera side always meets a thin
+    // wall from its front (its frame faces the ray); the light pass meets it from the light's side.
+    bool thinBack(float3 wo) { return base.thinWalled && base.transmissive() && wo.z < 0.0; }
+    float3 mirrored(float3 v) { return float3(v.xy, -v.z); }
+
     float3 eval(float3 wo, float3 wi, OpenPBRTables t)
     {
-        if (base.transmissive() && (wo.z < 0.0 || (base.thinWalled && wo.z < 0.0))) return base.eval(wo, wi, t);
+        return thinBack(wo) ? evalFront(mirrored(wo), mirrored(wi), t) : evalFront(wo, wi, t);
+    }
+
+    float3 evalFront(float3 wo, float3 wi, OpenPBRTables t)
+    {
+        if (base.transmissive() && wo.z < 0.0) return base.eval(wo, wi, t);
         float3 specular, diffuse;
         evalLobes(wo, wi, t, specular, diffuse);
         return specular + diffuse;
@@ -1576,6 +1587,12 @@ struct OpenPBRSurface
     // smooth parts and reaches the camera only through rough ones; the camera side drops exactly
     // those terms (docs/specs/2026-11-03-caustics-design.md, "The split").
     void evalParts(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 smooth, out float3 rough)
+    {
+        if (thinBack(wo)) evalPartsFront(mirrored(wo), mirrored(wi), t, cut, smooth, rough);
+        else evalPartsFront(wo, wi, t, cut, smooth, rough);
+    }
+
+    void evalPartsFront(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 smooth, out float3 rough)
     {
         float3 s, d;
         float3 c = float3(0.0);
@@ -1718,6 +1735,13 @@ struct OpenPBRSurface
     void evalLobesSmooth(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 specular, out float3 diffuse,
                          out float3 smooth)
     {
+        if (thinBack(wo)) evalLobesSmoothFront(mirrored(wo), mirrored(wi), t, cut, specular, diffuse, smooth);
+        else evalLobesSmoothFront(wo, wi, t, cut, specular, diffuse, smooth);
+    }
+
+    void evalLobesSmoothFront(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 specular, out float3 diffuse,
+                              out float3 smooth)
+    {
         float3 s, d;
         float3 c = float3(0.0);
         baseAt(wo, t).evalLobes(wo, wi, t, s, d);
@@ -1816,6 +1840,11 @@ struct OpenPBRSurface
 
     float pdf(float3 wo, float3 wi, OpenPBRTables t)
     {
+        return thinBack(wo) ? pdfFront(mirrored(wo), mirrored(wi), t) : pdfFront(wo, wi, t);
+    }
+
+    float pdfFront(float3 wo, float3 wi, OpenPBRTables t)
+    {
         if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).pdf(wo, wi, t);
         if (base.delegated()) return pdfLayeredTransmissive(wo, wi, t);
         if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
@@ -1845,6 +1874,14 @@ struct OpenPBRSurface
     }
 
     BsdfSample sample(float3 wo, float3 u, OpenPBRTables t)
+    {
+        if (!thinBack(wo)) return sampleFront(wo, u, t);
+        BsdfSample s = sampleFront(mirrored(wo), u, t);
+        s.wi = mirrored(s.wi);
+        return s;
+    }
+
+    BsdfSample sampleFront(float3 wo, float3 u, OpenPBRTables t)
     {
         if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).sample(wo, u, t);
         BsdfSample s;

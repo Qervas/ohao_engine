@@ -994,6 +994,47 @@ std::vector<Case> smoothCases() {
 
 void t6_sample_smooth() { samplingChi2(smoothCases(), 67u, true, {Op::SampleSmooth, Op::PdfSmooth, Op::Parts, 0.25f}); }
 
+// A thin wall is the same from either side (OpenPBR: either side is the outside): its parts and eval() at (wo, wi)
+// equal those at both mirrored through the surface, coated and fuzzed too. From the back the module once took the
+// base alone, without the coat's absorption and darkening or the fuzz over it: the light pass, which meets a thin
+// wall from the light's side, then weighed a coated leaf's transmission differently from the camera side.
+void t6_thin_symmetric() {
+    std::vector<Material> mats;
+    Material coated;
+    coated.transmissionWeight = 1.0f;
+    coated.thinWalled = true;
+    coated.specularRoughness = 0.15f;
+    coated.coatWeight = 1.0f;
+    coated.coatRoughness = 0.1f;
+    coated.coatColor = {0.8f, 0.6f, 0.4f};
+    mats.push_back(coated);
+    Material fuzzy = coated;
+    fuzzy.coatWeight = 0.0f;
+    fuzzy.fuzzWeight = 1.0f;
+    fuzzy.fuzzColor = {0.3f, 0.9f, 0.3f};
+    fuzzy.baseColor = {0.2f, 0.6f, 0.2f};
+    fuzzy.transmissionWeight = 0.5f;
+    mats.push_back(fuzzy);
+    uint32_t seed = 71u;
+    for (const Material& m : mats)
+        for (int k = 0; k < 256; ++k) {
+            const float muo = 0.1f + 0.85f * rnd(seed), mui = -0.95f + 1.9f * rnd(seed);
+            const Float3 wo = view(muo, 6.2831853f * rnd(seed));
+            const float si = std::sqrt(std::max(0.0f, 1.0f - mui * mui)), phi = 6.2831853f * rnd(seed);
+            const Float3 wi = {si * std::cos(phi), si * std::sin(phi), mui};
+            const Float3 woB = {wo[0], wo[1], -wo[2]}, wiB = {wi[0], wi[1], -wi[2]};
+            for (Op op : {Op::Parts, Op::Eval}) {
+                Item a = one(op, m, wo, wi), b = one(op, m, woB, wiB);
+                for (int c = 0; c < 3; ++c) {
+                    const bool ok = std::abs(a.r0[c] - b.r0[c]) <= 1e-5f * std::max(1e-3f, std::abs(a.r0[c])) &&
+                                    std::abs(a.r1[c] - b.r1[c]) <= 1e-5f * std::max(1e-3f, std::abs(a.r1[c]));
+                    if (!ok && k < 2) std::printf("\n    front %.5g/%.5g back %.5g/%.5g", a.r0[c], a.r1[c], b.r0[c], b.r1[c]);
+                    CHECK(ok, "a thin wall evaluates the same from either side");
+                }
+            }
+        }
+}
+
 
 int main(int argc, char** argv) {
     std::printf("material_tests (OpenPBR on the CPU)\n");
@@ -1031,5 +1072,6 @@ int main(int argc, char** argv) {
     RUN_ONE(t6_parts_sum);
     RUN_ONE(t6_parts_threshold);
     RUN_ONE(t6_sample_smooth);
+    RUN_ONE(t6_thin_symmetric);
     return ohao::test::finish("material_tests");
 }

@@ -61,6 +61,17 @@ good, half the dots, the glass ball's dot (1,283x its neighbours) gone, the helm
 - **A barrier** left the previous frame's clears of the splat buffer not visible to this frame's atomics.
 - **The light pass counted paths the camera side never reaches**: it now applies raygen's bounce limit.
 
+Found by the final review, each with a test that failed first:
+
+- **Paths' seeds clustered**: a path's seed was `index ^ h(frame)`, so a frame's paths sat in one block of the seed space,
+  which another frame's block could overlap. Now `h(h(index) ^ h(frame))`, held by `caustic_casters_test`
+  `SeedsSpreadOverTheRange`.
+- **A thin wall's back side was a front side seen from below**: a coated or fuzzed thin-walled material's eval, parts,
+  pdf and sample are now the front's, mirrored (`material_tests` `t6_thin_symmetric`).
+- **Light meshes shadowed the pass's sun**: its first ray met the emitter meshes, which the camera side's sun shadow
+  rays never see. The first ray now skips them; later rays meet them as raygen's bounces do (`c1_emitter`: 0.0027
+  against a closed form of 0.3376, now 0.3378).
+
 ## 4. Spec corrections
 
 In the spec's "Step 1 as built": the camera side cannot render sun through glass (a bias, not noise); the split in its own
@@ -74,16 +85,17 @@ refraction share's probability; `render.stats` reports casters and clamped splat
 | test | measured | bar |
 |---|---|---|
 | c1_split_only: the split alone on a patch only the pass lights | 7e-12 | 0 |
-| c1_mirror: a mirror's closed form | 0.3380 against 0.3376 (0.11%; 0.24% at 1 ray a pixel) | 2% |
-| c3_slab: a glass slab, every internal reflection, closed form | 0.3840 against 0.3805 (0.92%) | 2% |
+| c1_mirror: a mirror's closed form | 0.3378 against 0.3376 (0.07%; 0.24% at 1 ray a pixel) | 2% |
+| c1_emitter: the same with a lamp's mesh above the mirror | 0.3378 against 0.3376 (0.07%) | 2% |
+| c3_slab: a glass slab, every internal reflection, closed form | 0.3844 against 0.3805 (1.0%) | 2% |
 | c3_sphere: a moved glass ball against a ray simulation | 3.6% of its energy; halves 0.02% apart | 5%, 3% |
-| c2_split: metal at 0.15 / coat at 0.15, split against the camera side alone | 0.08% / 0.04% | 1% |
+| c2_split: metal at 0.15 / coat at 0.15, split against the camera side alone | 0.13% / 0.06% | 1% |
 | c4_through_glass: a patch seen only through glass | 0.0332 both, bit for bit | 1% |
 | c6_repeat: two captures in one process | identical | identical |
 
 `check_caustics_showcase` (slow): relMSE 0.00095 with against 0.188 without, 8 dots against 17, the glass dot 1.0x its
-neighbours against 1,283x. `caustic_casters_test` 4/4, `pipeline_cache_files_test` 3/3, `material_tests` 30/30
-(`t6_parts_sum`, `t6_parts_threshold`, `t6_sample_smooth`), `check_material --caustics` 51/51, `check_analytic --caustics`
+neighbours against 1,283x. `caustic_casters_test` 5/5, `pipeline_cache_files_test` 3/3, `material_tests` 31/31
+(`t6_parts_sum`, `t6_parts_threshold`, `t6_sample_smooth`, `t6_thin_symmetric`), `check_material --caustics` 51/51, `check_analytic --caustics`
 16/16, `check_validation` with a caustics capture: clean. Render goldens 42/42 unchanged.
 
 Rulings measured: C3 (rays a pixel) 8; C2 (the cut) 0.25. The pass at 8 rays costs about 1.4x a showcase frame (29 against
@@ -106,6 +118,10 @@ update in `docs/agents/skills/`).
   NVIDIA's own shader cache keeps it. A driver deferred operation on 1 or 5 threads measured the same (209 s, 212 s).
   A smaller raygen is on the roadmap's engine iteration items.
 - **Defaults**: off until Frank rules C1; C4's bar as recommended (`c5_showcase`).
+- **The final review's minors, not fixed**: a coated pane's null-event weight; the bounce limit when the first hit itself
+  crosses; a saturated splat is counted, not saturated; under NRD the splat goes to the diffuse guide only; each ray's
+  loop over the disks grows with the casters; `setScene` runs every frame; the view model's TLAS mask in the light pass;
+  no test holds `evalLobesSmooth` to `evalParts`' smooth part; skinned instances cast from their bind-pose bounds.
 - Found, not fixed here: `RenderScene::analyticLightPower` sizes the sun's share from the same mesh-local bounds (light
   selection only, unbiased); `check_validation`'s `cornell_box rt_offline` hit `vkResetFences` on a fence in use once,
   right after a cold compile (clean on reruns).
