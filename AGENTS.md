@@ -715,6 +715,26 @@ deferred, reference, path traced); two the transparency scene,
   roulette by the true throughput killed exactly the paths guiding aimed at a small source (a large `q`, a small weight).
   Unguided, `rrRatio` is exactly 1 and the tracer is bit for bit what it was. Measured: the spot-lit patch room 1.8x lower
   error at full depth; the Sponza showcase about 1.4x higher (typical pixels), so it stays off.
+- **Caustics** (sub-project 24, `docs/specs/2026-11-03-caustics-design.md`; step 1 built, **off by default**: `ohao run
+  --caustics`, `render.capture {caustics}`, `render.stats` `caustics {casters, clamped}`). Light traced from each
+  directional light (`causticTrace`, `rt/caustics.slang`, `render/rt/caustic_pass.*`) estimates every term sun -> smooth
+  parts -> the rough part of the camera ray's first hit, and `raygenCaustics` (raygen compiled with the split) drops
+  exactly those. **The camera side cannot render sun through glass at all** (light sampling looks above a surface only,
+  and no ray hits a delta sun): the pass removes a bias there, not only noise. Gotchas:
+  - `chainThroughput` takes **every factor `throughput` takes** (roulette, absorption, the dispersion channel), with
+    `f_rough / pdf` at the first hit and `f_smooth / pdf` after; the pass evaluates OpenPBR **in the camera's roles**
+    (`f(wo = toward the eye, wi = toward the light)`, the module is not reciprocal) and applies raygen's own bounce limit.
+  - **`RenderScene::Draw::aabbMin/aabbMax` are the mesh's own bounds**; world bounds go through `Draw::world`. Taken raw,
+    a moved caster was aimed at where its mesh sits untransformed (half a glass ball's caustic missing; `c3_sphere`).
+  - **The caustics program compiles for minutes cold** (`PathTracer: <name> pipeline in N s` in the log), and how warm
+    a second process is depends on the driver: for programs this size NVIDIA keeps the binary in its own shader cache
+    (`%LOCALAPPDATA%/NVIDIA/DXCache`, size-capped), not in our `VkPipelineCache` file. Keep the caustics raygens free of
+    extra inlined material evaluations (two of them once made every process compile it). A driver deferred operation
+    joined by 1 or 5 threads measured the same (209 s, 212 s).
+  - `OHAO_CAUSTICS_SPLIT_ONLY=1` drops the pass's terms without running it (`c1_split_only`); `OHAO_CAUSTIC_RAYS` overrides
+    the rays a pixel (`kCausticRaysPerPixel`).
+  Measured on the showcase at equal time: the whole image's error 190x lower, the sun's glints off the helmet 33x their
+  neighbours to 1.8x, the glass ball's 1,283x to 1x, typical pixels unchanged.
 - **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
   frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
   transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any
@@ -727,9 +747,11 @@ deferred, reference, path traced); two the transparency scene,
 - **The path tracer's pipeline is cached on disk** (`render/rt/pipeline_disk_cache.*`): it compiles for minutes
   cold, and a second process beside a live one (`check_live`'s headless host beside its window) was measured
   compiling it again from scratch, 239 s, past the test's 120 s reply wait. Its `VkPipelineCache` is a file per
-  device and driver under `$OHAO_PIPELINE_CACHE_DIR`, else `%LOCALAPPDATA%/ohao/pipeline_cache` (about 11 MB a
-  shader version; past 64 MB it starts empty), loaded before the pipeline is created and saved right after. The
-  first process after a shader change still compiles cold.
+  pipeline, shader version (a hash of its SPIR-V), device and driver, `<name>@<hash>-<vendor>-<device>-<driver>.bin`
+  under `$OHAO_PIPELINE_CACHE_DIR`, else `%LOCALAPPDATA%/ohao/pipeline_cache`, loaded before the pipeline is created and
+  saved right after; a save prunes that pipeline's other versions but the newest. (One file per pipeline once kept
+  every version, passed its 64 MB cap and was then ignored: every process compiled cold.) The first process after a
+  shader change still compiles cold (`PathTracer: <name> pipeline in N s`).
 - **Emission is light** (frontier F3, ruling F-R7; `render/rt/emissive_lights.*`). Every triangle of an
   emissive material (`MaterialTable::emissive`: emission colour and luminance above 0) is a light of the
   path tracer: the `emissive.lights` pass (before `pt.cache.update`) writes each one's world corners, uvs

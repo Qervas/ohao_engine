@@ -7,6 +7,9 @@
 #include "pipeline_disk_cache.hpp"
 #include "render/rt/rt_compute.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -165,10 +168,18 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
 
     // Minutes cold: kept in a file so the next process (a headless host beside a window) loads it.
     PipelineDiskCache cache;
-    cache.open(m_device, m_physicalDevice, cacheName);
+    const std::vector<char>* modules[] = {&rgenCode, &rmissCode, &rchitCode, &rahitCode, &extraCode};
+    std::vector<std::vector<char>> keyed;
+    for (const auto* m : modules) keyed.push_back(*m);
+    cache.open(m_device, m_physicalDevice, cacheName, pipelineContentKey(keyed));
     VkPipeline pipeline = VK_NULL_HANDLE;
+    // Timed: minutes cold. A driver's deferred operation joined by up to 6 threads measured no faster (209 s on
+    // 1 thread, 212 s on 5, for the caustics program on 2026-11-04): one huge raygen compiles on one core.
+    const auto compileStart = std::chrono::steady_clock::now();
     VkResult result = vkCreateRayTracingPipelinesKHR(
         m_device, VK_NULL_HANDLE, cache.handle(), 1, &pipelineInfo, nullptr, &pipeline);
+    OHAO_LOG(Info, render, "PathTracer: {} pipeline in {:.1f} s", cacheName,
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - compileStart).count());
     if (result == VK_SUCCESS) cache.save();
 
     // Cleanup shader modules (no longer needed after pipeline creation)

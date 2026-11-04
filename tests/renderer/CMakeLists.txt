@@ -186,6 +186,11 @@ add_executable(caustic_casters_test caustic_casters_test.cpp   # caustics: caste
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/caustic_casters.cpp
 )
 target_link_libraries(caustic_casters_test PRIVATE glm)
+add_executable(pipeline_cache_files_test pipeline_cache_files_test.cpp   # the pipeline disk cache's files
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/pipeline_disk_cache.cpp
+)
+target_include_directories(pipeline_cache_files_test PRIVATE ${Vulkan_INCLUDE_DIRS})
+target_link_libraries(pipeline_cache_files_test PRIVATE ohao_core ${Vulkan_LIBRARIES})
 add_executable(sobol_test sobol_test.cpp   # the path tracer's sampler against its CPU twin
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/sobol_generator.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
@@ -203,7 +208,7 @@ add_executable(sky_test sky_test.cpp   # the physical sky (Hillaire 2020) on the
 target_link_libraries(sky_test PRIVATE glm)
 add_executable(display_test display_test.cpp)   # the display transform: the module against its C++ twin
 target_link_libraries(display_test PRIVATE ohao_display_cpu)
-foreach(t env_cdf_test env_sun_test caustic_casters_test sobol_test vmf_test denoise_parse_test display_test sky_test)
+foreach(t env_cdf_test env_sun_test caustic_casters_test pipeline_cache_files_test sobol_test vmf_test denoise_parse_test display_test sky_test)
     target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
     target_link_libraries(${t} PRIVATE ohao_gtest_main)
     if(UNIX)
