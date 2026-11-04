@@ -79,9 +79,10 @@ bool manifoldSolve(const Tri& tri, const V3& p, const V3& L, V2 target, float to
     return io.rows[13].z != 0.0f;
 }
 
-V2 manifoldDrawSlope(V2 alphas, float slope2, const V3& u, float& density) {
+V2 manifoldDrawSlope(V2 alphas, float slope2, float minSlope2, const V3& u, float& density) {
     Io io = base(2, nullptr, nullptr, nullptr);
     io.rows[0].z = slope2;
+    io.rows[11].x = minSlope2;
     io.rows[9] = f4(0, 0, alphas[0], alphas[1]);
     io.rows[10] = f4(u);
     runItem(io);
@@ -89,12 +90,20 @@ V2 manifoldDrawSlope(V2 alphas, float slope2, const V3& u, float& density) {
     return {io.rows[13].x, io.rows[13].y};
 }
 
-float manifoldSlopeDensity(V2 alphas, float slope2, V2 sigma) {
+float manifoldSlopeDensity(V2 alphas, float slope2, float minSlope2, V2 sigma) {
     Io io = base(3, nullptr, nullptr, nullptr);
     io.rows[0].z = slope2;
+    io.rows[11].x = minSlope2;
     io.rows[9] = f4(sigma[0], sigma[1], alphas[0], alphas[1]);
     runItem(io);
     return io.rows[13].x;
+}
+
+bool manifoldTriangleTest(const Tri& tri, const V3& p, const V3& L, float thetaSigma) {
+    Io io = base(5, &tri, &p, &L);
+    io.rows[0].w = thetaSigma;
+    runItem(io);
+    return io.rows[13].x != 0.0f;
 }
 
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,

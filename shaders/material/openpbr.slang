@@ -1764,26 +1764,28 @@ struct OpenPBRSurface
 
     // ---- the smooth part's core (sub-project 24 step 2, docs/specs/2026-11-04-caustics-step2-design.md) ----
     // Whether the half vector m (the frame's z up) lies in a lobe's core: its slope stretched by the lobe's
-    // alphas, (m.x / ax)^2 + (m.y / ay)^2 over m.z^2, at most slope2 (GGX holds slope2 / (1 + slope2) of its
-    // normals there). The manifold pass owns a smooth reflection's core; the camera side keeps its tail.
-    static bool inCore(float3 m, float2 a, float slope2)
+    // alphas, (m.x / ax)^2 + (m.y / ay)^2 over m.z^2, at most core.x (GGX holds core.x / (1 + core.x) of its
+    // normals there), or its plain slope's square at most core.y (a mirror's tail past a few alphas is still far
+    // too narrow for the camera side to find: the core reaches a fixed angle at least). The manifold pass owns a
+    // smooth reflection's core; the camera side keeps its tail.
+    static bool inCore(float3 m, float2 a, float2 core)
     {
         if (m.z <= 0.0) return false;
-        const float x = m.x / a.x, y = m.y / a.y;
-        return x * x + y * y <= slope2 * m.z * m.z;
+        const float x = m.x / a.x, y = m.y / a.y, zz = m.z * m.z;
+        return x * x + y * y <= core.x * zz || m.x * m.x + m.y * m.y <= core.y * zz;
     }
 
     // evalParts' smooth part for a reflection (wo and wi above; 0 otherwise), each smooth lobe kept only where
     // the half vector is in its own core (the base's alphaXY, the coat's).
-    float3 evalSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float slope2)
+    float3 evalSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float2 coreSlope)
     {
         float3 specular, diffuse, smooth, core;
-        evalLobesSmoothCore(wo, wi, t, cut, slope2, specular, diffuse, smooth, core);
+        evalLobesSmoothCore(wo, wi, t, cut, coreSlope, specular, diffuse, smooth, core);
         return core;
     }
 
     // evalLobesSmooth and the core of its smooth part, from one evaluation (raygenCaustics' light sample).
-    void evalLobesSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float slope2, out float3 specular,
+    void evalLobesSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float2 coreSlope, out float3 specular,
                              out float3 diffuse, out float3 smooth, out float3 core)
     {
         const bool back = thinBack(wo);
@@ -1810,8 +1812,8 @@ struct OpenPBRSurface
         core = float3(0.0);
         if (back || !(o.z > 0.0) || !(i.z > 0.0)) return;
         const float3 m = normalize(o + i);
-        if (bs && inCore(m, base.alphaXY, slope2)) core += s;
-        if (cs && inCore(m, coat.alphaXY, slope2)) core += c;
+        if (bs && inCore(m, base.alphaXY, coreSlope)) core += s;
+        if (cs && inCore(m, coat.alphaXY, coreSlope)) core += c;
     }
 
     // Per lobe (the base's specular, the coat), the largest alpha it can have where it is smooth: the larger

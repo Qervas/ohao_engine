@@ -103,31 +103,37 @@ bool manifoldSolve(ManifoldTri tri, float3 p, float3 L, float2 target, float tol
 }
 
 // ---- the slope's density ------------------------------------------------------------------------
-// GGX's distribution of slopes at alpha (P22(sigma) = 1 / (pi a^2 (1 + |sigma|^2 / a^2)^2)), truncated to the core
-// |sigma|^2 <= slope2 a^2 and renormalised by its mass there, slope2 / (1 + slope2). With two smooth lobes (a base
-// and a coat, alphas.x and .y), half the draws use each.
+// GGX's distribution of slopes at alpha (P22(sigma) = 1 / (pi a^2 (1 + |sigma|^2 / a^2)^2)), truncated to the core's disc
+// |sigma|^2 <= R^2 = max(core.x a^2, core.y) (core.x GGX's stretched slope^2, core.y a plain slope^2: the module's
+// inCore with alpha the lobe's largest, so the disc holds every core) and renormalised by its mass there,
+// R^2 / (a^2 + R^2). With two smooth lobes (a base and a coat, alphas.x and .y), half the draws use each.
 
-float manifoldSlopeLobe(float a, float slope2, float2 sigma)
+float manifoldCoreRadius2(float a, float2 core) { return max(core.x * a * a, core.y); }
+
+float manifoldSlopeLobe(float a, float2 core, float2 sigma)
 {
     if (!(a > 0.0)) return 0.0;
-    const float q = dot(sigma, sigma) / (a * a);
-    if (q > slope2) return 0.0;
-    const float k = 1.0 + q;
-    return (1.0 + slope2) / (slope2 * kManifoldPi * a * a * k * k);
+    const float a2 = a * a;
+    const float R2 = manifoldCoreRadius2(a, core);
+    const float s2 = dot(sigma, sigma);
+    if (s2 > R2) return 0.0;
+    const float k = 1.0 + s2 / a2;
+    return (a2 + R2) / (R2 * kManifoldPi * a2 * k * k);
 }
 
-float manifoldSlopeDensity(float2 alphas, float slope2, float2 sigma)
+float manifoldSlopeDensity(float2 alphas, float2 core, float2 sigma)
 {
     const bool b = alphas.x > 0.0, c = alphas.y > 0.0;
-    if (b && c) return 0.5 * (manifoldSlopeLobe(alphas.x, slope2, sigma) + manifoldSlopeLobe(alphas.y, slope2, sigma));
-    return manifoldSlopeLobe(b ? alphas.x : alphas.y, slope2, sigma);
+    if (b && c) return 0.5 * (manifoldSlopeLobe(alphas.x, core, sigma) + manifoldSlopeLobe(alphas.y, core, sigma));
+    return manifoldSlopeLobe(b ? alphas.x : alphas.y, core, sigma);
 }
 
-float2 manifoldDrawSlope(float2 alphas, float slope2, float3 u)
+float2 manifoldDrawSlope(float2 alphas, float2 core, float3 u)
 {
     const bool b = alphas.x > 0.0, c = alphas.y > 0.0;
     const float a = b && c ? (u.x < 0.5 ? alphas.x : alphas.y) : (b ? alphas.x : alphas.y);
-    const float share = slope2 / (1.0 + slope2);
+    const float q = manifoldCoreRadius2(a, core) / (a * a);   // the disc's radius^2 in alphas^2
+    const float share = q / (1.0 + q);
     const float xi = min(u.y * share, share);
     const float r = a * sqrt(xi / (1.0 - xi));
     const float phi = 2.0 * kManifoldPi * u.z;
@@ -156,4 +162,22 @@ bool manifoldConeTest(float3 boxMin, float3 boxMax, float3 axis, float halfAngle
     const float ang = acos(clamp(dot(hc, axis), -1.0, 1.0));
     const float slack = halfAngle + dh + 1e-4;
     return abs(ang - thetaSigma) <= slack || abs((kManifoldPi - ang) - thetaSigma) <= slack;
+}
+
+// manifoldConeTest on one triangle: its box and the cone of its three vertex normals (a normalised convex combination
+// of them stays in that cone while it is under 90 degrees; past that nothing is pruned).
+bool manifoldTriangleTest(ManifoldTri tri, float3 p, float3 L, float thetaSigma)
+{
+    const float3 p1 = tri.p0 + tri.e1, p2 = tri.p0 + tri.e2;
+    const float3 n0 = tri.n0, n1 = tri.n0 + tri.a1, n2 = tri.n0 + tri.a2;
+    const float l0 = length(n0), l1 = length(n1), l2 = length(n2);
+    if (!(l0 > 1e-12 && l1 > 1e-12 && l2 > 1e-12)) return true;
+    const float3 u0 = n0 / l0, u1 = n1 / l1, u2 = n2 / l2;
+    const float3 s = u0 + u1 + u2;
+    if (!(dot(s, s) > 1e-20)) return true;
+    const float3 ax = normalize(s);
+    const float half = max(acos(clamp(dot(ax, u0), -1.0, 1.0)), max(acos(clamp(dot(ax, u1), -1.0, 1.0)),
+                                                                     acos(clamp(dot(ax, u2), -1.0, 1.0))));
+    if (half >= 0.5 * kManifoldPi) return true;
+    return manifoldConeTest(min(tri.p0, min(p1, p2)), max(tri.p0, max(p1, p2)), ax, half, p, L, thetaSigma);
 }

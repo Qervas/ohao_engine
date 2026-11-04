@@ -24,9 +24,10 @@ struct MapResult {
 MapResult manifoldMap(const Tri& tri, const V3& p, const V3& L, V2 uv);
 // False when Newton did not converge; uv is the root otherwise.
 bool manifoldSolve(const Tri& tri, const V3& p, const V3& L, V2 target, float tol, V2& uv);
-// The drawn slope and its density.
-V2 manifoldDrawSlope(V2 alphas, float slope2, const V3& u, float& density);
-float manifoldSlopeDensity(V2 alphas, float slope2, V2 sigma);
+// The drawn slope and its density; the core's disc is |sigma|^2 <= max(slope2 a^2, minSlope2).
+V2 manifoldDrawSlope(V2 alphas, float slope2, float minSlope2, const V3& u, float& density);
+float manifoldSlopeDensity(V2 alphas, float slope2, float minSlope2, V2 sigma);
+bool manifoldTriangleTest(const Tri& tri, const V3& p, const V3& L, float thetaSigma);
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 

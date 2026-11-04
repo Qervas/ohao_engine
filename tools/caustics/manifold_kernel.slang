@@ -7,9 +7,10 @@
 // row 11 the box's max; row 12 (axis, half angle). Ops:
 //   0 map      at uv 9.xy           -> 13 (sigma, ok), 14 (du, dv), 15 y, 16 n
 //   1 solve    target 9.xy, tol     -> 13 (uv, converged)
-//   2 draw     alphas 9.zw, u 10    -> 13 (sigma, its density)
-//   3 density  alphas 9.zw, sigma 9.xy -> 13.x
+//   2 draw     alphas 9.zw, u 10, the core (0.z, 11.x)    -> 13 (sigma, its density)
+//   3 density  alphas 9.zw, sigma 9.xy, the core (0.z, 11.x) -> 13.x
 //   4 cone     box 10-11, cone 12, p, L, thetaSigma -> 13.x (1: may hold a root)
+//   5 tri      the triangle, p, L, thetaSigma -> 13.x (manifoldTriangleTest)
 import rt.manifold;
 
 RWStructuredBuffer<float4> io;
@@ -49,17 +50,22 @@ void run(uint3 id : SV_DispatchThreadID)
     }
     else if (op == 2u)
     {
-        const float2 s = manifoldDrawSlope(r9.zw, h.z, io[b + 10u].xyz);
-        o13 = float4(s, manifoldSlopeDensity(r9.zw, h.z, s), 0.0);
+        const float2 core = float2(h.z, io[b + 11u].x);
+        const float2 s = manifoldDrawSlope(r9.zw, core, io[b + 10u].xyz);
+        o13 = float4(s, manifoldSlopeDensity(r9.zw, core, s), 0.0);
     }
     else if (op == 3u)
     {
-        o13.x = manifoldSlopeDensity(r9.zw, h.z, r9.xy);
+        o13.x = manifoldSlopeDensity(r9.zw, float2(h.z, io[b + 11u].x), r9.xy);
     }
     else if (op == 4u)
     {
         const float4 c = io[b + 12u];
         o13.x = manifoldConeTest(io[b + 10u].xyz, io[b + 11u].xyz, c.xyz, c.w, p, L, h.w) ? 1.0 : 0.0;
+    }
+    else if (op == 5u)
+    {
+        o13.x = manifoldTriangleTest(tri, p, L, h.w) ? 1.0 : 0.0;
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

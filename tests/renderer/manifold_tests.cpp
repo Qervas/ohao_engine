@@ -199,6 +199,31 @@ TEST(Manifold, t8_roots_sphere) {
     EXPECT_GT(roots, 60);
 }
 
+// The triangle test keeps every triangle holding a root (on the sphere, at the roots t8_roots_sphere's search finds).
+TEST(Manifold, t8_triangle_test_conservative) {
+    const std::vector<Tri> tris = uvSphere(0.5, 96, 48);
+    std::mt19937 g(86u);
+    int roots = 0, pruned = 0;
+    for (int k = 0; k < 120; ++k) {
+        const D3 p = mul(sphereDir(g), 1.0 + 2.0 * rnd(g));
+        const D3 L = sphereDir(g);
+        const double r = 0.1 * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
+        const double target[2] = {r * std::cos(phi), r * std::sin(phi)};
+        const float theta = float(std::atan(r));
+        for (size_t i = 0; i < tris.size(); ++i) {
+            const bool keep = manifoldTriangleTest(tris[i], f3(p), f3(L), theta);
+            if (!keep) ++pruned;
+            const Roots ref = referenceRoots(tris[i], p, L, target, -1e-3);
+            if (!ref.inside.empty() || !ref.nearEdge.empty()) {
+                ++roots;
+                ASSERT_TRUE(keep) << "pruned a triangle holding a root: case " << k << " triangle " << i;
+            }
+        }
+    }
+    EXPECT_GT(roots, 60);
+    EXPECT_GT(pruned, int(0.9 * 120 * tris.size())) << "it prunes most of a sphere";
+}
+
 // A flat mirror (two triangles of one quad): sigma = 0 has exactly one root, the mirror point.
 TEST(Manifold, t8_roots_mirror) {
     const D3 up{0, 0, 1};
@@ -231,21 +256,23 @@ TEST(Manifold, t8_roots_mirror) {
 }
 
 // The slope draw: its density is the formula's, the mass F = q / (1 + q) / share of the drawn |sigma|^2 / a^2 = q is
-// uniform, the azimuth uniform; the density integrates to 1; a mixture's halves.
+// uniform, the azimuth uniform; the density integrates to 1 over the core's disc, R^2 = max(slope2 a^2, minSlope2)
+// (a mirror's disc is the fixed slope's); a mixture's halves.
 TEST(Manifold, t8_slope_density) {
-    const float slope2 = 99.0f;
-    const double share = 99.0 / 100.0;
-    for (V2 alphas : {V2{0.01f, 0.0f}, V2{0.0f, 0.0004f}, V2{1e-4f, 0.0f}}) {
+    const float slope2 = 99.0f, minSlope2 = 0.01f;
+    for (V2 alphas : {V2{0.01f, 0.0f}, V2{0.0f, 0.0004f}, V2{1e-4f, 0.0f}, V2{0.0625f, 0.0f}}) {
         const double a = alphas[0] > 0 ? alphas[0] : alphas[1];
+        const double R2 = std::max(double(slope2) * a * a, double(minSlope2));
+        const double qMax = R2 / (a * a), share = qMax / (1.0 + qMax);
         std::mt19937 g(84u);
         const int N = 64000, B = 16;
         std::vector<int> hr(B, 0), hp(B, 0);
         for (int i = 0; i < N; ++i) {
             float dens;
             const V3 u{float(rnd(g)), float(rnd(g)), float(rnd(g))};
-            const V2 s = manifoldDrawSlope(alphas, slope2, u, dens);
+            const V2 s = manifoldDrawSlope(alphas, slope2, minSlope2, u, dens);
             const double q = (double(s[0]) * s[0] + double(s[1]) * s[1]) / (a * a);
-            ASSERT_LE(q, slope2 * 1.0001);
+            ASSERT_LE(q, qMax * 1.0001);
             const double want = 1.0 / (kPi * a * a * (1 + q) * (1 + q)) / share;
             ASSERT_NEAR(dens, want, 1e-3 * want);
             const double F = q / (1 + q) / share;
@@ -261,23 +288,23 @@ TEST(Manifold, t8_slope_density) {
         }
         EXPECT_LT(c2r, 37.7);   // chi-square, 15 degrees of freedom, p = 0.001
         EXPECT_LT(c2p, 37.7);
-        // The density's integral over the core's disc, in polar steps of |sigma| (log-spaced: the peak is at 0).
+        // The density's integral over the disc, in polar steps of |sigma| (squared spacing: the peak is at 0).
         double sum = 0.0;
-        const double R = std::sqrt(double(slope2)) * a;
-        const int steps = 20000;
+        const double R = std::sqrt(R2);
+        const int steps = 40000;
         for (int i = 0; i < steps; ++i) {
-            const double r0 = R * std::pow(double(i) / steps, 2.0), r1 = R * std::pow(double(i + 1) / steps, 2.0);
+            const double r0 = R * std::pow(double(i) / steps, 3.0), r1 = R * std::pow(double(i + 1) / steps, 3.0);
             const double rm = 0.5 * (r0 + r1);
-            sum += manifoldSlopeDensity(alphas, slope2, {float(rm), 0.0f}) * 2 * kPi * rm * (r1 - r0);
+            sum += manifoldSlopeDensity(alphas, slope2, minSlope2, {float(rm), 0.0f}) * 2 * kPi * rm * (r1 - r0);
         }
-        EXPECT_NEAR(sum, 1.0, 2e-3);
-        EXPECT_EQ(manifoldSlopeDensity(alphas, slope2, {float(R * 1.01), 0.0f}), 0.0f) << "nothing past the core";
+        EXPECT_NEAR(sum, 1.0, 2e-3) << "alpha " << a;
+        EXPECT_EQ(manifoldSlopeDensity(alphas, slope2, minSlope2, {float(R * 1.01), 0.0f}), 0.0f) << "nothing past the core";
     }
     // A mixture: half its mass at each lobe's alpha.
     const V2 mix{0.01f, 0.0004f};
-    const float both = manifoldSlopeDensity(mix, slope2, {0.0f, 0.0f});
-    const float b = manifoldSlopeDensity({0.01f, 0.0f}, slope2, {0.0f, 0.0f});
-    const float c = manifoldSlopeDensity({0.0f, 0.0004f}, slope2, {0.0f, 0.0f});
+    const float both = manifoldSlopeDensity(mix, slope2, minSlope2, {0.0f, 0.0f});
+    const float b = manifoldSlopeDensity({0.01f, 0.0f}, slope2, minSlope2, {0.0f, 0.0f});
+    const float c = manifoldSlopeDensity({0.0f, 0.0004f}, slope2, minSlope2, {0.0f, 0.0f});
     EXPECT_NEAR(both, 0.5f * (b + c), 1e-3f * both);
 }
 

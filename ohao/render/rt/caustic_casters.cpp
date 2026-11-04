@@ -11,6 +11,14 @@ constexpr float kPi = 3.14159265358979f;
 constexpr float kMinRoughness = 0.01f;   // material/openpbr.slang's kMinSpecularRoughness
 }
 
+bool baseCanBeSmooth(const MaterialSmoothness& m, float cut) {
+    return std::max(m.specularRoughness * m.specularTexMin, kMinRoughness) < cut;
+}
+
+bool coatCanBeSmooth(const MaterialSmoothness& m, float cut) {
+    return m.coatWeight > 0.0f && std::max(m.coatRoughness * m.coatTexMin, kMinRoughness) < cut;
+}
+
 bool canBeSmooth(const MaterialSmoothness& m, float cut) {
     const float spec = std::max(m.specularRoughness * m.specularTexMin, kMinRoughness);
     if (spec < cut) return true;

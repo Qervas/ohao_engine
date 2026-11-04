@@ -41,7 +41,7 @@ void run(std::span<Item> items, std::span<const float> tables) {
         set(b[12], m.transmissionColor[0], m.transmissionColor[1], m.transmissionColor[2], m.transmissionWeight);
         set(b[13], m.thinWalled ? 1.0f : 0.0f, m.thinFilmWeight, m.thinFilmThickness, m.thinFilmIor);
         set(b[14], m.subsurfaceColor[0], m.subsurfaceColor[1], m.subsurfaceColor[2], m.subsurfaceWeight);
-        set(b[15], m.subsurfaceWalked ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+        set(b[15], m.subsurfaceWalked ? 1.0f : 0.0f, it.minSlope2, 0.0f, 0.0f);
     }
     static const float kNoTables = 0.0f;
     GlobalParams_0 globals{};

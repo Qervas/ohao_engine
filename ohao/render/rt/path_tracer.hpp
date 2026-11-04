@@ -28,6 +28,7 @@
 #include "render/material/openpbr_tables_buffer.hpp"
 #include "render/rt/path_guiding.hpp"
 #include "render/rt/caustic_pass.hpp"
+#include "render/rt/manifold_casters.hpp"
 #include "render/rt/radiance_cache.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
@@ -78,6 +79,9 @@ struct PathTracerShaderSet {
     const char* raygenCausticsEntry{"raygenCaustics"};
     const char* causticTraceSpv{"bin/shaders/rt_path_tracer.slang.causticTrace.spv"};
     const char* causticTraceEntry{"causticTrace"};
+    // Caustics step 2: the manifold pass, a program of its own.
+    const char* manifoldSpv{"bin/shaders/rt_path_tracer.slang.manifoldConnect.spv"};
+    const char* manifoldEntry{"manifoldConnect"};
 };
 
 class PathTracer {
@@ -228,16 +232,18 @@ private:
     [[nodiscard]] bool createDescriptorResources();
     [[nodiscard]] bool createRTPipeline();
     [[nodiscard]] bool createShaderBindingTable();
-    // A program: raygen, the miss, the hit group and a second raygen, on the shared layout.
+    // A program: raygen, the miss, the hit group and a second raygen (none when extraSpv is null), on the shared layout.
     [[nodiscard]] VkPipeline buildRtPipeline(const char* rgenSpv, const char* rgenEntry, const char* extraSpv,
                                              const char* extraEntry, const char* cacheName);
     [[nodiscard]] bool buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffer, VkDeviceMemory& sbtMemory,
                                                VkStridedDeviceAddressRegionKHR& rgenRegion,
                                                VkStridedDeviceAddressRegionKHR& missRegion,
                                                VkStridedDeviceAddressRegionKHR& hitRegion,
-                                               VkStridedDeviceAddressRegionKHR& extraRegion);
+                                               VkStridedDeviceAddressRegionKHR* extraRegion);
     // Caustics' program, made the first time a frame needs it (minutes cold, as the default one).
     [[nodiscard]] bool ensureCausticsPipeline();
+    // Caustics step 2's program (manifoldConnect), made the first time a frame runs the manifold pass.
+    [[nodiscard]] bool ensureManifoldPipeline();
 public:
     // Caustics' counters once a frame has run the light pass (render.stats `caustics`).
     [[nodiscard]] std::optional<render::CausticsStats> causticsStats() const {
@@ -321,6 +327,9 @@ private:
     // Caustics' light pass (bindings 51-53; render/rt/caustic_pass.hpp).
     render::CausticPass m_caustics;
     bool m_causticsRan = false;
+    // Caustics step 2's casters and requests (bindings 54-57; render/rt/manifold_casters.hpp).
+    render::ManifoldCasters m_manifold;
+    bool m_manifoldRan = false;
     const render::RenderScene* m_scene = nullptr;   // setSceneBuffers': its casters, when a frame has caustics
     // The emissive triangle lights (bindings 42-45), from the scene's emissive instances.
     render::EmissiveLights* m_emissive = nullptr;   // the renderer's (setEmissiveLights)
@@ -472,6 +481,14 @@ private:
     VkStridedDeviceAddressRegionKHR m_causticsMissRegion{};
     VkStridedDeviceAddressRegionKHR m_causticsHitRegion{};
     VkStridedDeviceAddressRegionKHR m_causticTraceRegion{};
+    // Caustics step 2's program (ensureManifoldPipeline): manifoldConnect.
+    VkPipeline m_manifoldPipeline = VK_NULL_HANDLE;
+    bool m_manifoldPipelineFailed = false;
+    VkBuffer m_manifoldSbtBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_manifoldSbtMemory = VK_NULL_HANDLE;
+    VkStridedDeviceAddressRegionKHR m_manifoldRgenRegion{};
+    VkStridedDeviceAddressRegionKHR m_manifoldMissRegion{};
+    VkStridedDeviceAddressRegionKHR m_manifoldHitRegion{};
 
     // Push constants — 256 bytes (Vulkan max on most RT GPUs)
     struct PTPushConstants {

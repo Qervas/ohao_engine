@@ -65,6 +65,14 @@ static const float kCausticRough = 0.25;
 static const uint kCausticRaysPerPixel = 8u;
 // caustics: a splat's radiance times this is added as an integer (order-free sums, as the radiance cache's)
 static const float kCausticSplatScale = 1024.0;
+// caustics step 2: the camera depths (1 to this) whose rough reflection the manifold pass connects to the sun through one smooth reflection; a pixel's requests (ruling M5)
+static const uint kManifoldDepths = 2u;
+// caustics step 2: a smooth lobe's core, the half vectors whose slope stretched by its alphas is at most sqrt of this (GGX holds 99 / 100 of its normals there, ruling M3), or whose plain slope is within kManifoldCoreMinSlope2's; the manifold pass owns the core, the camera side the tail
+static const float kManifoldCoreSlope2 = 99.0;
+// caustics step 2: and every half vector whose plain slope is at most sqrt of this (0.1, 5.7 degrees): a mirror's tail past a few alphas is still far too narrow for the camera side to find, so the core reaches this angle at least (its tail past it carries alpha^2 / 0.01 of the light)
+static const float kManifoldCoreMinSlope2 = 0.01;
+// caustics step 2: the casters' triangles a cluster and clusters a group (the manifold pass's pruning: a box and a cone of normals each)
+static const uint kManifoldCluster = 32u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
 static const uint kVfxGroupSize = 64u;
 // vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order

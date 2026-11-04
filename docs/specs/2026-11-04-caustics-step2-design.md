@@ -202,7 +202,12 @@ Closed forms first; each case fails before its code exists.
 - **M2 (PROVISIONAL) — chain length K.** 2 (step 2b): a glass ball is two refractions, a glint one reflection. Longer
   chains stay with the camera side.
 - **M3 (OPEN) — the core, `θcore(α)`.** The angle holding a fixed share of GGX's normals: 0.9, 0.99 or 0.999, measured
-  on m2 and the showcase (a larger core: fewer camera-side dots, more triangles per request).
+  on m2 and the showcase (a larger core: fewer camera-side dots, more triangles per request). **Found while building
+  2a:** a share alone leaves a mirror's tail (α 1e-4: 1% of its light past a slope of 1e-3, 0.06 degrees) as narrow as
+  the lobe itself, which the camera side cannot find (m1 would read 1% dark, and its few finds would be dots). The
+  core is the wider of the share's (`kManifoldCoreSlope2` 99: 0.99) and a fixed slope, 0.1 (`kManifoldCoreMinSlope2`,
+  5.7 degrees: a mirror's tail past it carries α² / 0.01 of its light, 5.5e-6 at roughness 0). The slope draw is GGX's
+  at the lobe's α truncated to that disc, so its weight keeps D cancelled.
 - **M4 (OPEN) — the tuple bound.** Bernstein's irradiance bound or a solid angle x lobe peak, measured at equal time.
 - **M5 (OPEN) — the depths R.** 2 (depths 1 and 2) recommended; measured by the class images (what the glint class
   leaves at depth 3+).

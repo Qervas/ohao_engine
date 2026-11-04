@@ -152,3 +152,69 @@ TEST(CausticCasters, SeedsSpreadOverTheRange) {
         EXPECT_GT(hi - lo, 1u << 31) << "frame " << frame << ": the seeds' inputs span only " << (hi - lo);
     }
 }
+
+// ---- caustics step 2a: the manifold pass's owned materials (ruling M7) ----
+
+namespace {
+
+ManifoldSelection selectWith(const std::vector<ManifoldDrawInput>& draws, const std::vector<MaterialSmoothness>& mats) {
+    return selectManifoldDraws(std::span<const ManifoldDrawInput>(draws),
+                               [&](uint32_t m) { return m < mats.size() ? mats[m] : MaterialSmoothness{}; }, 0.25f);
+}
+
+MaterialSmoothness smoothMetal() {
+    MaterialSmoothness m;
+    m.specularRoughness = 0.1f;
+    return m;
+}
+
+} // namespace
+
+TEST(ManifoldOwned, OwnedNeedsSmooth) {
+    MaterialSmoothness rough;
+    rough.specularRoughness = 0.5f;
+    MaterialSmoothness coated = rough;
+    coated.coatWeight = 1.0f;
+    coated.coatRoughness = 0.02f;
+    const std::vector<MaterialSmoothness> mats{rough, smoothMetal(), coated};
+    const std::vector<ManifoldDrawInput> draws{{0, 12, 0, 0, 0}, {36, 12, 0, 1, 1}, {72, 12, 0, 2, 2}};
+    const ManifoldSelection s = selectWith(draws, mats);
+    EXPECT_EQ(s.materialBits[0], 0u);
+    EXPECT_EQ(s.materialBits[1], kManifoldOwned | kManifoldBaseSmooth);
+    EXPECT_EQ(s.materialBits[2], kManifoldOwned | kManifoldCoatSmooth) << "a rough base under a smooth coat";
+    EXPECT_EQ(s.draws, (std::vector<uint32_t>{1, 2}));
+}
+
+TEST(ManifoldOwned, OwnedExcludesNormalMaps) {
+    MaterialSmoothness mapped = smoothMetal();
+    mapped.normalMap = true;
+    const std::vector<MaterialSmoothness> mats{smoothMetal(), mapped};
+    const std::vector<ManifoldDrawInput> draws{{0, 12, 0, 0, 0}, {36, 12, 0, 1, 1}};
+    const ManifoldSelection s = selectWith(draws, mats);
+    EXPECT_TRUE(s.materialBits[0] & kManifoldOwned);
+    EXPECT_FALSE(s.materialBits[1] & kManifoldOwned) << "its glints have a root per texel";
+    EXPECT_EQ(s.draws, (std::vector<uint32_t>{0}));
+}
+
+TEST(ManifoldOwned, OwnedExcludesSkinned) {
+    // A material one skinned draw uses is not owned, for its static draws either: the camera side cannot tell them
+    // apart (it sees the material).
+    const std::vector<MaterialSmoothness> mats{smoothMetal()};
+    ManifoldDrawInput a{0, 12, 0, 0, 0}, b{36, 12, 0, 1, 0};
+    b.skinned = true;
+    const ManifoldSelection s = selectWith({a, b}, mats);
+    EXPECT_FALSE(s.materialBits[0] & kManifoldOwned);
+    EXPECT_TRUE(s.draws.empty());
+    ManifoldDrawInput e{0, 12, 0, 2, 0};
+    e.emitter = true;
+    EXPECT_FALSE(selectWith({a, e}, mats).materialBits[0] & kManifoldOwned);
+}
+
+TEST(ManifoldOwned, TextureLowersRoughness) {
+    // A rough factor whose texture can take it under the cut: the base can be smooth somewhere, so it is owned.
+    MaterialSmoothness textured;
+    textured.specularRoughness = 0.6f;
+    textured.specularTexMin = 0.2f;
+    const ManifoldSelection s = selectWith({{0, 12, 0, 0, 0}}, {textured});
+    EXPECT_EQ(s.materialBits[0], kManifoldOwned | kManifoldBaseSmooth);
+}

@@ -92,7 +92,11 @@ bool PathTracer::createDescriptorResources() {
     add(50, BUFFER, RGEN);  // each pixel's sample radiance and proposal count
     add(51, BUFFER, RGEN);  // caustics: the lights' disks (render/rt/caustic_pass.hpp),
     add(52, BUFFER, RGEN);  // the light pass's splats,
-    add(53, BUFFER, RGEN);  // its clamped count
+    add(53, BUFFER, RGEN);  // its clamped count (and the manifold pass's counters)
+    add(54, BUFFER, RGEN);  // caustics step 2: the owned casters' triangles (render/rt/manifold_casters.hpp),
+    add(55, BUFFER, RGEN);  // their clusters and groups,
+    add(56, BUFFER, RGEN);  // the owned draws and a word a material,
+    add(57, BUFFER, RGEN);  // the camera side's requests
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -114,7 +118,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 22 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50 + caustics 51-53
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 26 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50 + caustics 51-53 + manifold 54-57
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 * kSets},   // the emissive lights' power 43
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };

@@ -1122,6 +1122,7 @@ void t7_core_indicator() {
             Item it;
             it.op = Op::SmoothCore;
             it.slope2 = 4.0f;
+            it.minSlope2 = 0.0f;
             it.material = metal;
             it.wo = {float(wo[0]), float(wo[1]), float(wo[2])};
             it.v = {float(d * mx - wo[0]), float(d * my - wo[1]), float(d * mz - wo[2])};
@@ -1135,6 +1136,38 @@ void t7_core_indicator() {
             if (!ok) std::printf("\n    k %.1f phi %.1f core %g smooth %g", k, phi, it.r0[0], p.r0[0]);
         }
     CHECK(ok, "inside the core the smooth part, outside 0");
+}
+
+// A mirror's core reaches the plain slope sqrt(minSlope2) whatever its alpha: roughness 0 (alpha 1e-4), slope2 99
+// (10 alphas) and minSlope2 0.01 (slope 0.1): half vectors at slopes 0.09 in, 0.11 out.
+void t7_core_min_slope() {
+    Material mirror;
+    mirror.baseMetalness = 1.0f;
+    mirror.baseColor = {0.9f, 0.9f, 0.9f};
+    mirror.specularRoughness = 0.0f;
+    bool ok = true;
+    for (double k : {0.09, 0.11})
+        for (double phi : {0.0, 2.0}) {
+            const double sx = k * std::cos(phi), sy = k * std::sin(phi);
+            const double len = std::sqrt(sx * sx + sy * sy + 1.0);
+            const double mx = sx / len, my = sy / len, mz = 1.0 / len;
+            const double wo[3] = {0.1, 0.2, std::sqrt(1.0 - 0.05)};
+            const double d = 2.0 * (wo[0] * mx + wo[1] * my + wo[2] * mz);
+            Item it;
+            it.op = Op::SmoothCore;
+            it.material = mirror;
+            it.wo = {float(wo[0]), float(wo[1]), float(wo[2])};
+            it.v = {float(d * mx - wo[0]), float(d * my - wo[1]), float(d * mz - wo[2])};
+            Item p = it;
+            p.op = Op::Parts;
+            ohao::material::run(std::span<Item>(&it, 1), kTables);
+            ohao::material::run(std::span<Item>(&p, 1), kTables);
+            const bool in = k < 0.1;
+            if (in && !(it.r0[0] == p.r0[0] && p.r0[0] > 0.0f)) ok = false;
+            if (!in && !(it.r0[0] == 0.0f && p.r0[0] > 0.0f)) ok = false;
+            if (!ok) std::printf("\n    slope %.2f core %g smooth %g", k, it.r0[0], p.r0[0]);
+        }
+    CHECK(ok, "a mirror's core reaches the fixed slope");
 }
 
 void t7_alpha_bounds() {
@@ -1211,6 +1244,7 @@ int main(int argc, char** argv) {
     RUN_ONE(t7_core_le_smooth);
     RUN_ONE(t7_core_whole);
     RUN_ONE(t7_core_indicator);
+    RUN_ONE(t7_core_min_slope);
     RUN_ONE(t7_alpha_bounds);
     return ohao::test::finish("material_tests");
 }

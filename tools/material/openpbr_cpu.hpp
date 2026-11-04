@@ -61,6 +61,7 @@ struct Item {
     Float4 r1{};
     float cut{0.25f};   // Parts, SampleSmooth, PdfSmooth: lobes rougher than this are the rough part
     float slope2{99.0f};   // SmoothCore: the core's stretched slope, squared
+    float minSlope2{0.01f};   // SmoothCore: and its plain slope, squared (the core is the wider)
 };
 
 // Runs every item through the kernel; `tables` is the energy tables (kOpenPBRTables), or empty

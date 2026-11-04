@@ -456,10 +456,18 @@ def c1_emitter(failures):
 
 
 def c6_repeat(failures):
+    out = serve_twice("c6", mirror_scene(), {})
+    print("c6_repeat: two captures in one process %s" % ("identical" if out["identical"] else "DIFFER"))
+    if not out["identical"]:
+        failures.append("c6_repeat: two captures with caustics in one process differ (%s)" % out.get("errors"))
+    return {"identical": out["identical"]}
+
+
+def serve_twice(name, scene, extra):
     os.makedirs(OUT, exist_ok=True)
-    path = os.path.join(OUT, "c6.scene.json")
+    path = os.path.join(OUT, name + ".scene.json")
     with open(path, "w") as fh:
-        json.dump(mirror_scene(), fh)
+        json.dump(scene, fh)
     out = os.path.relpath(os.path.join(OUT, "serve"), ROOT).replace(os.sep, "/")
     proc = subprocess.Popen([OHAO, "serve", "--out", out], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, text=True)
@@ -475,21 +483,186 @@ def c6_repeat(failures):
 
     replies = [call(1, "scene.load", {"path": os.path.relpath(path, ROOT).replace(os.sep, "/")})]
     for i in (0, 1):
-        replies.append(call(2 + i, "render.capture", {"path": out + "/c6_%d.png" % i, "hdr": out + "/c6_%d.pfm" % i,
-                                                       "mode": "rt_offline", "spp": 64, "width": W, "height": H,
-                                                       "caustics": True}))
+        params = {"path": out + "/%s_%d.png" % (name, i), "hdr": out + "/%s_%d.pfm" % (name, i), "mode": "rt_offline",
+                  "spp": 64, "width": W, "height": H, "caustics": True}
+        params.update(extra)
+        replies.append(call(2 + i, "render.capture", params))
     proc.stdin.close()
-    proc.wait(timeout=120)
-    hdr = [os.path.join(ROOT, out, "c6_%d.pfm" % i) for i in (0, 1)]
+    proc.wait(timeout=1800)
+    hdr = [os.path.join(ROOT, out, "%s_%d.pfm" % (name, i)) for i in (0, 1)]
     errors = [r.get("error") for r in replies if r is None or "error" in r]
     same = not errors and all(os.path.exists(h) for h in hdr) and open(hdr[0], "rb").read() == open(hdr[1], "rb").read()
-    print("c6_repeat: two captures in one process %s" % ("identical" if same else "DIFFER"))
-    if not same:
-        failures.append("c6_repeat: two captures with caustics in one process differ (%s)" % errors)
-    return {"identical": same}
+    return {"identical": same, "errors": errors}
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase}
+# ---- caustics step 2a (docs/specs/2026-11-04-caustics-step2-design.md): the sun's smooth reflection seen past the
+# first hit. m1: c1's room (the mirror M1 lights R, the black wall keeps the sun off it) and a second, vertical white
+# mirror M2 at x = -1.5 facing +x, which the sun's light runs parallel to (it reflects none of it). The camera, above
+# and to the side, sees R directly (depth 0: step 1's term, L) and in M2 (R at depth 1, the sun through M1 at depth 2:
+# step 2a's term, F2 L = L for a white metal). With --bounces 2 nothing else reaches either view, so both are
+# L = 0.5 / pi E cos 45 within 1%. Without step 2a the mirrored R is missing (the camera side cannot find a mirror's
+# reflection of a delta sun).
+
+M1_CAM = (2.5, 3.0, 0.5)
+M1_LOOK = (-1.5, 0.3, 0.5)
+M1_FOV = 60.0
+
+
+def look_quat(eye, target):
+    import numpy as np
+    f = np.array(target, float) - np.array(eye, float)
+    f /= np.linalg.norm(f)
+    r = np.cross(f, [0.0, 1.0, 0.0])
+    r /= np.linalg.norm(r)
+    u = np.cross(r, f)
+    m = np.stack([r, u, -f], axis=1)   # columns: the camera's x, y, z (it looks down -z)
+    t = np.trace(m)
+    if t > 0:
+        s = 0.5 / math.sqrt(t + 1.0)
+        return [float((m[2, 1] - m[1, 2]) * s), float((m[0, 2] - m[2, 0]) * s), float((m[1, 0] - m[0, 1]) * s),
+                float(0.25 / s)]
+    i = int(np.argmax(np.diag(m)))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    s = 2.0 * math.sqrt(1.0 + m[i, i] - m[j, j] - m[k, k])
+    q = [0.0, 0.0, 0.0, 0.0]
+    q[i] = 0.25 * s
+    q[j] = (m[j, i] + m[i, j]) / s
+    q[k] = (m[k, i] + m[i, k]) / s
+    q[3] = (m[k, j] - m[j, k]) / s
+    return [float(v) for v in q]
+
+
+def mirror_seen_scene(m1_rough=0.0):
+    s = mirror_scene()
+    s["entities"] = [e for e in s["entities"] if e.get("Name", {}).get("value") != "Camera"]
+    for e in s["entities"]:
+        if e.get("Name", {}).get("value") == "Mirror":
+            e["Material"]["specular_roughness"] = m1_rough
+    s["entities"].append(ent(1, Name={"value": "Camera"}, Transform={"position": list(M1_CAM), "rotation": look_quat(M1_CAM, M1_LOOK)},
+                             Camera={"fovDeg": M1_FOV}))
+    s["entities"].append(ent(11, Name={"value": "Mirror2"},
+                             MeshSource={"source": {"QuadPrim": {"a": [-1.5, 0, -0.5], "b": [-1.5, 0, 1.5], "c": [-1.5, 2, 1.5],
+                                                                  "d": [-1.5, 2, -0.5], "normal": [1, 0, 0], "color": [1, 1, 1]}}},
+                             Material={"base_color": [1, 1, 1], "base_metalness": 1, "specular_roughness": 0.0}))
+    return s
+
+
+def m1_masks(margin=0.06):
+    """Pixels whose whole footprint (its corners) meets R directly, and those meeting R through M2, well inside both."""
+    import numpy as np
+    eye = np.array(M1_CAM, float)
+    f = np.array(M1_LOOK, float) - eye
+    f /= np.linalg.norm(f)
+    r = np.cross(f, [0.0, 1.0, 0.0])
+    r /= np.linalg.norm(r)
+    u = np.cross(r, f)
+    tan_y = math.tan(math.radians(M1_FOV) / 2)
+    tan_x = tan_y * W / H
+    direct = np.ones((H, W), bool)
+    mirrored = np.ones((H, W), bool)
+    for ox, oy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        xs = (np.arange(W)[None, :] + ox) / W * 2 - 1
+        ys = (np.arange(H)[:, None] + oy) / H * 2 - 1
+        d = f[None, None] + r[None, None] * (xs * tan_x)[..., None] - u[None, None] * (ys * tan_y)[..., None]
+        d = d / np.linalg.norm(d, axis=2, keepdims=True)
+        # Directly on R (y = 0, x in [-1, 1], z in [0, 1]).
+        t = -eye[1] / d[..., 1]
+        hit = eye + d * t[..., None]
+        in_r = (t > 0) & (np.abs(hit[..., 0]) < 1 - margin) & (hit[..., 2] > margin) & (hit[..., 2] < 1 - margin)
+        # M2 first (x = -1.5, y in [0, 2], z in [-0.5, 1.5]), then reflected onto R.
+        t2 = (-1.5 - eye[0]) / d[..., 0]
+        h2 = eye + d * t2[..., None]
+        on_m2 = (t2 > 0) & (h2[..., 1] > margin) & (h2[..., 1] < 2 - margin) & (h2[..., 2] > -0.5 + margin) & (h2[..., 2] < 1.5 - margin)
+        d2 = d * np.array([-1.0, 1.0, 1.0])
+        t3 = -h2[..., 1] / d2[..., 1]
+        h3 = h2 + d2 * t3[..., None]
+        via = on_m2 & (t3 > 0) & (np.abs(h3[..., 0]) < 1 - margin) & (h3[..., 2] > margin) & (h3[..., 2] < 1 - margin)
+        direct &= in_r & ~on_m2
+        mirrored &= via
+    return direct, mirrored
+
+
+def m1_mirror_seen(failures):
+    want = 0.5 / math.pi * SUN_E * math.cos(math.radians(45))
+    direct, mirrored = m1_masks()
+    img, log = render("m1_mirror_seen", mirror_seen_scene(), 256, ["--bounces", "2"])
+    off, _ = render("m1_mirror_seen_off", mirror_seen_scene(), 256, ["--bounces", "2"], {"OHAO_MANIFOLD_OFF": "1"})
+    x, xo = img.mean(2), off.mean(2)
+    out = {"direct_px": int(direct.sum()), "mirrored_px": int(mirrored.sum()), "closed_form": want}
+    for tag, mask in (("direct", direct), ("mirrored", mirrored)):
+        m, mo = float(x[mask].mean()), float(xo[mask].mean())
+        err = abs(m - want) / want
+        out[tag] = {"mean": m, "error": err, "without_step2": mo}
+        print("m1_mirror_seen %s (%d px): %.4f, closed form %.4f (%.2f%%); without step 2a %.4f"
+              % (tag, int(mask.sum()), m, want, 100 * err, mo))
+        if not err <= 0.01:
+            failures.append("m1_mirror_seen %s: %.4f against %.4f (%.2f%%, bar 1%%)" % (tag, m, want, 100 * err))
+    if not out["mirrored"]["without_step2"] < 0.05 * want:
+        failures.append("m1_mirror_seen: without step 2a the mirrored R is %.4f, not missing" % out["mirrored"]["without_step2"])
+    if out["mirrored"]["mean"] > 0:
+        out["mirrored"]["pixel_std"] = float(x[mirrored].std() / want)
+    for line in log.splitlines():
+        if "manifold pass" in line:
+            out["counters"] = line.strip()
+            print("  " + line.strip())
+    return out
+
+
+# m2: m1's room with M1 at roughness 0.1. R's irradiance from a glossy mirror large against its lobe has no closed form;
+# manifold_reference integrates OpenPBR's own BSDF (its CPU twin) over the half vector, and splits it at the core.
+# The mirrored R within 1% of 0.5 / pi E x the integral; the manifold pass's own light (OHAO_PT_CLASS=128) within 1% of
+# the core's share, the camera side's sun after a rough bounce (class 2) the tail's.
+
+def m2_reference(rough):
+    exe = os.path.join(ROOT, "build", "Release", "manifold_reference.exe")
+    r = subprocess.run([exe, str(rough)], capture_output=True, text=True, cwd=ROOT)
+    if r.returncode != 0:
+        raise RuntimeError("manifold_reference: " + r.stderr)
+    return json.loads(r.stdout)
+
+
+def m2_glossy_mirror(failures):
+    ref = m2_reference(0.1)
+    k = 0.5 / math.pi * SUN_E
+    want, want_core, want_tail = k * ref["total"], k * ref["core"], k * ref["tail"]
+    direct, mirrored = m1_masks(0.12)
+    scene = mirror_seen_scene(0.1)
+    img, log = render("m2_glossy", scene, 512, ["--bounces", "2"])
+    core, _ = render("m2_glossy_core", scene, 512, ["--bounces", "2"], {"OHAO_PT_CLASS": "128"})
+    tail, _ = render("m2_glossy_tail", scene, 512, ["--bounces", "2"], {"OHAO_PT_CLASS": "2"})
+    x, xc, xt = img.mean(2), core.mean(2), tail.mean(2)
+    out = {"reference": ref, "closed_form": want}
+    for tag, mask in (("direct", direct), ("mirrored", mirrored)):
+        m = float(x[mask].mean())
+        err = abs(m - want) / want
+        out[tag] = {"mean": m, "error": err, "px": int(mask.sum())}
+        print("m2_glossy_mirror %s (%d px): %.4f, reference %.4f (%.2f%%)" % (tag, int(mask.sum()), m, want, 100 * err))
+        if not err <= 0.01:
+            failures.append("m2_glossy_mirror %s: %.4f against %.4f (%.2f%%, bar 1%%)" % (tag, m, want, 100 * err))
+    mc, mt = float(xc[mirrored].mean()), float(xt[mirrored].mean())
+    ec = abs(mc - want_core) / want
+    et = abs(mt - want_tail) / want
+    out["core"] = {"mean": mc, "reference": want_core, "error": ec}
+    out["tail"] = {"mean": mt, "reference": want_tail, "error": et}
+    print("m2_glossy_mirror mirrored split: the pass %.4f (core %.4f), the camera side %.4f (tail %.4f)" % (mc, want_core, mt, want_tail))
+    if not (ec <= 0.01 and et <= 0.01):
+        failures.append("m2_glossy_mirror: the split %.4f / %.4f against the core %.4f / tail %.4f" % (mc, mt, want_core, want_tail))
+    for line in log.splitlines():
+        if "manifold pass" in line:
+            out["counters"] = line.strip()
+            print("  " + line.strip())
+    return out
+
+
+def m8_repeat(failures):
+    out = serve_twice("m8", mirror_seen_scene(0.1), {"bounces": 2})
+    print("m8_repeat: two captures in one process %s" % ("identical" if out["identical"] else "DIFFER"))
+    if not out["identical"]:
+        failures.append("m8_repeat: two captures with the manifold pass in one process differ (%s)" % out.get("errors"))
+    return out
+
+
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m8_repeat": m8_repeat}
 
 
 def main(argv):
