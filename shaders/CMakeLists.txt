@@ -1,8 +1,6 @@
-# Create output directory
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/shaders
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders/
-)
+# The output directory, made at configure time: a custom command whose output is the directory gave Ninja an edge
+# named `shaders`, the target's own name, so `--target shaders` built the directory and nothing else.
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/shaders)
 
 set(SHADER_BINARY_FILES "")
 
@@ -75,7 +73,7 @@ foreach(SLANG ${SLANG_SOURCES})
             OUTPUT ${SPIRV}
             COMMAND ${SLANGC} ${SLANG} -target spirv -profile spirv_1_6 ${SLANG_CAPS} -entry ${ENTRY} -fvk-use-entrypoint-name
                     -matrix-layout-column-major -I ${CMAKE_CURRENT_SOURCE_DIR} -o ${SPIRV}
-            DEPENDS ${SLANG_SOURCES} ${CMAKE_BINARY_DIR}/shaders
+            DEPENDS ${SLANG_SOURCES}
             COMMENT "Compiling Slang shader ${SPIRV_NAME}"
         )
         list(APPEND SHADER_BINARY_FILES ${SPIRV})
