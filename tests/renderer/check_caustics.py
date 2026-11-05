@@ -225,7 +225,8 @@ def sphere_scene():
     }
 
 
-def sphere_reference(w, h):
+def sphere_reference(w, h, orders=5):
+    # orders: the paths through the ball kept, by internal reflections (1: in and out only, step 2b's K = 2).
     import numpy as np
     c = np.array(SPHERE_C)
     rad, n_glass = 0.5, 1.5
@@ -267,7 +268,7 @@ def sphere_reference(w, h):
     tan_y = math.tan(math.radians(SPHERE_FOV / 2)); tan_x = tan_y * w / h
     hgt = SPHERE_CAM[1]
     e = np.zeros((h, w))
-    for _ in range(5):
+    for _ in range(orders):
         q = far(p, d)
         nin = -(q - c) / rad
         ci = -np.sum(d * nin, 1)
@@ -657,6 +658,173 @@ def m2_glossy_mirror(failures):
     return out
 
 
+# ---- m4-m6: step 2b, the sun through a solid seen past the first hit ---------------------------------
+# The camera side never renders it (its light samples look above a surface, its shadow rays stop at solids, no BSDF
+# ray meets the sun), so without the pass these floors are black. Step 2b takes the two refractions only (K = 2): every
+# closed form below is that order, (1 - F)^2 through the slab; the orders with internal reflections (F^2 ~ 0.002 of it)
+# are no one's. 2b runs with OHAO_MANIFOLD_GLASS=1 until these hold it.
+
+def slab_floor():
+    f = fresnel(math.cos(math.radians(30)), 1.5)
+    return 0.5 / math.pi * SUN_E * math.cos(math.radians(30)) * (1 - f) ** 2
+
+
+def camera_rays(eye, look, fov, ox, oy):
+    """Each pixel's ray through its corner (ox, oy) in [0, 1] (W x H x 3, unit), as the renderer's camera lays them."""
+    import numpy as np
+    eye = np.array(eye, float)
+    f = np.array(look, float) - eye
+    f /= np.linalg.norm(f)
+    r = np.cross(f, [0.0, 1.0, 0.0])
+    r /= np.linalg.norm(r)
+    u = np.cross(r, f)
+    tan_y = math.tan(math.radians(fov) / 2)
+    tan_x = tan_y * W / H
+    xs = (np.arange(W)[None, :] + ox) / W * 2 - 1
+    ys = (np.arange(H)[:, None] + oy) / H * 2 - 1
+    d = f[None, None] + r[None, None] * (xs * tan_x)[..., None] - u[None, None] * (ys * tan_y)[..., None]
+    return d / np.linalg.norm(d, axis=2, keepdims=True)
+
+
+def in_box(p, lo, hi, axes):
+    ok = True
+    for a in axes:
+        ok = ok & (p[..., a] > lo[a]) & (p[..., a] < hi[a])
+    return ok
+
+
+# m4: under c3_slab's slab a mirror (white metal, F 1) stands at x = 2 facing -x, edge-on to the sun (it travels in
+# the y-z plane), so it neither shadows the floor nor reflects the sun. The camera under the slab looks into it and
+# sees the floor under the slab's middle at camera depth 1: the closed form times the mirror's 1.
+M4_CAM, M4_LOOK, M4_FOV = (0.0, 0.6, 0.0), (2.0, 0.3, 0.0), 50.0
+
+
+def m4_scene():
+    s = slab_scene()
+    s["entities"] = [e for e in s["entities"] if e.get("Name", {}).get("value") != "Camera"]
+    s["entities"].append(ent(1, Name={"value": "Camera"}, Transform={"position": list(M4_CAM), "rotation": look_quat(M4_CAM, M4_LOOK)},
+                             Camera={"fovDeg": M4_FOV}))
+    s["entities"].append(ent(7, Name={"value": "Mirror"},
+                             MeshSource={"source": {"QuadPrim": {"a": [2, 0.05, -1.2], "b": [2, 0.05, 1.2], "c": [2, 0.95, 1.2],
+                                                                  "d": [2, 0.95, -1.2], "normal": [-1, 0, 0], "color": [1, 1, 1]}}},
+                             Material={"base_color": [1, 1, 1], "base_metalness": 1, "specular_roughness": 0.0}))
+    return s
+
+
+def m4_mask(margin=0.06):
+    import numpy as np
+    eye = np.array(M4_CAM, float)
+    mask = np.ones((H, W), bool)
+    for ox, oy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        d = camera_rays(M4_CAM, M4_LOOK, M4_FOV, ox, oy)
+        t = (2.0 - eye[0]) / d[..., 0]
+        hm = eye + d * t[..., None]
+        on = (t > 0) & in_box(hm, [0, 0.05 + margin, -1.2 + margin], [0, 0.95 - margin, 1.2 - margin], (1, 2))
+        d2 = d * np.array([-1.0, 1.0, 1.0])
+        t2 = -hm[..., 1] / d2[..., 1]
+        hf = hm + d2 * t2[..., None]
+        mask &= on & (t2 > 0) & in_box(hf, [-2.0, 0, -2.0], [1.7, 0, 1.7], (0, 2))
+    return mask
+
+
+def m4_slab_seen(failures):
+    want = slab_floor()
+    mask = m4_mask()
+    img, _ = render("m4_slab_seen", m4_scene(), 256, ["--bounces", "2"], {"OHAO_MANIFOLD_GLASS": "1"})
+    off, _ = render("m4_slab_seen_off", m4_scene(), 64, ["--bounces", "2"], {"OHAO_MANIFOLD_OFF": "1"})
+    m, mo = float(img.mean(2)[mask].mean()), float(off.mean(2)[mask].mean())
+    err = abs(m - want) / want
+    print("m4_slab_seen (%d px): the floor in the mirror %.4f, closed form %.4f (%.2f%%); without the pass %.4f"
+          % (int(mask.sum()), m, want, 100 * err, mo))
+    if not err <= 0.02:
+        failures.append("m4_slab_seen: %.4f against the closed form %.4f (%.2f%%, bar 2%%)" % (m, want, 100 * err))
+    if not mo < 0.01 * want:
+        failures.append("m4_slab_seen: without the pass the mirrored floor is %.4f, not missing" % mo)
+    return {"px": int(mask.sum()), "mean": m, "closed_form": want, "error": err, "without_pass": mo}
+
+
+# m5: c3_sphere's ball seen through a periscope: a mirror at 45 degrees (y = z + 2.4, facing down and +z, clear of every
+# sun ray to the floor in view) and a camera at (-0.7, 3, 1.6) looking -z into it, whose mirror image is c3_sphere's
+# camera exactly; the picture is c3's upside down. The floor is camera depth 1. Against the same numpy simulation kept
+# to the paths straight through (order 0), normalised by the lit floor, as c3_sphere: the energy in the shadow within 5%.
+M5_CAM = (-0.7, 3.0, 1.6)
+
+
+def m5_scene():
+    s = sphere_scene()
+    s["entities"] = [e for e in s["entities"] if e.get("Name", {}).get("value") != "Camera"]
+    s["entities"].append(ent(1, Name={"value": "Camera"}, Transform={"position": list(M5_CAM), "rotation": [0, 0, 0, 1]},
+                             Camera={"fovDeg": SPHERE_FOV}))
+    k = math.sqrt(0.5)
+    s["entities"].append(ent(7, Name={"value": "Periscope"},
+                             MeshSource={"source": {"QuadPrim": {"a": [-1.9, 2.3, -0.1], "b": [0.5, 2.3, -0.1], "c": [0.5, 3.4, 1.0],
+                                                                  "d": [-1.9, 3.4, 1.0], "normal": [0, -k, k], "color": [1, 1, 1]}}},
+                             Material={"base_color": [1, 1, 1], "base_metalness": 1, "specular_roughness": 0.0}))
+    return s
+
+
+def m5_ball_seen(failures):
+    import numpy as np
+    img, _ = render("m5_ball_seen", m5_scene(), 2048, ["--bounces", "2"], {"OHAO_MANIFOLD_GLASS": "1"})
+    lum = img.mean(2)[::-1]   # c3_sphere's orientation
+    lit = float(np.median(lum[5:30, 5:60]))
+    got = lum / lit
+    ref, mask = sphere_reference(W, H, orders=1)
+    e_ref, e_got = float(ref[mask].sum()), float(got[mask].sum())
+    err = abs(e_got - e_ref) / e_ref
+    print("m5_ball_seen: the caustic in the mirrored shadow %.1f, reference (straight through) %.1f (%.2f%%); lit floor %.4f"
+          % (e_got, e_ref, 100 * err, lit))
+    if not err <= 0.05:
+        failures.append("m5_ball_seen: the caustic's energy %.1f against the ray-simulated %.1f (%.2f%%, bar 5%%)"
+                        % (e_got, e_ref, 100 * err))
+    return {"energy": e_got, "reference": e_ref, "error": err, "lit": lit}
+
+
+# m6: c3_slab's floor seen through glass: a clear pane (a 5 cm box at x = 3.9 .. 3.95, edge-on to the sun, outside the
+# slab) between the camera at (4.5, 0.6, 0) and the floor under the slab, which the camera meets at depth 2 (both
+# refractions crossings). Each pixel's closed form is the floor's times the pane's (1 - F)^2 at its ray's incidence.
+M6_CAM, M6_LOOK, M6_FOV = (4.5, 0.6, 0.0), (0.5, 0.0, 0.0), 50.0
+
+
+def m6_scene():
+    s = slab_scene()
+    s["entities"] = [e for e in s["entities"] if e.get("Name", {}).get("value") != "Camera"]
+    s["entities"].append(ent(1, Name={"value": "Camera"}, Transform={"position": list(M6_CAM), "rotation": look_quat(M6_CAM, M6_LOOK)},
+                             Camera={"fovDeg": M6_FOV}))
+    s["entities"].append(ent(7, Name={"value": "Pane"},
+                             MeshSource={"source": {"BoxPrim": {"lo": [3.9, 0.0, -1.5], "hi": [3.95, 1.0, 1.5], "color": [1, 1, 1]}}},
+                             Material={"base_color": [1, 1, 1], "specular_roughness": 0.0, "transmission_weight": 1}))
+    return s
+
+
+def m6_through_glass(failures):
+    import numpy as np
+    eye = np.array(M6_CAM, float)
+    mask = np.ones((H, W), bool)
+    for ox, oy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        d = camera_rays(M6_CAM, M6_LOOK, M6_FOV, ox, oy)
+        t = (3.95 - eye[0]) / d[..., 0]
+        hp = eye + d * t[..., None]
+        tf = -eye[1] / d[..., 1]
+        hf = eye + d * tf[..., None]
+        mask &= (t > 0) & in_box(hp, [0, 0.1, -1.3], [0, 0.9, 1.3], (1, 2)) & (tf > 0) & in_box(hf, [-2.0, 0, -2.0], [2.5, 0, 1.7], (0, 2))
+    d = camera_rays(M6_CAM, M6_LOOK, M6_FOV, 0.5, 0.5)
+    cos_i = np.abs(d[..., 0])
+    f = np.vectorize(lambda c: fresnel(float(c), 1.5))(cos_i)
+    want = slab_floor() * (1 - f) ** 2
+    img, _ = render("m6_through_glass", m6_scene(), 256, ["--bounces", "1"], {"OHAO_MANIFOLD_GLASS": "1"})
+    off, _ = render("m6_through_glass_off", m6_scene(), 64, ["--bounces", "1"], {"OHAO_MANIFOLD_OFF": "1"})
+    m, w_, mo = float(img.mean(2)[mask].mean()), float(want[mask].mean()), float(off.mean(2)[mask].mean())
+    err = abs(m - w_) / w_
+    print("m6_through_glass (%d px): the floor through the pane %.4f, closed form %.4f (%.2f%%); without the pass %.4f"
+          % (int(mask.sum()), m, w_, 100 * err, mo))
+    if not err <= 0.02:
+        failures.append("m6_through_glass: %.4f against the closed form %.4f (%.2f%%, bar 2%%)" % (m, w_, 100 * err))
+    if not mo < 0.01 * w_:
+        failures.append("m6_through_glass: without the pass the floor through the pane is %.4f, not missing" % mo)
+    return {"px": int(mask.sum()), "mean": m, "closed_form": w_, "error": err, "without_pass": mo}
+
+
 def m8_repeat(failures):
     out = serve_twice("m8", mirror_seen_scene(0.1), {"bounces": 2})
     print("m8_repeat: two captures in one process %s" % ("identical" if out["identical"] else "DIFFER"))
@@ -665,7 +833,7 @@ def m8_repeat(failures):
     return out
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m8_repeat": m8_repeat}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m8_repeat": m8_repeat}
 
 
 def main(argv):

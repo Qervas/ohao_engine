@@ -322,11 +322,15 @@ Closed forms first; each case fails before its code exists.
   (`OHAO_PT_CLASS`) against the quadrature split at `θcore`.
 - **m3_sum** (2a): camera side alone (step 2 off) against step 2 on, at high spp, on m2's scene and the showcase's crop:
   means within 1% (every term counted once).
-- **m4_slab_seen** (2b): step 1's glass slab caustic (`c3_slab`'s closed form), seen in a mirror: the closed form times
-  the mirror's Fresnel, within 2%.
-- **m5_ball_seen** (2b): `c3_sphere`'s moved glass ball, its caustic seen after a bounce, against the same numpy ray
-  simulation, 5%.
-- **m6_through_glass** (2b): c4's slab between the camera and step 1's glass slab caustic (`c3_slab`), now found through glass.
+- **m4_slab_seen** (2b): step 1's glass slab caustic (`c3_slab`), seen in a white mirror standing under the slab edge-on
+  to the sun (camera depth 1): the floor's closed form for the two refractions alone, `0.5 / pi E cos 30 (1 - F)^2` (the
+  orders with internal reflections, F^2 of it, are no one's at K = 2), within 2%; without the pass black.
+- **m5_ball_seen** (2b): `c3_sphere`'s moved glass ball seen through a periscope (a 45-degree mirror whose image of the
+  camera is c3's camera, so the picture is c3's upside down; camera depth 1), against the same numpy ray simulation kept
+  to the paths straight through: the energy in the shadow within 5%.
+- **m6_through_glass** (2b): `c3_slab`'s floor seen through a clear pane outside the slab, edge-on to the sun (camera depth
+  2, both refractions crossings): per pixel the floor's closed form times the pane's `(1 - F)^2` at its ray's incidence,
+  within 2%; without the pass black.
 - **m7_showcase**: equal time against the 8192 spp reference: the glint-after-rough class (`OHAO_PT_CLASS=2`) has no
   dot; relMSE no higher than step 1's; dots no more than step 1's 7.
 - **m8_repeat**: two captures in one process identical (integer splats, fixed tuple order).
