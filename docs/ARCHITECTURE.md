@@ -489,8 +489,8 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    `runtime/frame_capture.cpp` and `runtime/live_host.cpp`.
 
 ```console
-$ python tests/validation/check_validation.py > /dev/null
-$ build/Release/deferred_determinism_gpu_test.exe > /dev/null
+$ python tests/validation/check_validation.py > /dev/null   # gpu
+$ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 ```
 
 ## Recipe: register a pass and give it a budget

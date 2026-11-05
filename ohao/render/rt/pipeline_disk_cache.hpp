@@ -2,10 +2,10 @@
 
 // A VkPipelineCache kept in a file, so a process does not compile what an earlier one did.
 //
-// The path tracer's ray tracing pipeline takes minutes to compile cold. The driver keeps its
-// own disk cache, but a second process creating the same pipeline while another one is alive
-// was measured compiling it from scratch (239 s against 6 s alone; check_live's headless
-// host beside its window). The file is per device and driver version, at
+// The path tracer's ray tracing pipeline takes minutes to compile cold. NVIDIA's driver does not use this data for
+// it (a fresh executable with the 38 MB file loaded compiled 692 s, 2026-11-05): its own per-executable cache is what
+// spares a compile there, and not for a second process while another holds the pipeline (AGENTS.md). The file stays
+// for drivers that honour a VkPipelineCache. It is per device and driver version, at
 // `$OHAO_PIPELINE_CACHE_DIR` if set, else `%LOCALAPPDATA%/ohao/pipeline_cache` (Windows) or
 // `$XDG_CACHE_HOME/ohao/pipeline_cache` (`~/.cache` without it). Data whose header is not this
 // device's is ignored; a write goes to a temporary file renamed over the old one, so two

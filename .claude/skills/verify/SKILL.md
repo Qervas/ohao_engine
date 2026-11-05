@@ -19,7 +19,6 @@ $ build/Release/api_tests.exe > /dev/null
 $ build/Release/systems_tests.exe > /dev/null
 $ build/Release/physics_backend_tests.exe > /dev/null
 $ build/Release/audio_system_tests.exe > /dev/null
-$ build/Release/force_generator_tests.exe > /dev/null
 $ build/Release/env_cdf_test.exe > /dev/null
 $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null

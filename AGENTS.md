@@ -751,14 +751,17 @@ deferred, reference, path traced); two the transparency scene,
   a staging buffer with the map. Keep the draw a continuous warp: an alias table was 1.1 ms faster
   but scattered neighbouring Sobol points across the map, 14% more error at 16 samples. A view of a 1080p render through an image tool may be palette-reduced and look
   posterized; judge renders from crops or pixel statistics.
-- **The path tracer's pipeline is cached on disk** (`render/rt/pipeline_disk_cache.*`): it compiles for minutes
-  cold, and a second process beside a live one (`check_live`'s headless host beside its window) was measured
-  compiling it again from scratch, 239 s, past the test's 120 s reply wait. Its `VkPipelineCache` is a file per
-  pipeline, shader version (a hash of its SPIR-V), device and driver, `<name>@<hash>-<vendor>-<device>-<driver>.bin`
-  under `$OHAO_PIPELINE_CACHE_DIR`, else `%LOCALAPPDATA%/ohao/pipeline_cache`, loaded before the pipeline is created and
-  saved right after; a save prunes that pipeline's other versions but the newest. (One file per pipeline once kept
-  every version, passed its 64 MB cap and was then ignored: every process compiled cold.) The first process after a
-  shader change still compiles cold (`PathTracer: <name> pipeline in N s`).
+- **The path tracer compiles for minutes cold, once per executable, and again beside a live process.** Its pipeline
+  (`PathTracer: <name> pipeline in N s`: the default program about 11 minutes, the caustics one about 8) is kept by
+  NVIDIA's driver in its own cache (`%LOCALAPPDATA%/NVIDIA/DXCache`), one per executable, so every test executable
+  compiles it once after a shader change. **A second process creating it while another one holds it compiles from
+  scratch** (a headless `ohao serve` beside a live window: 625 s). Neither our `VkPipelineCache` file
+  (`render/rt/pipeline_disk_cache.*`: a fresh executable with the 38 MB file loaded took 692 s) nor
+  `VK_KHR_pipeline_binary` spares it (2026-11-05: binaries refused by another executable, and by a second `ohao.exe`
+  while the first lives, even with the driver's internal cache off). Run path-traced processes one after another: a
+  test comparing two hosts starts the second once the first has exited (`check_live`). The `VkPipelineCache` file
+  (per pipeline, shader version, device and driver, under `$OHAO_PIPELINE_CACHE_DIR` or
+  `%LOCALAPPDATA%/ohao/pipeline_cache`) stays for drivers that honour it.
 - **Emission is light** (frontier F3, ruling F-R7; `render/rt/emissive_lights.*`). Every triangle of an
   emissive material (`MaterialTable::emissive`: emission colour and luminance above 0) is a light of the
   path tracer: the `emissive.lights` pass (before `pt.cache.update`) writes each one's world corners, uvs

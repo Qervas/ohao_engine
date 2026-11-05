@@ -349,8 +349,29 @@ def test_path_tracer_window():
     check(deferred.get("mimeType") == "image/jpeg" and "lighting" in names and "present" in names,
           "after a path-traced capture the window is deferred again (its live mode)")
 
+    # A long capture cancelled mid-way: progress arrived, no answer, the host serves on.
+    rid = s.send("render.capture", {"inline": True, "mode": "rt_offline", "spp": 60000,
+                                    "_meta": {"progressToken": "rt-progress"}})
+    time.sleep(1.5)
+    s.notify("notifications/cancelled", {"requestId": rid})
+    reply = s.wait(rid, timeout=5)
+    progress = [n for n in s.notes if n.get("method") == "notifications/progress" and
+                n.get("params", {}).get("progressToken") == "rt-progress"]
+    check(reply is None, "a cancelled capture gets no answer")
+    check(bool(progress) and progress[-1]["params"].get("total") == 60000,
+          "it reported progress meanwhile (%d notifications, last %s)"
+          % (len(progress), progress[-1]["params"] if progress else None))
+    after = result(s.call("render.capture", {"inline": True, "mode": "rt_offline", "spp": 4})) or {}
+    check(after.get("frames") == 4 and result(s.call("engine.info")) is not None,
+          "after the cancel the host serves: another capture renders")
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
     # The same state headless: the same image, to the path tracer's BVH floor (1 LSB on a few
-    # pixels, AGENTS.md: the driver builds a BVH differently per process).
+    # pixels, AGENTS.md: the driver builds a BVH differently per process). Started once the window has
+    # exited: NVIDIA's driver compiles the path tracer from scratch (625 s) for a second process while
+    # another holds it, and neither a VkPipelineCache file nor VK_KHR_pipeline_binary spares that
+    # (2026-11-05); one after the other, the driver's own cache serves it.
     h = Server([OHAO, "serve", "--out", out_dir("rt_headless"), "--seed", SEED, "assets/scenes/cornell_box.scene.json"],
                "rt_headless", env=validation_env())
     _, _, _, _, hhash = drive(h)
@@ -376,30 +397,13 @@ def test_path_tracer_window():
               "rt_%s: the window's lockstep capture equals the headless capture (max_abs %s, %.6f of channels)"
               % (mode, d[0] if d else "-", d[1] if d else 1.0))
 
-    # A long capture cancelled mid-way: progress arrived, no answer, the host serves on.
-    rid = s.send("render.capture", {"inline": True, "mode": "rt_offline", "spp": 60000,
-                                    "_meta": {"progressToken": "rt-progress"}})
-    time.sleep(1.5)
-    s.notify("notifications/cancelled", {"requestId": rid})
-    reply = s.wait(rid, timeout=5)
-    progress = [n for n in s.notes if n.get("method") == "notifications/progress" and
-                n.get("params", {}).get("progressToken") == "rt-progress"]
-    check(reply is None, "a cancelled capture gets no answer")
-    check(bool(progress) and progress[-1]["params"].get("total") == 60000,
-          "it reported progress meanwhile (%d notifications, last %s)"
-          % (len(progress), progress[-1]["params"] if progress else None))
-    after = result(s.call("render.capture", {"inline": True, "mode": "rt_offline", "spp": 4})) or {}
-    check(after.get("frames") == 4 and result(s.call("engine.info")) is not None,
-          "after the cancel the host serves: another capture renders")
-    code = s.close()
-    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
-
     # A window presenting rt_offline (lockstep): its accumulation converges to --spp samples
     # after a change, a frame each, then it stops presenting until the next change.
     p = Server([OHAO, "serve", "--window", "%dx%d" % size, "--hidden", "--out", out_dir("rt_live"),
                 "--mode", "rt_offline", "--spp", "24", "assets/scenes/cornell_box.scene.json"], "rt_live",
                env=validation_env())
-    first = wait_stats(p, lambda st: st.get("frames", 0) >= 24)
+    # Its first frames wait for the path tracer, whose 53 MB of SPIR-V the validation layer reads for 20-50 s.
+    first = wait_stats(p, lambda st: st.get("frames", 0) >= 24, seconds=180)
     time.sleep(1.0)
     again = result(p.call("render.stats", {"frames": 120})) or {}
     names = [x[0] for x in first.get("passes", [])]
