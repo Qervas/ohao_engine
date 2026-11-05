@@ -21,7 +21,10 @@
 // - Where the interpolated normal crosses the triangle's plane (its orientation flips), each branch is solved over the
 //   box and a root kept only where its orientation is its branch's.
 // A box the walk cannot decide (kCertMaxBoxes spent, or narrower than kCertMinWidth) is counted in `undecided`: the
-// pass reports it, never drops it silently. On the showcase's ball: 7.7 boxes a candidate triangle, none undecided.
+// pass reports it, never drops it silently. On the showcase's ball: 7.2 boxes a candidate triangle, none undecided.
+// - Rigour at the centre: F(c) is an interval (its rounding bounded), and the mean-value form F(c) + J(B)(B - c)
+//   excludes boxes the natural form cannot. Where K's width is that rounding times |J^-1| (an ill-conditioned
+//   Jacobian), smaller boxes can never certify: the box is retried once grown to 8 times it (Rump's verification).
 
 import rt.manifold;
 
@@ -333,115 +336,150 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
         }
         ++res.boxes;
         if (B.x + B.y > 1.0) continue;   // wholly past the triangle's hypotenuse
+        const float2 cuv = 0.5 * (B.xy + B.zw);
         // The test runs on B grown by a tenth a side (epsilon inflation): a root on a split line, or within float of
         // one, lies inside some grown box, where the plain box's K(B) could never fit in its interior.
-        const float2 grow = 0.1 * (B.zw - B.xy) + 1e-7;
-        const float4 Bt = float4(B.xy - grow, B.zw + grow);
-        MDualI2 fx, fy;
-        const int def = manifoldConstraintT<MDualI2>(tri, p, L, target, MDualI2.variable(MIval.make(Bt.x, Bt.z), 0),
-                                                     MDualI2.variable(MIval.make(Bt.y, Bt.w), 1), fx, fy, branch);
-        if (def < 0) continue;
-        if (def == 2)
+        float2 half = 0.6 * (B.zw - B.xy) + 1e-7;
+        bool decided = false, split = false;
+        for (uint attempt = 0u; attempt < 2u && !decided && !split; ++attempt)
         {
-            // The normal's orientation flips in Bt: solve each branch over B (each is smooth across the flip), keeping
-            // a root only where its own orientation is the branch's.
-            if (top + 2u > kCertStack)
+            const float4 Bt = float4(cuv - half, cuv + half);
+            MDualI2 fx, fy;
+            const int def = manifoldConstraintT<MDualI2>(tri, p, L, target,
+                                                         MDualI2.variable(MIval.make(Bt.x, Bt.z), 0),
+                                                         MDualI2.variable(MIval.make(Bt.y, Bt.w), 1), fx, fy, branch);
+            if (def < 0)
             {
-                ++res.undecided;
-                continue;
+                decided = true;   // C certainly negative over Bt: no root of sigma
+                break;
             }
-            branches[top] = 1;
-            stack[top++] = B;
-            branches[top] = -1;
-            stack[top++] = B;
-            continue;
-        }
-        bool decided = false;
-        if (def == 1)
-        {
-            if (!fx.v.holdsZero() || !fy.v.holdsZero()) continue;   // F(B) excludes 0
-            const float2 cuv = 0.5 * (B.xy + B.zw);
+            if (def == 2)
+            {
+                // The normal's orientation flips in Bt: solve each branch over B (each is smooth across the flip),
+                // keeping a root only where its own orientation is the branch's.
+                decided = true;
+                if (top + 2u > kCertStack)
+                {
+                    ++res.undecided;
+                    break;
+                }
+                branches[top] = 1;
+                stack[top++] = B;
+                branches[top] = -1;
+                stack[top++] = B;
+                break;
+            }
+            if (def == 0 || !fx.v.holdsZero() || !fy.v.holdsZero())
+            {
+                decided = def != 0;   // F(Bt) excludes 0; an undecidable guard splits
+                split = def == 0;
+                break;
+            }
+            // F at the centre as an interval (its own rounding bounded), then the mean-value form
+            // F(Bt) in F(c) + J(Bt) (Bt - c): its excess shrinks with the box's square, the natural one's with its width.
+            MIval fcx, fcy;
+            const int defc = manifoldConstraintT<MIval>(tri, p, L, target, MIval.cst(cuv.x), MIval.cst(cuv.y), fcx,
+                                                        fcy, branch);
             float2 fc;
             float2x2 Jc;
-            if (certAt(tri, p, L, target, cuv, branch, fc, Jc))
+            if (!(defc == 1 || defc == -1) || !certAt(tri, p, L, target, cuv, branch, fc, Jc))
             {
-                const float det = Jc[0][0] * Jc[1][1] - Jc[0][1] * Jc[1][0];
-                if (abs(det) > 1e-30)
+                split = true;
+                break;
+            }
+            const MIval du = MIval.make(Bt.x - cuv.x, Bt.z - cuv.x);
+            const MIval dv = MIval.make(Bt.y - cuv.y, Bt.w - cuv.y);
+            const MIval mx = fcx.add(fx.d[0].mul(du)).add(fx.d[1].mul(dv));
+            const MIval my = fcy.add(fy.d[0].mul(du)).add(fy.d[1].mul(dv));
+            if (!mx.holdsZero() || !my.holdsZero())
+            {
+                decided = true;
+                break;
+            }
+            const float det = Jc[0][0] * Jc[1][1] - Jc[0][1] * Jc[1][0];
+            if (!(abs(det) > 1e-30))
+            {
+                split = true;
+                break;
+            }
+            const float2x2 Y = float2x2(Jc[1][1], -Jc[0][1], -Jc[1][0], Jc[0][0]) / det;
+            // M = I - Y J(Bt), intervals; J(Bt) rows fx.d, fy.d.
+            MIval M[2][2];
+            [ForceUnroll] for (int i = 0; i < 2; ++i)
+            {
+                [ForceUnroll] for (int j = 0; j < 2; ++j)
                 {
-                    const float2x2 Y = float2x2(Jc[1][1], -Jc[0][1], -Jc[1][0], Jc[0][0]) / det;
-                    // M = I - Y J(Bt), intervals; J(Bt) rows fx.d, fy.d.
-                    MIval M[2][2];
-                    [ForceUnroll] for (int i = 0; i < 2; ++i)
+                    const MIval yj = MIval.cst(Y[i][0]).mul(fx.d[j]).add(MIval.cst(Y[i][1]).mul(fy.d[j]));
+                    M[i][j] = MIval.cst(i == j ? 1.0 : 0.0).sub(yj);
+                }
+            }
+            // Y F(c) with F(c) the interval above, so K(Bt) bounds every root rigorously.
+            const MIval yfx = MIval.cst(Y[0][0]).mul(fcx).add(MIval.cst(Y[0][1]).mul(fcy));
+            const MIval yfy = MIval.cst(Y[1][0]).mul(fcx).add(MIval.cst(Y[1][1]).mul(fcy));
+            const MIval Ku = MIval.cst(cuv.x).sub(yfx).add(M[0][0].mul(du)).add(M[0][1].mul(dv));
+            const MIval Kv = MIval.cst(cuv.y).sub(yfy).add(M[1][0].mul(du)).add(M[1][1].mul(dv));
+            if (Ku.hi < Bt.x || Ku.lo > Bt.z || Kv.hi < Bt.y || Kv.lo > Bt.w)
+            {
+                decided = true;   // no root in Bt, so none in B
+                break;
+            }
+            if (Ku.lo > Bt.x && Ku.hi < Bt.z && Kv.lo > Bt.y && Kv.hi < Bt.w)
+            {
+                decided = true;   // exactly one root of F in Bt (it may lie in a neighbour's part of Bt)
+                float2 uv = cuv;
+                for (uint it = 0u; it < 24u; ++it)
+                {
+                    float2 f;
+                    float2x2 J;
+                    if (!certAt(tri, p, L, target, uv, branch, f, J)) break;
+                    const float dj = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+                    if (!(abs(dj) > 1e-30)) break;
+                    const float2 step = mul(float2x2(J[1][1], -J[0][1], -J[1][0], J[0][0]) / dj, f);
+                    uv = clamp(uv - step, Bt.xy, Bt.zw);
+                    if (all(abs(step) <= 1e-7 * max(1.0, max(abs(uv.x), abs(uv.y))))) break;
+                }
+                // A root of F is sigma's where H is above the normal (F's roots with C <= 0 are not), sigma itself
+                // meets the target there (F also vanishes where H does: the direction to p opposite the light), and,
+                // on a forced branch, the normal's own orientation is the branch's.
+                MFloat A, Bc, C;
+                const bool framed = manifoldFrameT<MFloat>(tri, p, L, MFloat.cst(uv.x), MFloat.cst(uv.y), A, Bc, C,
+                                                           branch) == 1;
+                const float2 sigmaAt = framed && C.v > 0.0 ? float2(A.v, Bc.v) / C.v : float2(3.0e38);
+                const bool above = framed && C.v > 0.0 &&
+                                   all(abs(sigmaAt - target) <= 1e-3 * max(1.0, length(target))) &&
+                                   (branch == 0 || manifoldOrientation(tri, p, uv) == branch);
+                // Bt holds exactly one root: one already recorded inside Bt is this one (a neighbour's grown box
+                // certified it first).
+                bool seen = false;
+                for (uint q = 0u; q < res.roots; ++q)
+                    seen = seen || all(res.uv[q] >= Bt.xy && res.uv[q] <= Bt.zw) || all(abs(res.uv[q] - uv) <= 1e-6);
+                if (above && !seen && uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)
+                {
+                    if (res.roots < kCertMaxRoots)
                     {
-                        [ForceUnroll] for (int j = 0; j < 2; ++j)
-                        {
-                            const MIval yj = MIval.cst(Y[i][0]).mul(fx.d[j]).add(MIval.cst(Y[i][1]).mul(fy.d[j]));
-                            M[i][j] = MIval.cst(i == j ? 1.0 : 0.0).sub(yj);
-                        }
-                    }
-                    const float2 yf = mul(Y, fc);
-                    const MIval du = MIval.make(Bt.x - cuv.x, Bt.z - cuv.x);
-                    const MIval dv = MIval.make(Bt.y - cuv.y, Bt.w - cuv.y);
-                    const MIval Ku = MIval.cst(cuv.x).sub(MIval.cst(yf.x)).add(M[0][0].mul(du)).add(M[0][1].mul(dv));
-                    const MIval Kv = MIval.cst(cuv.y).sub(MIval.cst(yf.y)).add(M[1][0].mul(du)).add(M[1][1].mul(dv));
-                    if (Ku.hi < Bt.x || Ku.lo > Bt.z || Kv.hi < Bt.y || Kv.lo > Bt.w)
-                    {
-                        decided = true;   // no root in Bt, so none in B
-                    }
-                    else if (Ku.lo > Bt.x && Ku.hi < Bt.z && Kv.lo > Bt.y && Kv.hi < Bt.w)
-                    {
-                        decided = true;   // exactly one root of F in Bt (it may lie in a neighbour's part of Bt)
-                        float2 uv = cuv;
-                        for (uint it = 0u; it < 24u; ++it)
-                        {
-                            float2 f;
-                            float2x2 J;
-                            if (!certAt(tri, p, L, target, uv, branch, f, J)) break;
-                            const float dj = J[0][0] * J[1][1] - J[0][1] * J[1][0];
-                            if (!(abs(dj) > 1e-30)) break;
-                            const float2 step = mul(float2x2(J[1][1], -J[0][1], -J[1][0], J[0][0]) / dj, f);
-                            uv = clamp(uv - step, Bt.xy, Bt.zw);
-                            if (all(abs(step) <= 1e-7 * max(1.0, max(abs(uv.x), abs(uv.y))))) break;
-                        }
-                        // A root of F is sigma's where H is above the normal (F's roots with C <= 0 are not), and,
-                        // on a forced branch, where the normal's own orientation is the branch's.
-                        MFloat A, Bc, C;
-                        // F also vanishes where H does (the direction to p opposite the light: A = B = C = 0), which
-                        // is no root of sigma: sigma itself must meet the target there.
-                        const bool framed = manifoldFrameT<MFloat>(tri, p, L, MFloat.cst(uv.x), MFloat.cst(uv.y), A, Bc,
-                                                                   C, branch) == 1;
-                        const float2 sigmaAt = framed && C.v > 0.0 ? float2(A.v, Bc.v) / C.v : float2(3.0e38);
-                        const bool above = framed && C.v > 0.0 &&
-                                           all(abs(sigmaAt - target) <= 1e-3 * max(1.0, length(target))) &&
-                                           (branch == 0 || manifoldOrientation(tri, p, uv) == branch);
-                        // Bt holds exactly one root: one already recorded inside Bt is this one (a neighbour's grown
-                        // box certified it first).
-                        bool seen = false;
-                        for (uint q = 0u; q < res.roots; ++q)
-                            seen = seen || all(res.uv[q] >= Bt.xy && res.uv[q] <= Bt.zw) ||
-                                   all(abs(res.uv[q] - uv) <= 1e-6);
-                        if (above && !seen && uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)
-                        {
-                            if (res.roots < kCertMaxRoots)
-                            {
-                                res.uv[res.roots] = uv;
-                                ++res.roots;
-                            }
-                            else
-                            {
-                                ++res.undecided;
-                            }
-                        }
+                        res.uv[res.roots] = uv;
+                        ++res.roots;
                     }
                     else
                     {
-                        // Shrink B to K(Bt) before splitting (Krawczyk: every root in Bt, so in B, lies in K(Bt)).
-                        B = float4(max(B.x, Ku.lo), max(B.y, Kv.lo), min(B.z, Ku.hi), min(B.w, Kv.hi));
-                        // K(Bt) misses B (it meets only the growth): no root in B.
-                        if (B.x > B.z || B.y > B.w) decided = true;
+                        ++res.undecided;
                     }
                 }
+                break;
             }
+            // Neither: when K(Bt)'s width is the centre's rounding (|Y| times F(c)'s width), no smaller box can
+            // certify; retry once on Bt grown to eight times that (Rump's verification), else shrink and split.
+            const float noise = max(yfx.hi - yfx.lo, yfy.hi - yfy.lo);
+            if (attempt == 0u && 4.0 * noise > min(half.x, half.y))
+            {
+                half = max(half, float2(8.0 * noise));
+                continue;
+            }
+            // Shrink B to K(Bt) (Krawczyk: every root in Bt, so in B, lies in K(Bt)).
+            B = float4(max(B.x, Ku.lo), max(B.y, Kv.lo), min(B.z, Ku.hi), min(B.w, Kv.hi));
+            // K(Bt) misses B (it meets only the growth): no root in B.
+            if (B.x > B.z || B.y > B.w) decided = true;
+            else split = true;
         }
         if (decided) continue;
         // Split along the wider side.

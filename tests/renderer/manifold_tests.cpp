@@ -422,7 +422,7 @@ TEST(Manifold, t9_interval_enclosure) {
 // - on random near triangles (each spanning 30-60 degrees from p, vertex normals turned up to 25 degrees: two roots in
 //   one triangle happen there) it certifies every root wherever it leaves no box undecided, and the cases it leaves
 //   undecided (each one counted by the pass, never dropped silently) are measured: its interval enclosures are loose
-//   on so near and curved a triangle, and 512 boxes do not always reach a decision (2.9% measured, 2026-11-05).
+//   on so near and curved a triangle, and 512 boxes do not always reach a decision (0.9% measured, 2026-11-05).
 TEST(Manifold, t9_certify_complete) {
     const double kTiltTan = 0.4663;   // tan 25 degrees
     std::mt19937 g(92u);
@@ -505,5 +505,5 @@ TEST(Manifold, t9_certify_complete) {
     EXPECT_GT(roots, 2000);
     EXPECT_GT(twos, 5);
     EXPECT_EQ(ballUndecided, 0);
-    EXPECT_LE(randomUndecided, randomCases / 20);
+    EXPECT_LE(randomUndecided, randomCases / 100);
 }

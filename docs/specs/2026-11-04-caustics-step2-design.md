@@ -188,12 +188,12 @@ solver that proves what it finds:
   triangle certified), it is 2b's pair solver, and step 2c's cell solver (M11).
 
 **T1 measured (2026-11-05, `rt/manifold_cert.slang`, `manifold_tests` t9).** On the showcase's ball every root a
-14 x 14 double search finds is certified, none falsely, no box undecided, 7.7 boxes a candidate triangle (at most 83).
+14 x 14 double search finds is certified, none falsely, no box undecided, 7.2 boxes a candidate triangle (at most 77).
 On random near triangles (spanning 30-60 degrees from X, vertex normals turned up to 25 degrees: 18 held two roots) it
-never certifies a false root and finds every root wherever it decides every box, but 117 of 4,000 cases spend the
-512-box budget: natural interval enclosures are loose on so near and curved a triangle. Tighter enclosures (centred
-forms on the frame's sub-expressions, affine arithmetic) come before the pass uses it on such geometry; the undecided
-count is the pass's counter until then.
+never certifies a false root and finds every root wherever it decides every box; 35 of 4,000 cases spend the 512-box
+budget (117 with natural enclosures alone, before F(c) became an interval, the mean-value form excluded boxes and an
+ill-conditioned box was retried grown to its rounding's scale). Affine arithmetic is the next tightening if the pass's
+undecided counter shows them on real geometry.
 
 **Pairs.** An exit triangle is a candidate as in 2a (its disc test at X, with the inside direction unknown: the test runs
 on the cone of directions toward the draw's bounding sphere); for each, entry triangles come from the same draw's
