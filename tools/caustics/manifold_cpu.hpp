@@ -58,6 +58,10 @@ PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const 
 // with slopes s1, s2 (conservative; manifoldPairNodeTest).
 bool manifoldPairNodeTest(const V3& min1, const V3& max1, const V3& axis1, float half1, const V3& min2, const V3& max2,
                           const V3& axis2, float half2, const V3& X, const V3& L, float eta, V2 s1, V2 s2);
+// Its weight for sampling (manifoldPairNodeScore): 0 where it prunes, else in [kPairScoreFloor, 1].
+float manifoldPairNodeScore(const V3& min1, const V3& max1, const V3& axis1, float half1, const V3& min2,
+                            const V3& max2, const V3& axis2, float half2, const V3& X, const V3& L, float eta, V2 s1,
+                            V2 s2);
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 

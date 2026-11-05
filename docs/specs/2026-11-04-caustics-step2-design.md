@@ -204,14 +204,29 @@ test on a box centred at the root it finds (F(c) all but 0 there), that box too 
 Newton stopping at a few ulps (1e-6), not one. The walk is 3.5 MB of SPIR-V (the 4-D interval dual unrolled): the
 manifold program's compile time is measured when the pass takes it.
 
-**Pairs: per-frame beams (T3, revised 2026-11-05).** The first design tested pairs per request: `manifoldPairNodeTest`
-(conservative: the light's direction inside lies in the cone between the two nodes' boxes, and each refraction's half
-vector must fall within the node's normals tilted by its slope) on cluster pairs, then on the triangle pairs inside.
-Measured on the showcase's 96 x 48 ball (`manifold_tests` t11): it never drops a built path's pair, but leaves 306,000
-triangle pairs a request of 81 million (447,000 with slopes to 0.1). The slack is the geometry, not the slope: a
-triangle's normals spread a few degrees, the direction between two triangles a few more, and refraction multiplies a
-direction's change by about 3 in its half vector, so every pair aligned within about 10 degrees passes. Solving that
-many per pixel is out.
+**Pairs (T3): the open problem, measured 2026-11-05.** A request must find which (entry, exit) triangle pairs of a
+solid can hold its path; the showcase's ball has 81 million. Four ways were built and measured on the CPU twin
+(`manifold_tests` t11-t13), each conservative (never dropping a built path's pair):
+
+| way | what it leaves a request | why |
+|---|---|---|
+| per-request node test, half vectors against normals along the box-to-box direction | 306,000 triangle pairs (96 x 48) | refraction triples the box direction's slack in the half vector |
+| per-frame beams (slopes drawn once a frame; entry -> exit -> a cone out; look up beams covering X) | 148,000 of 234,000 beams (48 x 24) | a beam's light fans out over its exit triangle, and a cone from the triangle's box forgets which point sends which direction |
+| per-request test on refraction cones (entry E, exit D, between B: all three must meet), interval boxes | 30,800 pairs (48 x 24; 82,500 before) | a box of a cone, pushed through Snell's law, triples it |
+| sampling one pair down the hierarchy by score (exact for any positive score) | P(the path's pair) about 1e-7 | at the hierarchy's top every cone is wide: scores cannot single out the pair |
+
+The refraction cones were also tried in the mean-value form over tilt parameters: looser in practice (1.97 million
+pairs of 4.9 million), since an interval Snell's law over a cluster's cone leaves its guards undecided and the cone
+falls back to every direction; the box form is kept (`manifoldPairNodeScore`). None of the four is a per-pixel pair finder; the routes left (ruling M12):
+- **Warped beam volumes** (Ernst et al. 2005): per frame, each entry triangle's beam traced to its exit with its three
+  corner rays, the volume between them bounded conservatively (the interpolation's error), and a request finds the
+  volumes holding X: X's own beam, not every beam aimed near it. Exact if the volume bound is; the bound is the work.
+- **Photon-seeded walks** (step 1's light pass already traces the sun through the ball): a request takes the pairs of
+  light paths landing near X as candidates and solves them; complete only empirically, so not exact by this spec's
+  standard.
+- **Unbiased SMS with seeds** (Zeltner et al. 2020): Newton from seeds drawn from a known density, each root's
+  probability estimated by Bernoulli trials; exact in expectation, with the reciprocal-probability noise this spec set
+  out to avoid, mild where seeds come from photons near X.
 
 The pairs are found the other way round, once per frame. The slopes s1, s2 are drawn per frame (one draw for every
 pixel: correlated noise across pixels, the same expectation). Every sunlit entry triangle then refracts into a beam
@@ -368,6 +383,9 @@ Closed forms first; each case fails before its code exists.
   get their own step (roots per texel, as Zeltner et al. 2020's glints do).
 
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32** (step 2c): see "Step 2c".
+- **M12 (OPEN) — how 2b finds a request's triangle pairs** ("Pairs (T3)"): warped beam volumes (exact, the most work)
+  recommended; photon-seeded walks (fast, complete only empirically); unbiased SMS with photon seeds (exact in
+  expectation, some noise).
 - **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
 
 ## Licences

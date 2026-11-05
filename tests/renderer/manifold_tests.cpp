@@ -582,11 +582,11 @@ struct BuiltPath {
 
 // Up to `count` paths through `ball` (IOR eta), from attempts drawn by `g`.
 std::vector<BuiltPath> buildPaths(const std::vector<Tri>& ball, double eta, std::mt19937& g, int count,
-                                  double maxSlope = 0.1) {
+                                  double maxSlope = 0.1, const double* fixedS = nullptr, const D3* fixedL = nullptr) {
     std::vector<BuiltPath> paths;
     for (int k = 0; k < 40 * count && int(paths.size()) < count; ++k) {
         BuiltPath b;
-        b.L = norm(add(D3{0, 1, 0}, mul(sphereDir(g), 0.6 * rnd(g))));
+        b.L = fixedL ? *fixedL : norm(add(D3{0, 1, 0}, mul(sphereDir(g), 0.6 * rnd(g))));
         b.i1 = size_t(rnd(g) * double(ball.size())) % ball.size();
         const Tri& t1 = ball[b.i1];
         const double u1 = rnd(g), v1r = rnd(g);
@@ -600,7 +600,11 @@ std::vector<BuiltPath> buildPaths(const std::vector<Tri>& ball, double eta, std:
             const double r = maxSlope * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
             return std::array<double, 2>{r * std::cos(phi), r * std::sin(phi)};
         };
-        const auto a1 = slope(), a2 = slope();
+        auto a1 = slope(), a2 = slope();
+        if (fixedS) {
+            a1 = {fixedS[0], fixedS[1]};
+            a2 = {fixedS[2], fixedS[3]};
+        }
         const D3 m1 = norm(add(n1, add(mul(ta, a1[0]), mul(ba, a1[1]))));
         if (dot(m1, b.L) <= 0.0) continue;
         const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), b.u), mul(d3(t1.e2), b.v)));
@@ -700,12 +704,10 @@ TEST(Manifold, t10_pair_known_paths) {
     EXPECT_LE(undecidedCases, cases / 50);
 }
 
-// Which pairs to solve (2b T3): a ball grouped as the pass gathers it (clusters by latitude and longitude), the node
-// test applied to cluster pairs, then to the triangle pairs inside the cluster pairs that pass. It never drops a built
-// path's pair (conservative), and the pairs left a request are measured. On the showcase's 96 x 48 ball (2026-11-05):
-// 306,000 triangle pairs a request of 81 million with smooth glass's slopes, 447,000 with slopes to 0.1: far too many
-// to solve per pixel, so 2b selects pairs by per-frame beams instead (the spec's "Pairs"). Here a 48 x 24 ball, to stay
-// quick.
+// Which pairs to solve (2b T3): a ball grouped as the pass would gather it (clusters by latitude and longitude), the node
+// test (manifoldPairNodeTest: the refraction cones at the entry and the exit and the box-to-box cone must meet) on
+// cluster pairs, then on the triangle pairs inside those that pass. It never drops a built path's pair (conservative);
+// what it leaves is counted on one request (slow: every pair). The spec's "Pairs (T3)" records the four ways measured.
 TEST(Manifold, t11_pair_candidates) {
     const std::vector<Tri> ball = uvSphere(0.5, 48, 24);
     const double eta = 1.5;
@@ -738,6 +740,7 @@ TEST(Manifold, t11_pair_candidates) {
         // The built path's own pair passes at both levels.
         ASSERT_TRUE(test(cnodes[clusterOf[b.i1]], cnodes[clusterOf[b.i2]])) << "path " << q << ": its clusters pruned";
         ASSERT_TRUE(test(tnodes[b.i1], tnodes[b.i2])) << "path " << q << ": its triangles pruned";
+        if (q >= 1) continue;   // counting every pair is slow: one request
         long here = 0;
         for (size_t c1 = 0; c1 < cnodes.size(); ++c1)
             for (size_t c2 = 0; c2 < cnodes.size(); ++c2) {
@@ -750,10 +753,118 @@ TEST(Manifold, t11_pair_candidates) {
         trianglePairs += here;
         maxTrianglePairs = std::max(maxTrianglePairs, here);
     }
-    const double n = double(paths.size());
-    std::printf("t11_pair_candidates: %zu requests; cluster pairs %.1f a request (of %zu); triangle pairs %.1f a request "
-                "(at most %ld, of %zu)\n",
+    const double n = 1.0;
+    std::printf("t11_pair_candidates: %zu requests held conservative; on one: cluster pairs %.1f (of %zu); triangle pairs "
+                "%.1f (at most %ld, of %zu)\n",
                 paths.size(), clusterPairs / n, cnodes.size() * cnodes.size(), trianglePairs / n, maxTrianglePairs,
                 ball.size() * ball.size());
     EXPECT_GT(paths.size(), 8u);
+}
+
+// Sampling pairs (2b T3): a descent through the ball's hierarchy (groups of clusters, clusters, sub-clusters of 16,
+// triangles) that picks one (entry, exit) child pair a level with probability proportional to manifoldPairNodeScore. It
+// is exact for any positive score; its noise is set by the probability it gives a path's own pair, computed here
+// exactly (the product, level by level, of that child's score over its siblings' sum) for built paths on the
+// showcase's 96 x 48 ball. A path's pair must never score 0 (conservative).
+TEST(Manifold, t13_pair_sampling) {
+    const std::vector<Tri> ball = uvSphere(0.5, 96, 48);
+    const double eta = 1.5;
+    std::mt19937 g(131u);
+    const std::vector<BuiltPath> paths = buildPaths(ball, eta, g, 40, 1e-3);
+    // Clusters by latitude and longitude, groups of clusters, sub-clusters of 16 by index within a cluster.
+    const int bands = 8, sectors = 12;
+    std::vector<std::vector<size_t>> clusters(size_t(bands * sectors));
+    std::vector<size_t> clusterOf(ball.size());
+    for (size_t i = 0; i < ball.size(); ++i) {
+        const Tri& t = ball[i];
+        const D3 c = add(d3(t.p0), mul(add(d3(t.e1), d3(t.e2)), 1.0 / 3.0));
+        const double th = std::acos(std::clamp(c[1] / len(c), -1.0, 1.0)), ph = std::atan2(c[2], c[0]) + kPi;
+        const size_t k = size_t(std::min(double(bands - 1), std::floor(th / kPi * bands))) * size_t(sectors) +
+                         size_t(std::min(double(sectors - 1), std::floor(ph / (2.0 * kPi) * sectors)));
+        clusters[k].push_back(i);
+        clusterOf[i] = k;
+    }
+    // Node: its triangles and their node (box, cone); a level's children.
+    struct Node {
+        std::vector<size_t> tris;
+        NodeD d;
+        std::vector<int> kids;
+    };
+    std::vector<Node> nodes;
+    auto make = [&](std::vector<size_t> tris) {
+        nodes.push_back({tris, nodeOf(ball, tris), {}});
+        return int(nodes.size()) - 1;
+    };
+    std::vector<int> clusterNode(clusters.size());
+    for (size_t c = 0; c < clusters.size(); ++c) {
+        const int cn = make(clusters[c]);
+        for (size_t a = 0; a < clusters[c].size(); a += 16) {
+            std::vector<size_t> sub(clusters[c].begin() + long(a),
+                                    clusters[c].begin() + long(std::min(a + 16, clusters[c].size())));
+            const int sn = make(sub);
+            for (size_t i : sub) {
+                const int tn = make({i});   // first: make() may grow `nodes`
+                nodes[size_t(sn)].kids.push_back(tn);
+            }
+            nodes[size_t(cn)].kids.push_back(sn);
+        }
+        clusterNode[c] = cn;
+    }
+    std::vector<size_t> all(ball.size());
+    for (size_t i = 0; i < all.size(); ++i) all[i] = i;
+    const int root = make(all);
+    for (int gb = 0; gb < bands; gb += 2)
+        for (int gs = 0; gs < sectors; gs += 3) {
+            std::vector<size_t> tris;
+            std::vector<int> kids;
+            for (int b = gb; b < gb + 2; ++b)
+                for (int sct = gs; sct < gs + 3; ++sct) {
+                    const size_t c = size_t(b * sectors + sct);
+                    tris.insert(tris.end(), clusters[c].begin(), clusters[c].end());
+                    kids.push_back(clusterNode[c]);
+                }
+            const int gn = make(tris);
+            nodes[size_t(gn)].kids = kids;
+            nodes[size_t(root)].kids.push_back(gn);
+        }
+    // The path from the root to a triangle: the child holding it, level by level.
+    auto holder = [&](int node, size_t tri) {
+        for (int k : nodes[size_t(node)].kids)
+            if (std::find(nodes[size_t(k)].tris.begin(), nodes[size_t(k)].tris.end(), tri) != nodes[size_t(k)].tris.end())
+                return k;
+        return -1;
+    };
+    std::vector<double> probs;
+    long tests = 0;
+    for (const BuiltPath& b : paths) {
+        const V2 s1{float(b.s[0]), float(b.s[1])}, s2{float(b.s[2]), float(b.s[3])};
+        double p = 1.0;
+        int e = root, x = root;
+        while (!nodes[size_t(e)].kids.empty()) {
+            const int te = holder(e, b.i1), tx = holder(x, b.i2);
+            ASSERT_GE(te, 0);
+            ASSERT_GE(tx, 0);
+            double sum = 0.0, own = 0.0;
+            for (int ce : nodes[size_t(e)].kids)
+                for (int cx : nodes[size_t(x)].kids) {
+                    const NodeD &a = nodes[size_t(ce)].d, &c = nodes[size_t(cx)].d;
+                    const float sc = manifoldPairNodeScore(a.lo, a.hi, a.axis, a.half, c.lo, c.hi, c.axis, c.half,
+                                                           f3(b.X), f3(b.L), float(eta), s1, s2);
+                    ++tests;
+                    sum += sc;
+                    if (ce == te && cx == tx) own = sc;
+                }
+            ASSERT_GT(own, 0.0) << "a built path's pair scored 0: the score is not conservative";
+            p *= own / sum;
+            e = te;
+            x = tx;
+        }
+        probs.push_back(p);
+    }
+    std::sort(probs.begin(), probs.end());
+    std::printf("t13_pair_sampling: %zu paths; P(own pair) median %.3g, 10%% %.3g, 90%% %.3g; %.0f node tests a "
+                "request\n",
+                probs.size(), probs[probs.size() / 2], probs[probs.size() / 10], probs[probs.size() * 9 / 10],
+                double(tests) / double(paths.size()));
+    EXPECT_GT(probs.size(), 30u);
 }
