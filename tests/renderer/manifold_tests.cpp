@@ -868,3 +868,46 @@ TEST(Manifold, t13_pair_sampling) {
                 double(tests) / double(paths.size()));
     EXPECT_GT(probs.size(), 30u);
 }
+
+// The seeded walk (ruling M12): from each built path's X, a seed line crosses the ball (the shadow ray toward the sun,
+// MNEE's, else the line toward the ball's centre), Newton walks over the mesh, and the final pair is certified.
+// Measured on the showcase's ball, for smooth glass (slopes to 1e-3) and slopes to 0.1: how often each seed lands on
+// the built path, on another certified path, or nowhere, and its steps. Every path it reports is certified.
+TEST(Manifold, t14_walk) {
+    const std::vector<Tri> ball = uvSphere(0.5, 96, 48);
+    const double eta = 1.5;
+    for (const double maxSlope : {1e-3, 0.1}) {
+        std::mt19937 g(141u);
+        const std::vector<BuiltPath> paths = buildPaths(ball, eta, g, 60, maxSlope);
+        int byShadow = 0, byCentre = 0, other = 0, none = 0, steps = 0, walks = 0, undecided = 0;
+        for (const BuiltPath& b : paths) {
+            const V2 s1{float(b.s[0]), float(b.s[1])}, s2{float(b.s[2]), float(b.s[3])};
+            bool done = false;
+            for (int seed = 0; seed < 2 && !done; ++seed) {
+                const V3 dir = seed == 0 ? f3(b.L) : f3(norm(mul(b.X, -1.0)));   // the ball is centred at the origin
+                const WalkResult r = manifoldWalkPair(ball, f3(b.X), f3(b.L), float(eta), s1, s2, dir);
+                undecided += r.undecided;
+                steps += r.steps;
+                walks += r.steps > 0 ? 1 : 0;
+                if (!r.found) continue;
+                const Tri &t1 = ball[size_t(r.entry)], &t2 = ball[size_t(r.exit)];
+                EXPECT_LT(pairResidualD(t1, t2, b.X, b.L, eta, b.s, r.x), 2e-3) << "a false path";
+                const bool isBuilt = size_t(r.entry) == b.i1 && size_t(r.exit) == b.i2 &&
+                                     std::abs(r.x[0] - b.u) < 1e-3 && std::abs(r.x[1] - b.v) < 1e-3 &&
+                                     std::abs(r.x[2] - b.u2) < 1e-3 && std::abs(r.x[3] - b.v2) < 1e-3;
+                if (isBuilt) {
+                    (seed == 0 ? byShadow : byCentre) += 1;
+                    done = true;
+                } else {
+                    ++other;
+                }
+            }
+            if (!done) ++none;
+        }
+        std::printf("t14_walk (slopes to %g): %zu paths; the built path found from the shadow ray %d, from the centre "
+                    "line %d, not found %d; other certified paths %d; %.1f steps a walk; %d undecided\n",
+                    maxSlope, paths.size(), byShadow, byCentre, none, other, walks ? double(steps) / walks : 0.0,
+                    undecided);
+        EXPECT_GT(paths.size(), 40u);
+    }
+}

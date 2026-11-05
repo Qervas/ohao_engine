@@ -1034,3 +1034,113 @@ bool manifoldPairNodeTest(float3 min1, float3 max1, float3 axis1, float half1, f
 {
     return manifoldPairNodeScore(min1, max1, axis1, half1, min2, max2, axis2, half2, X, L, eta, s) > 0.0;
 }
+
+// ---- step 2b: the seeded walk (ruling M12) --------------------------------------------------------------
+// What the walk needs of the scene: the nearest triangle a ray meets (its index, barycentric (u, v) and distance) and a
+// triangle by index. The GPU pass answers with ray queries; the CPU twin with a loop over a buffer.
+interface IManifoldScene
+{
+    bool trace(float3 o, float3 d, float tMax, out uint tri, out float2 uv, out float t);
+    ManifoldTri triangle(uint i);
+}
+
+struct ManifoldWalkResult
+{
+    bool found;          // a path reached and certified
+    uint entry, exit;    // its triangles
+    float4 x;            // (u1, v1, u2, v2)
+    uint steps;          // Newton steps taken
+    uint roots;          // the certified roots of the final pair (the found one among them)
+    uint undecided;      // boxes the certification left undecided
+}
+
+static const uint kWalkSteps = 32u;
+static const float kWalkTol = 1e-5;
+
+float3 manifoldPoint(ManifoldTri t, float2 uv) { return t.p0 + t.e1 * uv.x + t.e2 * uv.y; }
+
+// The path X <- exit <- entry <- sun through a solid of relative index eta with slopes target.xy (entry) and target.zw
+// (exit), walked from a seed: the line from X along seedDir meets the exit first, then the entry (the shadow ray's,
+// seedDir = L, is MNEE's).
+ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float3 L, float eta, float4 target,
+                                                        float3 seedDir)
+{
+    ManifoldWalkResult res;
+    res.found = false;
+    res.entry = 0u;
+    res.exit = 0u;
+    res.x = float4(0.0);
+    res.steps = 0u;
+    res.roots = 0u;
+    res.undecided = 0u;
+    // The seed.
+    uint t2, t1;
+    float2 uv2, uv1;
+    float th;
+    if (!scene.trace(X, seedDir, 1e30, t2, uv2, th)) return res;
+    const float3 y2s = manifoldPoint(scene.triangle(t2), uv2);
+    if (!scene.trace(y2s + seedDir * 1e-4, seedDir, 1e30, t1, uv1, th)) return res;
+    float4 x = float4(uv1, uv2);
+    ManifoldTri A = scene.triangle(t1), B = scene.triangle(t2);
+    float4 f;
+    float4x4 J;
+    if (!pairAt(A, B, X, L, eta, target, x, f, J)) return res;
+    float err = max(max(abs(f.x), abs(f.y)), max(abs(f.z), abs(f.w)));
+    for (uint it = 0u; it < kWalkSteps && err > kWalkTol; ++it)
+    {
+        float4x4 Ji;
+        if (!invert4(J, Ji)) return res;
+        const float4 delta = -mul(Ji, f);
+        float beta = 1.0;
+        bool moved = false;
+        for (uint halving = 0u; halving < 8u && !moved; ++halving, beta *= 0.5)
+        {
+            const float4 xs = x + beta * delta;
+            // Re-project onto the mesh: X toward the stepped exit point, then from there toward the stepped entry point.
+            const float3 p2 = manifoldPoint(B, xs.zw), p1 = manifoldPoint(A, xs.xy);
+            uint n2, n1;
+            float2 q2, q1;
+            float tt;
+            if (!scene.trace(X, normalize(p2 - X), 1e30, n2, q2, tt)) continue;
+            const float3 y2 = manifoldPoint(scene.triangle(n2), q2);
+            const float3 toward = p1 - y2;
+            if (!(dot(toward, toward) > 0.0)) continue;
+            const float3 dir = normalize(toward);
+            if (!scene.trace(y2 + dir * 1e-4, dir, 1e30, n1, q1, tt)) continue;
+            const ManifoldTri A2 = scene.triangle(n1), B2 = scene.triangle(n2);
+            const float4 x2 = float4(q1, q2);
+            float4 f2;
+            float4x4 J2;
+            if (!pairAt(A2, B2, X, L, eta, target, x2, f2, J2)) continue;
+            const float err2 = max(max(abs(f2.x), abs(f2.y)), max(abs(f2.z), abs(f2.w)));
+            if (!(err2 < err)) continue;
+            x = x2;
+            t1 = n1;
+            t2 = n2;
+            A = A2;
+            B = B2;
+            f = f2;
+            J = J2;
+            err = err2;
+            moved = true;
+        }
+        ++res.steps;
+        if (!moved) return res;   // no step reduced the error: no path from this seed
+    }
+    if (!(err <= kWalkTol)) return res;
+    // Certify the final pair: every root in it, the walked one among them.
+    const ManifoldPairResult c = manifoldCertifyPair(A, B, X, L, eta, target);
+    res.roots = c.roots;
+    res.undecided = c.undecided;
+    for (uint q = 0u; q < c.roots; ++q)
+    {
+        if (all(abs(c.uv[q] - x) <= 1e-3))
+        {
+            res.found = true;
+            res.x = c.uv[q];
+        }
+    }
+    res.entry = t1;
+    res.exit = t2;
+    return res;
+}

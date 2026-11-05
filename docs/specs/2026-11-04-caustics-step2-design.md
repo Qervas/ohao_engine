@@ -217,16 +217,8 @@ solid can hold its path; the showcase's ball has 81 million. Four ways were buil
 
 The refraction cones were also tried in the mean-value form over tilt parameters: looser in practice (1.97 million
 pairs of 4.9 million), since an interval Snell's law over a cluster's cone leaves its guards undecided and the cone
-falls back to every direction; the box form is kept (`manifoldPairNodeScore`). None of the four is a per-pixel pair finder; the routes left (ruling M12):
-- **Warped beam volumes** (Ernst et al. 2005): per frame, each entry triangle's beam traced to its exit with its three
-  corner rays, the volume between them bounded conservatively (the interpolation's error), and a request finds the
-  volumes holding X: X's own beam, not every beam aimed near it. Exact if the volume bound is; the bound is the work.
-- **Photon-seeded walks** (step 1's light pass already traces the sun through the ball): a request takes the pairs of
-  light paths landing near X as candidates and solves them; complete only empirically, so not exact by this spec's
-  standard.
-- **Unbiased SMS with seeds** (Zeltner et al. 2020): Newton from seeds drawn from a known density, each root's
-  probability estimated by Bernoulli trials; exact in expectation, with the reciprocal-probability noise this spec set
-  out to avoid, mild where seeds come from photons near X.
+falls back to every direction; the box form is kept (`manifoldPairNodeScore`). None of the four is a per-pixel pair finder. Ruling M12 takes production's way instead: no search, a walk from the
+shadow ray's seed (M12 below).
 
 The pairs are found the other way round, once per frame. The slopes s1, s2 are drawn per frame (one draw for every
 pixel: correlated noise across pixels, the same expectation). Every sunlit entry triangle then refracts into a beam
@@ -383,9 +375,18 @@ Closed forms first; each case fails before its code exists.
   get their own step (roots per texel, as Zeltner et al. 2020's glints do).
 
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32** (step 2c): see "Step 2c".
-- **M12 (OPEN) — how 2b finds a request's triangle pairs** ("Pairs (T3)"): warped beam volumes (exact, the most work)
-  recommended; photon-seeded walks (fast, complete only empirically); unbiased SMS with photon seeds (exact in
-  expectation, some noise).
+- **M12 (ACCEPTED 2026-11-05: the seeded walk) — how 2b finds a request's triangle pairs** ("Pairs (T3)"): not by
+  searching pairs. The shadow ray from X toward the sun crosses the solid at an exit and an entry triangle: the seed
+  (MNEE's, Hanika et al. 2015, as Cycles and RenderMan seed their caustics). Newton walks from it over the mesh, a step
+  re-projected onto the surface by tracing (X toward the stepped exit point, then from there toward the stepped entry
+  point), to a path; the certified solver then proves that path is its pair's only one. Paths the walk cannot reach from
+  its seed are taken by Zeltner et al. 2020's unbiased estimate (seeds jittered about the shadow ray, each found path
+  weighed by the reciprocal of its probability, counted by Bernoulli trials): exact in expectation, its noise mild with a
+  seed this good.
+  Measured on the CPU twin (`manifold_tests` t14, paths built by hand on the showcase's ball): the shadow ray seeds half
+  of them (the rest land outside the ball's shadow, past its focus), and a second seed, the line from X toward the
+  solid's centre, the rest: for smooth glass 60 of 60 found and certified (28 and 32), about 4 Newton steps a walk, no
+  false path, none undecided; with slopes to 0.1, 57 of 60.
 - **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
 
 ## Licences

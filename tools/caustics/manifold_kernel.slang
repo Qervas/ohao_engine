@@ -20,11 +20,65 @@
 //              (manifoldCertifyPair)
 //  10 pair node box 1 rows 17-18, (axis1, half1) 19, box 2 rows 20-21, (axis2, half2) 22, X row 7, (L, eta) row 8,
 //              the slopes row 9 -> 23.xy (1: may hold a path; its score: manifoldPairNodeScore)
+//  12 walk      X row 7, (L, eta) row 8, the slopes row 9, the seed's direction row 10, the scene in `mesh` (6 rows a triangle, its c in rows
+//              0-2's w) -> 23 (found, steps, roots, undecided), 24 (u1, v1, u2, v2), 25 (entry, exit)
+//              (manifoldWalkPair)
 // The triangle's c rides in rows 1-3's w.
 import rt.manifold;
 import rt.manifold_cert;
 
 RWStructuredBuffer<float4> io;
+RWStructuredBuffer<float4> mesh;   // op 12's scene: 6 rows a triangle (p0, e1, e2, n0, a1, a2), its c in rows 0-2's w
+
+ManifoldTri meshTriangle(uint i)
+{
+    const uint m = i * 6u;
+    ManifoldTri t;
+    t.p0 = mesh[m].xyz;
+    t.e1 = mesh[m + 1u].xyz;
+    t.e2 = mesh[m + 2u].xyz;
+    t.n0 = mesh[m + 3u].xyz;
+    t.a1 = mesh[m + 4u].xyz;
+    t.a2 = mesh[m + 5u].xyz;
+    t.c = float3(mesh[m].w, mesh[m + 1u].w, mesh[m + 2u].w);
+    return t;
+}
+
+// Every triangle of `mesh`, tested in turn (Moller-Trumbore): the CPU twin's scene for the walk.
+struct BufferScene : IManifoldScene
+{
+    uint count;
+    bool trace(float3 o, float3 d, float tMax, out uint tri, out float2 uv, out float t)
+    {
+        tri = 0u;
+        uv = float2(0.0);
+        t = tMax;
+        bool hit = false;
+        for (uint i = 0u; i < count; ++i)
+        {
+            const ManifoldTri m = meshTriangle(i);
+            const float3 pv = cross(d, m.e2);
+            const float det = dot(m.e1, pv);
+            if (abs(det) < 1e-12) continue;
+            const float3 tv = o - m.p0;
+            const float a = dot(tv, pv) / det;
+            if (a < 0.0 || a > 1.0) continue;
+            const float3 qv = cross(tv, m.e1);
+            const float b = dot(d, qv) / det;
+            if (b < 0.0 || a + b > 1.0) continue;
+            const float th = dot(m.e2, qv) / det;
+            if (th > 1e-6 && th < t)
+            {
+                t = th;
+                tri = i;
+                uv = float2(a, b);
+                hit = true;
+            }
+        }
+        return hit;
+    }
+    ManifoldTri triangle(uint i) { return meshTriangle(i); }
+}
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
@@ -129,6 +183,16 @@ void run(uint3 id : SV_DispatchThreadID)
         const float score = manifoldPairNodeScore(io[b + 17u].xyz, io[b + 18u].xyz, a1.xyz, a1.w, io[b + 20u].xyz,
                                                   io[b + 21u].xyz, a2.xyz, a2.w, p, r8.xyz, r8.w, r9);
         io[b + 23u] = float4(may ? 1.0 : 0.0, score, 0.0, 0.0);
+    }
+    else if (op == 12u)
+    {
+        BufferScene scene;
+        scene.count = uint(h.y + 0.5);
+        const float4 r8 = io[b + 8u];
+        const ManifoldWalkResult r = manifoldWalkPair<BufferScene>(scene, p, r8.xyz, r8.w, r9, io[b + 10u].xyz);
+        io[b + 23u] = float4(r.found ? 1.0 : 0.0, float(r.steps), float(r.roots), float(r.undecided));
+        io[b + 24u] = r.x;
+        io[b + 25u] = float4(float(r.entry), float(r.exit), 0.0, 0.0);
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

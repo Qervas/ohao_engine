@@ -4,6 +4,7 @@
 // tests/renderer/manifold_tests calls, so the tests hold the path tracer's own solver.
 
 #include <array>
+#include <vector>
 
 namespace ohao::caustics {
 
@@ -62,6 +63,16 @@ bool manifoldPairNodeTest(const V3& min1, const V3& max1, const V3& axis1, float
 float manifoldPairNodeScore(const V3& min1, const V3& max1, const V3& axis1, float half1, const V3& min2,
                             const V3& max2, const V3& axis2, float half2, const V3& X, const V3& L, float eta, V2 s1,
                             V2 s2);
+// The seeded walk (ruling M12) through a solid given as a triangle list: the shadow ray's seed, Newton over the mesh,
+// the final pair certified (rt/manifold_cert.slang's manifoldWalkPair, its scene a loop over `mesh`).
+struct WalkResult {
+    bool found{false};
+    int steps{0}, roots{0}, undecided{0};
+    int entry{0}, exit{0};
+    std::array<float, 4> x{};
+};
+WalkResult manifoldWalkPair(const std::vector<Tri>& mesh, const V3& X, const V3& L, float eta, V2 s1, V2 s2,
+                            const V3& seedDir);
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 

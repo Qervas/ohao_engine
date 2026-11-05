@@ -44,10 +44,14 @@ Io base(float op, const Tri* tri, const V3* p, const V3* L) {
     return io;
 }
 
-void runItem(Io& io) {
+void runItem(Io& io, std::vector<F4>* mesh = nullptr) {
     GlobalParams_0 globals{};
     globals.io_0.data = io.rows;
     globals.io_0.count = 32;
+    if (mesh) {
+        globals.mesh_0.data = mesh->data();
+        globals.mesh_0.count = mesh->size();
+    }
     ComputeVaryingInput range{};
     range.startGroupID = {0, 0, 0};
     range.endGroupID = {1, 1, 1};
@@ -213,6 +217,35 @@ float manifoldPairNodeScore(const V3& min1, const V3& max1, const V3& axis1, flo
     io.rows[22] = f4(axis2, half2);
     runItem(io);
     return io.rows[23].y;
+}
+
+WalkResult manifoldWalkPair(const std::vector<Tri>& tris, const V3& X, const V3& L, float eta, V2 s1, V2 s2,
+                            const V3& seedDir) {
+    std::vector<F4> mesh;
+    mesh.reserve(tris.size() * 6);
+    for (const Tri& t : tris) {
+        mesh.push_back(f4(t.p0, t.c[0]));
+        mesh.push_back(f4(t.e1, t.c[1]));
+        mesh.push_back(f4(t.e2, t.c[2]));
+        mesh.push_back(f4(t.n0));
+        mesh.push_back(f4(t.a1));
+        mesh.push_back(f4(t.a2));
+    }
+    Io io = base(12, nullptr, &X, &L);
+    io.rows[0].y = float(tris.size());
+    io.rows[8].w = eta;
+    io.rows[9] = f4(s1[0], s1[1], s2[0], s2[1]);
+    io.rows[10] = f4(seedDir);
+    runItem(io, &mesh);
+    WalkResult r;
+    r.found = io.rows[23].x != 0.0f;
+    r.steps = static_cast<int>(io.rows[23].y);
+    r.roots = static_cast<int>(io.rows[23].z);
+    r.undecided = static_cast<int>(io.rows[23].w);
+    r.x = {io.rows[24].x, io.rows[24].y, io.rows[24].z, io.rows[24].w};
+    r.entry = static_cast<int>(io.rows[25].x);
+    r.exit = static_cast<int>(io.rows[25].y);
+    return r;
 }
 
 } // namespace ohao::caustics
