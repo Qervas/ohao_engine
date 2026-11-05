@@ -586,6 +586,13 @@ struct CellSlopeMap : ISlopeMap
 
     float2 uvAt(float2 x) { return o + ds * x.x + dt * x.y; }
 
+    // Without a division (each one through an interval's own dependency widened the centre's rounding to 400 ulps):
+    // every unit vector is kept at a positive scale, and the slope (A / C, B / C) is formed with one denominator.
+    // H' = (p - y) + L |p - y| (= |p - y| H); the tangent frame from the unnormalised vertex normal N (|N| = nu):
+    // T' = nu^2 Tw - N (N . Tw), so the mapped normal times nu |T'| is M = nu T' tn.x + sign (N x T') tn.y + |T'| N tn.z;
+    // its lift, M + geo (1e-3 |M| - M . geo), the lifted normal times a positive factor. With m the mapped normal at any
+    // positive scale, t' = m x (c x m) and b' = m x c are along the frame's t and b, |t'| = |m| |m x c|, so
+    // sigma = (H' . t', |m| H' . b') / (|m x c| H' . m): A, B and C below.
     int frame<T : INum>(T s, T t, out T A, out T B, out T C, int branch)
     {
         A = T.cst(0.0);
@@ -598,58 +605,56 @@ struct CellSlopeMap : ISlopeMap
         const MV3<T> d = MV3<T>.of(p).sub(y);
         const T rr = d.lengthSq();
         if (rr.signOf() <= 0) return 0;
-        const MV3<T> H = d.divide(rr.sqrtOf()).add(MV3<T>.of(L));
-        const MV3<T> N = MV3<T>.of(tri.n0).add(MV3<T>.of(tri.a1).scale(u)).add(MV3<T>.of(tri.a2).scale(v));
-        const T nn = N.lengthSq();
+        const MV3<T> H = d.add(MV3<T>.of(L).scale(rr.sqrtOf()));
+        const MV3<T> N0 = MV3<T>.of(tri.n0).add(MV3<T>.of(tri.a1).scale(u)).add(MV3<T>.of(tri.a2).scale(v));
+        const T nn = N0.lengthSq();
         if (nn.signOf() <= 0) return 0;
-        const MV3<T> Nh = N.divide(nn.sqrtOf());
         // Turned to the side p sees, as 2a's (the tracer turns it toward the ray before the map).
         const float3 g = cross(tri.e1, tri.e2);
         const float side = dot(g, p - tri.p0) >= 0.0 ? 1.0 : -1.0;
         int sgn = branch;
         if (sgn == 0)
         {
-            sgn = Nh.dotWith(MV3<T>.of(g * side)).signOf();
+            sgn = N0.dotWith(MV3<T>.of(g * side)).signOf();
             if (sgn == 0) return 2;
         }
-        const MV3<T> n = Nh.scale(T.cst(sgn < 0 ? -1.0 : 1.0));
-        // The tangent frame.
+        const MV3<T> N = N0.scale(T.cst(sgn < 0 ? -1.0 : 1.0));
         const MV3<T> Tw = MV3<T>.of(m.t0).add(MV3<T>.of(m.ta1).scale(u)).add(MV3<T>.of(m.ta2).scale(v));
-        const MV3<T> Tp = Tw.sub(n.scale(n.dotWith(Tw)));
+        const MV3<T> Tp = Tw.scale(nn).sub(N.scale(N.dotWith(Tw)));
         const T tp = Tp.lengthSq();
         if (tp.signOf() <= 0) return 0;
-        const MV3<T> Tt = Tp.divide(tp.sqrtOf());
-        const MV3<T> Bt = n.crossWith(Tt).scale(T.cst(m.sign < 0.0 ? -1.0 : 1.0));
         // The map's normal, its four texels blended as the tracer blends them: lerp(lerp(c00, c10, s), lerp(c01, c11, s), t).
         const MV3<T> r0 = MV3<T>.of(c00).add(MV3<T>.of(c10).sub(MV3<T>.of(c00)).scale(s));
         const MV3<T> r1 = MV3<T>.of(c01).add(MV3<T>.of(c11).sub(MV3<T>.of(c01)).scale(s));
         const MV3<T> tn = r0.add(r1.sub(r0).scale(t));
-        const MV3<T> mapped = Tt.scale(tn.x).add(Bt.scale(tn.y)).add(n.scale(tn.z));
-        const T mm = mapped.lengthSq();
+        const T tpl = tp.sqrtOf();
+        MV3<T> M = Tp.scale(nn.sqrtOf().mul(tn.x))
+                       .add(N.crossWith(Tp).scale(tn.y.mul(T.cst(m.sign < 0.0 ? -1.0 : 1.0))))
+                       .add(N.scale(tpl.mul(tn.z)));
+        const T mm = M.lengthSq();
         if (mm.signOf() <= 0) return 0;
-        MV3<T> ns = mapped.divide(mm.sqrtOf());
         // Lifted to 1e-3 above the geometric plane where it dips below (each side of that is smooth; a box across it is
         // split).
         const float3 geo = normalize(g) * side;
-        const T lift = T.cst(1e-3).sub(ns.dotWith(MV3<T>.of(geo)));
+        const T ml = mm.sqrtOf();
+        const T lift = T.cst(1e-3).mul(ml).sub(M.dotWith(MV3<T>.of(geo)));
         const int below = lift.signOf();
         if (below == 0) return 0;
+        T mlen = ml;
         if (below > 0)
         {
-            const MV3<T> q = ns.add(MV3<T>.of(geo).scale(lift));
-            const T qq = q.lengthSq();
-            if (qq.signOf() <= 0) return 0;
-            ns = q.divide(qq.sqrtOf());
+            M = M.add(MV3<T>.of(geo).scale(lift));
+            const T mq = M.lengthSq();
+            if (mq.signOf() <= 0) return 0;
+            mlen = mq.sqrtOf();
         }
         const MV3<T> c = MV3<T>.of(tri.c);
-        const MV3<T> Tv = c.sub(ns.scale(c.dotWith(ns)));
-        const T tt = Tv.lengthSq();
-        if (tt.signOf() <= 0) return 0;
-        const MV3<T> tc = Tv.divide(tt.sqrtOf());
-        const MV3<T> bc = ns.crossWith(tc);
-        A = H.dotWith(tc);
-        B = H.dotWith(bc);
-        C = H.dotWith(ns);
+        const MV3<T> mc = M.crossWith(c);
+        const T mcl = mc.lengthSq();
+        if (mcl.signOf() <= 0) return 0;
+        A = H.dotWith(M.crossWith(c.crossWith(M)));
+        B = H.dotWith(mc).mul(mlen);
+        C = H.dotWith(M).mul(mcl.sqrtOf());
         return 1;
     }
 

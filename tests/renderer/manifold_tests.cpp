@@ -1315,7 +1315,7 @@ TEST(Manifold, m10_cells_complete) {
                 cases, roots, twos, cases ? double(boxes) / cases : 0.0, maxBoxes, undecidedCases);
     EXPECT_GT(cases, 2500);
     EXPECT_GT(roots, 1500);
-    // Sound (asserted above), not yet complete: about 79% of cells spend the 512-box budget (24% still at 65,536), the
-    // centre's rounding interval F(c) 3e-5 to 8e-5 wide through the map's five normalisations, so no box round even a
-    // well-conditioned root certifies (ruling M11, docs/specs/2026-11-04-caustics-step2-design.md "Step 2c").
+    // Sound (asserted above), not yet complete: 44% of cells spend the 512-box budget (79% before the map lost its
+    // divisions): the centre's rounding interval keeps boxes round well-conditioned roots from certifying (ruling M11,
+    // docs/specs/2026-11-04-caustics-step2-design.md "Step 2c").
 }

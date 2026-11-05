@@ -316,18 +316,23 @@ does not find, none missed where every box was decided; but 2,346 cells (79%) sp
 conditioned (median condition 3.7, 0.9 clear of the 1e-3 lift). The cause, measured on boxes round those roots: the
 centre's rounding interval F(c) is 3e-5 to 8e-5 wide (about 400 ulps: the dependency problem through the map's five
 normalisations, at a point), which needs a box near 1e-3 wide to certify past, and F over a +-1e-3 box is about 20x its
-true range, so excluding boxes costs about 1,000 a cell (2a's triangles: 7). Interval Newton on this map in fp32 is not
-the solver. M11's choices, measured next: the map without divisions (H scaled by |p - y|, the frames unnormalised: the
-same roots, F scaled by a positive factor the estimator divides back out, as Specular Polynomials write their
-constraints), F(c) in fp64 (one evaluation a box; a GeForce's fp64 is 1/64 rate), or Specular Polynomials outright.
+true range, so excluding boxes costs about 1,000 a cell (2a's triangles: 7). **The map without divisions** (built:
+H' = (p - y) + L |p - y|, the tangent frame from the unnormalised vertex normal, the mapped normal at a positive scale,
+t' = m x (c x m) and b' = m x c, so sigma = (H' . t', |m| H' . b') / (|m x c| H' . m): the same roots, C a positive
+multiple of the old one, sigma within 1.6e-6 as before) leaves 1,300 cells (44%) at the budget, 384 boxes a cell:
+better, not the solver either, the products it trades the divisions for (m x (c x m) is quadratic in an M already cubic
+in the inputs) carrying the rounding instead. Interval Newton on this map in fp32 is not the solver. M11's remaining
+choices: F(c) and the boxes in fp64 intervals (one evaluation a box; a GeForce's fp64 is 1/64 rate), affine
+arithmetic, or Specular Polynomials (resultants: no intervals at all).
 
 **Rulings.**
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.
 - **M11 (OPEN) — the solver.** Interval Newton (Path Cuts) recommended; Specular Polynomials if undecided boxes are
-  ever counted. **They are** (T1 above: 79% of cells at the 512-box budget, the centre's rounding the cause): the
-  recommendation is now the division-free map first (it keeps the certifier and its proof), Specular Polynomials if
-  that still leaves boxes undecided.
+  ever counted. **They are** (T1 above: 79% of cells at the 512-box budget, 44% with the division-free map, fp32
+  rounding through the map the cause): the recommendation is now Specular Polynomials (Fan et al. 2024), every root by
+  resultants with no interval to round, unless fp64 intervals measure complete first (the cheaper change to try: the
+  certifier stays).
 
 ## Tests
 
