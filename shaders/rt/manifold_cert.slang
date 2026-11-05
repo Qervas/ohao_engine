@@ -919,8 +919,8 @@ struct ManifoldWalkResult
     float slopeDet;
 }
 
-static const uint kWalkSteps = 32u;
-static const float kWalkTol = 1e-5;
+static const uint kManifoldWalkSteps = 32u;
+static const float kManifoldWalkTol = 1e-5;
 
 float3 manifoldPoint(ManifoldTri t, float2 uv) { return t.p0 + t.e1 * uv.x + t.e2 * uv.y; }
 
@@ -940,82 +940,122 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene, let CERTIFY : bool>(S sc
     res.roots = 0u;
     res.undecided = 0u;
     res.slopeDet = 0.0;
-    // The seed.
-    uint t2, t1;
-    float2 uv2, uv1;
-    float th;
-    if (!scene.trace(X, seedDir, 1e30, t2, uv2, th)) return res;
-    const float3 y2s = manifoldPoint(scene.triangle(t2), uv2);
-    if (!scene.trace(y2s + seedDir * 1e-4, seedDir, 1e30, t1, uv1, th)) return res;
-    float4 x = float4(uv1, uv2);
-    ManifoldTri A = scene.triangle(t1), B = scene.triangle(t2);
-    float4 f;
-    float4x4 J;
-    float2 cc;
-    if (!pairAtC(A, B, X, L, eta, target, x, f, J, cc)) return res;
-    float err = max(max(abs(f.x), abs(f.y)), max(abs(f.z), abs(f.w)));
-    for (uint it = 0u; it < kWalkSteps && err > kWalkTol; ++it)
+    // Every point the walk weighs goes through one evaluation of the pair map, since each call site of the dual-number
+    // map is compiled whole: the seed (mode 0), each damped Newton step re-projected onto the mesh (1) and, uncertified,
+    // each polishing step (2).
+    uint mode = 0u;
+    uint t1 = 0u, t2 = 0u, halving = 0u, polished = 0u;
+    float4 x = float4(0.0), f = float4(0.0), delta = float4(0.0);
+    float4x4 J = float4x4(float4(0.0), float4(0.0), float4(0.0), float4(0.0));
+    float2 cc = float2(0.0);
+    float err = 0.0, beta = 1.0;
+    ManifoldTri A = scene.triangle(0u), B = A;
+    bool converged = false;
+    for (uint guard = 0u; guard < kManifoldWalkSteps * 9u + 4u && !converged; ++guard)
     {
+        // The candidate: its pair and its parameters.
+        uint n1 = t1, n2 = t2;
+        ManifoldTri Ac = A, Bc = B;
+        float4 xc = x + delta;   // polishing: a Newton step in the pair's own parameters, past its edges
+        bool valid = true;
+        if (mode != 2u)
+        {
+            // Onto the mesh: from X toward the stepped exit point, then from there toward the stepped entry point (the
+            // seed: along seedDir, then on along it).
+            const float4 xs = x + beta * delta;
+            float3 o = X;
+            float3 d = mode == 0u ? seedDir : normalize(manifoldPoint(B, xs.zw) - X);
+            for (uint j = 0u; j < 2u && valid; ++j)
+            {
+                uint tri;
+                float2 uv;
+                float th;
+                if (!scene.trace(o, d, 1e30, tri, uv, th))
+                {
+                    valid = false;
+                    break;
+                }
+                const ManifoldTri t = scene.triangle(tri);
+                if (j == 0u)
+                {
+                    n2 = tri;
+                    Bc = t;
+                    xc.zw = uv;
+                    const float3 y2 = manifoldPoint(t, uv);
+                    const float3 toward = mode == 0u ? seedDir : manifoldPoint(A, xs.xy) - y2;
+                    valid = dot(toward, toward) > 0.0;
+                    d = normalize(toward);
+                    o = y2 + d * 1e-4;
+                }
+                else
+                {
+                    n1 = tri;
+                    Ac = t;
+                    xc.xy = uv;
+                }
+            }
+        }
+        float4 fc = float4(0.0);
+        float4x4 Jc = J;
+        float2 cc2 = float2(0.0);
+        valid = valid && pairAtC(Ac, Bc, X, L, eta, target, xc, fc, Jc, cc2);
+        const float errc = max(max(abs(fc.x), abs(fc.y)), max(abs(fc.z), abs(fc.w)));
+        if (mode == 1u && !(valid && errc < err))
+        {
+            // Not an improvement: halve the step; when eight halvings reduce nothing, no path from this seed.
+            beta *= 0.5;
+            if (++halving < 8u) continue;
+            ++res.steps;
+            return res;
+        }
+        if (!valid) return res;   // the seed, or a polishing step, undefined
+        x = xc;
+        A = Ac;
+        B = Bc;
+        t1 = n1;
+        t2 = n2;
+        f = fc;
+        J = Jc;
+        cc = cc2;
+        err = errc;
+        if (mode == 2u)
+        {
+            converged = ++polished == 2u;
+            if (converged) break;
+        }
+        else
+        {
+            if (mode == 1u) ++res.steps;
+            if (err <= kManifoldWalkTol)
+            {
+                // Converged. The walk stops where |F| < kManifoldWalkTol, and where the slopes barely move with x (a
+                // caustic's focus: det dF/dx near 0) that region straddles the pair's edges: a root of the neighbouring
+                // pair, stopped at on this pair's side, counted in both (t15's GPU form 10% bright on the axis).
+                // Uncertified, the root is polished in this pair's own parameters (two Newton steps without
+                // re-projection) and kept only inside both triangles: every root belongs to one pair.
+                converged = CERTIFY;
+                if (converged) break;
+                mode = 2u;
+            }
+            else
+            {
+                if (res.steps >= kManifoldWalkSteps) return res;
+                mode = 1u;
+            }
+        }
         float4x4 Ji;
         if (!invert4(J, Ji)) return res;
-        const float4 delta = -mul(Ji, f);
-        float beta = 1.0;
-        bool moved = false;
-        for (uint halving = 0u; halving < 8u && !moved; ++halving, beta *= 0.5)
-        {
-            const float4 xs = x + beta * delta;
-            // Re-project onto the mesh: X toward the stepped exit point, then from there toward the stepped entry point.
-            const float3 p2 = manifoldPoint(B, xs.zw), p1 = manifoldPoint(A, xs.xy);
-            uint n2, n1;
-            float2 q2, q1;
-            float tt;
-            if (!scene.trace(X, normalize(p2 - X), 1e30, n2, q2, tt)) continue;
-            const float3 y2 = manifoldPoint(scene.triangle(n2), q2);
-            const float3 toward = p1 - y2;
-            if (!(dot(toward, toward) > 0.0)) continue;
-            const float3 dir = normalize(toward);
-            if (!scene.trace(y2 + dir * 1e-4, dir, 1e30, n1, q1, tt)) continue;
-            const ManifoldTri A2 = scene.triangle(n1), B2 = scene.triangle(n2);
-            const float4 x2 = float4(q1, q2);
-            float4 f2;
-            float4x4 J2;
-            float2 c2;
-            if (!pairAtC(A2, B2, X, L, eta, target, x2, f2, J2, c2)) continue;
-            const float err2 = max(max(abs(f2.x), abs(f2.y)), max(abs(f2.z), abs(f2.w)));
-            if (!(err2 < err)) continue;
-            x = x2;
-            t1 = n1;
-            t2 = n2;
-            A = A2;
-            B = B2;
-            f = f2;
-            J = J2;
-            cc = c2;
-            err = err2;
-            moved = true;
-        }
-        ++res.steps;
-        if (!moved) return res;   // no step reduced the error: no path from this seed
+        delta = -mul(Ji, f);
+        beta = 1.0;
+        halving = 0u;
     }
-    if (!(err <= kWalkTol)) return res;
+    if (!converged) return res;
     res.entry = t1;
     res.exit = t2;
+    const float c12 = cc.x * cc.x * cc.y * cc.y;
+    res.slopeDet = c12 > 0.0 ? abs(determinant(J)) / c12 : 0.0;
     if (!CERTIFY)
     {
-        // The walk stops where |F| < kWalkTol, and where the slopes barely move with x (a caustic's focus: det dF/dx
-        // near 0) that region straddles the pair's edges: a root of the neighbouring pair, stopped at on this pair's
-        // side, counted in both (t15's GPU form 10% bright on the axis). So the root is polished in this pair's own
-        // parameters, extended past its edges (Newton without re-projection), and kept only inside both triangles:
-        // every root belongs to one pair.
-        for (uint it = 0u; it < 2u; ++it)
-        {
-            float4x4 Ji;
-            if (!invert4(J, Ji)) return res;
-            x -= mul(Ji, f);
-            if (!pairAtC(A, B, X, L, eta, target, x, f, J, cc)) return res;
-        }
-        const float c12 = cc.x * cc.x * cc.y * cc.y;
-        res.slopeDet = c12 > 0.0 ? abs(determinant(J)) / c12 : 0.0;
         // A root of F is a path only where it refracts as light does (pairPhysical: each half vector on its normal's
         // side, the light outside then inside at y1, inside then outside at y2): without that check the walk took
         // roots no light follows (t15's GPU form read 7-20x bright).
@@ -1023,8 +1063,6 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene, let CERTIFY : bool>(S sc
         res.x = x;
         return res;
     }
-    const float c12 = cc.x * cc.x * cc.y * cc.y;
-    res.slopeDet = c12 > 0.0 ? abs(determinant(J)) / c12 : 0.0;
     // Certify the final pair: every root in it, the walked one among them.
     const ManifoldPairResult c = manifoldCertifyPair(A, B, X, L, eta, target);
     res.roots = c.roots;

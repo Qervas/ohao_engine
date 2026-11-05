@@ -749,6 +749,12 @@ deferred, reference, path traced); two the transparency scene,
   `OHAO_MANIFOLD_OFF=1`, `OHAO_MANIFOLD_SPLIT_ONLY=1`; `OHAO_MANIFOLD_STAGE` for profiling. Gotchas: a slope's frame is
   fixed per cluster (`ManifoldTri.c`), or pruning tests a ring round a sphere; the pass's cost is its pruning, not its
   tests (time `pt.manifold` with `render.capture {timings}`, never wall time: a cold compile hides in it).
+  **Step 2b** (same spec, "Step 2b as designed", M12): the sun through an owned solid (two refractions) onto X, which the
+  camera side never renders (nothing to drop), by the seeded walk (`manifoldGlass`, `rt/manifold_cert.slang`'s
+  `manifoldWalkPair<S, false>`; `manifold_tests` t15 holds its form to light traced through a glass ball). **Off until its
+  GPU tests (m4-m6) hold it:** `OHAO_MANIFOLD_GLASS=1`. Gotchas: an uncertified root must be polished in its own pair's
+  parameters and kept only inside both triangles, or a focus counts a root in two pairs; one frame reference for every
+  walk of a request; the walk's dual-number map and the BSDFs each at one call site (manifoldConnect 34k instructions).
 - **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
   frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
   transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any
@@ -1412,6 +1418,10 @@ deferred, reference, path traced); two the transparency scene,
     1e-5 (another math library's last digits: MSVC to GCC, at most 5.4e-6).
   - libstdc++ runs `std::execution::par` on oneTBB, linked where found (`TBB::tbb`).
   - Slang 2026 made `expand` a keyword; no entry point may be named so.
+  - No custom command may output a path named like a target: the shader directory's `make_directory` edge was named
+    `shaders` in Ninja, so `--target shaders` built the directory and no shader (made at configure time now).
+  - SPIRV-Tools 2026.4 (Arch's `spirv-val`) rejects the `ArrayStride` slangc 2025.11 puts on arrays outside blocks
+    (VUID-StandaloneSpirv-None-10684, in nearly every shader); whether the validation layer reports it is the GPU gate's.
   - `ohao serve` on stdio interrupts its reader with SIGUSR1 (no `SA_RESTART`), the POSIX `CancelSynchronousIo`.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build

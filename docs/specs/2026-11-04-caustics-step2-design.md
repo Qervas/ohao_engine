@@ -159,12 +159,14 @@ Working the outline into the tracer's code changed five things; the outline stay
 ## Step 2b as designed (2026-11-05)
 
 **What it owns.** `sun → S₁ (into a solid, refracting) → S₂ (out of it, refracting) → X (rough, depth 1 … R) → … →
-camera`, both refractions within their cores, S₁ and S₂ on the same draw of a transmissive, owned material (a glass ball,
-a slab). The camera side drops it as 2a's terms: `chain₂ ← chain₁ × f_smooth,core / pdf` at the bounce after X when it
-refracts into an owned solid, and its sun sample at S₁ subtracts `chain₂ × f_smooth,core(wo, l) × Le` when that bounce
-refracts back out at the same draw. Every other chain of two (two reflections, a reflection then a refraction) stays
-the camera side's. It is missing today, not noisy: the showcase's glow under the glass ball, seen through the ball, is
-camera depth 2 behind two refractions, and nothing renders it.
+camera`, S₁ and S₂ on the same instance of a transmissive solid of an owned material (a glass ball, a slab), over both
+refractions' whole lobes. **Corrected while building T4 (2026-11-05):** the camera side renders none of this term, at any
+roughness, so it has no `chain₂` to drop: its light samples look above a surface only (inside the solid at S₁ the sun is
+below it), its shadow rays stop at solids (only thin panes pass them, ruling O14), and no BSDF ray meets a delta sun.
+So the pass draws each slope from GGX's whole distribution at the draw's alpha (2a's core truncation exists to split a
+lobe with the camera side; here nothing is split), and the camera side is unchanged. Thin-walled panes stay the camera
+side's (their shadow rays carry the sun). It was missing, not noisy: the showcase's glow under the glass ball, seen
+through the ball, is camera depth 2 behind two refractions, and nothing rendered it.
 
 **The map.** Unknowns `(u₁, v₁)` on an entry triangle T₁ and `(u₂, v₂)` on an exit triangle T₂ of the same draw; two slope
 constraints, one at each vertex, on the generalised half vector of refraction (Walter et al. 2007,
@@ -242,7 +244,7 @@ before it is built: beams a frame and beams covering X a request, on c3's ball a
 
 **Build order.** T1 the generic map and the Krawczyk solver (CPU twin, tests t9), applied to 2a's triangles (m1, m2
 unchanged, M1 closed); T2 refraction's half vector and the pair map (twin, tests); T3 pair candidates and their count
-on c3's ball; T4 the camera side's `chain₂` and the pass's pairs; T5 the closed forms; T6 cost.
+on c3's ball; T4 the pass's walk (no camera-side change: "What it owns"); T5 the closed forms; T6 cost.
 
 ## Step 2c: normal-mapped glints (proposed, 2026-11-05)
 
@@ -398,6 +400,27 @@ Closed forms first; each case fails before its code exists.
   takes to find the same path again. Within 2% at three points of the floor under the ball (+1.7%, -0.05%, -1.8%), 1.1-1.3
   walks to refind a path. With the two fixed seeds and no N, the point under the centre read 18% dark: paths missed on
   the caustic's axis, which the random seeds reach.
+  **The GPU's form** (T4, `manifoldGlass` in `rt/path_tracer.slang`, 2026-11-05): the certified walk is 3.5 MB of
+  SPIR-V, so the pass walks uncertified (`manifoldWalkPair<S, false>`): a path is where the walk converges, its root
+  polished by two Newton steps in its pair's own parameters (extended past the triangles' edges) and kept only inside
+  both triangles, so every root belongs to one pair. Without the polish the point under the ball read 10% bright: at a
+  caustic's focus |F| < 1e-5 is a region straddling a pair's edges, and a root of the neighbouring pair stopped at on
+  this pair's side was counted in both. The walk also checks `pairPhysical` (a root of F is a path only where light
+  refracts that way: 7-20x bright without it). The weight is the walk's own slope Jacobian, |det dF/dx| / (C1 C2)^2
+  (checked against double central differences), and the BSDFs are OpenPBR's in the camera's roles, the shading cosines
+  inside them and the geometric ones in the area conversions; N counts re-find walks matching the pair and the polished
+  root within 1e-3, capped at 64. On t15's ball (800 draws) within 3% of the traced reference at all three points
+  (+1.2%, +0.3%, -3.0%); over 3,000 draws and two seeds within 2.3%, the reference's own spread. On the GPU the walk's
+  scene is the instance itself: rays forced non-opaque that commit only its triangles (`ManifoldInstanceScene`), its
+  triangles in world space through the instance's matrix (`manifoldTriangleFrom`, the gather's). The slopes' frame is
+  one reference for every walk of a request (a walk crosses clusters, so 2a's cluster frames would make F jump at their
+  edges): perpendicular to the sun and to the solid's direction from X, so its poles are normals the sun grazes or X sees
+  edge-on. A found path is checked as the camera side would trace it (X -> y2 and y2 -> y1 meet the solid first at the
+  walk's distances, the sun visible from y1's outer side), its inside absorbs as the camera side's volume does, and a
+  dispersive solid draws the wavelength the path does not have yet (that channel alone, x3). The walk evaluates the
+  dual-number map at one call site and the three BSDFs (X's rough part, the two refractions) at one OpenPBR site:
+  manifoldConnect is 34,168 SPIR-V instructions (2a alone 19,997; three walk sites and two OpenPBR sites made it 46,739).
+  Off until m4-m6 hold it on the GPU (`OHAO_MANIFOLD_GLASS=1`); the pass's counters add walks, paths and connections.
 - **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
 
 ## Licences

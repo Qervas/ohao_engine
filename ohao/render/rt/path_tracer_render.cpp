@@ -44,6 +44,7 @@ constexpr uint32_t kPTFlagCaustics = 1u << 10;
 // writes the pass's requests); bits 11-18 are OHAO_PT_CLASS.
 constexpr uint32_t kPTFlagManifold = 1u << 19;
 constexpr uint32_t kPTFlagManifoldRequests = 1u << 20;
+constexpr uint32_t kPTFlagManifoldGlass = 1u << 23;   // step 2b: the sun through owned solids
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -596,6 +597,9 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         if (manifoldPass) pc.control.x |= kPTFlagManifoldRequests;
         static const char* stage = std::getenv("OHAO_MANIFOLD_STAGE");   // profiling: where manifoldConnect stops
         if (stage) pc.control.x |= (uint32_t(std::atoi(stage)) & 3u) << 21u;
+        // Step 2b (manifoldGlass) runs only with OHAO_MANIFOLD_GLASS=1 until its GPU tests (m4-m6) have held it.
+        static const bool glass = std::getenv("OHAO_MANIFOLD_GLASS") != nullptr;
+        if (glass) pc.control.x |= kPTFlagManifoldGlass;
         m_manifoldRan = true;
     }
     // The frames already in the running mean (0: this frame's sample alone, which a temporal

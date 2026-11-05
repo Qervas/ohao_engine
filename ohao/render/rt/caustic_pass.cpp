@@ -70,12 +70,12 @@ bool CausticPass::create(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physicalDevice = physicalDevice;
     if (!allocate(m_table, kRows * sizeof(glm::vec4), false) || !allocate(m_splat, 16, false) ||
-        !allocate(m_stats, 32, true)) {
+        !allocate(m_stats, kStatsBytes, true)) {
         OHAO_LOG(Error, render, "CausticPass: its buffers could not be created");
         destroy();
         return false;
     }
-    std::memset(m_stats.mapped, 0, 32);
+    std::memset(m_stats.mapped, 0, kStatsBytes);
     m_clearSplat = true;
     m_clearCounts = true;
     return true;
@@ -86,8 +86,8 @@ void CausticPass::destroy() {
     if (m_splatFull) OHAO_LOG(Info, render, "caustics: {} casters, {} splats clamped", m_casterCount, clamped());
     if (const auto m = manifoldCounts(); m[0] > 0)
         OHAO_LOG(Info, render, "caustics' manifold pass: {} requests, {} triangles solved, {} roots, {} connections; "
-                 "{} cluster, {} sub-cluster and {} triangle tests",
-                 m[0], m[1], m[2], m[3], m[4], m[5], m[6]);
+                 "{} cluster, {} sub-cluster and {} triangle tests; through solids {} walks, {} paths, {} connections",
+                 m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9]);
     release(m_table);
     release(m_splat);
     release(m_stats);
@@ -202,8 +202,8 @@ void CausticPass::recordAfterTrace(VkCommandBuffer cmd) {
     barrier(cmd, kTrace, VK_ACCESS_SHADER_WRITE_BIT, kTrace, kRW);
 }
 
-std::array<uint32_t, 7> CausticPass::manifoldCounts() const {
-    std::array<uint32_t, 7> v{};
+std::array<uint32_t, 10> CausticPass::manifoldCounts() const {
+    std::array<uint32_t, 10> v{};
     if (m_stats.mapped) std::memcpy(v.data(), static_cast<const uint8_t*>(m_stats.mapped) + 4, sizeof v);
     return v;
 }
