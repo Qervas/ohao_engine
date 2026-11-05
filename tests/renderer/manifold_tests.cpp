@@ -1316,6 +1316,6 @@ TEST(Manifold, m10_cells_complete) {
     EXPECT_GT(cases, 2500);
     EXPECT_GT(roots, 1500);
     // Sound (asserted above), not yet complete: 44% of cells spend the 512-box budget (79% before the map lost its
-    // divisions): the centre's rounding interval keeps boxes round well-conditioned roots from certifying (ruling M11,
+    // divisions): its interval enclosures overestimate F and its Jacobian over a box many times over (ruling M11,
     // docs/specs/2026-11-04-caustics-step2-design.md "Step 2c").
 }
