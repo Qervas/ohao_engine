@@ -364,10 +364,13 @@ def c2_split(failures):
     return out
 
 
-# ---- c4_through_glass: a matte point seen only through glass is not the light pass's --------------
-# The c1 room with a clear slab (roughness 0) between camera and R: R is seen only through it, so no
-# term lighting it is the light pass's (its first hit is the glass). With caustics on and off R's mean
-# must agree within 1%.
+# ---- c4_through_glass: R lit by the mirror, seen only through a clear slab -----------------------
+# The c1 room with a clear slab (roughness 0) between camera and R. R's first hit is the glass, so the
+# light pass owns nothing there; the mirror's light reaches R at camera depth 2 (the slab's two faces
+# first), a term step 2a's manifold connection owns. The closed form: c1's R times the slab's
+# transmittance head-on, (1 - F)^2 / (1 - F^2) with its reflections inside (those past depth 2 stay with
+# the camera side, which cannot find a mirror's delta sun: (1 - F)^2 is what step 2a alone can give,
+# 0.16% under). Without caustics R misses the mirror's light.
 
 def c4_scene():
     s = mirror_scene()
@@ -384,13 +387,13 @@ def c4_through_glass(failures):
     off, _ = render("c4_off", c4_scene(), 1024, ["--no-caustics"])
     on, _ = render("c4_on", c4_scene(), 1024)
     a, b = r_mean(off), r_mean(on)
-    if not a > 0.01:
-        failures.append("c4_through_glass: R reads %.4g: the scene does not light it, so the test proves nothing" % a)
-    err = abs(b - a) / max(a, 1e-9)
-    print("c4_through_glass: R off %.4f, on %.4f (%.2f%%)" % (a, b, 100 * err))
+    f = fresnel(1.0, 1.5)
+    want = 0.5 / math.pi * SUN_E * math.cos(math.radians(45)) * (1 - f) ** 2 / (1 - f * f)
+    err = abs(b - want) / want
+    print("c4_through_glass: R %.4f, closed form %.4f (%.2f%%); without caustics %.4f" % (b, want, 100 * err, a))
     if not err <= 0.01:
-        failures.append("c4_through_glass: R %.4f with caustics against %.4f without (%.2f%%, bar 1%%)" % (b, a, 100 * err))
-    return {"off": a, "on": b, "error": err}
+        failures.append("c4_through_glass: R %.4f against the closed form %.4f (%.2f%%, bar 1%%)" % (b, want, 100 * err))
+    return {"r_mean": b, "closed_form": want, "error": err, "without_caustics": a}
 
 
 

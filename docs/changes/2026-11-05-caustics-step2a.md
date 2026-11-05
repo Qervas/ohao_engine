@@ -59,6 +59,9 @@ own), which step 2a leaves to the camera side (ruling M7), and at equal time ste
 - **Strip clusters.** Clusters of 32 triangles in index order were strips round a sphere's rings; clusters are meshlets.
 - **The material in the wrong field** after the draws buffer changed layout: every draw read material 0, unowned; m1
   caught it (the mirrored view read 0).
+- **c4's premise.** Step 1's c4 held R seen through glass equal with caustics on and off: no term was the light
+  pass's. R is lit by the mirror, and seen past the slab it is step 2a's (depth 2), which the camera side never
+  found: off read 0.0332, on 0.3111. c4 now holds R to the closed form times the slab's transmittance.
 - **Cost.** The pass took 340 ms a showcase frame (480 x 270) against `pt.trace`'s 21. Measured by stage: walking all six
   draws a request (to 116 ms by choosing one by solid angle), requests far from every caster (to 70 ms by roulette, to 60
   at the weight 0.1), the closest-hit trace for roots on a solid's far side (the shadow ray first). Loosening the disc
@@ -81,7 +84,8 @@ to the running mean itself.
 | m2_glossy_mirror, roughness 0.1, direct / mirrored | 0.47% / 0.66% against the quadrature | 1% |
 | m2: the pass's light, the camera side's | 0.3337 against the core's 0.3346; 0.0030 against the tail's 0.0044 | 1% of the whole |
 | m8_repeat: two captures in one process | identical | identical |
-| c1-c6 (step 1's) | as before (c1 0.07%, c3_slab 1.01%, c2 0.13% / 0.05%, c6 identical) | |
+| c4_through_glass: R lit by the mirror, seen through a clear slab (step 2a at depth 2) | 0.3111 against 0.3116 (0.19%); without caustics 0.0332 | 1% |
+| c1-c3, c6 (step 1's) | as before (c1 0.07%, c3_slab 1.01%, c2 0.13% / 0.05%, c6 identical) | |
 
 m2's direct and mirrored views both read about 0.0014 under the quadrature, which takes the mirror as infinite (its wide
 tail past the real mirror's edges is missing from the render, not from the reference).

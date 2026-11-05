@@ -38,8 +38,8 @@ seen from the other side (a peaked BSDF evaluated at a point drawn without regar
 **The other paths step 2 owns are missing, not noisy, so no dot shows them:** sun → glass (in) → glass (out) → floor,
 seen past the first hit (through glass, or after a bounce). The camera side cannot find them at all (its light sampling
 looks above a surface only; no ray meets a delta sun), and the light pass connects only to the first hit. They are a
-bias today, as the glow under the glass ball was before step 1 (`c4_through_glass` holds that its view through glass
-gets nothing yet).
+bias today, as the glow under the glass ball was before step 1. (`c4_through_glass`'s R is lit by a mirror, a reflection:
+seen through glass, step 2a owns it, and c4 holds it to its closed form.)
 
 ## Goal
 
@@ -172,7 +172,7 @@ Closed forms first; each case fails before its code exists.
   the mirror's Fresnel, within 2%.
 - **m5_ball_seen** (2b): `c3_sphere`'s moved glass ball, its caustic seen after a bounce, against the same numpy ray
   simulation, 5%.
-- **m6_through_glass** (2b): `c4_through_glass` with the caustic now found through glass.
+- **m6_through_glass** (2b): c4's slab between the camera and step 1's glass slab caustic (`c3_slab`), now found through glass.
 - **m7_showcase**: equal time against the 8192 spp reference: the glint-after-rough class (`OHAO_PT_CLASS=2`) has no
   dot; relMSE no higher than step 1's; dots no more than step 1's 7.
 - **m8_repeat**: two captures in one process identical (integer splats, fixed tuple order).
