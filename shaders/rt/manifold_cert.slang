@@ -278,7 +278,55 @@ int manifoldOrientation(ManifoldTri tri, float3 p, float2 uv)
     return d > 0.0 ? 1 : (d < 0.0 ? -1 : 0);
 }
 
-// ---- Krawczyk on a triangle ---------------------------------------------------------------------------
+// ---- the certifier's maps ----------------------------------------------------------------------------------
+// A slope map on a 2-D input (2a: a triangle's barycentrics (u, v); 2c: a normal map cell's bilinear parameters (s, t)):
+// the half vector's components in its frame (A = H.t, B = H.b, C = H.n) in any number type, as manifoldFrameT returns
+// them (0 a guard undecided, 2 the orientation undecided, 1 defined); the vertex normal's orientation at a point; the
+// domain a root must lie in; whether a box of the input lies wholly outside it.
+interface ISlopeMap
+{
+    int frame<T : INum>(T u, T v, out T A, out T B, out T C, int branch);
+    int orientation(float2 x);
+    bool inDomain(float2 x);
+    bool outside(float4 box);
+}
+
+// The constraint the certifier solves on any map, as manifoldConstraintT on 2a's.
+int slopeConstraint<M : ISlopeMap, T : INum>(M map, float2 target, T u, T v, out T fx, out T fy, int branch)
+{
+    T A, B, C;
+    const int def = map.frame<T>(u, v, A, B, C, branch);
+    fx = A.sub(C.mul(T.cst(target.x)));
+    fy = B.sub(C.mul(T.cst(target.y)));
+    if (def != 1) return def;
+    if (C.signOf() < 0) return -1;
+    return 1;
+}
+
+// 2a's map: a triangle of normals interpolated from its vertices, seen from p, lit from L.
+struct TriangleSlopeMap : ISlopeMap
+{
+    ManifoldTri tri;
+    float3 p, L;
+    int frame<T : INum>(T u, T v, out T A, out T B, out T C, int branch)
+    {
+        return manifoldFrameT<T>(tri, p, L, u, v, A, B, C, branch);
+    }
+    int orientation(float2 x) { return manifoldOrientation(tri, p, x); }
+    bool inDomain(float2 x) { return x.x >= 0.0 && x.y >= 0.0 && x.x + x.y <= 1.0; }
+    bool outside(float4 box) { return box.x + box.y > 1.0; }   // wholly past the hypotenuse
+}
+
+TriangleSlopeMap triangleSlopeMap(ManifoldTri tri, float3 p, float3 L)
+{
+    TriangleSlopeMap m;
+    m.tri = tri;
+    m.p = p;
+    m.L = L;
+    return m;
+}
+
+// ---- Krawczyk on a map -----------------------------------------------------------------------------------
 typealias MDualF2 = MDual<MFloat, 2>;
 typealias MDualI2 = MDual<MIval, 2>;
 
@@ -296,11 +344,11 @@ struct CertResult
 }
 
 // F and its Jacobian at a point. False where undefined.
-bool certAt(ManifoldTri tri, float3 p, float3 L, float2 target, float2 uv, int branch, out float2 f, out float2x2 J)
+bool certAt<Map : ISlopeMap>(Map map, float2 target, float2 uv, int branch, out float2 f, out float2x2 J)
 {
     MDualF2 fx, fy;
-    const int ok = manifoldConstraintT<MDualF2>(tri, p, L, target, MDualF2.variable(MFloat.cst(uv.x), 0),
-                                                MDualF2.variable(MFloat.cst(uv.y), 1), fx, fy, branch);
+    const int ok = slopeConstraint<Map, MDualF2>(map, target, MDualF2.variable(MFloat.cst(uv.x), 0),
+                                               MDualF2.variable(MFloat.cst(uv.y), 1), fx, fy, branch);
     f = float2(fx.v.v, fy.v.v);
     J = float2x2(fx.d[0].v, fx.d[1].v, fy.d[0].v, fy.d[1].v);   // rows: d F.x, d F.y
     return ok == 1 || ok == -1;
@@ -309,11 +357,17 @@ bool certAt(ManifoldTri tri, float3 p, float3 L, float2 target, float2 uv, int b
 // Every root of sigma(u, v) = target on the triangle (u, v >= 0, u + v <= 1), certified.
 CertResult manifoldCertify(ManifoldTri tri, float3 p, float3 L, float2 target)
 {
-    return manifoldCertifyBox(tri, p, L, target, float4(0.0, 0.0, 1.0, 1.0));
+    return manifoldCertifyMap<TriangleSlopeMap>(triangleSlopeMap(tri, p, L), target, float4(0.0, 0.0, 1.0, 1.0));
 }
 
 // The same from a box of (u, v): (u0, v0, u1, v1).
 CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target, float4 start)
+{
+    return manifoldCertifyMap<TriangleSlopeMap>(triangleSlopeMap(tri, p, L), target, start);
+}
+
+// Every root of a map's sigma = target in its domain, from a box of its input: (x0, y0, x1, y1).
+CertResult manifoldCertifyMap<Map : ISlopeMap>(Map map, float2 target, float4 start)
 {
     CertResult res;
     res.roots = 0u;
@@ -335,7 +389,7 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
             break;
         }
         ++res.boxes;
-        if (B.x + B.y > 1.0) continue;   // wholly past the triangle's hypotenuse
+        if (map.outside(B)) continue;
         const float2 cuv = 0.5 * (B.xy + B.zw);
         // The test runs on B grown by a tenth a side (epsilon inflation): a root on a split line, or within float of
         // one, lies inside some grown box, where the plain box's K(B) could never fit in its interior.
@@ -345,9 +399,8 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
         {
             const float4 Bt = float4(cuv - half, cuv + half);
             MDualI2 fx, fy;
-            const int def = manifoldConstraintT<MDualI2>(tri, p, L, target,
-                                                         MDualI2.variable(MIval.make(Bt.x, Bt.z), 0),
-                                                         MDualI2.variable(MIval.make(Bt.y, Bt.w), 1), fx, fy, branch);
+            const int def = slopeConstraint<Map, MDualI2>(map, target, MDualI2.variable(MIval.make(Bt.x, Bt.z), 0),
+                                                        MDualI2.variable(MIval.make(Bt.y, Bt.w), 1), fx, fy, branch);
             if (def < 0)
             {
                 decided = true;   // C certainly negative over Bt: no root of sigma
@@ -378,11 +431,11 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
             // F at the centre as an interval (its own rounding bounded), then the mean-value form
             // F(Bt) in F(c) + J(Bt) (Bt - c): its excess shrinks with the box's square, the natural one's with its width.
             MIval fcx, fcy;
-            const int defc = manifoldConstraintT<MIval>(tri, p, L, target, MIval.cst(cuv.x), MIval.cst(cuv.y), fcx,
-                                                        fcy, branch);
+            const int defc = slopeConstraint<Map, MIval>(map, target, MIval.cst(cuv.x), MIval.cst(cuv.y), fcx, fcy,
+                                                       branch);
             float2 fc;
             float2x2 Jc;
-            if (!(defc == 1 || defc == -1) || !certAt(tri, p, L, target, cuv, branch, fc, Jc))
+            if (!(defc == 1 || defc == -1) || !certAt<Map>(map, target, cuv, branch, fc, Jc))
             {
                 split = true;
                 break;
@@ -431,7 +484,7 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
                 {
                     float2 f;
                     float2x2 J;
-                    if (!certAt(tri, p, L, target, uv, branch, f, J)) break;
+                    if (!certAt<Map>(map, target, uv, branch, f, J)) break;
                     const float dj = J[0][0] * J[1][1] - J[0][1] * J[1][0];
                     if (!(abs(dj) > 1e-30)) break;
                     const float2 step = mul(float2x2(J[1][1], -J[0][1], -J[1][0], J[0][0]) / dj, f);
@@ -442,18 +495,17 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
                 // meets the target there (F also vanishes where H does: the direction to p opposite the light), and,
                 // on a forced branch, the normal's own orientation is the branch's.
                 MFloat A, Bc, C;
-                const bool framed = manifoldFrameT<MFloat>(tri, p, L, MFloat.cst(uv.x), MFloat.cst(uv.y), A, Bc, C,
-                                                           branch) == 1;
+                const bool framed = map.frame<MFloat>(MFloat.cst(uv.x), MFloat.cst(uv.y), A, Bc, C, branch) == 1;
                 const float2 sigmaAt = framed && C.v > 0.0 ? float2(A.v, Bc.v) / C.v : float2(3.0e38);
                 const bool above = framed && C.v > 0.0 &&
                                    all(abs(sigmaAt - target) <= 1e-3 * max(1.0, length(target))) &&
-                                   (branch == 0 || manifoldOrientation(tri, p, uv) == branch);
+                                   (branch == 0 || map.orientation(uv) == branch);
                 // Bt holds exactly one root: one already recorded inside Bt is this one (a neighbour's grown box
                 // certified it first).
                 bool seen = false;
                 for (uint q = 0u; q < res.roots; ++q)
                     seen = seen || all(res.uv[q] >= Bt.xy && res.uv[q] <= Bt.zw) || all(abs(res.uv[q] - uv) <= 1e-6);
-                if (above && !seen && uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)
+                if (above && !seen && map.inDomain(uv))
                 {
                     if (res.roots < kCertMaxRoots)
                     {
@@ -507,6 +559,143 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
         }
     }
     return res;
+}
+
+// ---- step 2c: a normal-mapped triangle, cell by cell ----------------------------------------------------------
+// The shading normal as the tracer builds it with a normal map (rt/pt_hit.slang fillHitAt): the vertex normal n
+// (interpolated, turned to the side seen), the tangent T (the vertex tangents interpolated, made perpendicular to n),
+// B = n x T times the tangent's sign, tn the map's normal in that frame, n' = normalize(T tn.x + B tn.y + n tn.z), lifted
+// to 1e-3 above the geometric plane where it dips below it. On one cell of the map (the square between four texel
+// centres) tn is the bilinear blend of its four texels in the cell's (s, t) in [0, 1]^2, and (s, t) is affine in the
+// triangle's (u, v): the map takes (s, t), so a cell is the box [0, 1]^2 and the triangle its domain. The slope's frame
+// is 2a's (t from c, b = n' x t), the half vector's slope drawn there.
+struct ManifoldMappedTri
+{
+    ManifoldTri tri;
+    float3 t0, ta1, ta2;   // world vertex tangents (unnormalised): t0, t1 - t0, t2 - t0
+    float sign;            // the bitangent's sign (vertex 0's tangent w)
+    float2 uv0, uvA, uvB;  // texture coordinates: uv0 + uvA u + uvB v
+};
+
+struct CellSlopeMap : ISlopeMap
+{
+    ManifoldMappedTri m;
+    float3 p, L;
+    float3 c00, c10, c01, c11;   // the cell's texels' normals, tangent space: (s, t) = (0, 0), (1, 0), (0, 1), (1, 1)
+    float2 o, ds, dt;            // (u, v) = o + ds s + dt t
+
+    float2 uvAt(float2 x) { return o + ds * x.x + dt * x.y; }
+
+    int frame<T : INum>(T s, T t, out T A, out T B, out T C, int branch)
+    {
+        A = T.cst(0.0);
+        B = A;
+        C = A;
+        const T u = T.cst(o.x).add(T.cst(ds.x).mul(s)).add(T.cst(dt.x).mul(t));
+        const T v = T.cst(o.y).add(T.cst(ds.y).mul(s)).add(T.cst(dt.y).mul(t));
+        const ManifoldTri tri = m.tri;
+        const MV3<T> y = MV3<T>.of(tri.p0).add(MV3<T>.of(tri.e1).scale(u)).add(MV3<T>.of(tri.e2).scale(v));
+        const MV3<T> d = MV3<T>.of(p).sub(y);
+        const T rr = d.lengthSq();
+        if (rr.signOf() <= 0) return 0;
+        const MV3<T> H = d.divide(rr.sqrtOf()).add(MV3<T>.of(L));
+        const MV3<T> N = MV3<T>.of(tri.n0).add(MV3<T>.of(tri.a1).scale(u)).add(MV3<T>.of(tri.a2).scale(v));
+        const T nn = N.lengthSq();
+        if (nn.signOf() <= 0) return 0;
+        const MV3<T> Nh = N.divide(nn.sqrtOf());
+        // Turned to the side p sees, as 2a's (the tracer turns it toward the ray before the map).
+        const float3 g = cross(tri.e1, tri.e2);
+        const float side = dot(g, p - tri.p0) >= 0.0 ? 1.0 : -1.0;
+        int sgn = branch;
+        if (sgn == 0)
+        {
+            sgn = Nh.dotWith(MV3<T>.of(g * side)).signOf();
+            if (sgn == 0) return 2;
+        }
+        const MV3<T> n = Nh.scale(T.cst(sgn < 0 ? -1.0 : 1.0));
+        // The tangent frame.
+        const MV3<T> Tw = MV3<T>.of(m.t0).add(MV3<T>.of(m.ta1).scale(u)).add(MV3<T>.of(m.ta2).scale(v));
+        const MV3<T> Tp = Tw.sub(n.scale(n.dotWith(Tw)));
+        const T tp = Tp.lengthSq();
+        if (tp.signOf() <= 0) return 0;
+        const MV3<T> Tt = Tp.divide(tp.sqrtOf());
+        const MV3<T> Bt = n.crossWith(Tt).scale(T.cst(m.sign < 0.0 ? -1.0 : 1.0));
+        // The map's normal, its four texels blended as the tracer blends them: lerp(lerp(c00, c10, s), lerp(c01, c11, s), t).
+        const MV3<T> r0 = MV3<T>.of(c00).add(MV3<T>.of(c10).sub(MV3<T>.of(c00)).scale(s));
+        const MV3<T> r1 = MV3<T>.of(c01).add(MV3<T>.of(c11).sub(MV3<T>.of(c01)).scale(s));
+        const MV3<T> tn = r0.add(r1.sub(r0).scale(t));
+        const MV3<T> mapped = Tt.scale(tn.x).add(Bt.scale(tn.y)).add(n.scale(tn.z));
+        const T mm = mapped.lengthSq();
+        if (mm.signOf() <= 0) return 0;
+        MV3<T> ns = mapped.divide(mm.sqrtOf());
+        // Lifted to 1e-3 above the geometric plane where it dips below (each side of that is smooth; a box across it is
+        // split).
+        const float3 geo = normalize(g) * side;
+        const T lift = T.cst(1e-3).sub(ns.dotWith(MV3<T>.of(geo)));
+        const int below = lift.signOf();
+        if (below == 0) return 0;
+        if (below > 0)
+        {
+            const MV3<T> q = ns.add(MV3<T>.of(geo).scale(lift));
+            const T qq = q.lengthSq();
+            if (qq.signOf() <= 0) return 0;
+            ns = q.divide(qq.sqrtOf());
+        }
+        const MV3<T> c = MV3<T>.of(tri.c);
+        const MV3<T> Tv = c.sub(ns.scale(c.dotWith(ns)));
+        const T tt = Tv.lengthSq();
+        if (tt.signOf() <= 0) return 0;
+        const MV3<T> tc = Tv.divide(tt.sqrtOf());
+        const MV3<T> bc = ns.crossWith(tc);
+        A = H.dotWith(tc);
+        B = H.dotWith(bc);
+        C = H.dotWith(ns);
+        return 1;
+    }
+
+    int orientation(float2 x) { return manifoldOrientation(m.tri, p, uvAt(x)); }
+
+    bool inDomain(float2 x)
+    {
+        const float2 uv = uvAt(x);
+        return all(x >= 0.0) && all(x <= 1.0) && uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0;
+    }
+
+    // A box wholly off the triangle (u, v affine in the box: its extremes at the corners), with a margin for the
+    // corners' rounding.
+    bool outside(float4 box)
+    {
+        const float2 a = uvAt(box.xy), b = uvAt(box.zy), c = uvAt(box.xw), d = uvAt(box.zw);
+        const float2 hi = max(max(a, b), max(c, d));
+        const float sumLo = min(min(a.x + a.y, b.x + b.y), min(c.x + c.y, d.x + d.y));
+        return hi.x < -1e-6 || hi.y < -1e-6 || sumLo > 1.0 + 1e-6;
+    }
+}
+
+// The map of one cell: its texels' tangent-space normals at (s, t) = (0, 0), (1, 0), (0, 1), (1, 1), the texture
+// coordinates of its (0, 0) (a texel centre) and a texel's size. False when the triangle's texture coordinates are
+// degenerate (no (u, v) for a (s, t)).
+bool cellSlopeMap(ManifoldMappedTri m, float3 p, float3 L, float3 c00, float3 c10, float3 c01, float3 c11,
+                  float2 origin, float2 size, out CellSlopeMap map)
+{
+    map.m = m;
+    map.p = p;
+    map.L = L;
+    map.c00 = c00;
+    map.c10 = c10;
+    map.c01 = c01;
+    map.c11 = c11;
+    map.o = float2(0.0);
+    map.ds = float2(0.0);
+    map.dt = float2(0.0);
+    const float det = m.uvA.x * m.uvB.y - m.uvB.x * m.uvA.y;
+    if (!(abs(det) > 1e-20)) return false;
+    // (u, v) = inverse([uvA uvB]) (uv - uv0), uv = origin + size (s, t).
+    const float2x2 inv = float2x2(m.uvB.y, -m.uvB.x, -m.uvA.y, m.uvA.x) / det;
+    map.o = mul(inv, origin - m.uv0);
+    map.ds = float2(inv[0][0], inv[1][0]) * size.x;
+    map.dt = float2(inv[0][1], inv[1][1]) * size.y;
+    return true;
 }
 
 // ---- step 2b: the sun through a solid, two refractions -------------------------------------------------

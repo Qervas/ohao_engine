@@ -304,11 +304,30 @@ helmet; it is measured per stage before anything else is built, as 2a's was. The
 cone (the vertex frame's cone with the map's) must be proven conservative, the tangents varying across the triangle too
 (`t8_disc_conservative`'s method, with maps).
 
+**T1 measured (2026-11-05 night, CPU twin, `manifold_tests` m10).** The map is built (`CellSlopeMap` in
+`rt/manifold_cert.slang`): the tracer's normal-mapped shading normal on one cell, its input the cell's (s, t) so a cell
+is the Krawczyk box [0, 1]^2 and the triangle its domain; the certifier is generic over a map (`ISlopeMap`,
+`manifoldCertifyMap`; 2a's triangle map is the other one, t9 unchanged to the box). `m10_cell_map`: the twin's map is
+the double map written from this description, sigma within 1.6e-6 and its Jacobian within 1.4e-5 (relative), at 1,979
+random points. `m10_cells_complete` (2,972 random cells: t9's triangles with tangents, 3-8 texels of a 64 x 64 map a
+side, texels tilted up to 27 or 45 degrees): **sound, not complete**. No root certified that a dense double search
+does not find, none missed where every box was decided; but 2,346 cells (79%) spend the 512-box budget, and with
+65,536 boxes 714 cells (24%) still do, with tens of thousands of boxes at the minimum width round roots that are well
+conditioned (median condition 3.7, 0.9 clear of the 1e-3 lift). The cause, measured on boxes round those roots: the
+centre's rounding interval F(c) is 3e-5 to 8e-5 wide (about 400 ulps: the dependency problem through the map's five
+normalisations, at a point), which needs a box near 1e-3 wide to certify past, and F over a +-1e-3 box is about 20x its
+true range, so excluding boxes costs about 1,000 a cell (2a's triangles: 7). Interval Newton on this map in fp32 is not
+the solver. M11's choices, measured next: the map without divisions (H scaled by |p - y|, the frames unnormalised: the
+same roots, F scaled by a positive factor the estimator divides back out, as Specular Polynomials write their
+constraints), F(c) in fp64 (one evaluation a box; a GeForce's fp64 is 1/64 rate), or Specular Polynomials outright.
+
 **Rulings.**
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.
 - **M11 (OPEN) — the solver.** Interval Newton (Path Cuts) recommended; Specular Polynomials if undecided boxes are
-  ever counted.
+  ever counted. **They are** (T1 above: 79% of cells at the 512-box budget, the centre's rounding the cause): the
+  recommendation is now the division-free map first (it keeps the certifier and its proof), Specular Polynomials if
+  that still leaves boxes undecided.
 
 ## Tests
 

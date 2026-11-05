@@ -22,6 +22,11 @@
 //              0-2's w) -> 23 (found, steps, roots, undecided), 24 (u1, v1, u2, v2), 25 (entry, exit, slopeDet)
 //              (manifoldWalkPair, the final pair certified)
 //  13 walk      as 12, uncertified (the GPU's walk: a path is where it converges)
+//  14 cell      step 2c: the triangle rows 1-6, its tangents rows 17-19 (17.w the bitangent's sign), (uv0, uvA) row 20,
+//              (uvB, the cell's origin) row 21, a texel's size 22.xy, the cell's texels' normals c00, c10, c01, c11 rows
+//              23-26, p, L, the target 9.xy -> 13 (roots, undecided, boxes, defined), 14 (st0, st1), 15 (st2, st3)
+//              (manifoldCertifyMap on a CellSlopeMap: every root in the cell, as (s, t))
+//  15 cell map  the same cell at (s, t) 9.zw -> 13 (sigma, defined), 14 (dsx/ds, dsx/dt, dsy/ds, dsy/dt), 15 (u, v)
 // The triangle's c rides in rows 1-3's w.
 import rt.manifold;
 import rt.manifold_cert;
@@ -185,6 +190,46 @@ void run(uint3 id : SV_DispatchThreadID)
         io[b + 23u] = float4(r.found ? 1.0 : 0.0, float(r.steps), float(r.roots), float(r.undecided));
         io[b + 24u] = r.x;
         io[b + 25u] = float4(float(r.entry), float(r.exit), r.slopeDet, 0.0);
+    }
+    else if (op == 14u || op == 15u)
+    {
+        ManifoldMappedTri mt;
+        mt.tri = tri;
+        mt.t0 = io[b + 17u].xyz;
+        mt.sign = io[b + 17u].w;
+        mt.ta1 = io[b + 18u].xyz;
+        mt.ta2 = io[b + 19u].xyz;
+        const float4 r20 = io[b + 20u], r21 = io[b + 21u];
+        mt.uv0 = r20.xy;
+        mt.uvA = r20.zw;
+        mt.uvB = r21.xy;
+        CellSlopeMap cm;
+        const bool ok = cellSlopeMap(mt, p, L, io[b + 23u].xyz, io[b + 24u].xyz, io[b + 25u].xyz, io[b + 26u].xyz,
+                                     r21.zw, io[b + 22u].xy, cm);
+        if (op == 14u)
+        {
+            CertResult r;
+            r.roots = 0u;
+            r.undecided = 0u;
+            r.boxes = 0u;
+            [ForceUnroll] for (uint k = 0u; k < 4u; ++k) r.uv[k] = float2(0.0);
+            if (ok) r = manifoldCertifyMap<CellSlopeMap>(cm, r9.xy, float4(0.0, 0.0, 1.0, 1.0));
+            o13 = float4(float(r.roots), float(r.undecided), float(r.boxes), ok ? 1.0 : 0.0);
+            o14 = float4(r.uv[0], r.uv[1]);
+            o15 = float4(r.uv[2], r.uv[3]);
+        }
+        else
+        {
+            MDualF2 A, B, C;
+            const int def = ok ? cm.frame<MDualF2>(MDualF2.variable(MFloat.cst(r9.z), 0),
+                                                   MDualF2.variable(MFloat.cst(r9.w), 1), A, B, C, 0)
+                               : 0;
+            const bool good = def == 1 && C.v.v > 0.0;
+            const MDualF2 sx = A.div(C), sy = B.div(C);
+            o13 = float4(good ? sx.v.v : 0.0, good ? sy.v.v : 0.0, good ? 1.0 : 0.0, 0.0);
+            o14 = good ? float4(sx.d[0].v, sx.d[1].v, sy.d[0].v, sy.d[1].v) : float4(0.0);
+            o15 = float4(cm.uvAt(r9.zw), 0.0, 0.0);
+        }
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

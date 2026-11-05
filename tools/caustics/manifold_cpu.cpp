@@ -151,6 +151,51 @@ CertResult manifoldCertify(const Tri& tri, const V3& p, const V3& L, V2 target, 
     return r;
 }
 
+namespace {
+Io cellIo(float op, const MappedTri& m, const Cell& cell, const V3& p, const V3& L) {
+    Io io = base(op, &m.tri, &p, &L);
+    io.rows[17] = f4(m.t0, m.sign);
+    io.rows[18] = f4(m.ta1);
+    io.rows[19] = f4(m.ta2);
+    io.rows[20] = f4(m.uv0[0], m.uv0[1], m.uvA[0], m.uvA[1]);
+    io.rows[21] = f4(m.uvB[0], m.uvB[1], cell.origin[0], cell.origin[1]);
+    io.rows[22] = f4(cell.size[0], cell.size[1], 0, 0);
+    io.rows[23] = f4(cell.c00);
+    io.rows[24] = f4(cell.c10);
+    io.rows[25] = f4(cell.c01);
+    io.rows[26] = f4(cell.c11);
+    return io;
+}
+} // namespace
+
+CellMapResult manifoldCellMap(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 st) {
+    Io io = cellIo(15, m, cell, p, L);
+    io.rows[9] = f4(0, 0, st[0], st[1]);
+    runItem(io);
+    CellMapResult r;
+    r.ok = io.rows[13].z > 0.5f;
+    r.sigma = {io.rows[13].x, io.rows[13].y};
+    r.J = {io.rows[14].x, io.rows[14].y, io.rows[14].z, io.rows[14].w};
+    r.uv = {io.rows[15].x, io.rows[15].y};
+    return r;
+}
+
+CertResult manifoldCertifyCell(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 target, bool* defined) {
+    Io io = cellIo(14, m, cell, p, L);
+    io.rows[9] = f4(target[0], target[1], 0, 0);
+    runItem(io);
+    CertResult r;
+    r.roots = static_cast<int>(io.rows[13].x);
+    r.undecided = static_cast<int>(io.rows[13].y);
+    r.boxes = static_cast<int>(io.rows[13].z);
+    if (defined) *defined = io.rows[13].w > 0.5f;
+    r.uv[0] = {io.rows[14].x, io.rows[14].y};
+    r.uv[1] = {io.rows[14].z, io.rows[14].w};
+    r.uv[2] = {io.rows[15].x, io.rows[15].y};
+    r.uv[3] = {io.rows[15].z, io.rows[15].w};
+    return r;
+}
+
 Enclosure manifoldEnclose(const Tri& tri, const V3& p, const V3& L, V2 lo, V2 hi, bool constraint, V2 target) {
     Io io = base(8, &tri, &p, &L);
     io.rows[0].y = constraint ? 1.0f : 0.0f;

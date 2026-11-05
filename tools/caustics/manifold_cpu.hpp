@@ -38,6 +38,31 @@ struct CertResult {
     V2 uv[4]{};
 };
 CertResult manifoldCertify(const Tri& tri, const V3& p, const V3& L, V2 target, V2 lo = {0, 0}, V2 hi = {0, 0});
+// Step 2c: a normal-mapped triangle (its tangents, the bitangent's sign, its texture coordinates uv0 + uvA u + uvB v)
+// and one cell of its map (its texels' tangent-space normals at (s, t) = (0, 0), (1, 0), (0, 1), (1, 1), the texture
+// coordinates of its (0, 0) and a texel's size): rt/manifold_cert.slang's CellSlopeMap.
+struct MappedTri {
+    Tri tri;
+    V3 t0{}, ta1{}, ta2{};
+    float sign{1.0f};
+    V2 uv0{}, uvA{}, uvB{};
+};
+struct Cell {
+    V3 c00{}, c10{}, c01{}, c11{};
+    V2 origin{}, size{};
+};
+// The map at (s, t): sigma, its derivatives (dsx/ds, dsx/dt, dsy/ds, dsy/dt) and the triangle's (u, v) there.
+struct CellMapResult {
+    bool ok{false};
+    V2 sigma{};
+    std::array<float, 4> J{};
+    V2 uv{};
+};
+CellMapResult manifoldCellMap(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 st);
+// Every root of sigma = target in the cell and on the triangle, certified; the roots as (s, t). defined false when the
+// triangle's texture coordinates are degenerate.
+CertResult manifoldCertifyCell(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 target,
+                               bool* defined = nullptr);
 // The interval map over the box [lo, hi] (u, v): sigma's and its Jacobian's enclosures; defined 1, 0 (unknown), -1.
 struct Enclosure {
     int defined{0};

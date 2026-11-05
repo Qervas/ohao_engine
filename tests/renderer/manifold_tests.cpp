@@ -1054,3 +1054,268 @@ TEST(Manifold, t15_estimator_brightness) {
         EXPECT_NEAR(estGpu, ref, 0.05 * ref) << "the GPU's form, X at " << xs[q];
     }
 }
+
+// ---- step 2c: normal-mapped triangles, cell by cell (CellSlopeMap) ------------------------------------------
+
+namespace {
+
+// Step 2c's map in double, from its description: the cell's (s, t) to the triangle's (u, v), the vertex normal turned
+// to p's side, the tangent made perpendicular to it, B = n x T times the sign, the four texels blended bilinearly, the
+// mapped normal lifted to 1e-3 above the geometric plane where it dips below, 2a's slope frame (t from c).
+struct CellCase {
+    MappedTri m;
+    Cell cell;
+    D3 p, L;
+    double o[2], ds[2], dt[2];   // (u, v) = o + ds s + dt t
+};
+
+CellCase makeCellCase(const MappedTri& m, const Cell& cell, const D3& p, const D3& L) {
+    CellCase c{m, cell, p, L, {}, {}, {}};
+    const double a0 = m.uvA[0], a1 = m.uvA[1], b0 = m.uvB[0], b1 = m.uvB[1];
+    const double det = a0 * b1 - b0 * a1;
+    const double i00 = b1 / det, i01 = -b0 / det, i10 = -a1 / det, i11 = a0 / det;
+    const double r0 = double(cell.origin[0]) - m.uv0[0], r1 = double(cell.origin[1]) - m.uv0[1];
+    c.o[0] = i00 * r0 + i01 * r1;
+    c.o[1] = i10 * r0 + i11 * r1;
+    c.ds[0] = i00 * cell.size[0];
+    c.ds[1] = i10 * cell.size[0];
+    c.dt[0] = i01 * cell.size[1];
+    c.dt[1] = i11 * cell.size[1];
+    return c;
+}
+
+bool cellSigmaD(const CellCase& c, double s, double t, double out[2], double uvOut[2] = nullptr) {
+    const Tri& tri = c.m.tri;
+    const double u = c.o[0] + c.ds[0] * s + c.dt[0] * t, v = c.o[1] + c.ds[1] * s + c.dt[1] * t;
+    if (uvOut) {
+        uvOut[0] = u;
+        uvOut[1] = v;
+    }
+    const D3 e1 = d3(tri.e1), e2 = d3(tri.e2);
+    const D3 y = add(d3(tri.p0), add(mul(e1, u), mul(e2, v)));
+    const D3 H = add(norm(sub(c.p, y)), c.L);
+    D3 n = norm(add(d3(tri.n0), add(mul(d3(tri.a1), u), mul(d3(tri.a2), v))));
+    const D3 g = cross(e1, e2);
+    const double side = dot(g, sub(c.p, d3(tri.p0))) >= 0.0 ? 1.0 : -1.0;
+    if (dot(n, g) * side < 0.0) n = mul(n, -1.0);
+    const D3 tw = add(d3(c.m.t0), add(mul(d3(c.m.ta1), u), mul(d3(c.m.ta2), v)));
+    const D3 T = norm(sub(tw, mul(n, dot(n, tw))));
+    const D3 B = mul(cross(n, T), c.m.sign < 0.0f ? -1.0 : 1.0);
+    D3 tn{};
+    for (int k = 0; k < 3; ++k) {
+        const double r0 = c.cell.c00[k] + (double(c.cell.c10[k]) - c.cell.c00[k]) * s;
+        const double r1 = c.cell.c01[k] + (double(c.cell.c11[k]) - c.cell.c01[k]) * s;
+        tn[k] = r0 + (r1 - r0) * t;
+    }
+    D3 ns = norm(add(add(mul(T, tn[0]), mul(B, tn[1])), mul(n, tn[2])));
+    const D3 geo = mul(norm(g), side);
+    if (dot(ns, geo) < 1e-3) ns = norm(add(ns, mul(geo, 1e-3 - dot(ns, geo))));
+    const D3 cc = d3(tri.c);
+    const D3 tt = norm(sub(cc, mul(ns, dot(cc, ns))));
+    const D3 b = cross(ns, tt);
+    const double C = dot(H, ns);
+    if (!(C > 1e-9)) return false;
+    out[0] = dot(H, tt) / C;
+    out[1] = dot(H, b) / C;
+    return true;
+}
+
+bool cellInDomain(const CellCase& c, double s, double t, double margin) {
+    const double u = c.o[0] + c.ds[0] * s + c.dt[0] * t, v = c.o[1] + c.ds[1] * s + c.dt[1] * t;
+    return std::min({s, t, 1.0 - s, 1.0 - t, u, v, 1.0 - u - v}) >= margin;
+}
+
+// Roots of the cell's sigma = target in the cell and on the triangle, by Newton in double from a grid of starts over
+// the cell, merged within 1e-6; those within `margin` of the domain's edge (in s, t, u or v) reported apart.
+Roots cellReferenceRoots(const CellCase& c, const double target[2], double margin, int grid) {
+    Roots r;
+    for (int a = 0; a < grid; ++a)
+        for (int b = 0; b < grid; ++b) {
+            double s = (a + 0.5) / grid, t = (b + 0.5) / grid;
+            bool conv = false;
+            for (int it = 0; it < 60; ++it) {
+                double f[2], fs[2], ft[2];
+                if (!cellSigmaD(c, s, t, f)) break;
+                const double f0 = f[0] - target[0], f1 = f[1] - target[1];
+                if (f0 * f0 + f1 * f1 < 1e-26) {
+                    conv = true;
+                    break;
+                }
+                const double h = 1e-7;
+                if (!cellSigmaD(c, s + h, t, fs) || !cellSigmaD(c, s, t + h, ft)) break;
+                const double j00 = (fs[0] - f[0]) / h, j10 = (fs[1] - f[1]) / h, j01 = (ft[0] - f[0]) / h,
+                             j11 = (ft[1] - f[1]) / h;
+                const double det = j00 * j11 - j01 * j10;
+                if (std::abs(det) < 1e-30) break;
+                s -= (j11 * f0 - j01 * f1) / det;
+                t -= (-j10 * f0 + j00 * f1) / det;
+                if (std::abs(s) > 4 || std::abs(t) > 4) break;
+            }
+            if (!conv || !cellInDomain(c, s, t, -margin)) continue;
+            auto& list = cellInDomain(c, s, t, margin) ? r.inside : r.nearEdge;
+            bool dup = false;
+            for (auto& q : r.inside) dup = dup || (std::abs(q[0] - s) < 1e-6 && std::abs(q[1] - t) < 1e-6);
+            for (auto& q : r.nearEdge) dup = dup || (std::abs(q[0] - s) < 1e-6 && std::abs(q[1] - t) < 1e-6);
+            if (!dup) list.push_back({s, t});
+        }
+    return r;
+}
+
+// A random normal-mapped triangle (t9's random triangles: 0.3-0.6 m sides, vertex normals tilted up to 25 degrees;
+// tangents in each vertex's plane, turned at random and tilted up to 0.2 out of it; either sign), its texture spanning
+// 3-8 texels of a 64 x 64 map a side, and the cell under a random point of it, its texels' normals tilted up to `bump`
+// (tan) from the tangent space's z: the bumps a glint comes from. p and L above the triangle; the target the map's
+// value at a random point of the cell, jittered.
+struct CellDraw {
+    CellCase c;
+    double target[2];
+};
+bool randomCell(std::mt19937& g, double bump, CellDraw& out) {
+    const double kTiltTan = 0.4663;
+    const D3 p0 = mul(sphereDir(g), 0.2 * rnd(g));
+    const D3 p1 = add(p0, mul(sphereDir(g), 0.3 + 0.3 * rnd(g)));
+    const D3 p2 = add(p0, mul(sphereDir(g), 0.3 + 0.3 * rnd(g)));
+    const D3 f = norm(cross(sub(p1, p0), sub(p2, p0)));
+    auto tiltOf = [&](const D3& axis, double tanMax) {
+        const D3 d = sphereDir(g);
+        return norm(add(axis, mul(norm(sub(d, mul(axis, dot(d, axis)))), tanMax * rnd(g))));
+    };
+    const D3 n0 = tiltOf(f, kTiltTan), n1 = tiltOf(f, kTiltTan), n2 = tiltOf(f, kTiltTan);
+    MappedTri m;
+    m.tri = makeTri(p0, p1, p2, n0, n1, n2);
+    const D3 base = perpendicular(f);
+    auto tangentAt = [&](const D3& n) {
+        const double a = 2.0 * kPi * rnd(g);
+        const D3 b2 = cross(n, base);
+        const D3 tdir = add(mul(norm(sub(base, mul(n, dot(base, n)))), std::cos(a)), mul(norm(b2), std::sin(a)));
+        return add(tdir, mul(n, 0.4 * (rnd(g) - 0.5)));
+    };
+    const D3 t0 = tangentAt(n0), t1 = tangentAt(n1), t2 = tangentAt(n2);
+    m.t0 = f3(t0);
+    m.ta1 = f3(sub(t1, t0));
+    m.ta2 = f3(sub(t2, t0));
+    m.sign = rnd(g) < 0.5 ? -1.0f : 1.0f;
+    const double texel = 1.0 / 64.0;
+    const double la = (3.0 + 5.0 * rnd(g)) * texel, lb = (3.0 + 5.0 * rnd(g)) * texel;
+    const double aa = 2.0 * kPi * rnd(g), ab = aa + (0.5 + 2.0 * rnd(g));   // not parallel
+    m.uv0 = {float(0.2 + 0.6 * rnd(g)), float(0.2 + 0.6 * rnd(g))};
+    m.uvA = {float(la * std::cos(aa)), float(la * std::sin(aa))};
+    m.uvB = {float(lb * std::cos(ab)), float(lb * std::sin(ab))};
+    // The cell under a random point of the triangle.
+    double u = rnd(g), v = rnd(g);
+    if (u + v > 1.0) {
+        u = 1.0 - u;
+        v = 1.0 - v;
+    }
+    const double tu = m.uv0[0] + m.uvA[0] * u + m.uvB[0] * v, tv = m.uv0[1] + m.uvA[1] * u + m.uvB[1] * v;
+    const double ci = std::floor(tu / texel - 0.5), cj = std::floor(tv / texel - 0.5);
+    Cell cell;
+    cell.origin = {float((ci + 0.5) * texel), float((cj + 0.5) * texel)};
+    cell.size = {float(texel), float(texel)};
+    auto texelNormal = [&] {
+        const double r = bump * std::sqrt(rnd(g)), a = 2.0 * kPi * rnd(g);
+        return f3(norm(D3{r * std::cos(a), r * std::sin(a), 1.0}));
+    };
+    cell.c00 = texelNormal();
+    cell.c10 = texelNormal();
+    cell.c01 = texelNormal();
+    cell.c11 = texelNormal();
+    const D3 p = add(mul(f, 0.5 + rnd(g)), mul(sphereDir(g), 0.5 * rnd(g)));
+    const D3 L = norm(add(f, mul(sphereDir(g), 0.8 * rnd(g))));
+    out.c = makeCellCase(m, cell, p, L);
+    // The target: the map's value at a random point of the cell on the triangle, jittered.
+    for (int k = 0; k < 16; ++k) {
+        const double s = rnd(g), t = rnd(g);
+        double s0[2];
+        if (!cellInDomain(out.c, s, t, 0.0) || !cellSigmaD(out.c, s, t, s0)) continue;
+        out.target[0] = s0[0] + 0.02 * (rnd(g) - 0.5);
+        out.target[1] = s0[1] + 0.02 * (rnd(g) - 0.5);
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+// The kernel's cell map is the double map, and its Jacobian the double map's central differences.
+TEST(Manifold, m10_cell_map) {
+    std::mt19937 g(1010u);
+    int checked = 0;
+    double worstS = 0.0, worstJ = 0.0;
+    for (int k = 0; k < 2000; ++k) {
+        CellDraw d;
+        if (!randomCell(g, 0.5, d)) continue;
+        const double s = rnd(g), t = rnd(g);
+        double ref[2], uv[2];
+        if (!cellSigmaD(d.c, s, t, ref, uv)) continue;
+        const CellMapResult r = manifoldCellMap(d.c.m, d.c.cell, f3(d.c.p), f3(d.c.L), {float(s), float(t)});
+        if (!r.ok) continue;
+        const double scale = std::max(1.0, std::max(std::abs(ref[0]), std::abs(ref[1])));
+        worstS = std::max(worstS, std::max(std::abs(r.sigma[0] - ref[0]), std::abs(r.sigma[1] - ref[1])) / scale);
+        EXPECT_NEAR(r.uv[0], uv[0], 1e-5);
+        EXPECT_NEAR(r.uv[1], uv[1], 1e-5);
+        const double h = 1e-6;
+        double a[2], b[2], c2[2], e[2];
+        if (!cellSigmaD(d.c, s + h, t, a) || !cellSigmaD(d.c, s - h, t, b) || !cellSigmaD(d.c, s, t + h, c2) ||
+            !cellSigmaD(d.c, s, t - h, e))
+            continue;
+        const double J[4] = {(a[0] - b[0]) / (2 * h), (c2[0] - e[0]) / (2 * h), (a[1] - b[1]) / (2 * h),
+                             (c2[1] - e[1]) / (2 * h)};
+        double jScale = 1.0;
+        for (double v : J) jScale = std::max(jScale, std::abs(v));
+        for (int i = 0; i < 4; ++i) worstJ = std::max(worstJ, std::abs(r.J[i] - J[i]) / jScale);
+        ++checked;
+    }
+    std::printf("m10_cell_map: %d points; sigma within %.2g, its Jacobian within %.2g (relative)\n", checked, worstS,
+                worstJ);
+    EXPECT_GT(checked, 1500);
+    EXPECT_LT(worstS, 1e-4);
+    EXPECT_LT(worstJ, 1e-3);
+}
+
+// Every root of a normal-mapped cell that a dense double search finds is certified, and nothing else: random
+// triangles, tangents, texture coordinates and bumpy cells (step 2c's map, rt/manifold_cert.slang's CellSlopeMap).
+TEST(Manifold, m10_cells_complete) {
+    std::mt19937 g(1011u);
+    int cases = 0, roots = 0, twos = 0, boxes = 0, undecidedCases = 0, maxBoxes = 0;
+    for (int k = 0; k < 3000; ++k) {
+        CellDraw d;
+        if (!randomCell(g, k % 3 == 0 ? 1.0 : 0.5, d)) continue;
+        const Roots ref = cellReferenceRoots(d.c, d.target, 1e-4, 16);
+        bool defined = false;
+        const CertResult c = manifoldCertifyCell(d.c.m, d.c.cell, f3(d.c.p), f3(d.c.L),
+                                                 {float(d.target[0]), float(d.target[1])}, &defined);
+        ASSERT_TRUE(defined) << "case " << k;
+        ++cases;
+        boxes += c.boxes;
+        maxBoxes = std::max(maxBoxes, c.boxes);
+        undecidedCases += c.undecided > 0 ? 1 : 0;
+        for (int i = 0; i < c.roots; ++i) {
+            bool found = false;
+            for (const auto* list : {&ref.inside, &ref.nearEdge})
+                for (const auto& q : *list)
+                    found = found || (std::abs(c.uv[i][0] - q[0]) < 1e-3 && std::abs(c.uv[i][1] - q[1]) < 1e-3);
+            ASSERT_TRUE(found) << "case " << k << ": certified a root no search finds at (" << c.uv[i][0] << ", "
+                               << c.uv[i][1] << ")";
+        }
+        if (c.undecided == 0) {
+            for (const auto& q : ref.inside) {
+                bool found = false;
+                for (int i = 0; i < c.roots; ++i)
+                    found = found || (std::abs(c.uv[i][0] - q[0]) < 1e-3 && std::abs(c.uv[i][1] - q[1]) < 1e-3);
+                ASSERT_TRUE(found) << "case " << k << ": a root at (" << q[0] << ", " << q[1]
+                                   << ") not certified, and no box left undecided";
+            }
+        }
+        roots += int(ref.inside.size());
+        twos += ref.inside.size() >= 2 ? 1 : 0;
+    }
+    std::printf("m10_cells_complete: %d cells, %d roots, %d cells with two or more, %.1f boxes a cell (at most %d), "
+                "%d cells left a box undecided\n",
+                cases, roots, twos, cases ? double(boxes) / cases : 0.0, maxBoxes, undecidedCases);
+    EXPECT_GT(cases, 2500);
+    EXPECT_GT(roots, 1500);
+    // Sound (asserted above), not yet complete: about 79% of cells spend the 512-box budget (24% still at 65,536), the
+    // centre's rounding interval F(c) 3e-5 to 8e-5 wide through the map's five normalisations, so no box round even a
+    // well-conditioned root certifies (ruling M11, docs/specs/2026-11-04-caustics-step2-design.md "Step 2c").
+}
