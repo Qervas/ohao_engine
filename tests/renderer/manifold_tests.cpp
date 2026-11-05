@@ -886,9 +886,9 @@ TEST(Manifold, t15_estimator_brightness) {
     for (int q = 0; q < 3; ++q) {
         const double ref = hits[q] * E * kPi * R * R / double(N) / (kPi * rho * rho);
         const D3 X{xs[q], floorY, 0.0};
-        double sum = 0.0;
-        int found = 0;
-        long totalTrials = 0;
+        double sum = 0.0, sumGpu = 0.0;
+        int found = 0, foundGpu = 0;
+        long totalTrials = 0, trialsGpu = 0;
         for (int k = 0; k < M; ++k) {
             double s[4];
             for (int h = 0; h < 2; ++h) {
@@ -909,6 +909,42 @@ TEST(Manifold, t15_estimator_brightness) {
                 const double ph = 2.0 * kPi * rnd(g);
                 return f3(add(mul(axis, c), add(mul(ta, sn * std::cos(ph)), mul(tb, sn * std::sin(ph)))));
             };
+            // The GPU's form (manifoldConnect's manifoldGlass): the walk uncertified, its own slope Jacobian
+            // (det dF/dx / (C1 C2)^2), the BSDFs' cosines at the shading normals and the area conversions at the
+            // triangles' geometric ones; its re-find trials capped at 64, as the pass caps them.
+            {
+                const WalkResult r = manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir(), false);
+                if (r.found && r.slopeDet > 0.0f) {
+                    int trials = 1;
+                    while (trials < 64) {
+                        const WalkResult again =
+                            manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir(), false);
+                        // The same path: the same pair and the same polished root (the walk polishes it in the pair's
+                        // own parameters, so two walks to one path end within float rounding of each other).
+                        if (again.found && again.entry == r.entry && again.exit == r.exit &&
+                            std::abs(again.x[0] - r.x[0]) < 1e-3 && std::abs(again.x[1] - r.x[1]) < 1e-3 &&
+                            std::abs(again.x[2] - r.x[2]) < 1e-3 && std::abs(again.x[3] - r.x[3]) < 1e-3)
+                            break;
+                        ++trials;
+                    }
+                    trialsGpu += trials;
+                    const Tri &t1 = ball[size_t(r.entry)], &t2 = ball[size_t(r.exit)];
+                    const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), r.x[0]), mul(d3(t1.e2), r.x[1])));
+                    const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), r.x[2]), mul(d3(t2.e2), r.x[3])));
+                    const D3 d = norm(sub(y2, y1)), w = norm(sub(X, y2));
+                    const double r1 = len(sub(y2, y1)), r2 = len(sub(X, y2));
+                    const D3 n1 = shadeN(t1, r.x[0], r.x[1]), n2 = shadeN(t2, r.x[2], r.x[3]);
+                    const D3 c1 = cross(d3(t1.e1), d3(t1.e2)), c2 = cross(d3(t2.e1), d3(t2.e2));
+                    const double area1 = len(c1), area2 = len(c2);
+                    const double eval1 = btdfWalter(L, d, n1, 1.0, eta, a) * std::abs(dot(L, n1));
+                    const double eval2 = btdfWalter(mul(d, -1.0), w, n2, eta, 1.0, a) * std::abs(dot(d, n2));
+                    const double integrand = E * eval1 * eval2 * std::abs(dot(d, c1)) / area1 / (r1 * r1) *
+                                             std::abs(dot(w, c2)) / area2 / (r2 * r2) * std::abs(dot(w, nX));
+                    const double detA = double(r.slopeDet) / (area1 * area2);
+                    sumGpu += trials * integrand / (detA * ggxP22(s[0], s[1], a) * ggxP22(s[2], s[3], a));
+                    ++foundGpu;
+                }
+            }
             std::vector<std::array<double, 7>> roots;   // (entry, exit, x, weight)
             const WalkResult r = manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir());
             if (r.found) {
@@ -1009,10 +1045,12 @@ TEST(Manifold, t15_estimator_brightness) {
                 ++found;
             }
         }
-        const double est = sum / M;
+        const double est = sum / M, estGpu = sumGpu / M;
         std::printf("t15: X at %.2f: the estimator %.4f (%d paths in %d draws, %.1f walks to find each again), the "
-                    "traced reference %.4f: %.2f%%\n",
-                    xs[q], est, found, M, found ? double(totalTrials) / found : 0.0, ref, 100.0 * (est - ref) / ref);
+                    "traced reference %.4f: %.2f%%; the GPU's form %.4f (%d paths, %.1f walks each): %.2f%%\n",
+                    xs[q], est, found, M, found ? double(totalTrials) / found : 0.0, ref, 100.0 * (est - ref) / ref,
+                    estGpu, foundGpu, foundGpu ? double(trialsGpu) / foundGpu : 0.0, 100.0 * (estGpu - ref) / ref);
         EXPECT_NEAR(est, ref, 0.05 * ref) << "X at " << xs[q];
+        EXPECT_NEAR(estGpu, ref, 0.05 * ref) << "the GPU's form, X at " << xs[q];
     }
 }

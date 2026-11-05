@@ -189,7 +189,7 @@ PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const 
 }
 
 WalkResult manifoldWalkPair(const std::vector<Tri>& tris, const V3& X, const V3& L, float eta, V2 s1, V2 s2,
-                            const V3& seedDir) {
+                            const V3& seedDir, bool certify) {
     std::vector<F4> mesh;
     mesh.reserve(tris.size() * 6);
     for (const Tri& t : tris) {
@@ -200,7 +200,7 @@ WalkResult manifoldWalkPair(const std::vector<Tri>& tris, const V3& X, const V3&
         mesh.push_back(f4(t.a1));
         mesh.push_back(f4(t.a2));
     }
-    Io io = base(12, nullptr, &X, &L);
+    Io io = base(certify ? 12 : 13, nullptr, &X, &L);
     io.rows[0].y = float(tris.size());
     io.rows[8].w = eta;
     io.rows[9] = f4(s1[0], s1[1], s2[0], s2[1]);
@@ -214,6 +214,7 @@ WalkResult manifoldWalkPair(const std::vector<Tri>& tris, const V3& X, const V3&
     r.x = {io.rows[24].x, io.rows[24].y, io.rows[24].z, io.rows[24].w};
     r.entry = static_cast<int>(io.rows[25].x);
     r.exit = static_cast<int>(io.rows[25].y);
+    r.slopeDet = io.rows[25].z;
     return r;
 }
 

@@ -590,9 +590,10 @@ int manifoldPairT<T : INum>(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, 
 typealias MDualF4 = MDual<MFloat, 4>;
 typealias MDualI4 = MDual<MIval, 4>;
 
-// F and its Jacobian at a point (rows: F's components, columns: u1, v1, u2, v2). False where undefined.
-bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
-            out float4x4 J)
+// F and its Jacobian at a point (rows: F's components, columns: u1, v1, u2, v2), and C1, C2 (each vertex's h . n).
+// False where undefined.
+bool pairAtC(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
+             out float4x4 J, out float2 c)
 {
     MDualF4 f0, f1, f2, f3, c1, c2;
     const int ok = manifoldPairT<MDualF4>(t1, t2, X, L, eta, target, MDualF4.variable(MFloat.cst(x.x), 0),
@@ -601,7 +602,15 @@ bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float
     f = float4(f0.v.v, f1.v.v, f2.v.v, f3.v.v);
     J = float4x4(f0.d[0].v, f0.d[1].v, f0.d[2].v, f0.d[3].v, f1.d[0].v, f1.d[1].v, f1.d[2].v, f1.d[3].v,
                  f2.d[0].v, f2.d[1].v, f2.d[2].v, f2.d[3].v, f3.d[0].v, f3.d[1].v, f3.d[2].v, f3.d[3].v);
+    c = float2(c1.v.v, c2.v.v);
     return ok == 1;
+}
+
+bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
+            out float4x4 J)
+{
+    float2 c;
+    return pairAtC(t1, t2, X, L, eta, target, x, f, J, c);
 }
 
 // The inverse of a 4 x 4 matrix by Gauss-Jordan with partial pivoting; false when a pivot is under 1e-30.
@@ -905,6 +914,9 @@ struct ManifoldWalkResult
     uint steps;          // Newton steps taken
     uint roots;          // the certified roots of the final pair (the found one among them)
     uint undecided;      // boxes the certification left undecided
+    // |det d(s1, s2) / d(u1, v1, u2, v2)| at the path: the slopes' Jacobian over the two triangles' parameters. At a root
+    // F = (h . t - s C) is 0, so dF/dx = C ds/dx row by row (C = h . n at that vertex): det(ds/dx) = det(dF/dx) / (C1 C2)^2.
+    float slopeDet;
 }
 
 static const uint kWalkSteps = 32u;
@@ -914,9 +926,10 @@ float3 manifoldPoint(ManifoldTri t, float2 uv) { return t.p0 + t.e1 * uv.x + t.e
 
 // The path X <- exit <- entry <- sun through a solid of relative index eta with slopes target.xy (entry) and target.zw
 // (exit), walked from a seed: the line from X along seedDir meets the exit first, then the entry (the shadow ray's,
-// seedDir = L, is MNEE's).
-ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float3 L, float eta, float4 target,
-                                                        float3 seedDir)
+// seedDir = L, is MNEE's). CERTIFY: the final pair's roots certified (the CPU twin's t14); without it a path is where
+// the walk converges (Zeltner et al. 2020's estimate needs no more, and the 4-D interval walk is 3.5 MB of SPIR-V).
+ManifoldWalkResult manifoldWalkPair<S : IManifoldScene, let CERTIFY : bool>(S scene, float3 X, float3 L, float eta,
+                                                                          float4 target, float3 seedDir)
 {
     ManifoldWalkResult res;
     res.found = false;
@@ -926,6 +939,7 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
     res.steps = 0u;
     res.roots = 0u;
     res.undecided = 0u;
+    res.slopeDet = 0.0;
     // The seed.
     uint t2, t1;
     float2 uv2, uv1;
@@ -937,7 +951,8 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
     ManifoldTri A = scene.triangle(t1), B = scene.triangle(t2);
     float4 f;
     float4x4 J;
-    if (!pairAt(A, B, X, L, eta, target, x, f, J)) return res;
+    float2 cc;
+    if (!pairAtC(A, B, X, L, eta, target, x, f, J, cc)) return res;
     float err = max(max(abs(f.x), abs(f.y)), max(abs(f.z), abs(f.w)));
     for (uint it = 0u; it < kWalkSteps && err > kWalkTol; ++it)
     {
@@ -964,7 +979,8 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
             const float4 x2 = float4(q1, q2);
             float4 f2;
             float4x4 J2;
-            if (!pairAt(A2, B2, X, L, eta, target, x2, f2, J2)) continue;
+            float2 c2;
+            if (!pairAtC(A2, B2, X, L, eta, target, x2, f2, J2, c2)) continue;
             const float err2 = max(max(abs(f2.x), abs(f2.y)), max(abs(f2.z), abs(f2.w)));
             if (!(err2 < err)) continue;
             x = x2;
@@ -974,6 +990,7 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
             B = B2;
             f = f2;
             J = J2;
+            cc = c2;
             err = err2;
             moved = true;
         }
@@ -981,6 +998,33 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
         if (!moved) return res;   // no step reduced the error: no path from this seed
     }
     if (!(err <= kWalkTol)) return res;
+    res.entry = t1;
+    res.exit = t2;
+    if (!CERTIFY)
+    {
+        // The walk stops where |F| < kWalkTol, and where the slopes barely move with x (a caustic's focus: det dF/dx
+        // near 0) that region straddles the pair's edges: a root of the neighbouring pair, stopped at on this pair's
+        // side, counted in both (t15's GPU form 10% bright on the axis). So the root is polished in this pair's own
+        // parameters, extended past its edges (Newton without re-projection), and kept only inside both triangles:
+        // every root belongs to one pair.
+        for (uint it = 0u; it < 2u; ++it)
+        {
+            float4x4 Ji;
+            if (!invert4(J, Ji)) return res;
+            x -= mul(Ji, f);
+            if (!pairAtC(A, B, X, L, eta, target, x, f, J, cc)) return res;
+        }
+        const float c12 = cc.x * cc.x * cc.y * cc.y;
+        res.slopeDet = c12 > 0.0 ? abs(determinant(J)) / c12 : 0.0;
+        // A root of F is a path only where it refracts as light does (pairPhysical: each half vector on its normal's
+        // side, the light outside then inside at y1, inside then outside at y2): without that check the walk took
+        // roots no light follows (t15's GPU form read 7-20x bright).
+        res.found = all(x >= 0.0) && x.x + x.y <= 1.0 && x.z + x.w <= 1.0 && pairPhysical(A, B, X, L, eta, target, x);
+        res.x = x;
+        return res;
+    }
+    const float c12 = cc.x * cc.x * cc.y * cc.y;
+    res.slopeDet = c12 > 0.0 ? abs(determinant(J)) / c12 : 0.0;
     // Certify the final pair: every root in it, the walked one among them.
     const ManifoldPairResult c = manifoldCertifyPair(A, B, X, L, eta, target);
     res.roots = c.roots;
@@ -993,7 +1037,5 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
             res.x = c.uv[q];
         }
     }
-    res.entry = t1;
-    res.exit = t2;
     return res;
 }

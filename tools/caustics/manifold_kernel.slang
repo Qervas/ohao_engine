@@ -19,8 +19,9 @@
 //              row 8, the slopes (s1, s2) row 9 -> 23 (roots, undecided, boxes), 24-27 each root (u1, v1, u2, v2)
 //              (manifoldCertifyPair)
 //  12 walk      X row 7, (L, eta) row 8, the slopes row 9, the seed's direction row 10, the scene in `mesh` (6 rows a triangle, its c in rows
-//              0-2's w) -> 23 (found, steps, roots, undecided), 24 (u1, v1, u2, v2), 25 (entry, exit)
-//              (manifoldWalkPair)
+//              0-2's w) -> 23 (found, steps, roots, undecided), 24 (u1, v1, u2, v2), 25 (entry, exit, slopeDet)
+//              (manifoldWalkPair, the final pair certified)
+//  13 walk      as 12, uncertified (the GPU's walk: a path is where it converges)
 // The triangle's c rides in rows 1-3's w.
 import rt.manifold;
 import rt.manifold_cert;
@@ -173,15 +174,17 @@ void run(uint3 id : SV_DispatchThreadID)
         io[b + 23u] = float4(float(r.roots), float(r.undecided), float(r.boxes), 0.0);
         [ForceUnroll] for (uint k = 0u; k < 4u; ++k) io[b + 24u + k] = r.uv[k];
     }
-    else if (op == 12u)
+    else if (op == 12u || op == 13u)
     {
         BufferScene scene;
         scene.count = uint(h.y + 0.5);
         const float4 r8 = io[b + 8u];
-        const ManifoldWalkResult r = manifoldWalkPair<BufferScene>(scene, p, r8.xyz, r8.w, r9, io[b + 10u].xyz);
+        ManifoldWalkResult r;
+        if (op == 12u) r = manifoldWalkPair<BufferScene, true>(scene, p, r8.xyz, r8.w, r9, io[b + 10u].xyz);
+        else r = manifoldWalkPair<BufferScene, false>(scene, p, r8.xyz, r8.w, r9, io[b + 10u].xyz);
         io[b + 23u] = float4(r.found ? 1.0 : 0.0, float(r.steps), float(r.roots), float(r.undecided));
         io[b + 24u] = r.x;
-        io[b + 25u] = float4(float(r.entry), float(r.exit), 0.0, 0.0);
+        io[b + 25u] = float4(float(r.entry), float(r.exit), r.slopeDet, 0.0);
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

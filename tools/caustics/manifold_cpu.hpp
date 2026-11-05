@@ -56,15 +56,17 @@ struct PairResult {
 };
 PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const V3& L, float eta, V2 s1, V2 s2);
 // The seeded walk (ruling M12) through a solid given as a triangle list: the shadow ray's seed, Newton over the mesh,
-// the final pair certified (rt/manifold_cert.slang's manifoldWalkPair, its scene a loop over `mesh`).
+// the final pair certified unless `certify` is false (the GPU's walk) (rt/manifold_cert.slang's manifoldWalkPair, its
+// scene a loop over `mesh`). slopeDet: |det d(s1, s2) / d(u1, v1, u2, v2)| at the path.
 struct WalkResult {
     bool found{false};
     int steps{0}, roots{0}, undecided{0};
     int entry{0}, exit{0};
     std::array<float, 4> x{};
+    float slopeDet{0.0f};
 };
 WalkResult manifoldWalkPair(const std::vector<Tri>& mesh, const V3& X, const V3& L, float eta, V2 s1, V2 s2,
-                            const V3& seedDir);
+                            const V3& seedDir, bool certify = true);
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 
