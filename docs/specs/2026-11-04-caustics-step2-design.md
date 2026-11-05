@@ -387,6 +387,17 @@ Closed forms first; each case fails before its code exists.
   of them (the rest land outside the ball's shadow, past its focus), and a second seed, the line from X toward the
   solid's centre, the rest: for smooth glass 60 of 60 found and certified (28 and 32), about 4 Newton steps a walk, no
   false path, none undecided; with slopes to 0.1, 57 of 60.
+  **The estimate** (`manifold_tests` t15, checked against light traced from the sun through a rough glass ball in double,
+  millions of rays): with slopes s1, s2 drawn from GGX's slope density and a found path (y1, y2),
+
+      E_X = E |L.n1| f1 |d.n1| |d.n2| / r1^2  f2 |w.n2| |w.nX| / r2^2  /  (|det ds/dA| p(s1) p(s2))  x  N
+
+  where f1, f2 are the BTDFs (Walter et al. 2007) in the camera's roles, d the direction inside, w toward X, r1 and r2 the
+  segments' lengths, |det ds/dA| the slopes' Jacobian over the two triangles' areas (the solver's, in (u1, v1, u2, v2),
+  over |e1 x e2| of each), and N the count of fresh seeds (drawn uniformly in the cone the solid subtends from X) it
+  takes to find the same path again. Within 2% at three points of the floor under the ball (+1.7%, -0.05%, -1.8%), 1.1-1.3
+  walks to refind a path. With the two fixed seeds and no N, the point under the centre read 18% dark: paths missed on
+  the caustic's axis, which the random seeds reach.
 - **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
 
 ## Licences

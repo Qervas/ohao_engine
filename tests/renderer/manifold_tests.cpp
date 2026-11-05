@@ -911,3 +911,298 @@ TEST(Manifold, t14_walk) {
         EXPECT_GT(paths.size(), 40u);
     }
 }
+
+// ---- step 2b: how much light a found path brings (the estimator) ------------------------------------------
+
+namespace {
+
+// GGX (isotropic) in a frame's slopes: P22(s) = 1 / (pi a^2 (1 + |s|^2 / a^2)^2); D(m) = P22(s) / cos^4 of m.
+double ggxP22(double sx, double sy, double a) {
+    const double q = 1.0 + (sx * sx + sy * sy) / (a * a);
+    return 1.0 / (kPi * a * a * q * q);
+}
+double ggxD(const D3& m, const D3& n, double a) {
+    const double c = dot(m, n);
+    if (c <= 0.0) return 0.0;
+    const double c2 = c * c, t2 = (1.0 - c2) / c2;
+    const double q = 1.0 + t2 / (a * a);
+    return 1.0 / (kPi * a * a * c2 * c2 * q * q);
+}
+double smithG1(const D3& v, const D3& m, const D3& n, double a) {
+    const double vn = dot(v, n);
+    if (dot(v, m) * vn <= 0.0) return 0.0;
+    const double c2 = vn * vn, t2 = (1.0 - c2) / c2;
+    return 2.0 / (1.0 + std::sqrt(1.0 + a * a * t2));
+}
+double fresnelD(double cosI, double eta) {   // eta = transmitted over incident
+    const double s2 = (1.0 - cosI * cosI) / (eta * eta);
+    if (s2 >= 1.0) return 1.0;
+    const double ct = std::sqrt(1.0 - s2);
+    const double rs = (cosI - eta * ct) / (cosI + eta * ct), rp = (eta * cosI - ct) / (eta * cosI + ct);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+// Walter et al. 2007's BTDF, i on the side of index etaI, o on etaO's (both pointing away from the surface).
+double btdfWalter(const D3& i, const D3& o, const D3& n, double etaI, double etaO, double a) {
+    D3 m = mul(add(mul(i, etaI), mul(o, etaO)), -1.0);
+    if (len(m) <= 0.0) return 0.0;
+    m = norm(m);
+    if (dot(m, n) < 0.0) m = mul(m, -1.0);
+    const double im = dot(i, m), om = dot(o, m), in = dot(i, n), on = dot(o, n);
+    const double den = etaI * im + etaO * om;
+    if (den * den <= 0.0 || in == 0.0 || on == 0.0) return 0.0;
+    const double F = fresnelD(std::abs(im), etaO / etaI);
+    const double G = smithG1(i, m, n, a) * smithG1(o, m, n, a);
+    return std::abs(im) * std::abs(om) / (std::abs(in) * std::abs(on)) * etaO * etaO * (1.0 - F) * ggxD(m, n, a) * G /
+           (den * den);
+}
+
+// The shading normal of a triangle at (u, v).
+D3 shadeN(const Tri& t, double u, double v) { return norm(add(d3(t.n0), add(mul(d3(t.a1), u), mul(d3(t.a2), v)))); }
+
+// The nearest hit of a ray on a uvSphere(r, sectors, stacks) ball centred at the origin: the analytic sphere's hit names
+// the cell, and the triangles of the 3 x 3 cells round it are tested exactly.
+int ballHit(const std::vector<Tri>& ball, int sectors, int stacks, double r, const D3& o, const D3& d, bool inside,
+            double& u, double& v, double& tHit) {
+    const double b = dot(o, d), c = dot(o, o) - r * r, disc = b * b - c;
+    if (disc < 0.0) return -1;
+    const double tS = inside ? -b + std::sqrt(disc) : -b - std::sqrt(disc);
+    const D3 p = add(o, mul(d, tS));
+    const double th = std::acos(std::clamp(p[1] / r, -1.0, 1.0));
+    double ph = std::atan2(p[2], p[0]);
+    if (ph < 0.0) ph += 2.0 * kPi;
+    const int j = std::min(stacks - 1, int(th / kPi * stacks)), i = std::min(sectors - 1, int(ph / (2.0 * kPi) * sectors));
+    // uvSphere's order: stack by stack, sector by sector; the first and last stacks hold one triangle a sector.
+    auto firstOf = [&](int jj) { return jj == 0 ? 0 : sectors + (jj - 1) * 2 * sectors; };
+    auto per = [&](int jj) { return (jj == 0 || jj == stacks - 1) ? 1 : 2; };
+    int best = -1;
+    tHit = 1e30;
+    for (int dj = -1; dj <= 1; ++dj)
+        for (int di = -1; di <= 1; ++di) {
+            const int jj = j + dj, ii = (i + di + sectors) % sectors;
+            if (jj < 0 || jj >= stacks) continue;
+            for (int k = 0; k < per(jj); ++k) {
+                const int idx = firstOf(jj) + ii * per(jj) + k;
+                const Tri& t = ball[size_t(idx)];
+                const D3 e1 = d3(t.e1), e2 = d3(t.e2), pv = cross(d, e2);
+                const double det = dot(e1, pv);
+                if (std::abs(det) < 1e-15) continue;
+                const D3 tv = sub(o, d3(t.p0));
+                const double a = dot(tv, pv) / det;
+                if (a < 0.0 || a > 1.0) continue;
+                const D3 qv = cross(tv, e1);
+                const double bb = dot(d, qv) / det;
+                if (bb < 0.0 || a + bb > 1.0) continue;
+                const double tt = dot(e2, qv) / det;
+                if (tt > 1e-9 && tt < tHit) {
+                    tHit = tt;
+                    best = idx;
+                    u = a;
+                    v = bb;
+                }
+            }
+        }
+    return best;
+}
+
+// A GGX microfacet normal drawn in proportion to D(m) (m . n): its slope's radius a sqrt(u / (1 - u)).
+D3 sampleMicro(const D3& n, double a, std::mt19937& g) {
+    const double u = std::min(rnd(g), 1.0 - 1e-12), phi = 2.0 * kPi * rnd(g);
+    const double r = a * std::sqrt(u / (1.0 - u));
+    const D3 t = perpendicular(n), b = cross(n, t);
+    return norm(add(n, add(mul(t, r * std::cos(phi)), mul(b, r * std::sin(phi)))));
+}
+
+} // namespace
+
+// The sun through a rough glass ball (96 x 48, radius 0.5, IOR 1.5, GGX roughness 0.1 at both faces) onto a floor 1.5
+// below its centre, refracting in and out (TT paths only). The estimator: slopes drawn from GGX's slope density, a walk
+// from a seed drawn uniformly in the cone the ball subtends from X, the path it finds weighed by Walter's BTDFs, the
+// geometry and 1 / (|det ds/dA| p(s1) p(s2)), and counted once per fresh seed it takes to find that path again
+// (Zeltner et al. 2020: on average 1 / its probability, so every reachable path counts exactly). The reference: light
+// traced from the sun in double (millions of rays, each microfacet normal drawn by D(m) (m.n) and weighed by Walter's
+// sampling weight, counted in a disc round the point). Measured 2026-11-05 with 1,500 draws: +1.7%, -0.05%, -1.8% at the
+// three points, 1.1-1.3 walks to find a path again; with the two fixed seeds instead (the shadow ray, the centre line),
+// the point under the centre read 18% dark (paths missed on the caustic's axis).
+TEST(Manifold, t15_estimator_brightness) {
+    const int sectors = 96, stacks = 48;
+    const double R = 0.5, eta = 1.5, rough = 0.1, a = rough * rough, floorY = -1.5, E = 1.0;
+    const std::vector<Tri> ball = uvSphere(R, sectors, stacks);
+    const D3 L{0.0, 1.0, 0.0};   // the sun overhead
+    const D3 nX{0.0, 1.0, 0.0};
+    const double xs[3] = {0.0, 0.12, 0.25};
+    const double rho = 0.02;   // the reference's disc
+    // The reference: sun rays uniformly over the ball's shadow disc (area pi R^2), each carrying flux E pi R^2 / N.
+    std::mt19937 g(151u);
+    const long N = 3000000;
+    double hits[3] = {0, 0, 0};
+    for (long k = 0; k < N; ++k) {
+        const double rr = R * std::sqrt(rnd(g)), ph = 2.0 * kPi * rnd(g);
+        const D3 o{rr * std::cos(ph), 2.0, rr * std::sin(ph)};
+        const D3 dir{0.0, -1.0, 0.0};
+        double u, v, th;
+        const int t1 = ballHit(ball, sectors, stacks, R, o, dir, false, u, v, th);
+        if (t1 < 0) continue;
+        const D3 y1 = add(o, mul(dir, th));
+        const D3 n1 = shadeN(ball[size_t(t1)], u, v);
+        const D3 m1 = sampleMicro(n1, a, g);
+        const D3 i1 = mul(dir, -1.0);
+        D3 d;
+        if (dot(i1, m1) <= 0.0 || !refractD(dir, m1, 1.0 / eta, d)) continue;
+        if (dot(d, n1) >= 0.0) continue;
+        // Walter's weight for a normal drawn by D(m) (m.n): |i.m| G (1 - F) / (|i.n| (m.n)).
+        double w = (1.0 - fresnelD(dot(i1, m1), eta)) * smithG1(i1, m1, n1, a) * smithG1(mul(d, -1.0), m1, n1, a) *
+                   dot(i1, m1) / (std::abs(dot(i1, n1)) * dot(m1, n1));
+        const int t2 = ballHit(ball, sectors, stacks, R, y1, d, true, u, v, th);
+        if (t2 < 0) continue;
+        const D3 y2 = add(y1, mul(d, th));
+        const D3 n2 = shadeN(ball[size_t(t2)], u, v);
+        const D3 m2 = sampleMicro(n2, a, g);
+        const D3 i2 = mul(d, -1.0);
+        D3 out;
+        if (dot(d, m2) <= 0.0 || !refractD(d, mul(m2, -1.0), eta, out)) continue;
+        if (dot(out, n2) <= 0.0) continue;
+        w *= (1.0 - fresnelD(dot(d, m2), 1.0 / eta)) * smithG1(i2, mul(m2, -1.0), mul(n2, -1.0), a) *
+             smithG1(out, m2, n2, a) * dot(d, m2) / (std::abs(dot(d, n2)) * dot(m2, n2));
+        if (out[1] >= 0.0) continue;
+        const D3 f = add(y2, mul(out, (floorY - y2[1]) / out[1]));
+        for (int q = 0; q < 3; ++q) {
+            const double dx = f[0] - xs[q], dz = f[2];
+            if (dx * dx + dz * dz <= rho * rho) hits[q] += w;
+        }
+    }
+    // The estimator at each point.
+    const int M = 800;
+    for (int q = 0; q < 3; ++q) {
+        const double ref = hits[q] * E * kPi * R * R / double(N) / (kPi * rho * rho);
+        const D3 X{xs[q], floorY, 0.0};
+        double sum = 0.0;
+        int found = 0;
+        long totalTrials = 0;
+        for (int k = 0; k < M; ++k) {
+            double s[4];
+            for (int h = 0; h < 2; ++h) {
+                const double u = std::min(rnd(g), 1.0 - 1e-12), ph = 2.0 * kPi * rnd(g);
+                const double r = a * std::sqrt(u / (1.0 - u));
+                s[2 * h] = r * std::cos(ph);
+                s[2 * h + 1] = r * std::sin(ph);
+            }
+            const V2 s1{float(s[0]), float(s[1])}, s2{float(s[2]), float(s[3])};
+            // Zeltner et al. 2020's unbiased estimate: a seed direction drawn uniformly in the cone the ball subtends
+            // from X; a path found from it counts once for every fresh seed it takes to find that same path again
+            // (on average 1 / its probability), so every path the walk can reach from some seed is counted exactly.
+            const D3 axis = norm(mul(X, -1.0));
+            const double cosA = std::cos(std::asin(std::min(1.0, 1.02 * R / len(X))));
+            const D3 ta = perpendicular(axis), tb = cross(axis, ta);
+            auto seedDir = [&] {
+                const double c = cosA + (1.0 - cosA) * rnd(g), sn = std::sqrt(std::max(0.0, 1.0 - c * c));
+                const double ph = 2.0 * kPi * rnd(g);
+                return f3(add(mul(axis, c), add(mul(ta, sn * std::cos(ph)), mul(tb, sn * std::sin(ph)))));
+            };
+            std::vector<std::array<double, 7>> roots;   // (entry, exit, x, weight)
+            const WalkResult r = manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir());
+            if (r.found) {
+                int trials = 1;
+                while (trials < 1000) {
+                    const WalkResult again = manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir());
+                    if (again.found && again.entry == r.entry && again.exit == r.exit &&
+                        std::abs(again.x[0] - r.x[0]) < 1e-4 && std::abs(again.x[1] - r.x[1]) < 1e-4 &&
+                        std::abs(again.x[2] - r.x[2]) < 1e-4 && std::abs(again.x[3] - r.x[3]) < 1e-4)
+                        break;
+                    ++trials;
+                }
+                totalTrials += trials;
+                roots.push_back({double(r.entry), double(r.exit), r.x[0], r.x[1], r.x[2], r.x[3], double(trials)});
+            }
+            for (const auto& o : roots) {
+                const Tri &t1 = ball[size_t(o[0])], &t2 = ball[size_t(o[1])];
+                auto slopes = [&](const std::array<double, 4>& x, double out[4]) {
+                    const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), x[0]), mul(d3(t1.e2), x[1])));
+                    const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), x[2]), mul(d3(t2.e2), x[3])));
+                    const D3 d = norm(sub(y2, y1)), w = norm(sub(X, y2));
+                    const D3 h1 = mul(add(L, mul(d, eta)), -1.0), h2 = sub(mul(d, eta), w);
+                    D3 n1, ta, ba, n2, tb, bb;
+                    frameD(t1, x[0], x[1], n1, ta, ba);
+                    frameD(t2, x[2], x[3], n2, tb, bb);
+                    out[0] = dot(h1, ta) / dot(h1, n1);
+                    out[1] = dot(h1, ba) / dot(h1, n1);
+                    out[2] = dot(h2, tb) / dot(h2, n2);
+                    out[3] = dot(h2, bb) / dot(h2, n2);
+                };
+                // Polish the float root in double (Newton on the slopes), then its Jacobian by central differences.
+                std::array<double, 4> x0{o[2], o[3], o[4], o[5]};
+                double J[4][4];
+                for (int it = 0; it < 6; ++it) {
+                    double f0[4];
+                    slopes(x0, f0);
+                    for (int i = 0; i < 4; ++i) f0[i] -= s[i];
+                    for (int j = 0; j < 4; ++j) {
+                        auto xa = x0, xb = x0;
+                        xa[j] += 1e-7;
+                        xb[j] -= 1e-7;
+                        double fa[4], fb[4];
+                        slopes(xa, fa);
+                        slopes(xb, fb);
+                        for (int i = 0; i < 4; ++i) J[i][j] = (fa[i] - fb[i]) / 2e-7;
+                    }
+                    // Solve J dx = -f (Gauss with pivoting on a copy).
+                    double A[4][5];
+                    for (int i = 0; i < 4; ++i) {
+                        for (int j = 0; j < 4; ++j) A[i][j] = J[i][j];
+                        A[i][4] = -f0[i];
+                    }
+                    for (int c = 0; c < 4; ++c) {
+                        int piv = c;
+                        for (int r = c + 1; r < 4; ++r)
+                            if (std::abs(A[r][c]) > std::abs(A[piv][c])) piv = r;
+                        for (int k2 = 0; k2 < 5; ++k2) std::swap(A[c][k2], A[piv][k2]);
+                        for (int r = 0; r < 4; ++r) {
+                            if (r == c) continue;
+                            const double fct = A[r][c] / A[c][c];
+                            for (int k2 = c; k2 < 5; ++k2) A[r][k2] -= fct * A[c][k2];
+                        }
+                    }
+                    for (int i = 0; i < 4; ++i) x0[i] += A[i][4] / A[i][i];
+                }
+                double det = 1.0;
+                {
+                    double B[4][4];
+                    for (int i = 0; i < 4; ++i)
+                        for (int j = 0; j < 4; ++j) B[i][j] = J[i][j];
+                    for (int c = 0; c < 4; ++c) {
+                        int piv = c;
+                        for (int r = c + 1; r < 4; ++r)
+                            if (std::abs(B[r][c]) > std::abs(B[piv][c])) piv = r;
+                        if (piv != c) {
+                            for (int k2 = 0; k2 < 4; ++k2) std::swap(B[c][k2], B[piv][k2]);
+                            det = -det;
+                        }
+                        det *= B[c][c];
+                        for (int r = c + 1; r < 4; ++r) {
+                            const double fct = B[r][c] / B[c][c];
+                            for (int k2 = c; k2 < 4; ++k2) B[r][k2] -= fct * B[c][k2];
+                        }
+                    }
+                }
+                const double area1 = len(cross(d3(t1.e1), d3(t1.e2))), area2 = len(cross(d3(t2.e1), d3(t2.e2)));
+                const double detA = std::abs(det) / (area1 * area2);   // |det ds / dA|
+                const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), x0[0]), mul(d3(t1.e2), x0[1])));
+                const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), x0[2]), mul(d3(t2.e2), x0[3])));
+                const D3 d = norm(sub(y2, y1)), w = norm(sub(X, y2));
+                const double r1 = len(sub(y2, y1)), r2 = len(sub(X, y2));
+                const D3 n1 = shadeN(t1, x0[0], x0[1]), n2 = shadeN(t2, x0[2], x0[3]);
+                const double f1 = btdfWalter(L, d, n1, 1.0, eta, a);
+                const double f2 = btdfWalter(mul(d, -1.0), w, n2, eta, 1.0, a);
+                const double integrand = E * std::abs(dot(L, n1)) * f1 * std::abs(dot(d, n1)) * std::abs(dot(d, n2)) /
+                                         (r1 * r1) * f2 * std::abs(dot(w, n2)) * std::abs(dot(w, nX)) / (r2 * r2);
+                sum += o[6] * integrand / (detA * ggxP22(s[0], s[1], a) * ggxP22(s[2], s[3], a));
+                ++found;
+            }
+        }
+        const double est = sum / M;
+        std::printf("t15: X at %.2f: the estimator %.4f (%d paths in %d draws, %.1f walks to find each again), the "
+                    "traced reference %.4f: %.2f%%\n",
+                    xs[q], est, found, M, found ? double(totalTrials) / found : 0.0, ref, 100.0 * (est - ref) / ref);
+        EXPECT_NEAR(est, ref, 0.05 * ref) << "X at " << xs[q];
+    }
+}
