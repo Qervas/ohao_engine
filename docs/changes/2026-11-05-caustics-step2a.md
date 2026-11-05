@@ -4,7 +4,7 @@
 designed", rulings M3, M7)
 **Plan:** `docs/plans/2026-11-04-caustics-step2a.md` (tasks 1-7)
 **Status:** built and tested on branch `caustics-step2`; on with caustics in `rt_offline` (`OHAO_MANIFOLD_OFF=1` turns it
-off). Not merged: the default is Frank's ruling (section 6).
+off; ruling M9, Frank 2026-11-05: on, and look for ways to make it cheaper; M8: the roulette weight 0.1). Not merged.
 
 ## 1. Summary
 
@@ -106,8 +106,8 @@ Render goldens 42/42 unchanged.
 
 - **Normal-mapped glints stay with the camera side** (ruling M7): a normal map gives a triangle a root per texel's slope.
   They are the showcase's dots; they need their own step (the map's cells as Newton's domains).
-- **The default.** Exact either way; the pass removes light that is missing without it (mirrors seen past the first hit),
-  and costs about 3x `pt.trace` on the showcase without improving it at equal time. Frank's ruling.
+- **The cost.** On by default (M9): it removes light that is missing without it (mirrors seen past the first hit), and
+  costs about 3x `pt.trace` on the showcase without improving it at equal time.
 - **Chains of two** (light through glass seen past the first hit): step 2b.
 - **The far side of closed casters**: their roots are solved and then shadowed; skipping them needs to know a mesh is
   closed.

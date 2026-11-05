@@ -273,7 +273,7 @@ cone (the vertex frame's cone with the map's) must be proven conservative, the t
 (`t8_disc_conservative`'s method, with maps).
 
 **Rulings.**
-- **M10 (OPEN) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
+- **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.
 - **M11 (OPEN) — the solver.** Interval Newton (Path Cuts) recommended; Specular Polynomials if undecided boxes are
   ever counted.
@@ -334,16 +334,17 @@ Closed forms first; each case fails before its code exists.
 - **M5 (OPEN) — the depths R.** 2 (depths 1 and 2) recommended; measured by the class images (what the glint class
   leaves at depth 3+).
 - **M6 (PROVISIONAL) — the diagnostic stays.** `OHAO_PT_CLASS` is how m7 is judged; it lives in the caustics raygen only.
-- **M8 (OPEN) — requests' roulette.** A request whose casters' summed solid angle from X is under
+- **M8 (ACCEPTED 2026-11-05: 0.1) — requests' roulette.** A request whose casters' summed solid angle from X is under
   `kManifoldRouletteWeight` runs with probability its ratio to it (exact). 0.02 / 0.1 / 0.5 cost 70 / 60 / 46 ms of the
   showcase's frame; 0.1 kept until an equal-time measurement decides.
-- **M9 (OPEN) — the default.** The pass is exact and finds light the camera side misses (a mirror's sun seen past the first
-  hit), but on the showcase costs about 3x `pt.trace` and loses at equal time (its dots are normal-mapped glints, M7).
+- **M9 (ACCEPTED 2026-11-05: on with caustics) — the default.** The pass is exact and finds light the camera side misses (a
+  mirror's sun seen past the first hit), but on the showcase costs about 3x `pt.trace` and loses at equal time (its dots
+  are normal-mapped glints, M7). Frank: on, and look for ways to make it cheaper.
 - **M7 (PROVISIONAL) — owned materials.** Normal-mapped smooth surfaces and skinned casters stay with the camera side
   in step 2 ("Step 2a as designed"). If the showcase's remaining dots turn out to be the helmet's, normal-mapped glints
   get their own step (roots per texel, as Zeltner et al. 2020's glints do).
 
-- **M10 (OPEN) — the map read in fp32** (step 2c): see "Step 2c".
+- **M10 (ACCEPTED 2026-11-05) — the map read in fp32** (step 2c): see "Step 2c".
 - **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
 
 ## Licences
