@@ -728,10 +728,9 @@ deferred, reference, path traced); two the transparency scene,
   - **`RenderScene::Draw::aabbMin/aabbMax` are the mesh's own bounds**; world bounds go through `Draw::world`. Taken raw,
     a moved caster was aimed at where its mesh sits untransformed (half a glass ball's caustic missing; `c3_sphere`).
   - **The caustics program compiles cold in about ten seconds** (`PathTracer: <name> pipeline in N s (T threads)` in the
-    log: 10.7 s with other processes using three cores; about 8 minutes before every call site was made single, below),
-    and how warm a second process is depends on the driver: NVIDIA keeps the binary in its own shader cache
-    (`%LOCALAPPDATA%/NVIDIA/DXCache`, size-capped), not in our `VkPipelineCache` file. Keep the caustics raygens free of
-    a second material evaluation site (one once made every process compile it).
+    log: 10.0 s with other processes using four cores; about 8 minutes before every call site was made single, below),
+    once per shader change: later processes load it from the pipeline cache file (below). Keep the caustics raygens free
+    of a second material evaluation site.
   - `OHAO_CAUSTICS_SPLIT_ONLY=1` drops the pass's terms without running it (`c1_split_only`); `OHAO_CAUSTIC_RAYS` overrides
     the rays a pixel (`kCausticRaysPerPixel`).
   Measured on the showcase at equal time: the whole image's error 190x lower, the sun's glints off the helmet 33x their
@@ -762,20 +761,19 @@ deferred, reference, path traced); two the transparency scene,
   constants (`vE1Avg`, `vMsD`, `vMsM`) and the albedos at the view's mu (`vEd`, `vEm`, `vSlot`), and the base's
   functions read them, so **call a base's functions only on a view of the same wo** (`OpenPBRSurface.view`/`baseAt`
   do it; a base no view made holds NaN there, which shows). A program's stages compile side by side: the pipeline is
-  created through a deferred operation joined by up to 4 threads (`createRtPipelineJoined`). raygen went from 1,101,869
-  SPIR-V instructions to 27,895 and the default program's cold compile from 11 minutes to 9.0 s, with Unreal Editor
-  and others using three cores. **Never give an OpenPBR entry a second call site in a kernel**: weigh a new direction
-  in the vertex's loop. Count a kernel's instructions with `spirv-dis --no-color X.spv | grep -vc '^\s*;'`.
-- **A cold compile happens once per executable, and again beside a live process.** NVIDIA's driver keeps compiled
-  pipelines in its own cache (`%LOCALAPPDATA%/NVIDIA/DXCache`), one per executable, so every test executable compiles
-  the path tracer once after a shader change, and **a second process creating it while another one holds it compiles
-  from scratch** (a headless `ohao serve` beside a live window, at the old size: 625 s). Neither our `VkPipelineCache`
-  file (`render/rt/pipeline_disk_cache.*`: a fresh executable with the 38 MB file loaded compiled from scratch) nor
-  `VK_KHR_pipeline_binary` spares it (2026-11-05: binaries refused by another executable, and by a second `ohao.exe`
-  while the first lives, even with the driver's internal cache off). Run path-traced processes one after another: a
-  test comparing two hosts starts the second once the first has exited (`check_live`). The `VkPipelineCache` file
-  (per pipeline, shader version, device and driver, under `$OHAO_PIPELINE_CACHE_DIR` or
-  `%LOCALAPPDATA%/ohao/pipeline_cache`) stays for drivers that honour it.
+  created through a deferred operation joined by 4 threads (`createRtPipelineJoined`; `OHAO_RT_COMPILE_THREADS` 1-8:
+  cold, the default program 13.7 s on 1, 8.5 s on 4; caustics' 18.3 s and 10.0 s). raygen went from 1,101,869 SPIR-V
+  instructions to 27,895 and the default program's cold compile from 11 minutes to 8.5 s, with Unreal Editor and
+  others using three to four cores. **Never give an OpenPBR entry a second call site in a kernel**: weigh a new
+  direction in the vertex's loop. Count a kernel's instructions with `spirv-dis --no-color X.spv | grep -vc '^\s*;'`.
+- **A cold compile happens once per shader change, for every executable.** Our `VkPipelineCache` file
+  (`render/rt/pipeline_disk_cache.*`: per pipeline, shader version, device and driver, under `$OHAO_PIPELINE_CACHE_DIR`
+  or `%LOCALAPPDATA%/ohao/pipeline_cache`) holds the path tracer's programs since they became small (W1d): a fresh
+  executable loads each in 0.1-0.2 s, and so does a second process beside a live one holding them (both measured
+  2026-11-05). At the old size NVIDIA ignored the file and kept the binary in its own cache
+  (`%LOCALAPPDATA%/NVIDIA/DXCache`), one per executable, so every executable compiled the path tracer cold and a second
+  process beside a live one compiled again (625 s); `VK_KHR_pipeline_binary` was refused across executables. A truly
+  cold compile, for timing: a fresh copy of the CLI with `OHAO_PIPELINE_CACHE_DIR` set to an empty directory.
 - **Emission is light** (frontier F3, ruling F-R7; `render/rt/emissive_lights.*`). Every triangle of an
   emissive material (`MaterialTable::emissive`: emission colour and luminance above 0) is a light of the
   path tracer: the `emissive.lights` pass (before `pt.cache.update`) writes each one's world corners, uvs

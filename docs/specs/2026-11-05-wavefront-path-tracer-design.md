@@ -111,7 +111,11 @@ film        add each path's radiance to the running mean; NRD's and DLSS's guide
   manifoldConnect 24,891 to 19,995. Each program is created through a deferred operation joined by up to 4 threads, so
   its two raygens (now about the same size) compile side by side. Cold, with other processes using three cores as in
   W1c's second figure: the default program 27.3 s to 9.0 s, the caustics program 33.7 s to 10.7 s, the manifold
-  program 7.3 s to 5.6 s; the size alone predicts about 14 s and 17 s for the first two.
+  program 7.3 s to 5.6 s. The threads A/B (`OHAO_RT_COMPILE_THREADS`): the default program 13.7 s on 1, 8.5 s on 4;
+  caustics 18.3 s and 10.0 s. At this size NVIDIA honours our `VkPipelineCache` file, which it ignored at the old one:
+  a fresh executable, and a second process beside a live one, load each program in 0.1-0.2 s, so a cold compile is
+  once per shader change. The frame cost is unchanged (`pt.trace` 108.88 to 108.80 ms on `helmet_rt_1080p`, 99.31 to
+  96.95 ms on `play_rt_1080p`, back to back).
 - **W2 — the wavefront for the reference.** camera, trace, escaped, emitted, shade (one class), shadow, film; offline
   profile, no cache, no guiding, no caustics. Held to the megakernel: `check_material` (the white furnace, the closed
   box), `check_analytic`, the path-traced goldens within their floor, Cornell and the helmet room's means.

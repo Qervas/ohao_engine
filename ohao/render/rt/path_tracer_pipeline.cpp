@@ -225,11 +225,15 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
     for (const auto* m : modules) keyed.push_back(*m);
     cache.open(m_device, m_physicalDevice, cacheName, pipelineContentKey(keyed));
     VkPipeline pipeline = VK_NULL_HANDLE;
-    // Timed: seconds cold (sub-project 25, W1c), on up to 4 threads (a program has at most 5 stages).
+    // Timed: seconds cold (sub-project 25, W1c-W1d), on 4 threads (a program has at most 5 stages; cold, the default
+    // program took 13.7 s on 1 thread and 8.5 s on 4, caustics' 18.3 s and 10.0 s).
     const auto compileStart = std::chrono::steady_clock::now();
     uint32_t threads = 1;
-    VkResult result =
-        createRtPipelineJoined(vkCreateRayTracingPipelinesKHR, m_device, cache.handle(), pipelineInfo, pipeline, 3, threads);
+    // OHAO_RT_COMPILE_THREADS (1-8, default 4): the threads joining the compile.
+    uint32_t joined = 4;
+    if (const char* e = std::getenv("OHAO_RT_COMPILE_THREADS")) joined = std::clamp<uint32_t>(std::atoi(e), 1u, 8u);
+    VkResult result = createRtPipelineJoined(vkCreateRayTracingPipelinesKHR, m_device, cache.handle(), pipelineInfo,
+                                             pipeline, joined - 1u, threads);
     OHAO_LOG(Info, render, "PathTracer: {} pipeline in {:.1f} s ({} threads)", cacheName,
              std::chrono::duration<double>(std::chrono::steady_clock::now() - compileStart).count(), threads);
     if (result == VK_SUCCESS) cache.save();

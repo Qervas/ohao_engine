@@ -14,7 +14,9 @@ so a function reached from k sites is compiled k times, and OpenPBR's entries ca
 each (`OpenPBRSurface.sample()` alone was 404,296 instructions). Every OpenPBR helper now has one call site per entry,
 a path vertex weighs all its directions at one site, and a view of wo reads OpenPBR's tables once. raygen fell from
 1,101,869 SPIR-V instructions to 27,895, and with the stages compiled side by side each program compiles cold in about
-ten seconds on a loaded machine. Same arithmetic throughout: the energy tables integrate byte for byte.
+ten seconds on a loaded machine, once per shader change: at this size the driver honours our pipeline cache file, so
+every other executable and a second process beside a live one load it in 0.1-0.2 s. Same arithmetic throughout (the
+energy tables integrate byte for byte), and the same frame cost.
 
 ## 2. What was built
 
@@ -82,8 +84,22 @@ Cold compiles (`PathTracer: <name> pipeline in N s`, a fresh copy of the CLI, th
 | caustics | about 490 s | | 33.7 s | 10.7 s (4 threads) |
 | manifold | 4.4 s | | 7.3 s | 5.6 s (4 threads) |
 
-Size alone predicts about 14 s and 17 s for W1d's first two; the rest is the stages compiling side by side (not
-separated by an A/B run).
+The threads, A/B (each twice, a fresh copy of the CLI and an empty `OHAO_PIPELINE_CACHE_DIR`, others using four
+cores): the default program 13.6-13.8 s on 1 thread, 8.4-8.5 s on 4; caustics 18.2-18.4 s and 10.0 s; manifold (one
+raygen) 5.7-5.8 s and 5.1-5.2 s.
+
+**The pipeline cache file now serves every executable.** At the old size NVIDIA ignored our `VkPipelineCache` file and
+kept the binary in its own cache, one per executable; at the new size it honours the file: a fresh executable loads
+each program in 0.1-0.2 s, and so does a second `ohao.exe` started while another one holds the programs (it compiled
+from scratch before, 625 s). A cold compile is now once per shader change.
+
+Frame cost (`render_bench --frames 60`, GPU timestamps, the old program and the new one back to back; both runs noisy by
+the CPU's calibration, the GPU's calibration within 8% of its reference):
+
+| scene | `pt.trace` old | new | `pt.cache.update` old | new |
+|---|---:|---:|---:|---:|
+| helmet_rt_1080p | 108.88 ms | 108.80 ms | 3.64 ms | 3.55 ms |
+| play_rt_1080p | 99.31 ms | 96.95 ms | 3.61 ms | 3.11 ms |
 
 Gates: the energy tables (`openpbr_tables --check`) byte for byte after each step; `material_tests` 36/36,
 `manifold_tests` 12/12. W1c's targeted gate (30 suites, every `gpu` label one included): 26 passed and the four
@@ -97,9 +113,10 @@ by 1 level each.
 
 ## 6. Known gaps
 
-- The path tracer's frame cost against the old megakernel is not yet measured (`render_bench`); the machine was loaded.
-- The threads' share of W1d's compile gain is inferred from the size law, not measured A/B.
-- No cold-compile figure on a quiet machine.
+- No cold-compile or frame-cost figure on a quiet machine (Unreal Editor used two cores throughout).
+- `helmet_rt_1080p`'s `pt.trace` was 69.0 ms on 2026-11-03 (a noisy run, 100 frames) and is 108.8 ms in both of
+  today's programs: something between then and W1 (caustics T4 onward) made the realtime path tracer slower. Not
+  bisected yet.
 - The coat's own table reads (`OpenPBRCoat.albedo`, `.eval`) stay per call site; the Sobol sampler's refill is inlined
   at each of its 17 draw sites in raygen.
 
