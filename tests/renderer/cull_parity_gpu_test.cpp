@@ -41,7 +41,6 @@
 #include <string>
 #include <vector>
 
-#include <process.h>   // _getpid
 
 using namespace ohao;
 namespace shared = gpu::shared;
@@ -342,7 +341,7 @@ void t06_parity_scene_files() {
                           Case{"helmet room, 30 frames with post", "helmet", "assets/scenes/helmet_game.scene.json", "post"}}) {
         // Per-process names: CTest may run another copy of this test.
         const std::string base = std::string(OHAO_BINARY_DIR) + "/cull_parity_" + c.tag + "_" +
-                                 std::to_string(static_cast<unsigned long>(_getpid()));
+                                 std::to_string(static_cast<unsigned long>(ohao::test::processId()));
         SceneLists onLists, offLists;
         const auto on = sceneCapture(c.path, c.capture, {true, true}, base + "_on.png", onLists);
         const auto off = sceneCapture(c.path, c.capture, {false, false}, base + "_off.png", offLists);
@@ -441,7 +440,7 @@ void t07_mesh_shaders_and_fallback_render_the_scene_files_identically() {
                           Case{"helmet room, geometry auto, post", "helmet", "assets/scenes/helmet_game.scene.json", "post",
                                Geometry::Auto}}) {
         const std::string base = std::string(OHAO_BINARY_DIR) + "/meshlet_parity_" + c.tag + "_" +
-                                 std::to_string(static_cast<unsigned long>(_getpid()));
+                                 std::to_string(static_cast<unsigned long>(ohao::test::processId()));
         SceneLists meshLists, fallbackLists, instanceLists;
         const auto mesh = sceneCapture(c.path, c.capture, {true, true, c.geometry, true}, base + "_mesh.png", meshLists);
         const auto fallback =
@@ -497,7 +496,7 @@ std::string skinnedOffscreenScene(bool bind) {
   ]
 })";
     const std::string path = std::string(OHAO_BINARY_DIR) + "/cull_parity_rig_" + (bind ? "bind_" : "raised_") +
-                             std::to_string(static_cast<unsigned long>(_getpid())) + ".scene.json";
+                             std::to_string(static_cast<unsigned long>(ohao::test::processId())) + ".scene.json";
     FILE* f = std::fopen(path.c_str(), "wb");
     if (f) {
         std::fwrite(rig.data(), 1, rig.size(), f);
@@ -510,7 +509,7 @@ void t08_skinned_arm_outside_its_bind_box_is_drawn() {
     std::printf("t08: a skinned rig whose bind box is off screen and whose raised arm is in view\n");
     const std::string raised = skinnedOffscreenScene(false), bind = skinnedOffscreenScene(true);
     const std::string base = std::string(OHAO_BINARY_DIR) + "/cull_parity_rig_" +
-                             std::to_string(static_cast<unsigned long>(_getpid()));
+                             std::to_string(static_cast<unsigned long>(ohao::test::processId()));
     SceneLists l1, l2, l3, l4, l5;
     const auto on = sceneCapture(raised.c_str(), "plain", {true, true}, base + "_on.png", l1);
     const auto off = sceneCapture(raised.c_str(), "plain", {false, false}, base + "_off.png", l2);

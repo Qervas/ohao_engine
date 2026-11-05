@@ -10,11 +10,36 @@
 //     `return ohao::test::finish("suite", passed, failed, failures);`.
 // Header-only, standard library only, so any suite can include it.
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace ohao::test {
+
+// This process's id (scratch files a test writes are named by it: CTest runs copies side by side).
+inline unsigned long processId() {
+#ifdef _WIN32
+    return static_cast<unsigned long>(_getpid());
+#else
+    return static_cast<unsigned long>(getpid());
+#endif
+}
+
+// Sets an environment variable for this process; an empty value removes it (as _putenv_s does on Windows).
+inline void setEnvVar(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    if (value[0] != '\0') setenv(name, value, 1);
+    else unsetenv(name);
+#endif
+}
 
 struct State {
     int passed{0};

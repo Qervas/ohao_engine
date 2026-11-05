@@ -1255,10 +1255,10 @@ static void runOrphanedEntryPointTests() {
         // destroyed. The layer tracks handle lifetimes, so those show up as
         // "invalid Vk..." / "destroyed" errors deterministically -- without it they
         // are a heap-layout-dependent segfault.
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer renderer(320, 180);
         const bool ok = renderer.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok) {
             std::cout << "(no Vulkan device -- skipped) ";
             TEST_PASS();
@@ -1301,10 +1301,10 @@ static void runOrphanedEntryPointTests() {
         // rebuilds its images and descriptor sets; any set left unwritten, or any
         // image sampled before its first write, is a validation message. Every
         // message counts here, not only handle lifetimes.
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer renderer(320, 180);
         const bool ok = renderer.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok) {
             std::cout << "(no Vulkan device -- skipped) ";
             TEST_PASS();
@@ -1381,10 +1381,10 @@ static void runOrphanedEntryPointTests() {
         // With the post stack's tonemap off, the frame's final image is the lighting
         // pass's HDR output, so it is the source of the readback copy (headless) or
         // the swapchain blit (windowed). Either needs TRANSFER_SRC on that image.
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer renderer(320, 180);
         const bool ok = renderer.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok || !renderer.validationEnabled()) {
             std::cout << "(no Vulkan device or validation layer -- skipped) ";
             TEST_PASS();
@@ -2891,10 +2891,10 @@ static void runRenderSceneTests() {
 
     TEST_BEGIN("instance-table growth mid-frame defers destroying the old buffers");
     {
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer r(64, 64);
         const bool ok = r.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok || !r.validationEnabled()) { std::cout << "(skipped) "; TEST_PASS(); return; }
         r.setRenderMode(ohao::RenderMode::Deferred);
         std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
@@ -3164,10 +3164,10 @@ static void runRenderSceneTests() {
     // layer checks those builds and their barriers.
     TEST_BEGIN("moving an instance refits the TLAS with the new transform");
     {
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer r(64, 64);
         const bool ok = r.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok) { std::cout << "(skipped) "; TEST_PASS(); return; }
         RenderScene& rs = r.renderScene();
         if (!rs.rtSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
@@ -3198,10 +3198,10 @@ static void runRenderSceneTests() {
 
     TEST_BEGIN("a slot released and reused in one frame forces a TLAS rebuild");
     {
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer r(64, 64);
         const bool ok = r.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok) { std::cout << "(skipped) "; TEST_PASS(); return; }
         RenderScene& rs = r.renderScene();
         if (!rs.rtSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
@@ -3240,10 +3240,10 @@ static void runRenderSceneTests() {
     // slot's fence, bound by that slot's lighting and lights.cluster descriptor sets.
     TEST_BEGIN("the raster light table is one buffer per frame slot");
     {
-        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer r(64, 64);
         const bool ok = r.initialize();
-        _putenv_s("OHAO_VALIDATION", "");
+        ohao::test::setEnvVar("OHAO_VALIDATION", "");
         if (!ok) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
         r.setRenderMode(ohao::RenderMode::Deferred);
         RenderScene& rs = r.renderScene();

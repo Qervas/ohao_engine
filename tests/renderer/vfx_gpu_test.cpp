@@ -51,7 +51,6 @@
 #include <string>
 #include <vector>
 
-#include <process.h>   // _getpid
 
 using namespace ohao;
 
@@ -94,7 +93,7 @@ const reflect::TypeRegistry& engineTypes() {
 
 // Per-process names under build/: CTest may run another copy of this test.
 std::string scratch(const std::string& name) {
-    return "build/vfx_gpu_" + name + "_" + std::to_string(static_cast<unsigned long>(_getpid()));
+    return "build/vfx_gpu_" + name + "_" + std::to_string(static_cast<unsigned long>(ohao::test::processId()));
 }
 
 constexpr uint32_t kWidth = 320, kHeight = 180;

@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -800,6 +801,11 @@ static void sp4_t12_value_hash_ignores_padding_and_counts_bits() {
     std::memset(b, 0xAA, sizeof b);
     auto* pa = new (a) HashPadded{true, 2.5f};
     auto* pb = new (b) HashPadded{true, 2.5f};
+    // Construction may zero the padding (GCC does), so write different padding bytes after it.
+    for (std::size_t i = sizeof(bool); i < offsetof(HashPadded, x); ++i) {
+        a[i] = 0x00;
+        b[i] = 0xAA;
+    }
     CHECK(std::memcmp(a, b, sizeof a) != 0, "(the two objects differ in their padding bytes)");
     CHECK(hashOf(*pa) == hashOf(*pb), "padding never reaches the hash");
     CHECK(hashTypes().find<HashPadded>()->plainBytes.value.load() == 0, "a type with padding is hashed field by field");

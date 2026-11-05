@@ -167,6 +167,7 @@ private:
     VkDescriptorPool m_hizPool{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> m_hizSets;
     VkPipelineLayout m_hizLayout{VK_NULL_HANDLE};
+    std::vector<VkPipelineLayout> m_extraLayouts;   // the other pipelines' own layouts, kept until teardown
     VkPipeline m_fromDepth{VK_NULL_HANDLE}, m_downsample{VK_NULL_HANDLE};
 
     // This frame

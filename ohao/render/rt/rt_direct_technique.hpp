@@ -155,6 +155,7 @@ private:
     VkDescriptorSetLayout m_alphaTablesLayout = VK_NULL_HANDLE, m_texturesLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_sampleSetLayout = VK_NULL_HANDLE, m_denoiseSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_sampleLayout = VK_NULL_HANDLE, m_denoiseLayout = VK_NULL_HANDLE;
+    std::vector<VkPipelineLayout> m_extraLayouts;   // the other pipelines' own layouts, kept until teardown
     VkPipeline m_initial = VK_NULL_HANDLE, m_spatial = VK_NULL_HANDLE, m_shade = VK_NULL_HANDLE;
     VkPipeline m_shadeLayered = VK_NULL_HANDLE;   // shade with OpenPBR's layers (restir_di.slang)
     bool m_layers = true;

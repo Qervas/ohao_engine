@@ -34,6 +34,11 @@ target_link_libraries(ohao_renderer PUBLIC
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}
 )
+# The sky's rows run through std::execution::par (render/sky/atmosphere.cpp): libstdc++ runs the parallel
+# algorithms on oneTBB, which must then be linked (MSVC's standard library needs nothing).
+if(NOT MSVC AND TARGET TBB::tbb)
+    target_link_libraries(ohao_renderer PUBLIC TBB::tbb)
+endif()
 if(OpenImageDenoise_FOUND)
     target_link_libraries(ohao_renderer PUBLIC OpenImageDenoise)
     target_compile_definitions(ohao_renderer PRIVATE OHAO_OIDN_ENABLED)

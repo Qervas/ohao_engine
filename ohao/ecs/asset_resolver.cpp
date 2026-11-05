@@ -15,6 +15,9 @@ fs::path FileAssetResolver::absolutePath(const AssetRef& ref) const {
     const fs::path rel = fs::path(ref.path).lexically_normal();
     if (rel.is_absolute() || rel.has_root_name() || rel.has_root_directory()) return {};
     if (!rel.empty() && *rel.begin() == "..") return {};   // leaves the project
+    // A drive ("C:/...") is absolute on Windows and a folder named "C:" elsewhere: refused everywhere, so a scene
+    // file means the same on every platform.
+    if (ref.path.size() >= 2 && ref.path[1] == ':') return {};
     return (m_root / rel).lexically_normal();
 }
 

@@ -412,7 +412,7 @@ struct Server::Impl {
         }
         queueSpace.notify_all();
         while (!readerDone) {   // the client still holds the input open: interrupt the read
-            transport.interruptRead(reader.native_handle());
+            transport.interruptRead(reinterpret_cast<void*>(reader.native_handle()));
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         reader.join();

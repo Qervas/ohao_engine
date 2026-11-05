@@ -44,7 +44,6 @@
 #include <string>
 #include <vector>
 
-#include <process.h>   // _getpid
 
 using namespace ohao;
 namespace shared = gpu::shared;
@@ -84,7 +83,7 @@ std::vector<uint8_t> readFile(const std::string& p) {
 
 // Per-process names under build/: CTest may run another copy of this test.
 std::string scratch(const std::string& name) {
-    return "build/light_cluster_" + name + "_" + std::to_string(static_cast<unsigned long>(_getpid()));
+    return "build/light_cluster_" + name + "_" + std::to_string(static_cast<unsigned long>(ohao::test::processId()));
 }
 
 // A built world saved as a scene file (relative to the source root, where the asset resolver

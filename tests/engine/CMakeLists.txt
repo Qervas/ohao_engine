@@ -16,14 +16,8 @@ if(MSVC)
     target_link_options(engine_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
 
-if(MSVC)
-    target_link_libraries(engine_tests PRIVATE
-        ohao_runtime ohao_ecs ohao_asset ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
-else()
-    target_link_libraries(engine_tests PRIVATE
-        ohao_ecs ohao_asset ohao_physics ohao_core
-        -Wl,--start-group ohao_renderer ${Vulkan_LIBRARIES} glm)
-endif()
+target_link_libraries(engine_tests PRIVATE
+    ohao_runtime ohao_ecs ohao_asset ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
 
 if(TARGET Jolt)
     target_link_libraries(engine_tests PRIVATE Jolt)

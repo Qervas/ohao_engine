@@ -350,7 +350,7 @@ bool VfxRenderer::createRenderPass() {
 }
 
 bool VfxRenderer::createPipelines() {
-    if (!rtc::createComputePipeline(m_device, "vfx_expand.slang.spv", "expand", m_expandLayout,
+    if (!rtc::createComputePipeline(m_device, "vfx_expand.slang.spv", "expandParticles", m_expandLayout,
                                     sizeof(shared::VfxExpandPush), m_expandPipelineLayout, m_expandPipeline) ||
         !rtc::createComputePipeline(m_device, "vfx_sort.slang.spv", "sort", m_sortLayout, sizeof(shared::VfxSortPush),
                                     m_sortPipelineLayout, m_sortPipeline))

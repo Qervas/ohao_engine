@@ -317,10 +317,14 @@ void assetCheck(const Options& o, std::vector<Check>& out) {
                            "restore the files (git checkout, or git lfs pull for large assets)"));
 }
 
-// slangc where shaders/CMakeLists.txt looks: $VULKAN_SDK/Bin, the newest C:/VulkanSDK/*/Bin,
-// then PATH. Its version against shaders/slangc.version: the pin the SPIR-V was made with.
+// The slangc this build compiled its shaders with (OHAO_SLANGC, from the configure step), else where
+// shaders/CMakeLists.txt looks: $VULKAN_SDK/Bin, the newest C:/VulkanSDK/*/Bin, then PATH. Its version against
+// shaders/slangc.version: the pin the SPIR-V was made with.
 fs::path findSlangc() {
     std::error_code ec;
+#ifdef OHAO_SLANGC
+    if (fs::is_regular_file(OHAO_SLANGC, ec)) return fs::path(OHAO_SLANGC);
+#endif
 #ifdef _WIN32
     const char* exe = "slangc.exe";
 #else

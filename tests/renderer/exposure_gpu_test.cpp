@@ -20,7 +20,6 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
-#include <process.h>
 #include <string>
 #include <vector>
 
@@ -51,7 +50,7 @@ const reflect::TypeRegistry& engineTypes() {
 
 // Per-process names under build/: CTest may run another copy of this test.
 std::string scratch(const std::string& name) {
-    return std::string(OHAO_SOURCE_DIR) + "/build/exposure_" + name + "_" + std::to_string(_getpid()) + ".png";
+    return std::string(OHAO_SOURCE_DIR) + "/build/exposure_" + name + "_" + std::to_string(ohao::test::processId()) + ".png";
 }
 
 std::string readFile(const std::string& path) {

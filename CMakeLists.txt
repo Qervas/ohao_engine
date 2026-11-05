@@ -13,6 +13,12 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 if(NOT MSVC)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    # The GNU counterpart of the /FORCE:MULTIPLE the MSVC targets link with (AGENTS.md: stb, and a second VMA inside
+    # NRI_VK): the first definition by link order wins in both. gpu_allocator.cpp keeps NRI's VMA configuration so
+    # either copy serves.
+    add_link_options(LINKER:--allow-multiple-definition)
+    # libstdc++ runs std::execution::par on oneTBB (render/sky/atmosphere.cpp): found here, so every directory sees it.
+    find_package(TBB QUIET)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(MSVC)

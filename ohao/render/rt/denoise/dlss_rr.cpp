@@ -486,7 +486,7 @@ bool DlssRR::initialize(VkInstance, VkPhysicalDevice, VkDevice, const char*, con
 bool DlssRR::createFeature(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t, DlssQuality) { return false; }
 bool DlssRR::evaluate(VkCommandBuffer, const EvalInputs&) { return false; }
 bool DlssRR::createTonemapPipeline() { return false; }
-void DlssRR::tonemap(VkCommandBuffer, uint32_t, VkImageView, VkImageView, uint32_t, uint32_t) {}
+void DlssRR::tonemap(VkCommandBuffer, uint32_t, VkImageView, VkImageView, float, uint32_t, uint32_t, uint32_t) {}
 void DlssRR::releaseFeature() {}
 void DlssRR::shutdown() {}
 }  // namespace ohao

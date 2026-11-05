@@ -13,6 +13,8 @@ if(TARGET Jolt)
 endif()
 
 add_executable(ohao main.cpp doctor.cpp doctor.hpp)
+# doctor checks the slangc the shaders were built with (shaders/CMakeLists.txt's SLANGC), not whichever is on PATH.
+target_compile_definitions(ohao PRIVATE OHAO_SLANGC="${SLANGC}")
 target_compile_features(ohao PRIVATE cxx_std_20)
 target_link_libraries(ohao PRIVATE ohao_host ohao_rpc)
 if(MSVC)

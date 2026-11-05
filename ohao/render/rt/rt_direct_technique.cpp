@@ -193,7 +193,8 @@ bool RTDirectTechnique::createPipelines() {
     if (!m_alphaTablesLayout || !m_texturesLayout) return false;
     const VkDescriptorSetLayout sets[] = {m_sampleSetLayout, m_alphaTablesLayout, m_texturesLayout};
     // The second pipeline of each pair makes its own layout, identical to the first's (so the first's
-    // binds both) and destroyed at once.
+    // binds both), kept until teardown: NVIDIA's Linux driver (615.78) crashed binding a pipeline whose layout was
+    // destroyed, maintenance4 or not.
     VkPipelineLayout spatialLayout = VK_NULL_HANDLE, shadeLayout = VK_NULL_HANDLE, atrousLayout = VK_NULL_HANDLE,
                      layeredLayout = VK_NULL_HANDLE;
     const bool ok = rtc::createComputePipeline(m_device, "rt_restir_di.slang.initial.spv", "initial", sets,
@@ -209,7 +210,7 @@ bool RTDirectTechnique::createPipelines() {
                     rtc::createComputePipeline(m_device, "rt_di_denoise.slang.atrous.spv", "atrous", m_denoiseSetLayout,
                                                sizeof(shared::DIPush), atrousLayout, m_atrous);
     for (VkPipelineLayout l : {spatialLayout, shadeLayout, atrousLayout, layeredLayout})
-        if (l) vkDestroyPipelineLayout(m_device, l, nullptr);
+        if (l) m_extraLayouts.push_back(l);
     return ok;
 }
 
@@ -448,6 +449,8 @@ void RTDirectTechnique::destroy() {
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_sampleLayout, &m_denoiseLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
+    for (VkPipelineLayout l : m_extraLayouts) vkDestroyPipelineLayout(m_device, l, nullptr);
+    m_extraLayouts.clear();
     if (m_pool) { vkDestroyDescriptorPool(m_device, m_pool, nullptr); m_pool = VK_NULL_HANDLE; }
     for (VkDescriptorSetLayout* l : {&m_sampleSetLayout, &m_denoiseSetLayout})
         if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }

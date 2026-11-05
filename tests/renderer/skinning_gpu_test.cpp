@@ -39,7 +39,6 @@
 #include <string>
 #include <vector>
 
-#include <process.h>   // _getpid
 
 using namespace ohao;
 namespace fs = std::filesystem;
@@ -88,7 +87,7 @@ std::string twoRigScene() {
 })";
     const auto end = text.rfind("\n  ]");
     text = text.substr(0, end) + second;
-    const fs::path out = fs::path(OHAO_BINARY_DIR) / ("skinning_two_rigs_" + std::to_string(_getpid()) + ".scene.json");
+    const fs::path out = fs::path(OHAO_BINARY_DIR) / ("skinning_two_rigs_" + std::to_string(ohao::test::processId()) + ".scene.json");
     std::ofstream(out, std::ios::binary) << text;
     return out.generic_string();
 }

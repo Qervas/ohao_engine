@@ -208,6 +208,9 @@ add_executable(sky_test sky_test.cpp   # the physical sky (Hillaire 2020) on the
     ${CMAKE_SOURCE_DIR}/ohao/render/sky/atmosphere.cpp
 )
 target_link_libraries(sky_test PRIVATE glm)
+if(NOT MSVC AND TARGET TBB::tbb)   # atmosphere.cpp's std::execution::par runs on oneTBB under libstdc++
+    target_link_libraries(sky_test PRIVATE TBB::tbb)
+endif()
 add_executable(display_test display_test.cpp)   # the display transform: the module against its C++ twin
 target_link_libraries(display_test PRIVATE ohao_display_cpu)
 foreach(t env_cdf_test env_sun_test caustic_casters_test pipeline_cache_files_test sobol_test vmf_test manifold_tests denoise_parse_test display_test sky_test)

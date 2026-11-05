@@ -95,8 +95,10 @@ bool GpuCulling::initialize(VkDevice device, VkPhysicalDevice physicalDevice, bo
         VkPipelineLayout layout = VK_NULL_HANDLE;
         ok = ok && rtc::createComputePipeline(m_device, e.spirv, e.name, m_setLayout, sizeof(shared::CullPush), layout,
                                               *e.pipeline);
+        // The layouts are identical, so the first binds them all. Every pipeline keeps the layout it was made with until teardown: NVIDIA's
+        //  Linux driver (615.78) crashed binding a pipeline whose layout was destroyed, maintenance4 or not.
         if (m_layout == VK_NULL_HANDLE) m_layout = layout;
-        else if (layout) vkDestroyPipelineLayout(m_device, layout, nullptr);
+        else if (layout) m_extraLayouts.push_back(layout);
     }
     if (!ok) {
         OHAO_LOG(Error, render, "GpuCulling: culling pipelines failed");
@@ -115,7 +117,7 @@ bool GpuCulling::initialize(VkDevice device, VkPhysicalDevice physicalDevice, bo
                                                   sizeof(shared::HiZPush), m_hizLayout, m_fromDepth) &&
                        rtc::createComputePipeline(m_device, "cull_hiz.slang.downsample.spv", "downsample",
                                                   m_hizSetLayout, sizeof(shared::HiZPush), downLayout, m_downsample);
-    if (downLayout) vkDestroyPipelineLayout(m_device, downLayout, nullptr);
+    if (downLayout) m_extraLayouts.push_back(downLayout);
     if (!hizOk) {
         OHAO_LOG(Error, render, "GpuCulling: Hi-Z pipelines failed");
         return false;
@@ -135,6 +137,8 @@ void GpuCulling::cleanup() {
         if (*p) vkDestroyPipeline(m_device, *p, nullptr), *p = VK_NULL_HANDLE;
     for (VkPipelineLayout* l : {&m_layout, &m_hizLayout})
         if (*l) vkDestroyPipelineLayout(m_device, *l, nullptr), *l = VK_NULL_HANDLE;
+    for (VkPipelineLayout l : m_extraLayouts) vkDestroyPipelineLayout(m_device, l, nullptr);
+    m_extraLayouts.clear();
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
     m_pool = VK_NULL_HANDLE;
     m_sets = {};
