@@ -85,8 +85,9 @@ void CausticPass::destroy() {
     if (m_device == VK_NULL_HANDLE) return;
     if (m_splatFull) OHAO_LOG(Info, render, "caustics: {} casters, {} splats clamped", m_casterCount, clamped());
     if (const auto m = manifoldCounts(); m[0] > 0)
-        OHAO_LOG(Info, render, "caustics' manifold pass: {} requests, {} triangles solved, {} roots, {} connections",
-                 m[0], m[1], m[2], m[3]);
+        OHAO_LOG(Info, render, "caustics' manifold pass: {} requests, {} triangles solved, {} roots, {} connections; "
+                 "{} cluster, {} sub-cluster and {} triangle tests",
+                 m[0], m[1], m[2], m[3], m[4], m[5], m[6]);
     release(m_table);
     release(m_splat);
     release(m_stats);
@@ -201,8 +202,8 @@ void CausticPass::recordAfterTrace(VkCommandBuffer cmd) {
     barrier(cmd, kTrace, VK_ACCESS_SHADER_WRITE_BIT, kTrace, kRW);
 }
 
-std::array<uint32_t, 4> CausticPass::manifoldCounts() const {
-    std::array<uint32_t, 4> v{};
+std::array<uint32_t, 7> CausticPass::manifoldCounts() const {
+    std::array<uint32_t, 7> v{};
     if (m_stats.mapped) std::memcpy(v.data(), static_cast<const uint8_t*>(m_stats.mapped) + 4, sizeof v);
     return v;
 }

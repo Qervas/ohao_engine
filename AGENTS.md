@@ -735,6 +735,13 @@ deferred, reference, path traced); two the transparency scene,
     the rays a pixel (`kCausticRaysPerPixel`).
   Measured on the showcase at equal time: the whole image's error 190x lower, the sun's glints off the helmet 33x their
   neighbours to 1.8x, the glass ball's 1,283x to 1x, typical pixels unchanged.
+  **Step 2a** (`docs/specs/2026-11-04-caustics-step2-design.md`, `docs/changes/2026-11-05-caustics-step2a.md`): the sun
+  through the core of a smooth reflection onto a rough reflection at camera depth 1-2 is solved for (`manifoldConnect`, its
+  own program; `rt/manifold.slang`; casters gathered a meshlet a cluster by `pt.manifold.gather`), and `raygenCaustics`
+  drops it (`chainOne`). Owned only at materials without a normal map whose every draw is gathered (ruling M7).
+  `OHAO_MANIFOLD_OFF=1`, `OHAO_MANIFOLD_SPLIT_ONLY=1`; `OHAO_MANIFOLD_STAGE` for profiling. Gotchas: a slope's frame is
+  fixed per cluster (`ManifoldTri.c`), or pruning tests a ring round a sphere; the pass's cost is its pruning, not its
+  tests (time `pt.manifold` with `render.capture {timings}`, never wall time: a cold compile hides in it).
 - **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
   frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
   transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any

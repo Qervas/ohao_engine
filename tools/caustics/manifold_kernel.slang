@@ -10,7 +10,9 @@
 //   2 draw     alphas 9.zw, u 10, the core (0.z, 11.x)    -> 13 (sigma, its density)
 //   3 density  alphas 9.zw, sigma 9.xy, the core (0.z, 11.x) -> 13.x
 //   4 cone     box 10-11, cone 12, p, L, thetaSigma -> 13.x (1: may hold a root)
-//   5 tri      the triangle, p, L, thetaSigma -> 13.x (manifoldTriangleTest)
+//   5 tri      the triangle, p, L, sigma 9.xy -> 13.x (manifoldTriangleTest)
+//   6 disc     box 10-11, cone 12, c (the triangle's), sigma 9.xy, p, L -> 13.x (manifoldDiscTest)
+// The triangle's c rides in rows 1-3's w.
 import rt.manifold;
 
 RWStructuredBuffer<float4> io;
@@ -29,6 +31,7 @@ void run(uint3 id : SV_DispatchThreadID)
     tri.n0 = io[b + 4u].xyz;
     tri.a1 = io[b + 5u].xyz;
     tri.a2 = io[b + 6u].xyz;
+    tri.c = float3(io[b + 1u].w, io[b + 2u].w, io[b + 3u].w);
     const float3 p = io[b + 7u].xyz, L = io[b + 8u].xyz;
     const float4 r9 = io[b + 9u];
     float4 o13 = float4(0.0), o14 = float4(0.0), o15 = float4(0.0), o16 = float4(0.0);
@@ -65,7 +68,12 @@ void run(uint3 id : SV_DispatchThreadID)
     }
     else if (op == 5u)
     {
-        o13.x = manifoldTriangleTest(tri, p, L, h.w) ? 1.0 : 0.0;
+        o13.x = manifoldTriangleTest(tri, p, L, r9.xy) ? 1.0 : 0.0;
+    }
+    else if (op == 6u)
+    {
+        const float4 c = io[b + 12u];
+        o13.x = manifoldDiscTest(io[b + 10u].xyz, io[b + 11u].xyz, c.xyz, c.w, tri.c, r9.xy, p, L) ? 1.0 : 0.0;
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

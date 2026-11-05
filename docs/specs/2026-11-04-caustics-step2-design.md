@@ -212,6 +212,11 @@ Closed forms first; each case fails before its code exists.
 - **M5 (OPEN) — the depths R.** 2 (depths 1 and 2) recommended; measured by the class images (what the glint class
   leaves at depth 3+).
 - **M6 (PROVISIONAL) — the diagnostic stays.** `OHAO_PT_CLASS` is how m7 is judged; it lives in the caustics raygen only.
+- **M8 (OPEN) — requests' roulette.** A request whose casters' summed solid angle from X is under
+  `kManifoldRouletteWeight` runs with probability its ratio to it (exact). 0.02 / 0.1 / 0.5 cost 70 / 60 / 46 ms of the
+  showcase's frame; 0.1 kept until an equal-time measurement decides.
+- **M9 (OPEN) — the default.** The pass is exact and finds light the camera side misses (a mirror's sun seen past the first
+  hit), but on the showcase costs about 3x `pt.trace` and loses at equal time (its dots are normal-mapped glints, M7).
 - **M7 (PROVISIONAL) — owned materials.** Normal-mapped smooth surfaces and skinned casters stay with the camera side
   in step 2 ("Step 2a as designed"). If the showcase's remaining dots turn out to be the helmet's, normal-mapped glints
   get their own step (roots per texel, as Zeltner et al. 2020's glints do).

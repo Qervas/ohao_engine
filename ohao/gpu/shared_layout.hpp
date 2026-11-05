@@ -77,8 +77,10 @@ inline constexpr uint32_t kManifoldDepths = 2u;
 inline constexpr float kManifoldCoreSlope2 = 99.0f;
 // caustics step 2: and every half vector whose plain slope is at most sqrt of this (0.1, 5.7 degrees): a mirror's tail past a few alphas is still far too narrow for the camera side to find, so the core reaches this angle at least (its tail past it carries alpha^2 / 0.01 of the light)
 inline constexpr float kManifoldCoreMinSlope2 = 0.01f;
-// caustics step 2: the casters' triangles a cluster and clusters a group (the manifold pass's pruning: a box and a cone of normals each)
-inline constexpr uint32_t kManifoldCluster = 32u;
+// caustics step 2: a request whose owned casters' summed solid angle from X (over 2 pi) is under this runs with probability its ratio to it, weighed by the inverse (Russian roulette: exact; a caster's glint at X scales with its solid angle)
+inline constexpr float kManifoldRouletteWeight = 0.1f;
+// caustics step 2: clusters (meshlets) a group in the manifold pass's pruning (a box and a cone of normals each); 32 made a group a third of a sphere, which its ring test never pruned
+inline constexpr uint32_t kManifoldCluster = 8u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
 inline constexpr uint32_t kVfxGroupSize = 64u;
 // vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order

@@ -4,9 +4,10 @@
 // designed"): the draws whose material the pass owns, their triangles gathered into world space on the GPU every frame
 // it runs (rt/manifold_gather.slang: triangles, clusters and groups of kManifoldCluster with boxes and normal cones),
 // a bit word a material, and the camera side's requests (kManifoldDepths a pixel). The path tracer's bindings:
-//   54 tris     6 float4 a triangle slot, 128 a cluster (a meshlet; manifold_gather.slang)
-//   55 nodes    3 float4 a node, the groups then the clusters
-//   56 draws    row 0 (D, slots, C, G); two rows a draw; then a word a material (kManifoldOwned* bits)
+//   54 tris     9 float4 a triangle slot, 128 a cluster (a meshlet; manifold_gather.slang)
+//   55 nodes    4 float4 a node: the groups, the clusters, then a record a draw (its lobes' alpha bounds)
+//   56 draws    row 0 (D, slots, C, G); three rows a draw (the third its world bounding sphere); then a word a
+//               material (kManifoldOwned* bits)
 //   57 requests 3 float4 a request: (origin, meta bits), (direction, 0), (throughput, 0); meta 0 = none
 //
 // A material is owned when a lobe of it can be smooth, it has no normal map, and every draw using it is gathered
@@ -47,7 +48,7 @@ public:
     // The gather (its results visible to ray tracing shaders), and the requests cleared on the first frame after
     // they were (re)allocated.
     void record(VkCommandBuffer cmd, uint32_t frameSlot, VkBuffer vertices, VkBuffer meshlets, VkBuffer meshletVertices,
-                VkBuffer meshletTriangles, VkBuffer instances);
+                VkBuffer meshletTriangles, VkBuffer instances, VkBuffer materials);
 
     [[nodiscard]] VkBuffer tris() const noexcept { return m_tris.buffer; }
     [[nodiscard]] VkBuffer nodes() const noexcept { return m_nodes.buffer; }

@@ -32,9 +32,9 @@ Io base(float op, const Tri* tri, const V3* p, const V3* L) {
     Io io;
     io.rows[0] = f4(op, 0, 0, 0);
     if (tri) {
-        io.rows[1] = f4(tri->p0);
-        io.rows[2] = f4(tri->e1);
-        io.rows[3] = f4(tri->e2);
+        io.rows[1] = f4(tri->p0, tri->c[0]);
+        io.rows[2] = f4(tri->e1, tri->c[1]);
+        io.rows[3] = f4(tri->e2, tri->c[2]);
         io.rows[4] = f4(tri->n0);
         io.rows[5] = f4(tri->a1);
         io.rows[6] = f4(tri->a2);
@@ -99,9 +99,22 @@ float manifoldSlopeDensity(V2 alphas, float slope2, float minSlope2, V2 sigma) {
     return io.rows[13].x;
 }
 
-bool manifoldTriangleTest(const Tri& tri, const V3& p, const V3& L, float thetaSigma) {
+bool manifoldTriangleTest(const Tri& tri, const V3& p, const V3& L, V2 sigma) {
     Io io = base(5, &tri, &p, &L);
-    io.rows[0].w = thetaSigma;
+    io.rows[9] = f4(sigma[0], sigma[1], 0, 0);
+    runItem(io);
+    return io.rows[13].x != 0.0f;
+}
+
+bool manifoldDiscTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& c, V2 sigma,
+                      const V3& p, const V3& L) {
+    Tri tri{};
+    tri.c = c;
+    Io io = base(6, &tri, &p, &L);
+    io.rows[9] = f4(sigma[0], sigma[1], 0, 0);
+    io.rows[10] = f4(boxMin);
+    io.rows[11] = f4(boxMax);
+    io.rows[12] = f4(axis, halfAngle);
     runItem(io);
     return io.rows[13].x != 0.0f;
 }

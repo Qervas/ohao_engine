@@ -6,9 +6,11 @@
 // The map. On a triangle y(u, v) = p0 + u e1 + v e2, its interpolated shading normal N(u, v) = n0 + u a1 + v a2
 // (world normals by the inverse transpose, unnormalised: fillHit's normalize(mul(nObj, w2o)) is the same direction),
 // turned to the side the triangle shows p. With w = normalize(p - y) and L toward the light, the half vector is
-// H = w + L, and sigma(u, v) is its slope in a frame of the triangle's own: n, t = normalize(c - (c.n) n) with c the
-// first edge's direction, b = n x t, sigma = (H.t / H.n, H.b / H.n). Any smooth frame is a valid change of variables
-// on one triangle, so a frame per triangle is exact; |sigma| = tan(angle(H, n)) whatever the frame.
+// H = w + L, and sigma(u, v) is its slope in the frame n, t = normalize(c - (c.n) n), b = n x t, with c a unit vector
+// of the triangle's cluster (perpendicular to its cone's axis): sigma = (H.t / H.n, H.b / H.n), so H is along
+// n + sigma.x t + sigma.y b. Any smooth frame is a valid change of variables on one triangle, so the choice is exact;
+// one c for a whole cluster makes a slope point the same way across it, which is what lets manifoldDiscTest prune to
+// the triangles near one point instead of a ring (|sigma| = tan(angle(H, n)) alone allows a ring round a sphere).
 //
 // The estimator draws sigma (manifoldDrawSlope), solves sigma(u, v) = sigma* on every candidate triangle
 // (manifoldSolve), and weighs each root by 1 / (p(sigma) |det d sigma / d(u, v)| / |e1 x e2|) (area per slope).
@@ -19,6 +21,7 @@ struct ManifoldTri
 {
     float3 p0, e1, e2;   // world corners: p0, p1 - p0, p2 - p0
     float3 n0, a1, a2;   // world vertex normals (unnormalised): n0, n1 - n0, n2 - n0
+    float3 c;            // the frame's reference: its cluster's, unit, perpendicular to the cluster's normal cone
 };
 
 // sigma at (u, v) and its derivatives (du: d sigma / du, dv: d sigma / dv); y the point, n its oriented shading
@@ -47,7 +50,7 @@ bool manifoldMap(ManifoldTri tri, float3 p, float3 L, float2 uv, out float2 sigm
     const float side = dot(g, d) >= 0.0 ? 1.0 : -1.0;
     const float s = dot(Nh, g) * side < 0.0 ? -1.0 : 1.0;
     n = Nh * s;
-    const float3 c = normalize(tri.e1);
+    const float3 c = tri.c;
     const float3 T = c - n * dot(c, n);
     const float lenT = length(T);
     if (!(lenT > 1e-6)) return false;
@@ -164,20 +167,95 @@ bool manifoldConeTest(float3 boxMin, float3 boxMax, float3 axis, float halfAngle
     return abs(ang - thetaSigma) <= slack || abs((kManifoldPi - ang) - thetaSigma) <= slack;
 }
 
-// manifoldConeTest on one triangle: its box and the cone of its three vertex normals (a normalised convex combination
-// of them stays in that cone while it is under 90 degrees; past that nothing is pruned).
-bool manifoldTriangleTest(ManifoldTri tri, float3 p, float3 L, float thetaSigma)
+// A triangle's bounds for the disc test: its box and the cone of its three vertex normals (a normalised convex
+// combination of them stays in that cone while it is under 90 degrees; past that the half angle is pi: no pruning).
+void manifoldTriangleBounds(ManifoldTri tri, out float3 boxMin, out float3 boxMax, out float3 axis, out float halfAngle)
 {
     const float3 p1 = tri.p0 + tri.e1, p2 = tri.p0 + tri.e2;
+    boxMin = min(tri.p0, min(p1, p2));
+    boxMax = max(tri.p0, max(p1, p2));
+    axis = float3(0.0, 0.0, 1.0);
+    halfAngle = kManifoldPi;
     const float3 n0 = tri.n0, n1 = tri.n0 + tri.a1, n2 = tri.n0 + tri.a2;
     const float l0 = length(n0), l1 = length(n1), l2 = length(n2);
-    if (!(l0 > 1e-12 && l1 > 1e-12 && l2 > 1e-12)) return true;
+    if (!(l0 > 1e-12 && l1 > 1e-12 && l2 > 1e-12)) return;
     const float3 u0 = n0 / l0, u1 = n1 / l1, u2 = n2 / l2;
     const float3 s = u0 + u1 + u2;
-    if (!(dot(s, s) > 1e-20)) return true;
-    const float3 ax = normalize(s);
-    const float half = max(acos(clamp(dot(ax, u0), -1.0, 1.0)), max(acos(clamp(dot(ax, u1), -1.0, 1.0)),
-                                                                     acos(clamp(dot(ax, u2), -1.0, 1.0))));
-    if (half >= 0.5 * kManifoldPi) return true;
-    return manifoldConeTest(min(tri.p0, min(p1, p2)), max(tri.p0, max(p1, p2)), ax, half, p, L, thetaSigma);
+    if (!(dot(s, s) > 1e-20)) return;
+    axis = normalize(s);
+    const float h = max(acos(clamp(dot(axis, u0), -1.0, 1.0)),
+                        max(acos(clamp(dot(axis, u1), -1.0, 1.0)), acos(clamp(dot(axis, u2), -1.0, 1.0))));
+    halfAngle = h >= 0.5 * kManifoldPi ? kManifoldPi : h;
+}
+
+// manifoldDiscTest on one triangle (its frame's c).
+bool manifoldTriangleTest(ManifoldTri tri, float3 p, float3 L, float2 sigma)
+{
+    float3 lo, hi, axis;
+    float halfAngle;
+    manifoldTriangleBounds(tri, lo, hi, axis, halfAngle);
+    return manifoldDiscTest(lo, hi, axis, halfAngle, tri.c, sigma, p, L);
+}
+
+// The half vector a slope sigma means at normal n in the frame of reference c: along n + sigma.x t + sigma.y b.
+float3 manifoldHalfAt(float3 n, float3 c, float2 sigma)
+{
+    const float3 t = normalize(c - n * dot(c, n));
+    const float3 b = cross(n, t);
+    return normalize(n + t * sigma.x + b * sigma.y);
+}
+
+// A node's term for the disc test, from its cone and frame of reference: halfAngle (1 + 2 K), K = |cot| of the
+// normal's angle to c over the cone; -1 when the cone is too wide to prune (the test then keeps the node).
+float manifoldDiscTerm(float3 axis, float halfAngle, float3 c)
+{
+    if (!(halfAngle < 1.2)) return -1.0;
+    const float g0 = acos(clamp(dot(c, axis), -1.0, 1.0));
+    const float gMin = min(g0 - halfAngle, kManifoldPi - g0 - halfAngle);
+    if (!(gMin > 0.05)) return -1.0;
+    return halfAngle * (1.0 + 2.0 / tan(gMin));
+}
+
+// manifoldDiscTest with the node's term precomputed (manifoldDiscTerm; the gather stores it). The half vector the slope
+// means at normal a, (a + sigma.x t + sigma.y b) / sqrt(1 + |sigma|^2), is compared with H = wc + L by dot products
+// (either orientation: -a, with b turned). (Loosening its asin and cos to polynomials passed so many more nodes that
+// the pass took 1.4x as long: the pruning, not the test, is the cost.)
+bool manifoldDiscTestTerm(float3 boxMin, float3 boxMax, float3 axis, float halfAngle, float term, float3 c, float2 sigma,
+                          float3 p, float3 L)
+{
+    if (term < 0.0) return true;
+    const float3 centre = 0.5 * (boxMin + boxMax);
+    const float radius = 0.5 * length(boxMax - boxMin);
+    const float3 d = p - centre;
+    const float dist = length(d);
+    if (!(dist > radius * 1.0001 + 1e-6)) return true;
+    const float3 wc = d / dist;
+    const float dw = asin(min(radius / dist, 1.0));
+    const float cg = clamp(dot(wc, L), -1.0, 1.0);
+    const float gammaMax = acos(cg) + dw;
+    if (gammaMax >= kManifoldPi - 1e-3) return true;
+    const float dh = dw / (2.0 * cos(0.5 * gammaMax));
+    // The half vector the slope means moves with the normal by at most 2 asin(dv / 2), dv = halfAngle + |sigma| term
+    // (manifoldDiscTest's bound: halfAngle (1 + |sigma| (1 + 2 K)) <= halfAngle + |sigma| term).
+    const float dv = halfAngle + length(sigma) * term;
+    if (dv >= 2.0) return true;
+    const float slack = 2.0 * asin(0.5 * dv) + dh + 1e-4;
+    if (slack >= kManifoldPi) return true;
+    const float3 t = normalize(c - axis * dot(c, axis));
+    const float3 b = cross(axis, t);
+    const float3 H = wc + L;
+    const float ha = dot(H, axis), ht = dot(H, t), hb = dot(H, b);
+    const float need = cos(slack) * sqrt(max(2.0 + 2.0 * cg, 0.0)) * sqrt(1.0 + dot(sigma, sigma));
+    return ha + sigma.x * ht + sigma.y * hb >= need || -ha + sigma.x * ht - sigma.y * hb >= need;
+}
+
+// Whether a box whose shading normals lie in a cone (axis, half angle) can hold a point y where the half vector
+// between normalize(p - y) and L is the slope sigma in the frame of reference c (either orientation of the normal).
+// False only when no such point can exist. The half vector the slope means moves with the normal by at most
+// 2 asin(beta (1 + |sigma| (1 + 2 K)) / 2), K = |cot| of the normal's angle to c over the cone (the frame's tangent
+// turns by K per radian the normal turns); the half vectors from the box toward p lie within dh of the centre's
+// (manifoldConeTest's bound).
+bool manifoldDiscTest(float3 boxMin, float3 boxMax, float3 axis, float halfAngle, float3 c, float2 sigma, float3 p, float3 L)
+{
+    return manifoldDiscTestTerm(boxMin, boxMax, axis, halfAngle, manifoldDiscTerm(axis, halfAngle, c), c, sigma, p, L);
 }

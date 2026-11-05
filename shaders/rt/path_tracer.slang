@@ -125,7 +125,7 @@ static const uint kManifoldCoatBit = 4u;
 uint manifoldMaterialBits(uint material)
 {
     const uint4 h = manifoldDraws[0];
-    const uint row = 1u + 2u * h.x + material / 4u;
+    const uint row = 1u + 3u * h.x + material / 4u;
     const uint4 r = manifoldDraws[row];
     const uint k = material & 3u;
     return h.x == 0u ? 0u : (k == 0u ? r.x : k == 1u ? r.y : k == 2u ? r.z : r.w);
@@ -1220,34 +1220,6 @@ void raygenCaustics()
 
 // ---- caustics step 2: manifold connections (docs/specs/2026-11-04-caustics-step2-design.md) ----------------------
 
-// The base factors of a material, untextured: a roughness or coat texture only lowers what the factor says, so the
-// lobes' alphas built from these bound every point of it (the slope draw must cover each point's core).
-struct NoTextures : IMaterialTextures
-{
-    float4 sample(uint index, float2 uv) { return float4(1.0); }
-};
-
-MaterialInputs factorInputs(uint material)
-{
-    const uint m = material * kMaterialRows;
-    const float4 row0 = materials[m], row1 = materials[m + 1u], row4 = materials[m + 4u], row5 = materials[m + 5u];
-    MaterialInputs mi = defaultMaterialInputs();
-    mi.baseColor = row0.rgb;
-    mi.baseWeight = row5.z;
-    mi.baseMetalness = saturate(row1.y);
-    mi.baseDiffuseRoughness = row5.y;
-    mi.specularWeight = row4.w;
-    mi.specularColor = row4.rgb;
-    mi.specularRoughness = saturate(row1.x);
-    mi.specularIor = row5.x;
-    const uint r = m + kLayerRowFirst;
-    NoTextures none;
-    applyLayerRows(mi, materials[r], materials[r + 1u], materials[r + 2u], materials[r + 3u], materials[r + 4u], float2(0.0), none);
-    const uint t = m + kTransmissionRowFirst;
-    applyTransmissionRows(mi, materials[t], materials[t + 1u], materials[t + 2u]);
-    return mi;
-}
-
 // A hit's surface as tracePixel builds it (its inputs, the dispersion's IOR at `channel`, its frame), with its shading
 // normal replaced by `normal` when that is not zero (the manifold's solved normal at S).
 struct ManifoldSurface
@@ -1285,6 +1257,19 @@ ManifoldSurface manifoldSurface(PathPayload hit, int channel, float3 normal)
     return s;
 }
 
+// A draw's weight for its choice from p: its world bounding sphere's solid angle (over 2 pi), 0 when no lobe of it can
+// be smooth (the draws buffer's third row: centre, radius; its alpha bounds in the gather's record).
+float manifoldDrawWeight(uint d, uint4 header, float3 p)
+{
+    const float2 alphas = manifoldNodes[(header.w + header.z + d) * 4u].xy;
+    if (!(alphas.x > 0.0 || alphas.y > 0.0)) return 0.0;
+    const float4 s = asfloat(manifoldDraws[3u + 3u * d]);
+    const float3 v = s.xyz - p;
+    const float d2 = dot(v, v), r2 = s.w * s.w;
+    if (!(d2 > r2)) return 1.0;
+    return 1.0 - sqrt(1.0 - r2 / d2);
+}
+
 uint manifoldHash(uint a, uint b, uint c, uint d) { return pcg(a ^ pcg(b ^ pcg(c ^ pcg(d ^ 0x3C6EF372u)))); }
 float manifoldUnit(uint h) { return float(h >> 8u) * (1.0 / 16777216.0); }
 
@@ -1301,12 +1286,14 @@ void manifoldConnect()
     const uint pixelIndex = pixel.y * size.x + pixel.x;
     const uint flags = pc.control.x;
     const uint classMask = (flags >> 11u) & 255u;
+    const uint debugStage = (flags >> 21u) & 3u;   // OHAO_MANIFOLD_STAGE: 3 stop after X, 1 at the candidates, 2 at the roots
     OpenPBRTables tables;
     tables.data = openpbrTables;
     const uint4 header = manifoldDraws[0];   // (D, T, C, G)
     const uint lights = asuint(causticCasters[0].x);
     float3 sum = float3(0.0);
     uint requests = 0u, candidates = 0u, roots = 0u, connections = 0u;
+    uint clusterTests = 0u, subTests = 0u, triTests = 0u;
     for (uint slot = 0u; slot < kManifoldDepths; ++slot)
     {
         const uint r = (pixelIndex * kManifoldDepths + slot) * 3u;
@@ -1324,18 +1311,41 @@ void manifoldConnect()
         const OpenPBRSurface bx = OpenPBRSurface(sx.mi);
         const float3 wo = toLocal(-rayDir, sx.t, sx.b, sx.n);
         const float3 pX = hx.position + hx.geoNormal * 1e-3;
+        if (debugStage == 3u) continue;
         for (uint l = 0u; l < lights; ++l)
         {
             const float4 la = causticCasters[2u + 3u * l], lb = causticCasters[3u + 3u * l];
             const float3 L = -normalize(la.xyz);
             const float3 E = lb.rgb;
-            for (uint d = 0u; d < header.x; ++d)
+            // One owned draw a request and light, chosen by its solid angle from X: the estimate divides by its
+            // probability (exact while every draw that can hold a root has one above 0), and a convex caster's glint
+            // at X scales with its solid angle. Six draws walked a request cost the showcase 300 ms a frame.
+            float wSum = 0.0;
+            for (uint e = 0u; e < header.x; ++e) wSum += manifoldDrawWeight(e, header, pX);
+            if (!(wSum > 0.0)) continue;
+            // Russian roulette on the request by the casters' solid angle from X (their glints scale with it): one far
+            // from every caster runs with probability wSum / kManifoldRouletteWeight, weighed by its inverse (exact).
+            const float keep = min(wSum / kManifoldRouletteWeight, 1.0);
+            if (keep < 1.0 && manifoldUnit(manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, 0x0B5EEDu)) >= keep) continue;
+            const float uPick = manifoldUnit(manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, 0x5EEDu)) * wSum;
+            uint d = 0u;
+            float wPick = 0.0, acc = 0.0;
+            for (uint e = 0u; e < header.x; ++e)
             {
-                const uint4 da = manifoldDraws[1u + 2u * d], db = manifoldDraws[2u + 2u * d];
-                const uint bits = manifoldMaterialBits(db.z);
-                float2 alphas = OpenPBRSurface(factorInputs(db.z)).smoothAlphaBounds(kCausticRough);
-                if ((bits & kManifoldBaseBit) == 0u) alphas.x = 0.0;
-                if ((bits & kManifoldCoatBit) == 0u) alphas.y = 0.0;
+                const float w = manifoldDrawWeight(e, header, pX);
+                acc += w;
+                if (w > 0.0)
+                {
+                    d = e;
+                    wPick = w;
+                    if (uPick < acc) break;
+                }
+            }
+            const float invP = wSum / (wPick * keep);
+            {
+                const uint4 da = manifoldDraws[1u + 3u * d], db = manifoldDraws[2u + 3u * d];
+                // The draw's lobes' alpha bounds, from its material's factors (the gather's record).
+                const float2 alphas = manifoldNodes[(header.w + header.z + d) * 4u].xy;
                 if (!(alphas.x > 0.0 || alphas.y > 0.0)) continue;
                 const uint h0 = manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, d);
                 const uint h1 = pcg(h0), h2 = pcg(h1);
@@ -1349,19 +1359,31 @@ void manifoldConnect()
                 const uint groupsInDraw = (clustersInDraw + kManifoldCluster - 1u) / kManifoldCluster;
                 for (uint g = 0u; g < groupsInDraw; ++g)
                 {
-                    const uint gn = (db.y + g) * 3u;
+                    const uint gn = (db.y + g) * 4u;
                     const float4 g0 = manifoldNodes[gn], g1 = manifoldNodes[gn + 1u], g2 = manifoldNodes[gn + 2u];
                     if (!manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, pX, L, thetaS)) continue;
                     const uint cEnd = min(clustersInDraw, (g + 1u) * kManifoldCluster);
                     for (uint c = g * kManifoldCluster; c < cEnd; ++c)
                     {
-                        const uint cn = (header.w + db.x + c) * 3u;
+                        ++clusterTests;
+                        const uint cn = (header.w + db.x + c) * 4u;
                         const float4 c0 = manifoldNodes[cn], c1 = manifoldNodes[cn + 1u], c2 = manifoldNodes[cn + 2u];
-                        if (!manifoldConeTest(c0.xyz, c1.xyz, c2.xyz, c0.w, pX, L, thetaS)) continue;
+                        const float3 cRef = manifoldNodes[cn + 3u].xyz;   // the cluster's frame of reference
+                        if (!manifoldDiscTestTerm(c0.xyz, c1.xyz, c2.xyz, c0.w, c2.w, cRef, target, pX, L)) continue;
                         const uint count = asuint(c1.w);
-                        for (uint k = 0u; k < count; ++k)
+                        for (uint sc = 0u; sc * 16u < count; ++sc)
                         {
-                            const uint i = ((db.x + c) * 128u + k) * 6u;
+                        ++subTests;
+                        const uint sn = (header.w + header.z + header.x + (db.x + c) * 8u + sc) * 4u;
+                        const float4 s0 = manifoldNodes[sn], s1 = manifoldNodes[sn + 1u], s2 = manifoldNodes[sn + 2u];
+                        if (!manifoldDiscTestTerm(s0.xyz, s1.xyz, s2.xyz, s0.w, s2.w, cRef, target, pX, L)) continue;
+                        const uint kEnd = min(count, sc * 16u + 16u);
+                        for (uint k = sc * 16u; k < kEnd; ++k)
+                        {
+                            const uint i = ((db.x + c) * 128u + k) * 9u;
+                            ++triTests;
+                            const float4 b0 = manifoldTris[i + 6u], b1 = manifoldTris[i + 7u], b2 = manifoldTris[i + 8u];
+                            if (!manifoldDiscTestTerm(b0.xyz, b1.xyz, b2.xyz, b0.w, b2.w, cRef, target, pX, L)) continue;
                             ManifoldTri tri;
                             tri.p0 = manifoldTris[i].xyz;
                             tri.e1 = manifoldTris[i + 1u].xyz;
@@ -1369,8 +1391,9 @@ void manifoldConnect()
                             tri.n0 = manifoldTris[i + 3u].xyz;
                             tri.a1 = manifoldTris[i + 4u].xyz;
                             tri.a2 = manifoldTris[i + 5u].xyz;
-                            if (!manifoldTriangleTest(tri, pX, L, thetaS)) continue;
+                            tri.c = cRef;
                             ++candidates;
+                            if (debugStage == 1u) continue;
                             float2 uv;
                             if (!manifoldSolve(tri, pX, L, target, tol, uv)) continue;
                             if (!(uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)) continue;
@@ -1378,10 +1401,19 @@ void manifoldConnect()
                             float3 y, nS;
                             if (!manifoldMap(tri, pX, L, uv, sigma, du, dv, y, nS)) continue;
                             ++roots;
+                            if (debugStage == 2u) continue;
+                            // X and the light on opposite sides of the triangle: no reflection there reaches X.
+                            const float3 gS = cross(tri.e1, tri.e2);
+                            if (dot(gS, pX - y) * dot(gS, L) <= 0.0) continue;
                             const float3 toY = y - pX;
                             const float dist = length(toY);
                             const float3 w = toY / dist;
                             if (dot(w, hx.geoNormal) <= 0.0) continue;
+                            // The sun's shadow ray first (an any-hit ray: a root on a solid's far side, or in shadow, is
+                            // turned away before the closest-hit trace), from y off its side toward X, as the camera's
+                            // light sample leaves its hit.
+                            float3 T;
+                            if (!visible(y + normalize(gS) * (dot(gS, pX - y) > 0.0 ? 1e-3 : -1e-3), L, 1.0e4, T)) continue;
                             // X -> y as the camera's bounce ray traces it: the first thing it meets must be y.
                             const PathPayload hs = trace(pX, w, kPathMask | kTlasMaskEmitter, 1.0e4);
                             if ((hs.flags & kHit) == 0u || (hs.flags & kHitEmitter) != 0u || hs.material != db.z ||
@@ -1403,8 +1435,6 @@ void manifoldConnect()
                             const float3 core =
                                 OpenPBRSurface(ss.mi).evalSmoothCore(woS, wiS, tables, kCausticRough, coreSlope);
                             if (!any(core > 0.0)) continue;
-                            float3 T;
-                            if (!visible(hs.position + hs.geoNormal * 1e-3, L, 1.0e4, T)) continue;
                             float3 sm, ro;
                             bx.evalParts(wo, toLocal(w, sx.t, sx.b, sx.n), tables, kCausticRough, sm, ro);
                             const float3 e12 = cross(tri.e1, tri.e2);
@@ -1413,12 +1443,13 @@ void manifoldConnect()
                             const float det = abs(du.x * dv.y - dv.x * du.y);
                             const float dens = manifoldSlopeDensity(alphas, coreSlope, sigma);
                             if (!(det > 0.0) || !(dens > 0.0)) continue;
-                            const float3 c = beta * ro * core * E * T * (chWeight * cosY * area2 / (dist * dist * det * dens));
+                            const float3 c = beta * ro * core * E * T * (invP * chWeight * cosY * area2 / (dist * dist * det * dens));
                             if (all(isfinite(c)))
                             {
                                 sum += c;
                                 ++connections;
                             }
+                        }
                         }
                     }
                 }
@@ -1432,6 +1463,9 @@ void manifoldConnect()
         InterlockedAdd(causticStats[2], candidates);
         InterlockedAdd(causticStats[3], roots);
         InterlockedAdd(causticStats[4], connections);
+        InterlockedAdd(causticStats[5], clusterTests);
+        InterlockedAdd(causticStats[6], subTests);
+        InterlockedAdd(causticStats[7], triTests);
     }
     sum *= classKeep(classMask, kClassManifold);
     if (any(sum != 0.0))

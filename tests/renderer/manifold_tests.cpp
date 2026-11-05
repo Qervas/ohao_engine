@@ -42,7 +42,7 @@ bool sigmaD(const Tri& t, const D3& p, const D3& L, double u, double v, double o
     const D3 g = cross(e1, e2);
     const double side = dot(g, sub(p, y)) >= 0.0 ? 1.0 : -1.0;
     if (dot(n, g) * side < 0.0) n = mul(n, -1.0);
-    const D3 c = norm(e1);
+    const D3 c = d3(t.c);
     const D3 tt = norm(sub(c, mul(n, dot(c, n))));
     const D3 b = cross(n, tt);
     const double C = dot(H, n);
@@ -58,8 +58,17 @@ D3 sphereDir(std::mt19937& g) {
     return {s * std::cos(phi), s * std::sin(phi), z};
 }
 
+// A unit vector perpendicular to a (the gather's choice for a cluster's frame).
+D3 perpendicular(const D3& a) {
+    const D3 k = std::abs(a[0]) < 0.9 ? D3{1, 0, 0} : D3{0, 1, 0};
+    return norm(cross(a, k));
+}
+
 Tri makeTri(const D3& p0, const D3& p1, const D3& p2, const D3& n0, const D3& n1, const D3& n2) {
-    return {f3(p0), f3(sub(p1, p0)), f3(sub(p2, p0)), f3(n0), f3(sub(n1, n0)), f3(sub(n2, n0))};
+    const D3 f = norm(add(add(norm(n0), norm(n1)), norm(n2)));
+    Tri t{f3(p0), f3(sub(p1, p0)), f3(sub(p2, p0)), f3(n0), f3(sub(n1, n0)), f3(sub(n2, n0))};
+    t.c = f3(perpendicular(f));
+    return t;
 }
 
 // A random small triangle near the origin, its vertex normals tilted up to 0.3 from its face's.
@@ -209,9 +218,8 @@ TEST(Manifold, t8_triangle_test_conservative) {
         const D3 L = sphereDir(g);
         const double r = 0.1 * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
         const double target[2] = {r * std::cos(phi), r * std::sin(phi)};
-        const float theta = float(std::atan(r));
         for (size_t i = 0; i < tris.size(); ++i) {
-            const bool keep = manifoldTriangleTest(tris[i], f3(p), f3(L), theta);
+            const bool keep = manifoldTriangleTest(tris[i], f3(p), f3(L), {float(target[0]), float(target[1])});
             if (!keep) ++pruned;
             const Roots ref = referenceRoots(tris[i], p, L, target, -1e-3);
             if (!ref.inside.empty() || !ref.nearEdge.empty()) {
@@ -221,7 +229,7 @@ TEST(Manifold, t8_triangle_test_conservative) {
         }
     }
     EXPECT_GT(roots, 60);
-    EXPECT_GT(pruned, int(0.9 * 120 * tris.size())) << "it prunes most of a sphere";
+    EXPECT_GT(pruned, int(0.995 * 120 * tris.size())) << "it prunes all but a few triangles of a sphere";
 }
 
 // A flat mirror (two triangles of one quad): sigma = 0 has exactly one root, the mirror point.
@@ -336,4 +344,37 @@ TEST(Manifold, t8_cone_conservative) {
         if (!manifoldConeTest(f3(lo), f3(hi), f3(axis), float(halfAngle), f3(p), f3(L), float(other))) ++rejected;
     }
     EXPECT_GT(rejected, 20000);
+}
+
+// The disc test never rejects a box holding a point whose normal (in the cone, either way round) and half vector have
+// the asked slope in the frame of reference c; and it prunes far more than the ring test.
+TEST(Manifold, t8_disc_conservative) {
+    std::mt19937 g(87u);
+    int rejected = 0, cases = 0;
+    for (int k = 0; k < 200000; ++k) {
+        const D3 centre = mul(sphereDir(g), rnd(g));
+        const double size = 0.01 + 0.3 * rnd(g);
+        const D3 half{size * rnd(g), size * rnd(g), size * rnd(g)};
+        const D3 lo = sub(centre, half), hi = add(centre, half);
+        const D3 y{lo[0] + (hi[0] - lo[0]) * rnd(g), lo[1] + (hi[1] - lo[1]) * rnd(g), lo[2] + (hi[2] - lo[2]) * rnd(g)};
+        const D3 axis = sphereDir(g);
+        const double halfAngle = 0.6 * rnd(g);
+        const D3 c = norm(add(perpendicular(axis), mul(sphereDir(g), 0.3 * rnd(g))));
+        D3 n = norm(add(axis, mul(sphereDir(g), std::tan(halfAngle) * rnd(g) * 0.99)));
+        if (std::acos(std::clamp(dot(n, axis), -1.0, 1.0)) > halfAngle) n = axis;
+        if (rnd(g) < 0.5) n = mul(n, -1.0);
+        const D3 p = add(centre, mul(sphereDir(g), 0.4 + 3.0 * rnd(g)));
+        const D3 L = sphereDir(g);
+        const D3 h = norm(add(norm(sub(p, y)), L));
+        if (dot(h, n) < 0.3) continue;
+        const D3 t = norm(sub(c, mul(n, dot(c, n))));
+        const D3 b = cross(n, t);
+        const V2 sigma{float(dot(h, t) / dot(h, n)), float(dot(h, b) / dot(h, n))};
+        ++cases;
+        ASSERT_TRUE(manifoldDiscTest(f3(lo), f3(hi), f3(axis), float(halfAngle), f3(c), sigma, f3(p), f3(L))) << "case " << k;
+        const V2 other{sigma[1] + 0.3f, -sigma[0]};
+        if (!manifoldDiscTest(f3(lo), f3(hi), f3(axis), float(halfAngle), f3(c), other, f3(p), f3(L))) ++rejected;
+    }
+    EXPECT_GT(cases, 50000);
+    EXPECT_GT(rejected, cases / 4);
 }

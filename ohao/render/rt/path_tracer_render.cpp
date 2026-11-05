@@ -85,7 +85,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (manifoldOn) {
         timePass("pt.manifold.gather");
         m_manifold.record(cmd, frameSlot, m_vertexArena, m_scene->meshletArena(), m_scene->meshletVertexArena(),
-                          m_scene->meshletTriangleArena(), m_instances);
+                          m_scene->meshletTriangleArena(), m_instances, m_materialTable);
     }
     // The frame's setup is timed with its first trace.
     timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update"
@@ -594,6 +594,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (manifoldOn) {
         pc.control.x |= kPTFlagManifold;
         if (manifoldPass) pc.control.x |= kPTFlagManifoldRequests;
+        static const char* stage = std::getenv("OHAO_MANIFOLD_STAGE");   // profiling: where manifoldConnect stops
+        if (stage) pc.control.x |= (uint32_t(std::atoi(stage)) & 3u) << 21u;
         m_manifoldRan = true;
     }
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
