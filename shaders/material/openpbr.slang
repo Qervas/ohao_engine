@@ -878,6 +878,17 @@ struct BsdfSample
     uint lobe;
 };
 
+// No sample: straight up, weight and pdf 0, lobe 0.
+BsdfSample bsdfSampleNone()
+{
+    BsdfSample s;
+    s.wi = float3(0.0, 0.0, 1.0);
+    s.weight = float3(0.0);
+    s.pdf = 0.0;
+    s.lobe = 0u;
+    return s;
+}
+
 struct OpenPBRBase
 {
     float3 rho;          // the diffuse albedo, base_weight * base_color
@@ -1152,14 +1163,27 @@ struct OpenPBRBase
         return total > 0.0 ? float4(r, d, tr, ss) / total : float4(1.0, 0.0, 0.0, 0.0);
     }
 
-    BsdfSample sampleTransmissive(float3 wo, float3 u, OpenPBRTables t)
+    // sample()'s direction and lobe, written into s: true when sample() is to weigh it (eval / pdf), false when s
+    // is final (no direction: pdf and weight 0; or the walked subsurface's, whose weight is what enters).
+    bool sampleDirection(float3 wo, float3 u, OpenPBRTables t, inout BsdfSample s)
     {
-        BsdfSample s;
-        s.wi = float3(0.0, 0.0, 1.0);
-        s.weight = float3(0.0);
-        s.pdf = 0.0;
-        s.lobe = 0u;
-        if (wo.z == 0.0 || (wo.z < 0.0 && !transmissive())) return s;
+        if (!delegated())
+        {
+            if (wo.z <= 0.0) return false;
+            const float ps = specularShare(wo, t);
+            if (u.x < ps)
+            {
+                const float3 m = sampleSpecular(wo, u.yz);
+                s.wi = reflect(-wo, m);
+            }
+            else
+            {
+                s.wi = eonSample(wo, diffRough, u.y, u.z).xyz;
+                s.lobe = 1u;
+            }
+            return !(s.wi.z <= 0.0);
+        }
+        if (wo.z == 0.0 || (wo.z < 0.0 && !transmissive())) return false;
         const bool inside = !thinWalled && wo.z < 0.0;
         const bool flip = wo.z < 0.0;
         const float3 o = flip ? flipZ(wo) : wo;
@@ -1170,7 +1194,7 @@ struct OpenPBRBase
             if (u.x < pr) i = reflect(-o, ggxSampleBoundedAniso(o, alphaXY, u.yz));
             else
             {
-                if (!refractThrough(o, ggxSampleVisible(o, alphaXY, u.yz), 1.0 / eta, i)) return s;
+                if (!refractThrough(o, ggxSampleVisible(o, alphaXY, u.yz), 1.0 / eta, i)) return false;
                 s.lobe = 4u;
             }
         }
@@ -1192,30 +1216,27 @@ struct OpenPBRBase
                 s.lobe = 5u;
                 s.pdf = p.w;
                 s.weight = float3(subsurfaceShare(o, t) / p.w);
-                return s;
+                return false;
             }
             else
             {
                 if (thinWalled) i = flipZ(reflect(-o, sampleSpecular(o, u.yz)));
-                else if (!refractThrough(o, ggxSampleVisible(o, alphaXY, u.yz), eta, i)) return s;
+                else if (!refractThrough(o, ggxSampleVisible(o, alphaXY, u.yz), eta, i)) return false;
                 s.lobe = 4u;
             }
         }
-        if (s.lobe == 4u ? i.z >= 0.0 : i.z <= 0.0) return s;
+        if (s.lobe == 4u ? i.z >= 0.0 : i.z <= 0.0) return false;
         s.wi = flip ? flipZ(i) : i;
-        s.pdf = pdfTransmissive(wo, s.wi, t);
-        if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;
-        return s;
+        return true;
     }
 
-    // BSDF x cos(wi).
+    // BSDF x cos(wi). A thin wall seen from its back is its front mirrored, through the one evalLobes: every call
+    // site inlines its callee whole (Slang, for SPIR-V), so a function called twice is compiled twice.
     float3 eval(float3 wo, float3 wi, OpenPBRTables t)
     {
+        const bool f = thinWalled && transmissive() && wo.z < 0.0;
         float3 specular, diffuse;
-        if (thinWalled && transmissive() && wo.z < 0.0)
-            evalLobes(flipZ(wo), flipZ(wi), t, specular, diffuse);
-        else
-            evalLobes(wo, wi, t, specular, diffuse);
+        evalLobes(f ? flipZ(wo) : wo, f ? flipZ(wi) : wi, t, specular, diffuse);
         return specular + diffuse;
     }
 
@@ -1293,28 +1314,12 @@ struct OpenPBRBase
         return ps * pdfSpecular(wo, wi) + (1.0 - ps) * eonPdf(wo, wi, diffRough);
     }
 
+    // A direction, then its density and weight: one pdf() and one eval() for every lobe.
     BsdfSample sample(float3 wo, float3 u, OpenPBRTables t)
     {
-        BsdfSample s;
-        s.wi = float3(0.0, 0.0, 1.0);
-        s.weight = float3(0.0);
-        s.pdf = 0.0;
-        s.lobe = 0u;
-        if (delegated()) return sampleTransmissive(wo, u, t);
-        if (wo.z <= 0.0) return s;
-        const float ps = specularShare(wo, t);
-        if (u.x < ps)
-        {
-            const float3 m = sampleSpecular(wo, u.yz);
-            s.wi = reflect(-wo, m);
-        }
-        else
-        {
-            s.wi = eonSample(wo, diffRough, u.y, u.z).xyz;
-            s.lobe = 1u;
-        }
-        if (s.wi.z <= 0.0) return s;
-        s.pdf = ps * pdfSpecular(wo, s.wi) + (1.0 - ps) * eonPdf(wo, s.wi, diffRough);
+        BsdfSample s = bsdfSampleNone();
+        if (!sampleDirection(wo, u, t, s)) return s;
+        s.pdf = pdf(wo, s.wi, t);
         if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;
         return s;
     }
@@ -1451,6 +1456,17 @@ struct OpenPBRFuzz
 
 // ---- the surface ----------------------------------------------------------------------------
 
+// What OpenPBRSurface's weights read from wo alone, worked out once per entry (OpenPBRSurface.view).
+struct OpenPBRView
+{
+    OpenPBRBase b;   // the base as the tables see it from wo
+    float fuzzAlb;   // E_fuzz(wo): 0 without layers, or from below
+    float coatAlb;   // E_coat(wo)
+    float pathO;     // coatPath(wo.z)
+    float3 darken;   // coatDarken(wo.z): 1 without a coat
+};
+
+
 // OpenPBR's whole as step 2 builds it: fuzz over coat over the base,
 //   f = F f_fuzz + (1 - F E_fuzz(wo)) [C f_coat + lerp(1, T (1 - E_coat(wo)), C) lerp(1, Delta, C delta) f_base']
 // with f_fuzz cos = fuzz_color E_fuzz D, T the coat's absorption along wi and wo, Delta its
@@ -1531,32 +1547,64 @@ struct OpenPBRSurface
         return lerp(float3(1.0), delta, coatWeight * coatDarkening);
     }
 
-    // What reaches the base through the coat along a path pathI in and out at wo, and through the
-    // fuzz at wo.
-    float3 baseScale(float pathI, float3 wo, OpenPBRTables t)
+    // ---- seen from wo ----
+    // Slang inlines every call for SPIR-V, so each call site carries its callee's whole code: a value two
+    // functions needed from wo was compiled (and computed) twice, and the path tracer's sample() reached
+    // 400,000 instructions. Each entry builds one view and every weight below reads it (sub-project 25).
+    OpenPBRView view(float3 wo, OpenPBRTables t)
     {
-        float3 k = float3(1.0 - fuzzWeight * fuzz.albedo(wo.z));
+        OpenPBRView v;
+        v.b = baseAt(wo, t);
+        v.fuzzAlb = 0.0;
+        v.coatAlb = 0.0;
+        v.pathO = 1.0;
+        v.darken = float3(1.0);
+        if (layered && wo.z > 0.0)   // every layered weight is read from above
+        {
+            v.fuzzAlb = fuzz.albedo(wo.z);
+            v.coatAlb = coat.albedo(wo, t);
+            v.pathO = coatPath(wo.z);
+            if (coatWeight > 0.0) v.darken = coatDarken(wo.z, t);
+        }
+        return v;
+    }
+
+    // What reaches the base through the coat along a path pathI in and out at v's wo, and through the fuzz there.
+    float3 baseScale(float pathI, OpenPBRView v)
+    {
+        float3 k = float3(1.0 - fuzzWeight * v.fuzzAlb);
         if (coatWeight > 0.0)
-            k *= lerp(float3(1.0), coatTransmittance(pathI, coatPath(wo.z)) * (1.0 - coat.albedo(wo, t)), coatWeight)
-               * coatDarken(wo.z, t);
+            k *= lerp(float3(1.0), coatTransmittance(pathI, v.pathO) * (1.0 - v.coatAlb), coatWeight) * v.darken;
         return k;
+    }
+
+    // The lobes x cos(wi) seen from v's wo (a thin wall's back already mirrored to its front): the base's
+    // specular (its reflection, or its refraction) s and its diffuse d, each through the coat and the fuzz, the
+    // fuzz added to d, and the coat's lobe c. eval() is s + c + d.
+    void terms(float3 wo, float3 wi, OpenPBRView v, OpenPBRTables t, out float3 s, out float3 c, out float3 d)
+    {
+        c = float3(0.0);
+        v.b.evalLobes(wo, wi, t, s, d);
+        if (layered && wo.z > 0.0 && wi.z < 0.0)   // refracted: through the coat and the fuzz, as the diffuse goes
+        {
+            s *= baseScale(coatPathDiffuse(), v);
+            return;
+        }
+        if (!layered || wo.z <= 0.0 || wi.z <= 0.0) return;
+        const float3 k = baseScale(coatPath(wi.z), v);
+        const float fuzzOver = 1.0 - fuzzWeight * v.fuzzAlb;
+        s = k * s;
+        c = float3(fuzzOver * coatWeight * coat.eval(wo, wi, t));
+        d = k * d + fuzzWeight * fuzzColor * v.fuzzAlb * fuzz.D(wo, wi);
     }
 
     // The lobes x cos(wi), split as RT direct light demodulates them: the specular (the coat's and
     // the base's) and the diffuse (the base's and the fuzz).
     void evalLobes(float3 wo, float3 wi, OpenPBRTables t, out float3 specular, out float3 diffuse)
     {
-        baseAt(wo, t).evalLobes(wo, wi, t, specular, diffuse);
-        if (layered && wo.z > 0.0 && wi.z < 0.0)   // refracted: through the coat and the fuzz, as the diffuse goes
-        {
-            specular *= baseScale(coatPathDiffuse(), wo, t);
-            return;
-        }
-        if (!layered || wo.z <= 0.0 || wi.z <= 0.0) return;
-        const float3 k = baseScale(coatPath(wi.z), wo, t);
-        const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
-        specular = k * specular + fuzzOver * coatWeight * coat.eval(wo, wi, t);
-        diffuse = k * diffuse + fuzzWeight * fuzzColor * fuzz.albedo(wo.z) * fuzz.D(wo, wi);
+        float3 c;
+        terms(wo, wi, view(wo, t), t, specular, c, diffuse);
+        specular += c;
     }
 
     // A thin wall is the same from either side (OpenPBR: either side is the outside): seen from its back it is
@@ -1567,61 +1615,67 @@ struct OpenPBRSurface
 
     float3 eval(float3 wo, float3 wi, OpenPBRTables t)
     {
-        return thinBack(wo) ? evalFront(mirrored(wo), mirrored(wi), t) : evalFront(wo, wi, t);
+        const bool back = thinBack(wo);
+        const float3 o = back ? mirrored(wo) : wo;
+        return evalFrom(o, back ? mirrored(wi) : wi, view(o, t), t);
     }
 
-    float3 evalFront(float3 wo, float3 wi, OpenPBRTables t)
+    // eval() in the front frame, from a view of wo.
+    float3 evalFrom(float3 wo, float3 wi, OpenPBRView v, OpenPBRTables t)
     {
-        if (base.transmissive() && wo.z < 0.0) return base.eval(wo, wi, t);
-        float3 specular, diffuse;
-        evalLobes(wo, wi, t, specular, diffuse);
-        return specular + diffuse;
+        float3 s, c, d;
+        terms(wo, wi, v, t, s, c, d);
+        return s + c + d;
     }
 
     // ---- the smooth and rough parts (sub-project 24, caustics) ----
     // eval() split by lobe roughness: the smooth part holds the base's specular reflection and
     // refraction while the base's roughness is under cut, and the coat's lobe while the coat's is;
     // the rough part holds everything else eval() holds (the diffuse, the fuzz, and either specular
-    // at or over the cut). smooth + rough = eval() in every case (the same arithmetic, not a call of
-    // it, so eval()'s own code and bits stay as they are). Light traced from a light follows only
+    // at or over the cut). smooth + rough = eval() in every case. Light traced from a light follows only
     // smooth parts and reaches the camera only through rough ones; the camera side drops exactly
     // those terms (docs/specs/2026-11-03-caustics-design.md, "The split").
-    void evalParts(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 smooth, out float3 rough)
+    //
+    // Every split from one evaluation (each is a sum of terms()): the specular (the base's and the coat's) and
+    // the diffuse, as evalLobes() splits them; the smooth part at cut and the rough part; and the smooth part's
+    // core (below), for reflections seen from the front only.
+    void evalSplit(float3 wo, float3 wi, OpenPBRTables t, float cut, float2 coreSlope, out float3 specular,
+                   out float3 diffuse, out float3 smooth, out float3 rough, out float3 core)
     {
-        if (thinBack(wo)) evalPartsFront(mirrored(wo), mirrored(wi), t, cut, smooth, rough);
-        else evalPartsFront(wo, wi, t, cut, smooth, rough);
+        const bool back = thinBack(wo);
+        const float3 o = back ? mirrored(wo) : wo, i = back ? mirrored(wi) : wi;
+        float3 s, c, d;
+        terms(o, i, view(o, t), t, s, c, d);
+        specular = s + c;
+        diffuse = d;
+        split(s, c, d, cut, smooth, rough);
+        core = back ? float3(0.0) : coreOf(o, i, s, c, cut, coreSlope);
     }
 
-    void evalPartsFront(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 smooth, out float3 rough)
+    // terms()' smooth and rough parts at cut.
+    void split(float3 s, float3 c, float3 d, float cut, out float3 smooth, out float3 rough)
     {
-        float3 s, d;
-        float3 c = float3(0.0);
-        if (base.transmissive() && wo.z < 0.0)
-        {
-            // Inside a solid, or a thin wall from its back: the base alone, as eval() takes it.
-            if (base.thinWalled) base.evalLobes(base.flipZ(wo), base.flipZ(wi), t, s, d);
-            else base.evalLobes(wo, wi, t, s, d);
-        }
-        else
-        {
-            baseAt(wo, t).evalLobes(wo, wi, t, s, d);
-            if (layered && wo.z > 0.0 && wi.z < 0.0)
-            {
-                s *= baseScale(coatPathDiffuse(), wo, t);
-            }
-            else if (layered && wo.z > 0.0 && wi.z > 0.0)
-            {
-                const float3 k = baseScale(coatPath(wi.z), wo, t);
-                const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
-                s = k * s;
-                c = float3(fuzzOver * coatWeight * coat.eval(wo, wi, t));
-                d = k * d + fuzzWeight * fuzzColor * fuzz.albedo(wo.z) * fuzz.D(wo, wi);
-            }
-        }
-        const bool bs = base.rough < cut;
-        const bool cs = coatWeight > 0.0 && coat.rough < cut;
+        const bool bs = base.rough < cut, cs = coatWeight > 0.0 && coat.rough < cut;
         smooth = (bs ? s : float3(0.0)) + (cs ? c : float3(0.0));
         rough = d + (bs ? float3(0.0) : s) + (cs ? float3(0.0) : c);
+    }
+
+    // The core of terms()' smooth part (a reflection seen from the front: 0 otherwise).
+    float3 coreOf(float3 wo, float3 wi, float3 s, float3 c, float cut, float2 coreSlope)
+    {
+        float3 core = float3(0.0);
+        if (!(wo.z > 0.0) || !(wi.z > 0.0)) return core;
+        const bool bs = base.rough < cut, cs = coatWeight > 0.0 && coat.rough < cut;
+        const float3 m = normalize(wo + wi);
+        if (bs && inCore(m, base.alphaXY, coreSlope)) core += s;
+        if (cs && inCore(m, coat.alphaXY, coreSlope)) core += c;
+        return core;
+    }
+
+    void evalParts(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 smooth, out float3 rough)
+    {
+        float3 specular, diffuse, core;
+        evalSplit(wo, wi, t, cut, float2(0.0), specular, diffuse, smooth, rough, core);
     }
 
     // Whether any lobe can be smooth at cut.
@@ -1648,13 +1702,13 @@ struct OpenPBRSurface
         else
         {
             if (wo.z <= 0.0) return w;
-            const OpenPBRBase b = baseAt(wo, t);
+            const OpenPBRView v = view(wo, t);
             if (bs)
             {
-                w.x = pbrLuminance(baseScale(coatPath(wo.z), wo, t) * b.specularAlbedo(wo, t));
-                w.y = pbrLuminance(baseScale(coatPathDiffuse(), wo, t) * b.transmissionAlbedo(wo, t));
+                w.x = pbrLuminance(baseScale(v.pathO, v) * v.b.specularAlbedo(wo, t));
+                w.y = pbrLuminance(baseScale(coatPathDiffuse(), v) * v.b.transmissionAlbedo(wo, t));
             }
-            if (cs) w.z = coatAlbedo(wo, t);
+            if (cs) w.z = coatAlbedoFrom(wo, v);
         }
         const float total = w.x + w.y + w.z;
         return total > 0.0 ? w / total : float3(0.0);
@@ -1664,7 +1718,13 @@ struct OpenPBRSurface
     float pdfSmooth(float3 wo, float3 wi, OpenPBRTables t, float cut)
     {
         if (wo.z == 0.0 || wi.z == 0.0) return 0.0;
-        const float3 p = smoothShares(wo, t, cut);
+        return pdfSmoothWith(wo, wi, smoothShares(wo, t, cut));
+    }
+
+    // pdfSmooth() with the shares smoothShares() gives.
+    float pdfSmoothWith(float3 wo, float3 wi, float3 p)
+    {
+        if (wo.z == 0.0 || wi.z == 0.0) return 0.0;
         if (base.transmissive() && wo.z < 0.0)
         {
             const float3 o = base.flipZ(wo), i = base.flipZ(wi);
@@ -1684,11 +1744,7 @@ struct OpenPBRSurface
     // camera side's roles, so the smooth part is not evaluated twice.
     BsdfSample sampleSmoothDirection(float3 wo, float3 u, OpenPBRTables t, float cut)
     {
-        BsdfSample s;
-        s.wi = float3(0.0, 0.0, 1.0);
-        s.weight = float3(0.0);
-        s.pdf = 0.0;
-        s.lobe = 0u;
+        BsdfSample s = bsdfSampleNone();
         const float3 p = smoothShares(wo, t, cut);
         if (!(p.x + p.y + p.z > 0.0)) return s;
         const bool inside = base.transmissive() && wo.z < 0.0;
@@ -1714,7 +1770,7 @@ struct OpenPBRSurface
             if (i.z <= 0.0) return s;
         }
         s.wi = inside ? base.flipZ(i) : i;
-        s.pdf = pdfSmooth(wo, s.wi, t, cut);
+        s.pdf = pdfSmoothWith(wo, s.wi, p);
         return s;
     }
 
@@ -1735,31 +1791,8 @@ struct OpenPBRSurface
     void evalLobesSmooth(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 specular, out float3 diffuse,
                          out float3 smooth)
     {
-        if (thinBack(wo)) evalLobesSmoothFront(mirrored(wo), mirrored(wi), t, cut, specular, diffuse, smooth);
-        else evalLobesSmoothFront(wo, wi, t, cut, specular, diffuse, smooth);
-    }
-
-    void evalLobesSmoothFront(float3 wo, float3 wi, OpenPBRTables t, float cut, out float3 specular, out float3 diffuse,
-                              out float3 smooth)
-    {
-        float3 s, d;
-        float3 c = float3(0.0);
-        baseAt(wo, t).evalLobes(wo, wi, t, s, d);
-        if (layered && wo.z > 0.0 && wi.z < 0.0)
-        {
-            s *= baseScale(coatPathDiffuse(), wo, t);
-        }
-        else if (layered && wo.z > 0.0 && wi.z > 0.0)
-        {
-            const float3 k = baseScale(coatPath(wi.z), wo, t);
-            const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
-            s = k * s;
-            c = float3(fuzzOver * coatWeight * coat.eval(wo, wi, t));
-            d = k * d + fuzzWeight * fuzzColor * fuzz.albedo(wo.z) * fuzz.D(wo, wi);
-        }
-        specular = s + c;
-        diffuse = d;
-        smooth = (base.rough < cut ? s : float3(0.0)) + (coatWeight > 0.0 && coat.rough < cut ? c : float3(0.0));
+        float3 rough, core;
+        evalSplit(wo, wi, t, cut, float2(0.0), specular, diffuse, smooth, rough, core);
     }
 
     // ---- the smooth part's core (sub-project 24 step 2, docs/specs/2026-11-04-caustics-step2-design.md) ----
@@ -1779,8 +1812,8 @@ struct OpenPBRSurface
     // the half vector is in its own core (the base's alphaXY, the coat's).
     float3 evalSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float2 coreSlope)
     {
-        float3 specular, diffuse, smooth, core;
-        evalLobesSmoothCore(wo, wi, t, cut, coreSlope, specular, diffuse, smooth, core);
+        float3 specular, diffuse, smooth, rough, core;
+        evalSplit(wo, wi, t, cut, coreSlope, specular, diffuse, smooth, rough, core);
         return core;
     }
 
@@ -1788,32 +1821,8 @@ struct OpenPBRSurface
     void evalLobesSmoothCore(float3 wo, float3 wi, OpenPBRTables t, float cut, float2 coreSlope, out float3 specular,
                              out float3 diffuse, out float3 smooth, out float3 core)
     {
-        const bool back = thinBack(wo);
-        const float3 o = back ? mirrored(wo) : wo, i = back ? mirrored(wi) : wi;
-        float3 s, d;
-        float3 c = float3(0.0);
-        baseAt(o, t).evalLobes(o, i, t, s, d);
-        if (layered && o.z > 0.0 && i.z < 0.0)
-        {
-            s *= baseScale(coatPathDiffuse(), o, t);
-        }
-        else if (layered && o.z > 0.0 && i.z > 0.0)
-        {
-            const float3 k = baseScale(coatPath(i.z), o, t);
-            const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(o.z);
-            s = k * s;
-            c = float3(fuzzOver * coatWeight * coat.eval(o, i, t));
-            d = k * d + fuzzWeight * fuzzColor * fuzz.albedo(o.z) * fuzz.D(o, i);
-        }
-        specular = s + c;
-        diffuse = d;
-        const bool bs = base.rough < cut, cs = coatWeight > 0.0 && coat.rough < cut;
-        smooth = (bs ? s : float3(0.0)) + (cs ? c : float3(0.0));
-        core = float3(0.0);
-        if (back || !(o.z > 0.0) || !(i.z > 0.0)) return;
-        const float3 m = normalize(o + i);
-        if (bs && inCore(m, base.alphaXY, coreSlope)) core += s;
-        if (cs && inCore(m, coat.alphaXY, coreSlope)) core += c;
+        float3 rough;
+        evalSplit(wo, wi, t, cut, coreSlope, specular, diffuse, smooth, rough, core);
     }
 
     // Per lobe (the base's specular, the coat), the largest alpha it can have where it is smooth: the larger
@@ -1828,43 +1837,48 @@ struct OpenPBRSurface
         return float2(max(b.x, b.y), coatWeight > 0.0 ? max(c.x, c.y) : 0.0);
     }
 
-    // The refraction's albedo toward wo, through the layers.
-    float3 transmissionAlbedo(float3 wo, OpenPBRTables t)
-    {
-        const float3 a = baseAt(wo, t).transmissionAlbedo(wo, t);
-        if (!layered || wo.z <= 0.0) return a;
-        return baseScale(coatPathDiffuse(), wo, t) * a;
-    }
-
+    // ---- albedos ----
     // The directional albedos: the specular's light crosses the coat about as it came (wi near the
-    // mirror of wo), the diffuse's along coatPathDiffuse.
-    float3 specularAlbedo(float3 wo, OpenPBRTables t)
+    // mirror of wo), the diffuse's along coatPathDiffuse. Each from a view of wo (the ...From forms).
+    float3 transmissionAlbedoFrom(float3 wo, OpenPBRView v, OpenPBRTables t)
     {
-        const float3 s = baseAt(wo, t).specularAlbedo(wo, t);
-        if (!layered || wo.z <= 0.0) return s;
-        const float fuzzOver = 1.0 - fuzzWeight * fuzz.albedo(wo.z);
-        return baseScale(coatPath(wo.z), wo, t) * s + fuzzOver * coatWeight * coat.albedo(wo, t);
-    }
-
-    float3 diffuseAlbedo(float3 wo, OpenPBRTables t)
-    {
-        const float3 d = baseAt(wo, t).diffuseAlbedo(wo, t);
-        if (!layered || wo.z <= 0.0) return d;
-        return baseScale(coatPathDiffuse(), wo, t) * d + fuzzWeight * fuzzColor * fuzz.albedo(wo.z);
-    }
-
-    float3 albedo(float3 wo, OpenPBRTables t)
-    {
-        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t) + transmissionAlbedo(wo, t) + subsurfaceAlbedo(wo, t);
-    }
-
-    // A walked subsurface's expected return toward wo, through the layers.
-    float3 subsurfaceAlbedo(float3 wo, OpenPBRTables t)
-    {
-        const float3 a = baseAt(wo, t).subsurfaceAlbedo(wo, t);
+        const float3 a = v.b.transmissionAlbedo(wo, t);
         if (!layered || wo.z <= 0.0) return a;
-        return baseScale(coatPathDiffuse(), wo, t) * a;
+        return baseScale(coatPathDiffuse(), v) * a;
     }
+
+    float3 specularAlbedoFrom(float3 wo, OpenPBRView v, OpenPBRTables t)
+    {
+        const float3 s = v.b.specularAlbedo(wo, t);
+        if (!layered || wo.z <= 0.0) return s;
+        const float fuzzOver = 1.0 - fuzzWeight * v.fuzzAlb;
+        return baseScale(v.pathO, v) * s + fuzzOver * coatWeight * v.coatAlb;
+    }
+
+    float3 diffuseAlbedoFrom(float3 wo, OpenPBRView v, OpenPBRTables t)
+    {
+        const float3 d = v.b.diffuseAlbedo(wo, t);
+        if (!layered || wo.z <= 0.0) return d;
+        return baseScale(coatPathDiffuse(), v) * d + fuzzWeight * fuzzColor * v.fuzzAlb;
+    }
+
+    float3 subsurfaceAlbedoFrom(float3 wo, OpenPBRView v, OpenPBRTables t)
+    {
+        const float3 a = v.b.subsurfaceAlbedo(wo, t);
+        if (!layered || wo.z <= 0.0) return a;
+        return baseScale(coatPathDiffuse(), v) * a;
+    }
+
+    float coatAlbedoFrom(float3 wo, OpenPBRView v)
+    {
+        if (coatWeight <= 0.0 || wo.z <= 0.0) return 0.0;
+        return (1.0 - fuzzWeight * v.fuzzAlb) * coatWeight * v.coatAlb;
+    }
+
+    float3 transmissionAlbedo(float3 wo, OpenPBRTables t) { return transmissionAlbedoFrom(wo, view(wo, t), t); }
+    float3 specularAlbedo(float3 wo, OpenPBRTables t) { return specularAlbedoFrom(wo, view(wo, t), t); }
+    float3 diffuseAlbedo(float3 wo, OpenPBRTables t) { return diffuseAlbedoFrom(wo, view(wo, t), t); }
+    float3 subsurfaceAlbedo(float3 wo, OpenPBRTables t) { return subsurfaceAlbedoFrom(wo, view(wo, t), t); }
 
     // The coat's part of specularAlbedo (the deferred frame's split sum reads it at the coat's
     // roughness, the rest at the base's).
@@ -1872,6 +1886,14 @@ struct OpenPBRSurface
     {
         if (coatWeight <= 0.0 || wo.z <= 0.0) return 0.0;
         return (1.0 - fuzzWeight * fuzz.albedo(wo.z)) * coatWeight * coat.albedo(wo, t);
+    }
+
+    float3 albedo(float3 wo, OpenPBRTables t) { return albedoFrom(wo, view(wo, t), t); }
+
+    float3 albedoFrom(float3 wo, OpenPBRView v, OpenPBRTables t)
+    {
+        return specularAlbedoFrom(wo, v, t) + diffuseAlbedoFrom(wo, v, t) + transmissionAlbedoFrom(wo, v, t)
+             + subsurfaceAlbedoFrom(wo, v, t);
     }
 
     // This surface with each specular lobe's alpha widened by `da` (a sphere's or a rectangle's
@@ -1884,95 +1906,118 @@ struct OpenPBRSurface
         return w;
     }
 
-    // The chance of drawing each lobe, by the luminance of its albedo: (base specular, diffuse,
-    // coat, fuzz).
-    float4 lobeShares(float3 wo, OpenPBRTables t)
+    // ---- drawing a direction ----
+    // The base draws its own lobes (its own sample()) when alone: without layers, or inside a solid. A layered
+    // glass (or walked subsurface) draws its base the base's own way, the coat or the fuzz; a layered opaque
+    // base draws its specular, its diffuse, the coat or the fuzz.
+    bool alone(float3 wo) { return !layered || (base.transmissive() && wo.z < 0.0); }
+
+    // The chance of drawing each lobe, by the luminance of its albedo, for v's wo above: a layered glass's (its
+    // base, the coat, the fuzz, 0), a layered opaque base's (its specular, its diffuse, the coat, the fuzz).
+    // Alone: (1, 0, 0, 0).
+    float4 drawShares(float3 wo, OpenPBRView v, OpenPBRTables t)
     {
+        if (alone(wo)) return float4(1.0, 0.0, 0.0, 0.0);
+        const float f = fuzzWeight * pbrLuminance(fuzzColor) * v.fuzzAlb;
+        if (base.delegated())
+        {
+            const float c = coatAlbedoFrom(wo, v);
+            const float b = pbrLuminance(specularAlbedoFrom(wo, v, t) - c + diffuseAlbedoFrom(wo, v, t)
+                                         - fuzzWeight * fuzzColor * v.fuzzAlb + transmissionAlbedoFrom(wo, v, t)
+                                         + subsurfaceAlbedoFrom(wo, v, t));
+            const float total = max(b, 0.0) + c + f;
+            return float4(total > 0.0 ? float3(max(b, 0.0), c, f) / total : float3(1.0, 0.0, 0.0), 0.0);
+        }
         float4 w;
-        const OpenPBRBase b = baseAt(wo, t);
-        w.x = pbrLuminance(baseScale(coatPath(wo.z), wo, t) * b.specularAlbedo(wo, t));
-        w.y = pbrLuminance(baseScale(coatPathDiffuse(), wo, t) * b.diffuseAlbedo(wo, t));
-        w.z = (1.0 - fuzzWeight * fuzz.albedo(wo.z)) * coatWeight * coat.albedo(wo, t);
-        w.w = fuzzWeight * pbrLuminance(fuzzColor) * fuzz.albedo(wo.z);
+        w.x = pbrLuminance(baseScale(v.pathO, v) * v.b.specularAlbedo(wo, t));
+        w.y = pbrLuminance(baseScale(coatPathDiffuse(), v) * v.b.diffuseAlbedo(wo, t));
+        w.z = (1.0 - fuzzWeight * v.fuzzAlb) * coatWeight * v.coatAlb;
+        w.w = f;
         const float total = w.x + w.y + w.z + w.w;
         return total > 0.0 ? w / total : float4(1.0, 0.0, 0.0, 0.0);
     }
 
-    float pdfOf(float3 wo, float3 wi, float4 p)
-    {
-        return p.x * base.pdfSpecular(wo, wi) + p.y * eonPdf(wo, wi, base.diffRough) + p.z * coat.pdf(wo, wi)
-             + p.w * fuzz.D(wo, wi);
-    }
-
+    // The density sample() draws wi with.
     float pdf(float3 wo, float3 wi, OpenPBRTables t)
     {
-        return thinBack(wo) ? pdfFront(mirrored(wo), mirrored(wi), t) : pdfFront(wo, wi, t);
+        const bool back = thinBack(wo);
+        const float3 o = back ? mirrored(wo) : wo;
+        const OpenPBRView v = view(o, t);
+        float basePdf;
+        return pdfFrom(o, back ? mirrored(wi) : wi, v, drawShares(o, v, t), t, basePdf);
     }
 
-    float pdfFront(float3 wo, float3 wi, OpenPBRTables t)
+    // pdf() in the front frame, from a view of wo and its drawShares; basePdf is the base's own density (0 where
+    // the base does not draw its own lobes).
+    float pdfFrom(float3 wo, float3 wi, OpenPBRView v, float4 p, OpenPBRTables t, out float basePdf)
     {
-        if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).pdf(wo, wi, t);
-        if (base.delegated()) return pdfLayeredTransmissive(wo, wi, t);
-        if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
-        return pdfOf(wo, wi, lobeShares(wo, t));
-    }
-
-    // A layered glass: the base (all its lobes, by its own sampling), the coat and the fuzz, by the
-    // luminance of their albedos.
-    float3 layeredTransmissiveShares(float3 wo, OpenPBRTables t)
-    {
-        const float b = pbrLuminance(specularAlbedo(wo, t) - coatAlbedo(wo, t) + diffuseAlbedo(wo, t)
-                                     - fuzzWeight * fuzzColor * fuzz.albedo(wo.z) + transmissionAlbedo(wo, t)
-                                     + subsurfaceAlbedo(wo, t));
-        const float c = coatAlbedo(wo, t);
-        const float f = fuzzWeight * pbrLuminance(fuzzColor) * fuzz.albedo(wo.z);
-        const float total = max(b, 0.0) + c + f;
-        return total > 0.0 ? float3(max(b, 0.0), c, f) / total : float3(1.0, 0.0, 0.0);
-    }
-
-    float pdfLayeredTransmissive(float3 wo, float3 wi, OpenPBRTables t)
-    {
-        if (wo.z <= 0.0) return 0.0;
-        const float3 p = layeredTransmissiveShares(wo, t);
-        float pdf = p.x * baseAt(wo, t).pdf(wo, wi, t);
+        basePdf = 0.0;
+        const bool baseAlone = alone(wo);
+        if (!baseAlone && !base.delegated())
+        {
+            if (wo.z <= 0.0 || wi.z <= 0.0) return 0.0;
+            return p.x * base.pdfSpecular(wo, wi) + p.y * eonPdf(wo, wi, base.diffRough) + p.z * coat.pdf(wo, wi)
+                 + p.w * fuzz.D(wo, wi);
+        }
+        if (!baseAlone && wo.z <= 0.0) return 0.0;
+        basePdf = v.b.pdf(wo, wi, t);
+        if (baseAlone) return basePdf;
+        float pdf = p.x * basePdf;
         if (wi.z > 0.0) pdf += p.y * coat.pdf(wo, wi) + p.z * fuzz.D(wo, wi);
         return pdf;
     }
 
     BsdfSample sample(float3 wo, float3 u, OpenPBRTables t)
     {
-        if (!thinBack(wo)) return sampleFront(wo, u, t);
-        BsdfSample s = sampleFront(mirrored(wo), u, t);
-        s.wi = mirrored(s.wi);
+        const bool back = thinBack(wo);
+        BsdfSample s = sampleFront(back ? mirrored(wo) : wo, u, t);
+        if (back) s.wi = mirrored(s.wi);
         return s;
     }
 
+    // sample() in the front frame: a lobe and its direction, then one density (pdfFrom) and one evaluation.
     BsdfSample sampleFront(float3 wo, float3 u, OpenPBRTables t)
     {
-        if (!layered || (base.transmissive() && wo.z < 0.0)) return baseAt(wo, t).sample(wo, u, t);
-        BsdfSample s;
-        s.wi = float3(0.0, 0.0, 1.0);
-        s.weight = float3(0.0);
-        s.pdf = 0.0;
-        s.lobe = 0u;
-        if (wo.z <= 0.0) return s;
-        if (base.delegated())
+        BsdfSample s = bsdfSampleNone();
+        const OpenPBRView v = view(wo, t);
+        const float4 p = drawShares(wo, v, t);
+        bool baseDrawn;
+        if (!sampleDirectionFrom(wo, u, v, p, t, s, baseDrawn)) return s;
+        float basePdf;
+        const float pdf = pdfFrom(wo, s.wi, v, p, t, basePdf);
+        sampleWeigh(s, pdf, basePdf, baseDrawn, evalFrom(wo, s.wi, v, t));
+        return s;
+    }
+
+    // sample()'s draw in the front frame, from a view of wo and its drawShares: a lobe and its direction, written
+    // into s. True when it is to be weighed (sampleWeigh, with pdfFrom and the evaluation there); false when s is
+    // final (no direction; or the walk's, whose weight is what enters). baseDrawn: a layered glass's base drew it,
+    // so the base's own density must hold it. A path tracer draws this, then weighs it beside its light samples
+    // at its one evaluation site.
+    bool sampleDirectionFrom(float3 wo, float3 u, OpenPBRView v, float4 p, OpenPBRTables t, inout BsdfSample s,
+                             out bool baseDrawn)
+    {
+        baseDrawn = false;
+        const bool baseAlone = alone(wo);
+        if (!baseAlone && wo.z <= 0.0) return false;
+        const bool glass = !baseAlone && base.delegated();
+        if (baseAlone || (glass && u.x < p.x))
         {
-            const float3 p = layeredTransmissiveShares(wo, t);
-            if (u.x < p.x)
+            // The base's own sampling: alone, or a layered glass's share of it (u.x rescaled into the share).
+            baseDrawn = glass;
+            if (v.b.sampleDirection(wo, float3(baseAlone ? u.x : u.x / max(p.x, 1e-6), u.y, u.z), t, s)) return true;
+            // Final: no direction, or the walk's. Layered, the walk enters through the coat and the fuzz as the
+            // diffuse goes.
+            if (glass && s.pdf > 0.0)
             {
-                const BsdfSample b = baseAt(wo, t).sample(wo, float3(u.x / max(p.x, 1e-6), u.y, u.z), t);
-                s.wi = b.wi;
-                s.lobe = b.lobe;
-                if (!(b.pdf > 0.0)) return s;
-                if (b.lobe == 5u)   // into the volume, through the coat and the fuzz as the diffuse goes
-                {
-                    s.pdf = b.pdf * p.x;
-                    s.weight = baseScale(coatPathDiffuse(), wo, t) * b.weight / max(p.x, 1e-6);
-                    return s;
-                }
+                s.pdf = s.pdf * p.x;
+                s.weight = baseScale(coatPathDiffuse(), v) * s.weight / max(p.x, 1e-6);
             }
-            else if (u.x < p.x + p.y)
+            return false;
+        }
+        if (glass)
+        {
+            if (u.x < p.x + p.y)
             {
                 s.wi = reflect(-wo, coat.sampleNormal(wo, u.yz));
                 s.lobe = 2u;
@@ -1982,12 +2027,8 @@ struct OpenPBRSurface
                 s.wi = fuzz.sample(wo, u.yz);
                 s.lobe = 3u;
             }
-            if (s.wi.z == 0.0 || ((s.lobe == 2u || s.lobe == 3u) && s.wi.z < 0.0)) return s;   // the coat and fuzz reflect only
-            s.pdf = pdfLayeredTransmissive(wo, s.wi, t);
-            if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;
-            return s;
+            return !(s.wi.z == 0.0 || s.wi.z < 0.0);   // the coat and the fuzz reflect only
         }
-        const float4 p = lobeShares(wo, t);
         if (u.x < p.x)
         {
             s.wi = reflect(-wo, base.sampleSpecular(wo, u.yz));
@@ -2007,9 +2048,19 @@ struct OpenPBRSurface
             s.wi = fuzz.sample(wo, u.yz);
             s.lobe = 3u;
         }
-        if (s.wi.z <= 0.0) return s;
-        s.pdf = pdfOf(wo, s.wi, p);
-        if (s.pdf > 0.0) s.weight = eval(wo, s.wi, t) / s.pdf;
-        return s;
+        return !(s.wi.z <= 0.0);
+    }
+
+    // A drawn direction's density and weight: pdfFrom's density (0 where a layered glass's base drew what its own
+    // density, basePdf, does not hold), and f cos over it (f the evaluation at the direction).
+    void sampleWeigh(inout BsdfSample s, float pdf, float basePdf, bool baseDrawn, float3 f)
+    {
+        s.pdf = pdf;
+        if (baseDrawn && !(basePdf > 0.0))
+        {
+            s.pdf = 0.0;
+            return;
+        }
+        if (s.pdf > 0.0) s.weight = f / s.pdf;
     }
 };

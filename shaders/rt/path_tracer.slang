@@ -733,11 +733,19 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
             mi.specularIor = dispersedIor(mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
         }
         const OpenPBRSurface base = OpenPBRSurface(mi);
+        // The surface seen from wo, once for every direction below (a thin wall seen from its back as its front,
+        // mirrored, as OpenPBR's sample() and pdf() see it). Each OpenPBR call site is inlined whole (Slang, for
+        // SPIR-V): this vertex weighs its light's, the environment's and the bounce's directions at one site each,
+        // in one loop (sub-project 25: raygen was 1.1 million instructions, an 11-minute cold compile).
+        const bool back = base.thinBack(wo);
+        const float3 o = back ? base.mirrored(wo) : wo;
+        const OpenPBRView surfView = base.view(o, tables);
+        const float4 shares = base.drawShares(o, surfView, tables);
         if (depth == 0u)
         {
             firstRough = clamp(hit.specularRoughness, 0.01, 1.0);
             roughnessAOV[pixel] = firstRough;
-            const float3 a = base.albedo(wo, tables);
+            const float3 a = base.albedoFrom(wo, surfView, tables);
             if ((flags & kFlagAOVs) != 0u)
             {
                 albedoAOV[pixel] = float4(a, 1.0);
@@ -788,7 +796,11 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
             guideDebugColor = mode == 2u ? hit.position : mode == 3u ? bestMu : float3(valid, sharp, best / (best + 1.0));
         }
 
-        // Next-event estimation: a light, then the environment, each weighed against the BSDF.
+        // ---- the vertex's directions ----
+        // Next-event estimation's (a light, then the environment, each weighed against the BSDF) and the bounce's,
+        // all drawn before any is weighed. The draws are the groups they always were: 1 + 3 depth the light, 2 + 3
+        // depth the environment, kGuideGroup + depth the guide, 3 + 3 depth the bounce; nothing draws while they are
+        // weighed, so Russian roulette after reads the bounce group's fourth coordinate, as a walk's exit does.
         float lu0, lu1, lu2;
         if (walkExitVertex)
         {
@@ -804,29 +816,151 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
             lu2 = rng.next();
         }
         const LightSample ls = sampleLight(walkExitVertex ? origin : hit.position, p, lu0, lu1, lu2);
-        if (ls.valid)
+        const bool envOn = envSampled();
+        float pdfL = 0.0;
+        float3 L = float3(0.0, 0.0, 1.0);
+        if (envOn)
         {
-            const float3 wi = toLocal(ls.L, t, b, n);
-            float3 fs = float3(0.0), fd;
-            float3 smoothNee = float3(0.0), coreNee = float3(0.0);
-            if (walkExitVertex) fd = float3(max(dot(ls.L, n), 0.0) * (1.0 / kPi));
-            else if (CAUSTICS) base.evalLobesSmoothCore(wo, wi, tables, kCausticRough, float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2), fs, fd, smoothNee, coreNee);
-            else base.evalLobes(wo, wi, tables, fs, fd);
+            if (walkExitVertex) L = sampleEnvAt(float4(wr.next(), wr.next(), wr.next(), wr.next()), pdfL);
+            else
+            {
+                rng.group(2u + 3u * depth);
+                L = sampleEnv(rng, pdfL);
+            }
+        }
+
+        // Caustics step 2: a vertex at depth 1 to kManifoldDepths whose next vertex's light sample the bounce limit
+        // allows (a reflection from outside a solid, not inside an absorbing one; not a walk's exit) is a manifold pass's X: its request is the
+        // ray that met it and the throughput before its bounce, whatever the bounce then draws.
+        bool manifoldX = false;
+        // The next direction: the BSDF's draw, or at a guided vertex the mixture's (a lobe with probability gm.g),
+        // weighed below by f cos over the mixture's exact density either way.
+        BsdfSample s = bsdfSampleNone();
+        bool bounce = false;      // s's direction is weighed below (else s is final: none, or the walk's)
+        bool baseDrawn = false;   // a layered glass's base drew it
+        bool guided = false;
+        float3 guideDir = float3(0.0);
+        uint guideSlot = kGuideNoSlot;
+        if (!walkExitVertex)
+        {
+            if (manifold)
+            {
+                manifoldX = depth >= 1u && depth <= kManifoldDepths && !fromInside && !insideVolume &&
+                            depth + 1u - crossings <= bounces && crossings <= kCrossings;
+                if (manifoldX && (flags & kFlagManifoldRequests) != 0u)
+                {
+                    const uint r = (pixelIndex * kManifoldDepths + depth - 1u) * 3u;
+                    manifoldRequests[r] = float4(origin, asfloat(1u | uint(channel + 1) << 1u));
+                    manifoldRequests[r + 1u] = float4(dir, 0.0);
+                    manifoldRequests[r + 2u] = float4(throughput, 0.0);
+                }
+            }
+            float3 bu;
+            if (guidable)
+            {
+                rng.group(kGuideGroup + depth);
+                const float4 gu = float4(rng.next(), rng.next(), rng.next(), rng.next());
+                rng.group(3u + 3u * depth);
+                bu = float3(rng.next(), rng.next(), rng.next());   // the BSDF's draws (Russian roulette follows them)
+                guided = gu.x < gm.g;
+                if (guided)
+                {
+                    const uint i = guidePick(gm, gu.y);
+                    guideSlot = gm.slot[i];
+                    guideDir = vmfSample(gm.mu[i], gm.kappa[i], gu.zw);
+                    s.wi = toLocal(guideDir, t, b, n);
+                    bounce = true;
+                }
+            }
+            else
+            {
+                rng.group(3u + 3u * depth);
+                bu = float3(rng.next(), rng.next(), rng.next());
+            }
+            if (!guided) bounce = base.sampleDirectionFrom(o, bu, surfView, shares, tables, s, baseDrawn);
+            if (back) s.wi = base.mirrored(s.wi);
+        }
+
+        // ---- each direction weighed ----
+        // k = 0 the light's, 1 the environment's (each through the vertex's one shadow ray), 2 the bounce's.
+        float3 smoothNee = float3(0.0), coreNee = float3(0.0);   // caustics: the light sample's smooth part and its core
+        float3 sB = float3(0.0), cB = float3(0.0), dB = float3(0.0);   // the bounce's terms (its caustic split)
+        [loop]
+        for (uint k = 0u; k < 3u; ++k)
+        {
+            if (k == 0u ? !ls.valid : k == 1u ? !envOn : !bounce) continue;
+            const float3 Lw = k == 0u ? ls.L : L;   // a light sample's direction, in the world
+            const float3 wi = k == 2u ? s.wi : toLocal(Lw, t, b, n);
+            const float3 iFront = back ? base.mirrored(wi) : wi;
+            float3 fs = float3(0.0), fd, sT = float3(0.0), cT = float3(0.0);
+            if (walkExitVertex) fd = float3(max(dot(Lw, n), 0.0) * (1.0 / kPi));
+            else
+            {
+                // The bounce and the caustic light sample are weighed in the front frame (as OpenPBR's sample() and
+                // evalParts() take them); light sampling's split is evalLobes()' (the camera side meets a thin wall
+                // from its front, where both are one).
+                const bool front = k == 2u || (CAUSTICS && k == 0u);
+                base.terms(front ? o : wo, front ? iFront : wi, surfView, tables, sT, cT, fd);
+                fs = sT + cT;
+            }
             const float3 f = fs + fd;
-            float3 vis1;
-            if (any(f > 0.0) && dot(ls.L, ng) > 0.0 && visible(p, ls.L, ls.dist, vis1))
+            float3 vis = float3(1.0);
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, ng) > 0.0 &&
+                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
+                continue;
+            float bsdfPdf = fd.x, basePdf = 0.0;
+            if (!walkExitVertex && (k != 0u || (ls.pdf > 0.0 && ls.mis)))
+                bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
+            if (k == 2u)
+            {
+                sB = sT;
+                cB = cT;
+                dB = fd;
+                if (guided)
+                {
+                    s.pdf = guidePdf(gm, guideDir, bsdfPdf);
+                    s.weight = s.pdf > 0.0 ? f / s.pdf : float3(0.0);
+                    if (bsdfPdf > 0.0) rrRatio *= s.pdf / bsdfPdf;
+                    s.lobe = luminance(fd) >= luminance(fs) ? 1u : 0u;
+                }
+                else
+                {
+                    base.sampleWeigh(s, bsdfPdf, basePdf, baseDrawn, f);
+                    if (guidable && s.pdf > 0.0)
+                    {
+                        const float q = guidePdf(gm, toWorld(s.wi, t, b, n), s.pdf);
+                        s.weight *= s.pdf / q;
+                        rrRatio *= q / s.pdf;
+                        s.pdf = q;
+                    }
+                }
+                continue;
+            }
+            float3 le;
+            if (k == 0u)
             {
                 // A sun is a delta (its radiance already over its choice); a light without an
                 // emitter mesh only light sampling finds: full weight.
                 float w = 1.0;
                 if (ls.pdf > 0.0)
                 {
-                    float bsdfPdf = fd.x;
-                    if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, base.pdf(wo, wi, tables));
+                    if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, bsdfPdf);
                     w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
                 }
-                const float3 le = ls.radiance * vis1 * w;
-                float3 c = throughput * f * le;
+                le = ls.radiance * vis * w;
+            }
+            else
+            {
+                if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, bsdfPdf);
+                le = envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL;
+            }
+            float3 c = throughput * f * le;
+            if (CAUSTICS && k == 0u && !walkExitVertex)
+            {
+                float3 rough;
+                base.split(sT, cT, fd, kCausticRough, smoothNee, rough);
+                coreNee = back ? float3(0.0) : base.coreOf(o, iFront, sT, cT, kCausticRough,
+                                                           float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2));
                 if (caustics && depth > 0u && ls.pdf == 0.0 && any(chainThroughput > 0.0))
                 {
                     // A directional light through an all-smooth chain from the first hit: the light pass's.
@@ -837,51 +971,20 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                     // A directional light through the core of a smooth reflection after a rough one: the manifold pass's.
                     c -= chainOne * coreNee * le;
                 }
-                if (CAUSTICS)
-                {
-                    const bool smoothVertex = !walkExitVertex && hit.specularRoughness < kCausticRough;
-                    const uint sunClass = !smoothVertex ? kClassSunDirect : roughBefore ? kClassSunGlint : kClassSunSpecular;
-                    radiance += c * classKeep(classMask, ls.pdf == 0.0 ? sunClass : kClassLights);
-                }
-                else radiance += c;
-                // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
-                if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
-                else if (firstLobe == 1u) diffuseOut += c;
-                else specularOut += c;
             }
-        }
-        if (envSampled())
-        {
-            float pdfL;
-            float3 L;
-            if (walkExitVertex) L = sampleEnvAt(float4(wr.next(), wr.next(), wr.next(), wr.next()), pdfL);
-            else
+            if (CAUSTICS)
             {
-                rng.group(2u + 3u * depth);
-                L = sampleEnv(rng, pdfL);
+                const bool smoothVertex = !walkExitVertex && hit.specularRoughness < kCausticRough;
+                const uint sunClass = !smoothVertex ? kClassSunDirect : roughBefore ? kClassSunGlint : kClassSunSpecular;
+                const uint cls = k == 0u ? (ls.pdf == 0.0 ? sunClass : kClassLights)
+                                         : smoothVertex && roughBefore ? kClassEnvCaustic : kClassEnv;
+                radiance += c * classKeep(classMask, cls);
             }
-            const float3 wi = toLocal(L, t, b, n);
-            float3 fs = float3(0.0), fd;
-            if (walkExitVertex) fd = float3(max(dot(L, n), 0.0) * (1.0 / kPi));
-            else base.evalLobes(wo, wi, tables, fs, fd);
-            const float3 f = fs + fd;
-            float3 vis2;
-            if (pdfL > 0.0 && any(f > 0.0) && dot(L, ng) > 0.0 && visible(p, L, 1.0e4, vis2))
-            {
-                float bsdfPdf = fd.x;
-                if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, base.pdf(wo, wi, tables));
-                const float3 le = envRadiance(L) * vis2 * powerHeuristic(pdfL, bsdfPdf) / pdfL;
-                const float3 c = throughput * f * le;
-                if (CAUSTICS)
-                {
-                    const bool smoothVertex = !walkExitVertex && hit.specularRoughness < kCausticRough;
-                    radiance += c * classKeep(classMask, smoothVertex && roughBefore ? kClassEnvCaustic : kClassEnv);
-                }
-                else radiance += c;
-                if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
-                else if (firstLobe == 1u) diffuseOut += c;
-                else specularOut += c;
-            }
+            else radiance += c;
+            // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
+            if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
+            else if (firstLobe == 1u) diffuseOut += c;
+            else specularOut += c;
         }
 
         if (walkExitVertex)
@@ -909,81 +1012,23 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
             continue;
         }
 
-        // Caustics step 2: a vertex at depth 1 to kManifoldDepths whose next vertex's light sample the bounce limit
-        // allows (a reflection from outside a solid, not inside an absorbing one; not a walk's exit) is a manifold pass's X: its request is the
-        // ray that met it and the throughput before its bounce, whatever the bounce then draws.
-        bool manifoldX = false;
-        if (manifold)
+        if (guidable && s.pdf > 0.0 && guideProposed < kGuideTrainVertices)
         {
-            manifoldX = depth >= 1u && depth <= kManifoldDepths && !fromInside && !insideVolume &&
-                        depth + 1u - crossings <= bounces && crossings <= kCrossings;
-            if (manifoldX && (flags & kFlagManifoldRequests) != 0u)
-            {
-                const uint r = (pixelIndex * kManifoldDepths + depth - 1u) * 3u;
-                manifoldRequests[r] = float4(origin, asfloat(1u | uint(channel + 1) << 1u));
-                manifoldRequests[r + 1u] = float4(dir, 0.0);
-                manifoldRequests[r + 2u] = float4(throughput, 0.0);
-            }
-        }
-
-        // The next direction: the BSDF's sample, or at a guided vertex the mixture's (a lobe with
-        // probability gm.g), weighed by f cos over the mixture's exact density either way.
-        BsdfSample s;
-        uint guideSlot = kGuideNoSlot;
-        if (guidable)
-        {
-            rng.group(kGuideGroup + depth);
-            const float4 gu = float4(rng.next(), rng.next(), rng.next(), rng.next());
-            rng.group(3u + 3u * depth);
-            const float3 bu = float3(rng.next(), rng.next(), rng.next());   // the BSDF's draws (Russian roulette follows them)
-            if (gu.x < gm.g)
-            {
-                const uint i = guidePick(gm, gu.y);
-                guideSlot = gm.slot[i];
-                const float3 d = vmfSample(gm.mu[i], gm.kappa[i], gu.zw);
-                s.wi = toLocal(d, t, b, n);
-                float3 fs, fd;
-                base.evalLobes(wo, s.wi, tables, fs, fd);
-                const float bsdfPdf = base.pdf(wo, s.wi, tables);
-                s.pdf = guidePdf(gm, d, bsdfPdf);
-                s.weight = s.pdf > 0.0 ? (fs + fd) / s.pdf : float3(0.0);
-                if (bsdfPdf > 0.0) rrRatio *= s.pdf / bsdfPdf;
-                s.lobe = luminance(fd) >= luminance(fs) ? 1u : 0u;
-            }
-            else
-            {
-                s = base.sample(wo, bu, tables);
-                if (s.pdf > 0.0)
-                {
-                    const float q = guidePdf(gm, toWorld(s.wi, t, b, n), s.pdf);
-                    s.weight *= s.pdf / q;
-                    rrRatio *= q / s.pdf;
-                    s.pdf = q;
-                }
-            }
-            if (s.pdf > 0.0 && guideProposed < kGuideTrainVertices)
-            {
-                // A proposal for the grid: this vertex, the light the path had before the bounce and the
-                // throughput reaching it; the ray's end is written after the next trace.
-                const uint pi = pixelIndex * kGuideTrainVertices + guideProposed;
-                GuideProposal gp;
-                gp.x = hit.position;
-                gp.normal = guideOctPack(hit.geoNormal);
-                gp.xnext = float3(0.0);
-                gp.flags = 0u;
-                gp.rk = radiance;
-                gp.meanW = gm.total / float(kGuideCandidates);
-                gp.beta = throughput;
-                gp.srcSlot = guideSlot;
-                guideProposals[pi] = gp;
-                guidePending = pi;
-                ++guideProposed;
-            }
-        }
-        else
-        {
-            rng.group(3u + 3u * depth);
-            s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+            // A proposal for the grid: this vertex, the light the path had before the bounce and the
+            // throughput reaching it; the ray's end is written after the next trace.
+            const uint pi = pixelIndex * kGuideTrainVertices + guideProposed;
+            GuideProposal gp;
+            gp.x = hit.position;
+            gp.normal = guideOctPack(hit.geoNormal);
+            gp.xnext = float3(0.0);
+            gp.flags = 0u;
+            gp.rk = radiance;
+            gp.meanW = gm.total / float(kGuideCandidates);
+            gp.beta = throughput;
+            gp.srcSlot = guideSlot;
+            guideProposals[pi] = gp;
+            guidePending = pi;
+            ++guideProposed;
         }
         if (!(s.pdf > 0.0)) break;
         if (s.lobe == 5u)
@@ -1015,7 +1060,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
         if (caustics)
         {
             float3 sm, ro;
-            base.evalParts(wo, s.wi, tables, kCausticRough, sm, ro);
+            base.split(sB, cB, dB, kCausticRough, sm, ro);
             chainThroughput = depth == 0u ? throughput * ro / s.pdf : chainThroughput * sm / s.pdf;
             // Caustics step 2: a rough reflection at depth 1 to kManifoldDepths starts a chain of one (its request was
             // written before the draw); any other bounce ends it.
@@ -1677,35 +1722,58 @@ void cacheUpdate()
         const float3 wo = toLocal(-dir, t, b, n);
         const OpenPBRSurface base = OpenPBRSurface(inputsOf(hit));
         const float3 p = hit.position + hit.geoNormal * 1e-3;
+        // As tracePixel's vertex: the surface seen from wo once, every direction drawn first, then each weighed at
+        // one site (OpenPBR inlined once).
+        const bool back = base.thinBack(wo);
+        const float3 o = back ? base.mirrored(wo) : wo;
+        const OpenPBRView surfView = base.view(o, tables);
+        const float4 shares = base.drawShares(o, surfView, tables);
 
         rng.group(1u + 3u * depth);
         const float lu0 = rng.next(), lu1 = rng.next(), lu2 = rng.next();
         const LightSample ls = sampleLight(hit.position, p, lu0, lu1, lu2);
-        if (ls.valid)
-        {
-            const float3 wi = toLocal(ls.L, t, b, n);
-            const float3 f = base.eval(wo, wi, tables);
-            float3 vis5;
-            if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist, vis5))
-            {
-                const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
-                cacheContribute(verts, count, throughput * f * ls.radiance * vis5 * w);
-            }
-        }
-        if (envSampled())
+        const bool envOn = envSampled();
+        float pdfL = 0.0;
+        float3 L = float3(0.0, 0.0, 1.0);
+        if (envOn)
         {
             rng.group(2u + 3u * depth);
-            float pdfL;
-            const float3 L = sampleEnv(rng, pdfL);
-            const float3 wi = toLocal(L, t, b, n);
-            const float3 f = base.eval(wo, wi, tables);
-            float3 vis6;
-            if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4, vis6))
-                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis6 * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
+            L = sampleEnv(rng, pdfL);
         }
-
         rng.group(3u + 3u * depth);
-        const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+        BsdfSample s = bsdfSampleNone();
+        bool baseDrawn;
+        const bool bounce = base.sampleDirectionFrom(o, float3(rng.next(), rng.next(), rng.next()), surfView, shares, tables,
+                                                     s, baseDrawn);
+        if (back) s.wi = base.mirrored(s.wi);
+
+        // k = 0 the light's, 1 the environment's (each through one shadow ray), 2 the bounce's.
+        [loop]
+        for (uint k = 0u; k < 3u; ++k)
+        {
+            if (k == 0u ? !ls.valid : k == 1u ? !envOn : !bounce) continue;
+            const float3 Lw = k == 0u ? ls.L : L;
+            const float3 wi = k == 2u ? s.wi : toLocal(Lw, t, b, n);
+            const float3 iFront = back ? base.mirrored(wi) : wi;
+            float3 sT, cT, dT;
+            base.terms(o, iFront, surfView, tables, sT, cT, dT);
+            const float3 f = sT + cT + dT;
+            float3 vis = float3(1.0);
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, hit.geoNormal) > 0.0 &&
+                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
+                continue;
+            float bsdfPdf = 0.0, basePdf = 0.0;
+            if (k != 0u || (ls.pdf > 0.0 && ls.mis)) bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
+            if (k == 2u)
+                base.sampleWeigh(s, bsdfPdf, basePdf, baseDrawn, f);
+            else if (k == 0u)
+            {
+                const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf : 1.0;
+                cacheContribute(verts, count, throughput * f * ls.radiance * vis * w);
+            }
+            else
+                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL);
+        }
         if (!(s.pdf > 0.0)) break;
         const float3 next = toWorld(s.wi, t, b, n);
         if (dot(next, hit.geoNormal) <= 0.0) break;

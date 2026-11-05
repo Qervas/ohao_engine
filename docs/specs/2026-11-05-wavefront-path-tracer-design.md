@@ -9,9 +9,11 @@ The path tracer is one ray-tracing pipeline whose raygen, `tracePixel`, runs a w
 that inline OpenPBR's layered material, the subsurface walk, glass and its crossings, path guiding, the radiance cache,
 NRD's and DLSS's guides and the caustics split, about a million SPIR-V instructions (19 MB). That costs three ways:
 
-- **Compile time.** The driver compiles it cold in 8-11 minutes a program (default, caustics), once per executable, and
-  again for a second process beside a live one (AGENTS.md). Every shader edit that reaches raygen costs that before any
-  image; the gate's GPU suites spend most of their hours there (engine_tests 92 minutes after one shader change).
+- **Compile time.** The driver compiled it cold in 8-11 minutes a program (default, caustics), once per executable, and
+  again for a second process beside a live one (AGENTS.md). Every shader edit that reached raygen cost that before any
+  image; the gate's GPU suites spent most of their hours there (engine_tests 92 minutes after one shader change).
+  **Solved without the split** (W1c below: every function called from one site; raygen 27x smaller, its program's cold
+  compile 10-27 s). The split stays for the other two.
 - **Spills.** What raygen keeps alive across a trace is spilled for every pixel (AGENTS.md: a second trace site made the
   whole tracer 8x slower). Each feature added to the loop taxes every scene.
 - **Divergence.** A warp runs every material's code its pixels need, and a long path (glass, a walk) holds its warp's
@@ -73,11 +75,32 @@ film        add each path's radiance to the running mean; NRD's and DLSS's guide
   pipeline's, and the stages are for divergence and speed; if in minutes, it is the code's size, and only the split
   cures it.
   **Measured 2026-11-05:** the compute kernel's pipeline 688.8 s cold, the ray-tracing pipeline's 620-709 s: the same.
-  The compile is the code's size (one function, the whole path inlined), not the pipeline. Only the split cures it, and
-  each stage kernel must stay small: the shade kernels carry OpenPBR, and must not carry each other. (Mesa's RADV
-  reports the same of merged ray-tracing megashaders, "shader sizes get genuinely ridiculous", fixed by compiling them
-  apart: pixelcluster, "Inside Mesa 26.0's RADV RT improvements".) The probe is deleted; the descriptor set and push
-  constants keep the compute stage for the wavefront's kernels.
+  The compile is the code's size (one function, the whole path inlined), not the pipeline. (Mesa's RADV reports the same
+  of merged ray-tracing megashaders, "shader sizes get genuinely ridiculous": pixelcluster, "Inside Mesa 26.0's RADV RT
+  improvements".) The probe is deleted; the descriptor set and push constants keep the compute stage for the
+  wavefront's kernels. *Spec correction:* this paragraph concluded that only the split cures the size; W1c cured it in
+  the megakernel.
+- **W1c — one call site each (measured 2026-11-05).** Where the size came from: Slang inlines every call for SPIR-V
+  (`[noinline]` is not honoured there), so a function reached from k call sites is compiled k times, and OpenPBR's
+  entries called each other from several sites each. `OpenPBRSurface.sample()` was 404,296 instructions: `sampleFront`
+  twice (a thin wall's two sides), in it the base's `sample()` twice and `eval()` twice, in each `eval()` the base's
+  `evalLobes()` three times, and `coatDarken` (the base's whole albedo) in every `baseScale`. Each OpenPBR entry now
+  builds one `OpenPBRView` of wo (the viewed base, the fuzz's and the coat's albedos, the coat's path and darkening)
+  and calls each helper from one site (`terms`, `pdfFrom`, `drawShares`, `sampleDirectionFrom` then `sampleWeigh`; a
+  thin wall's back mirrored before the one call): `sample()` 24,969, `pdf()` 12,878 (76,068), `eval()` 10,070
+  (44,925), `albedo()` 5,970 (17,055). A path vertex (`tracePixel`, `cacheUpdate`) builds its view once, draws its
+  light's, the environment's and the bounce's directions, then weighs the three in one loop at one evaluation, one
+  density and one shadow-ray site; nothing draws inside the loop, so every Sobol group and Russian roulette's draw are
+  as they were. Instructions: raygen 1,101,869 to 40,620, raygenCaustics 1,147,350 to 41,732, cacheUpdate 651,498 to
+  32,477, causticTrace 125,850 to 41,709, manifoldConnect 62,418 to 24,891; deferred lighting's SPIR-V 1.7x smaller,
+  the transparent pass's 1.8x. Cold compiles (`ohao_cold1.exe`, a fresh copy of the CLI): the default program 620-709 s
+  to 10.3 s beside one busy core, 27.3 s with Unreal Editor and others using four; the caustics program about 490 s to
+  33.7 s, the manifold program 7.3 s (both beside the four). Same arithmetic: the energy tables integrate byte for byte
+  as before, material_tests 36/36, manifold_tests 12/12, every deferred golden exact (max_abs 0), the path-traced ones
+  within their floor except two the driver's new rounding re-rolled (re-captured: the transparency scene's panes are a
+  coin hashed from each ray's bits, so one ulp anywhere re-rolls the frame's noise, its mean 50.7954 to 50.7956; glass
+  33 pixels by 1-2 levels). The split is no longer needed for compile time; it is for spills and divergence, measured
+  against this megakernel.
 - **W2 — the wavefront for the reference.** camera, trace, escaped, emitted, shade (one class), shadow, film; offline
   profile, no cache, no guiding, no caustics. Held to the megakernel: `check_material` (the white furnace, the closed
   box), `check_analytic`, the path-traced goldens within their floor, Cornell and the helmet room's means.
@@ -108,8 +131,9 @@ Each step ends with the engine running and every gate green, as the conventions 
 
 ## Rulings for Frank
 
-- **WF1 (OPEN) — when.** Recommended: before step 2b's GPU work, which would otherwise pay a cold compile of the
-  caustics program per iteration; 2b's CPU work (the walk, its estimate) is done and waits.
+- **WF1 (OPEN) — when.** Recommended: after caustics 2b and 2c. W1c took the cold compile from minutes to seconds in the
+  megakernel, so 2b's GPU work no longer waits on the split; W2-W5 are then measured for speed (spills, divergence)
+  against a megakernel that compiles as fast as they would.
 - **WF2 (OPEN) — the realtime profile.** Recommended: the same wavefront (one tracer, as frontier F1 ruled); its
   bounce limit keeps queues short.
 
