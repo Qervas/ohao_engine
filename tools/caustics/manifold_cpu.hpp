@@ -54,6 +54,10 @@ struct PairResult {
     std::array<float, 4> x[4]{};   // (u1, v1, u2, v2)
 };
 PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const V3& L, float eta, V2 s1, V2 s2);
+// Whether a set of entry triangles (box 1, normals within half1 of axis1) and a set of exit triangles can hold a path
+// with slopes s1, s2 (conservative; manifoldPairNodeTest).
+bool manifoldPairNodeTest(const V3& min1, const V3& max1, const V3& axis1, float half1, const V3& min2, const V3& max2,
+                          const V3& axis2, float half2, const V3& X, const V3& L, float eta, V2 s1, V2 s2);
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 

@@ -204,11 +204,25 @@ test on a box centred at the root it finds (F(c) all but 0 there), that box too 
 Newton stopping at a few ulps (1e-6), not one. The walk is 3.5 MB of SPIR-V (the 4-D interval dual unrolled): the
 manifold program's compile time is measured when the pass takes it.
 
-**Pairs.** An exit triangle is a candidate as in 2a (its disc test at X, with the inside direction unknown: the test runs
-on the cone of directions toward the draw's bounding sphere); for each, entry triangles come from the same draw's
-hierarchy, pruned by the interval map on the pair's node boxes (node pairs whose constraint intervals exclude the drawn
-slopes are dropped, Path Cuts' pair pruning). Measured as candidate pairs a request on `c3_sphere`'s ball before the
-pass is built.
+**Pairs: per-frame beams (T3, revised 2026-11-05).** The first design tested pairs per request: `manifoldPairNodeTest`
+(conservative: the light's direction inside lies in the cone between the two nodes' boxes, and each refraction's half
+vector must fall within the node's normals tilted by its slope) on cluster pairs, then on the triangle pairs inside.
+Measured on the showcase's 96 x 48 ball (`manifold_tests` t11): it never drops a built path's pair, but leaves 306,000
+triangle pairs a request of 81 million (447,000 with slopes to 0.1). The slack is the geometry, not the slope: a
+triangle's normals spread a few degrees, the direction between two triangles a few more, and refraction multiplies a
+direction's change by about 3 in its half vector, so every pair aligned within about 10 degrees passes. Solving that
+many per pixel is out.
+
+The pairs are found the other way round, once per frame. The slopes s1, s2 are drawn per frame (one draw for every
+pixel: correlated noise across pixels, the same expectation). Every sunlit entry triangle then refracts into a beam
+whose directions inside are a narrow cone (its own normals' spread, about a third of it after refraction), the exit
+triangles that beam can reach are found through the solid's hierarchy (the same node test, with the entry fixed to one
+triangle), and each (entry, exit) pair becomes a beam out of the solid: the exit triangle's box and the cone of
+directions leaving it (the interval refraction of the inside cone through the exit's tilted normals). A tree over the
+beams (boxes and cones, as a light tree's) lets each request find the beams whose cone covers its X, and only those
+pairs are certified. Exact: every bound is conservative and every root of a pair is certified. The same per-frame
+beams serve 2a's reflections (a beam a reflecting triangle), which is how 2a gets cheaper (ruling M9's ask). Measured
+before it is built: beams a frame and beams covering X a request, on c3's ball and the showcase's.
 
 **Tests.**
 - **t9_krawczyk_complete** (CPU twin): random triangles, points and slopes, 2a's map: every root a dense double search

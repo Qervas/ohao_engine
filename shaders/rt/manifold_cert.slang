@@ -887,3 +887,48 @@ ManifoldPairResult manifoldCertifyPair(ManifoldTri t1, ManifoldTri t2, float3 X,
     }
     return res;
 }
+
+// ---- step 2b: which entry and exit triangles to pair (T3) ------------------------------------------------
+// Whether a set of entry triangles (box 1, its normals within half1 of axis1) and a set of exit triangles (box 2,
+// axis2, half2) can hold a path with slopes s.xy at the entry and s.zw at the exit. Conservative: false only when no
+// pair of their triangles can.
+// - The light crosses the solid from box 1 to box 2: its direction d lies in the cone from box 1 toward box 2 (axis the
+//   centres' line, half angle asin of the boxes' radii over their distance; everything when they are close).
+// - It leaves toward X: w lies in the cone from box 2 toward X.
+// - A path needs h1 = -(L + eta d) along a microfacet normal of the entry (within half1 + atan|s.xy| of axis1) and
+//   h2 = eta d - w along one of the exit (within half2 + atan|s.zw| of axis2). Over the cones, h1 moves from its value
+//   at the axes by a chord of at most eta 2 sin(dHalf / 2), h2 by eta 2 sin(dHalf / 2) + 2 sin(wHalf / 2), so its angle by
+//   at most asin(chord / |h|) (everything once the chord reaches |h|).
+float pairConeAngle(float3 a, float3 b)
+{
+    return acos(clamp(dot(a, b) / max(length(a) * length(b), 1e-30), -1.0, 1.0));
+}
+
+float pairChordAngle(float chord, float r)
+{
+    return chord >= r ? kManifoldPi : asin(chord / r);
+}
+
+bool manifoldPairNodeTest(float3 min1, float3 max1, float3 axis1, float half1, float3 min2, float3 max2, float3 axis2,
+                          float half2, float3 X, float3 L, float eta, float4 s)
+{
+    const float3 c1 = 0.5 * (min1 + max1), c2 = 0.5 * (min2 + max2);
+    const float r1 = 0.5 * length(max1 - min1), r2 = 0.5 * length(max2 - min2);
+    const float3 between = c2 - c1;
+    const float dist = length(between);
+    if (!(dist > r1 + r2)) return true;   // close or overlapping: every direction
+    const float3 dAxis = between / dist;
+    const float dHalf = asin(min(1.0, (r1 + r2) / dist));
+    const float3 toX = X - c2;
+    const float xDist = length(toX);
+    if (!(xDist > r2)) return true;
+    const float3 wAxis = toX / xDist;
+    const float wHalf = asin(min(1.0, r2 / xDist));
+    const float3 h1 = -(L + eta * dAxis);
+    const float3 h2 = eta * dAxis - wAxis;
+    const float chord1 = eta * 2.0 * sin(0.5 * dHalf);
+    const float chord2 = chord1 + 2.0 * sin(0.5 * wHalf);
+    const float allow1 = half1 + atan(length(s.xy)) + pairChordAngle(chord1, length(h1));
+    const float allow2 = half2 + atan(length(s.zw)) + pairChordAngle(chord2, length(h2));
+    return pairConeAngle(h1, axis1) <= allow1 * 1.0001 + 1e-6 && pairConeAngle(h2, axis2) <= allow2 * 1.0001 + 1e-6;
+}

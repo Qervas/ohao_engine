@@ -571,6 +571,90 @@ double pairResidualD(const Tri& t1, const Tri& t2, const D3& X, const D3& L, dou
                      std::abs(dot(h2, tb) / c2 - s[2]), std::abs(dot(h2, bb) / c2 - s[3])});
 }
 
+// A path built by hand: the sun's ray refracted into the ball at (u, v) of triangle i1 through a microfacet normal of
+// slope s[0..1], the mesh met in double at (u2, v2) of i2, refracted out through slope s[2..3], X on the way out.
+struct BuiltPath {
+    size_t i1{0}, i2{0};
+    double u{0}, v{0}, u2{0}, v2{0};
+    D3 X{}, L{};
+    double s[4]{};
+};
+
+// Up to `count` paths through `ball` (IOR eta), from attempts drawn by `g`.
+std::vector<BuiltPath> buildPaths(const std::vector<Tri>& ball, double eta, std::mt19937& g, int count,
+                                  double maxSlope = 0.1) {
+    std::vector<BuiltPath> paths;
+    for (int k = 0; k < 40 * count && int(paths.size()) < count; ++k) {
+        BuiltPath b;
+        b.L = norm(add(D3{0, 1, 0}, mul(sphereDir(g), 0.6 * rnd(g))));
+        b.i1 = size_t(rnd(g) * double(ball.size())) % ball.size();
+        const Tri& t1 = ball[b.i1];
+        const double u1 = rnd(g), v1r = rnd(g);
+        b.u = u1 * (1.0 - std::sqrt(v1r));
+        b.v = std::sqrt(v1r) * rnd(g) * (1.0 - u1);
+        if (b.u + b.v > 1.0) continue;
+        D3 n1, ta, ba;
+        frameD(t1, b.u, b.v, n1, ta, ba);
+        if (dot(n1, b.L) < 0.2) continue;   // lit
+        auto slope = [&] {
+            const double r = maxSlope * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
+            return std::array<double, 2>{r * std::cos(phi), r * std::sin(phi)};
+        };
+        const auto a1 = slope(), a2 = slope();
+        const D3 m1 = norm(add(n1, add(mul(ta, a1[0]), mul(ba, a1[1]))));
+        if (dot(m1, b.L) <= 0.0) continue;
+        const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), b.u), mul(d3(t1.e2), b.v)));
+        D3 d;
+        if (!refractD(mul(b.L, -1.0), m1, 1.0 / eta, d)) continue;
+        double th;
+        const int i2 = hitD(ball, y1, d, b.u2, b.v2, th);
+        if (i2 < 0) continue;
+        b.i2 = size_t(i2);
+        const Tri& t2 = ball[b.i2];
+        D3 n2, tb, bb;
+        frameD(t2, b.u2, b.v2, n2, tb, bb);
+        const D3 m2 = norm(add(n2, add(mul(tb, a2[0]), mul(bb, a2[1]))));
+        if (dot(d, m2) <= 0.0) continue;
+        D3 w;
+        if (!refractD(d, mul(m2, -1.0), eta, w)) continue;   // total internal reflection: no path out
+        const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), b.u2), mul(d3(t2.e2), b.v2)));
+        b.X = add(y2, mul(w, 0.5 + 1.5 * rnd(g)));
+        b.s[0] = a1[0];
+        b.s[1] = a1[1];
+        b.s[2] = a2[0];
+        b.s[3] = a2[1];
+        paths.push_back(b);
+    }
+    return paths;
+}
+
+// A set of triangles as the pass would gather it: its world box and the cone of its vertex normals.
+struct NodeD {
+    V3 lo{}, hi{}, axis{};
+    float half{0};
+};
+NodeD nodeOf(const std::vector<Tri>& tris, const std::vector<size_t>& members) {
+    D3 lo{1e30, 1e30, 1e30}, hi{-1e30, -1e30, -1e30}, sum{0, 0, 0};
+    std::vector<D3> normals;
+    for (size_t i : members) {
+        const Tri& t = tris[i];
+        const D3 p[3] = {d3(t.p0), add(d3(t.p0), d3(t.e1)), add(d3(t.p0), d3(t.e2))};
+        const D3 n[3] = {norm(d3(t.n0)), norm(add(d3(t.n0), d3(t.a1))), norm(add(d3(t.n0), d3(t.a2)))};
+        for (int k = 0; k < 3; ++k) {
+            for (int a = 0; a < 3; ++a) {
+                lo[a] = std::min(lo[a], p[k][a]);
+                hi[a] = std::max(hi[a], p[k][a]);
+            }
+            sum = add(sum, n[k]);
+            normals.push_back(n[k]);
+        }
+    }
+    const D3 axis = norm(sum);
+    double half = 0.0;
+    for (const D3& n : normals) half = std::max(half, std::acos(std::clamp(dot(n, axis), -1.0, 1.0)));
+    return {f3(lo), f3(hi), f3(axis), float(half + 1e-6)};
+}
+
 } // namespace
 
 // Paths built by hand on the showcase's ball (96 x 48, IOR 1.5): a point on a lit triangle, two slopes in the glass's
@@ -582,60 +666,31 @@ TEST(Manifold, t10_pair_known_paths) {
     const std::vector<Tri> ball = uvSphere(0.5, 96, 48);
     const double eta = 1.5;
     std::mt19937 g(101u);
+    const std::vector<BuiltPath> paths = buildPaths(ball, eta, g, 120);
     int cases = 0, found = 0, extra = 0, undecided = 0, undecidedCases = 0, boxes = 0, maxBoxes = 0;
-    for (int k = 0; k < 400 && cases < 120; ++k) {
-        const D3 L = norm(add(D3{0, 1, 0}, mul(sphereDir(g), 0.6 * rnd(g))));
-        const Tri& t1 = ball[size_t(rnd(g) * double(ball.size())) % ball.size()];
-        const double u1 = rnd(g), v1r = rnd(g);
-        const double u = u1 * (1.0 - std::sqrt(v1r)), v = std::sqrt(v1r) * rnd(g) * (1.0 - u1);
-        if (u + v > 1.0) continue;
-        D3 n1, ta, ba;
-        frameD(t1, u, v, n1, ta, ba);
-        if (dot(n1, L) < 0.2) continue;   // lit
-        auto slope = [&] {
-            const double r = 0.1 * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
-            return std::array<double, 2>{r * std::cos(phi), r * std::sin(phi)};
-        };
-        const auto a1 = slope(), a2 = slope();
-        const D3 m1 = norm(add(n1, add(mul(ta, a1[0]), mul(ba, a1[1]))));
-        if (dot(m1, L) <= 0.0) continue;
-        const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), u), mul(d3(t1.e2), v)));
-        D3 d;
-        if (!refractD(mul(L, -1.0), m1, 1.0 / eta, d)) continue;
-        double u2, v2, th;
-        const int i2 = hitD(ball, y1, d, u2, v2, th);
-        if (i2 < 0) continue;
-        const Tri& t2 = ball[size_t(i2)];
-        D3 n2, tb, bb;
-        frameD(t2, u2, v2, n2, tb, bb);
-        const D3 m2 = norm(add(n2, add(mul(tb, a2[0]), mul(bb, a2[1]))));
-        if (dot(d, m2) <= 0.0) continue;
-        D3 w;
-        if (!refractD(d, mul(m2, -1.0), eta, w)) continue;   // total internal reflection: no path out
-        const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), u2), mul(d3(t2.e2), v2)));
-        const D3 X = add(y2, mul(w, 0.5 + 1.5 * rnd(g)));
-        const double s[4] = {a1[0], a1[1], a2[0], a2[1]};
+    for (const BuiltPath& b : paths) {
+        const Tri &t1 = ball[b.i1], &t2 = ball[b.i2];
         // The construction itself meets the constraint (the half vectors are the microfacet normals).
-        ASSERT_LT(pairResidualD(t1, t2, X, L, eta, s, {float(u), float(v), float(u2), float(v2)}), 1e-4)
-            << "case " << k;
-        const PairResult r = manifoldCertifyPair(t1, t2, f3(X), f3(L), float(eta), {float(s[0]), float(s[1])},
-                                                 {float(s[2]), float(s[3])});
-        ++cases;
+        ASSERT_LT(pairResidualD(t1, t2, b.X, b.L, eta, b.s, {float(b.u), float(b.v), float(b.u2), float(b.v2)}), 1e-4)
+            << "case " << cases;
+        const PairResult r = manifoldCertifyPair(t1, t2, f3(b.X), f3(b.L), float(eta), {float(b.s[0]), float(b.s[1])},
+                                                 {float(b.s[2]), float(b.s[3])});
         undecided += r.undecided;
         boxes += r.boxes;
         maxBoxes = std::max(maxBoxes, r.boxes);
         bool hit = false;
         for (int i = 0; i < r.roots; ++i) {
             const auto& x = r.x[i];
-            const bool same = std::abs(x[0] - u) < 1e-3 && std::abs(x[1] - v) < 1e-3 && std::abs(x[2] - u2) < 1e-3 &&
-                              std::abs(x[3] - v2) < 1e-3;
+            const bool same = std::abs(x[0] - b.u) < 1e-3 && std::abs(x[1] - b.v) < 1e-3 &&
+                              std::abs(x[2] - b.u2) < 1e-3 && std::abs(x[3] - b.v2) < 1e-3;
             hit = hit || same;
             if (!same) ++extra;
-            EXPECT_LT(pairResidualD(t1, t2, X, L, eta, s, x), 2e-3) << "case " << k << ": a false path";
+            EXPECT_LT(pairResidualD(t1, t2, b.X, b.L, eta, b.s, x), 2e-3) << "case " << cases << ": a false path";
         }
         if (hit) ++found;
         undecidedCases += r.undecided > 0 ? 1 : 0;
-        EXPECT_TRUE(hit || r.undecided > 0) << "case " << k << ": the built path not certified, nothing undecided";
+        EXPECT_TRUE(hit || r.undecided > 0) << "case " << cases << ": the built path not certified, nothing undecided";
+        ++cases;
     }
     std::printf("t10_pair_known_paths: %d paths, %d certified, %d other roots, %d boxes (%.1f each, at most %d), "
                 "%d undecided\n",
@@ -643,4 +698,62 @@ TEST(Manifold, t10_pair_known_paths) {
     EXPECT_GT(cases, 80);
     EXPECT_EQ(found + undecidedCases, cases);
     EXPECT_LE(undecidedCases, cases / 50);
+}
+
+// Which pairs to solve (2b T3): a ball grouped as the pass gathers it (clusters by latitude and longitude), the node
+// test applied to cluster pairs, then to the triangle pairs inside the cluster pairs that pass. It never drops a built
+// path's pair (conservative), and the pairs left a request are measured. On the showcase's 96 x 48 ball (2026-11-05):
+// 306,000 triangle pairs a request of 81 million with smooth glass's slopes, 447,000 with slopes to 0.1: far too many
+// to solve per pixel, so 2b selects pairs by per-frame beams instead (the spec's "Pairs"). Here a 48 x 24 ball, to stay
+// quick.
+TEST(Manifold, t11_pair_candidates) {
+    const std::vector<Tri> ball = uvSphere(0.5, 48, 24);
+    const double eta = 1.5;
+    std::mt19937 g(111u);
+    // Smooth glass (the showcase's: roughness 0, alpha about 1e-4): slopes drawn within 1e-3.
+    const std::vector<BuiltPath> paths = buildPaths(ball, eta, g, 12, 1e-3);
+    // Clusters: 8 bands of latitude x 12 of longitude by the triangle's centroid.
+    std::vector<std::vector<size_t>> clusters(8 * 12);
+    std::vector<size_t> clusterOf(ball.size());
+    for (size_t i = 0; i < ball.size(); ++i) {
+        const Tri& t = ball[i];
+        const D3 c = add(d3(t.p0), mul(add(d3(t.e1), d3(t.e2)), 1.0 / 3.0));
+        const double th = std::acos(std::clamp(c[1] / len(c), -1.0, 1.0)), ph = std::atan2(c[2], c[0]) + kPi;
+        const size_t k = size_t(std::min(7.0, std::floor(th / kPi * 8.0))) * 12 +
+                         size_t(std::min(11.0, std::floor(ph / (2.0 * kPi) * 12.0)));
+        clusters[k].push_back(i);
+        clusterOf[i] = k;
+    }
+    std::vector<NodeD> cnodes, tnodes;
+    for (const auto& m : clusters) cnodes.push_back(nodeOf(ball, m));
+    for (size_t i = 0; i < ball.size(); ++i) tnodes.push_back(nodeOf(ball, {i}));
+    long clusterPairs = 0, trianglePairs = 0, maxTrianglePairs = 0;
+    for (size_t q = 0; q < paths.size(); ++q) {
+        const BuiltPath& b = paths[q];
+        const V2 s1{float(b.s[0]), float(b.s[1])}, s2{float(b.s[2]), float(b.s[3])};
+        auto test = [&](const NodeD& a, const NodeD& c) {
+            return manifoldPairNodeTest(a.lo, a.hi, a.axis, a.half, c.lo, c.hi, c.axis, c.half, f3(b.X), f3(b.L),
+                                        float(eta), s1, s2);
+        };
+        // The built path's own pair passes at both levels.
+        ASSERT_TRUE(test(cnodes[clusterOf[b.i1]], cnodes[clusterOf[b.i2]])) << "path " << q << ": its clusters pruned";
+        ASSERT_TRUE(test(tnodes[b.i1], tnodes[b.i2])) << "path " << q << ": its triangles pruned";
+        long here = 0;
+        for (size_t c1 = 0; c1 < cnodes.size(); ++c1)
+            for (size_t c2 = 0; c2 < cnodes.size(); ++c2) {
+                if (clusters[c1].empty() || clusters[c2].empty() || !test(cnodes[c1], cnodes[c2])) continue;
+                ++clusterPairs;
+                for (size_t i1 : clusters[c1])
+                    for (size_t i2 : clusters[c2])
+                        if (i1 != i2 && test(tnodes[i1], tnodes[i2])) ++here;
+            }
+        trianglePairs += here;
+        maxTrianglePairs = std::max(maxTrianglePairs, here);
+    }
+    const double n = double(paths.size());
+    std::printf("t11_pair_candidates: %zu requests; cluster pairs %.1f a request (of %zu); triangle pairs %.1f a request "
+                "(at most %ld, of %zu)\n",
+                paths.size(), clusterPairs / n, cnodes.size() * cnodes.size(), trianglePairs / n, maxTrianglePairs,
+                ball.size() * ball.size());
+    EXPECT_GT(paths.size(), 8u);
 }
