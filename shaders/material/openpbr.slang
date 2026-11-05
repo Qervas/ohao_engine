@@ -900,6 +900,15 @@ struct OpenPBRBase
     float2 alphaXY;      // (alpha_t, alpha_b) when anisotropic
     float tableRough;    // the roughness the albedos read the tables at: rough, or viewedFrom()'s
     float2 s56Delta;     // viewedFrom()'s pbrS56Delta: the anisotropic lobe's Fresnel moments
+    // What viewedFrom() works out besides, once a view: each function reading them is asked about the view's own wo
+    // (|wo.z| its mu), as OpenPBRSurface's view() asks. Every call site is compiled whole (Slang inlines it), so these
+    // were the tables read again at every site. A base no view made holds NaN in them.
+    float vE1Avg;        // pbrE1Avg: the specular lobe's mean E1
+    float vMsD;          // the dielectric's multiple-scattering Fresnel, msFresnel(FavgD(eta), vE1Avg).x
+    float3 vMsM;         // the metal's, msFresnel(metalFavg(), vE1Avg)
+    float vEd;           // dielectricAlbedo(mu)
+    float3 vEm;          // metalAlbedo(mu)
+    float3 vSlot;        // slotAlbedo(mu)
     float eta;           // the dielectric's IOR after specular_weight
     float3 specColor;
     float3 metalF0;      // specular_weight folded in below
@@ -940,6 +949,19 @@ struct OpenPBRBase
         sss = saturate(m.subsurfaceWeight);
         sssColor = saturate(m.subsurfaceColor);
         sssLocal = m.subsurfaceLocal;
+        unviewed();
+    }
+
+    // No view's values: NaN, so a function asked without a view shows it.
+    [mutating] void unviewed()
+    {
+        const float nan = asfloat(0x7FC00000u);
+        vE1Avg = nan;
+        vMsD = nan;
+        vMsM = float3(nan);
+        vEd = nan;
+        vEm = float3(nan);
+        vSlot = float3(nan);
     }
 
     // ---- subsurface (step 4) ----
@@ -966,7 +988,7 @@ struct OpenPBRBase
     float subsurfaceShare(float3 wo, OpenPBRTables t)
     {
         if (!walked() || wo.z <= 0.0) return 0.0;
-        return (1.0 - metalness) * (1.0 - transmission) * sss * (1.0 - dielectricAlbedo(wo.z, t));
+        return (1.0 - metalness) * (1.0 - transmission) * sss * (1.0 - vEd);
     }
 
     // Its expected return (the walk's colour is subsurface_color's), for choosing lobes.
@@ -999,15 +1021,14 @@ struct OpenPBRBase
     // The multiple-scattering lobe with F = 1 (x cos(wi)).
     float msLobe(float3 wo, float3 wi, OpenPBRTables t)
     {
-        const float e1Avg = pbrE1Avg(t, rough, anisotropy);
         const float ro = pbrTableRough(t, rough, anisotropy, wo), ri = pbrTableRough(t, rough, anisotropy, wi);
-        return (1.0 - t.E1(wo.z, ro)) * (1.0 - t.E1(wi.z, ri)) / (kPbrPi * max(1.0 - e1Avg, 1e-6)) * wi.z;
+        return (1.0 - t.E1(wo.z, ro)) * (1.0 - t.E1(wi.z, ri)) / (kPbrPi * max(1.0 - vE1Avg, 1e-6)) * wi.z;
     }
 
     // The dielectric specular's albedo toward wo (untinted: the albedo scaling's E).
     float dielectricAlbedo(float mu, OpenPBRTables t)
     {
-        const float ms = msFresnel(float3(t.FavgD(eta)), pbrE1Avg(t, rough, anisotropy)).x;
+        const float ms = vMsD;
         return t.EssD(mu, tableRough, eta) + dielectricS56(eta, s56Delta) + ms * (1.0 - t.E1(mu, tableRough));
     }
 
@@ -1016,7 +1037,7 @@ struct OpenPBRBase
         const float e1 = t.E1(mu, tableRough);
         const float s5 = t.S5(mu, tableRough) + s56Delta.x, s6 = t.S6(mu, tableRough) + s56Delta.y;
         const float3 ess = metalWeight * (metalF0 * e1 + (1.0 - metalF0) * s5 - metalB * s6);
-        return ess + msFresnel(metalFavg(), pbrE1Avg(t, rough, anisotropy)) * (1.0 - e1);
+        return ess + vMsM * (1.0 - e1);
     }
 
     // The specular lobes (the metal's and the dielectric's, tinted) and the diffuse beneath them,
@@ -1035,23 +1056,22 @@ struct OpenPBRBase
         const float c = dot(wo, m);
         const float ss = anisotropy > 0.0 ? ggxSingleAniso(wo, wi, alphaXY) : ggxSingle(wo, wi, alpha * alpha);
         const float ms = msLobe(wo, wi, t);
-        const float e1Avg = pbrE1Avg(t, rough, anisotropy);
         if (metalness > 0.0)
         {
             const float3 F = metalWeight * metalFresnel(c);
-            specular += metalness * (F * ss + msFresnel(metalFavg(), e1Avg) * ms);
+            specular += metalness * (F * ss + vMsM * ms);
         }
         if (metalness < 1.0)
         {
             if (film > 0.0)
                 specular += (1.0 - metalness) * specColor
-                          * (dielectricFresnel(c) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms);
+                          * (dielectricFresnel(c) * ss + vMsD * ms);
             else
             {
-                const float spec = fresnelDielectric(c, eta) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms;
+                const float spec = fresnelDielectric(c, eta) * ss + vMsD * ms;
                 specular += (1.0 - metalness) * specColor * spec;
             }
-            diffuse = (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t))
+            diffuse = (1.0 - metalness) * (1.0 - transmission) * (1.0 - vEd)
                     * slotEval(wi, wo) * wi.z;
         }
     }
@@ -1071,7 +1091,7 @@ struct OpenPBRBase
 
     float refractedShare(float3 wo, OpenPBRTables t)
     {
-        return (1.0 - metalness) * transmission * (1.0 - dielectricAlbedo(wo.z, t));
+        return (1.0 - metalness) * transmission * (1.0 - vEd);
     }
 
     float3 evalTransmission(float3 wo, float3 wi, OpenPBRTables t)
@@ -1082,7 +1102,7 @@ struct OpenPBRBase
             const float3 o = wo.z > 0.0 ? wo : flipZ(wo);
             const float3 i = wo.z > 0.0 ? wi : flipZ(wi);
             if (i.z >= 0.0) return float3(0.0);   // the reflection is evalLobes' (after the flip)
-            const OpenPBRBase b = viewedFrom(o, t);
+            const OpenPBRBase b = this;   // the view of o's |z|, as every caller holds it
             const float3 r = flipZ(i);
             const float shape = anisotropy > 0.0 ? ggxSingleAniso(o, r, alphaXY) : ggxSingle(o, r, alpha * alpha);
             return transTint * (b.refractedShare(o, t) / max(b.thinE1(o, t), 1e-4)) * shape;   // ggxSingle is f x cos already
@@ -1090,7 +1110,7 @@ struct OpenPBRBase
         if (wo.z > 0.0)
         {
             if (wi.z >= 0.0) return float3(0.0);
-            const OpenPBRBase b = viewedFrom(wo, t);
+            const OpenPBRBase b = this;
             const float et = t.EssT(wo.z, b.tableRough, eta);
             return transTint * (b.refractedShare(wo, t) / max(et, 1e-4)) * ggxRefract(wo, wi, alphaXY, eta);
         }
@@ -1114,7 +1134,7 @@ struct OpenPBRBase
     float insideSum(float3 wo, OpenPBRTables t)
     {
         const float3 o = flipZ(wo);
-        const float r = viewedFrom(o, t).tableRough;
+        const float r = tableRough;
         return t.EssDIn(o.z, r, eta) + t.EssTIn(o.z, r, eta);
     }
 
@@ -1129,7 +1149,7 @@ struct OpenPBRBase
     float insideReflection(float3 wo, OpenPBRTables t)
     {
         const float3 o = flipZ(wo);
-        const float r = viewedFrom(o, t).tableRough;
+        const float r = tableRough;
         const float er = t.EssDIn(o.z, r, eta), et = t.EssTIn(o.z, r, eta);
         return er + et > 0.0 ? saturate(er / (er + et)) : 1.0;
     }
@@ -1154,7 +1174,7 @@ struct OpenPBRBase
     // outside, by luminance. The walk's share is no density over directions: pdf() leaves it out.
     float4 transmissiveShares(float3 wo, OpenPBRTables t)
     {
-        const OpenPBRBase b = viewedFrom(wo, t);
+        const OpenPBRBase b = this;   // the view of wo's |z|, as every caller holds it
         const float r = pbrLuminance(b.specularAlbedo(wo, t));
         const float d = pbrLuminance(b.diffuseAlbedo(wo, t));
         const float tr = pbrLuminance(b.transmissionAlbedo(wo, t));
@@ -1249,6 +1269,7 @@ struct OpenPBRBase
         b.alphaXY = b.anisotropy > 0.0 ? ggxAnisoAlpha(b.rough, b.anisotropy) : float2(b.alpha);
         b.tableRough = b.rough;
         b.s56Delta = float2(0.0);
+        b.unviewed();
         return b;
     }
 
@@ -1261,6 +1282,12 @@ struct OpenPBRBase
         const float3 w = float3(wo.xy, abs(wo.z));
         b.tableRough = pbrTableRough(t, rough, anisotropy, w);
         b.s56Delta = pbrS56Delta(t, rough, anisotropy, w, b.tableRough);
+        b.vE1Avg = pbrE1Avg(t, rough, anisotropy);
+        b.vMsD = msFresnel(float3(t.FavgD(eta)), b.vE1Avg).x;
+        b.vMsM = msFresnel(metalFavg(), b.vE1Avg);
+        b.vEd = b.dielectricAlbedo(w.z, t);
+        b.vEm = b.metalAlbedo(w.z, t);
+        b.vSlot = slotAlbedo(w.z);
         return b;
     }
 
@@ -1270,13 +1297,13 @@ struct OpenPBRBase
     float3 specularAlbedo(float3 wo, OpenPBRTables t)
     {
         if (wo.z <= 0.0) return float3(0.0);
-        return lerp(specColor * dielectricAlbedo(wo.z, t), metalAlbedo(wo.z, t), metalness);
+        return lerp(specColor * vEd, vEm, metalness);
     }
 
     float3 diffuseAlbedo(float3 wo, OpenPBRTables t)
     {
         if (wo.z <= 0.0) return float3(0.0);
-        return (1.0 - metalness) * (1.0 - transmission) * (1.0 - dielectricAlbedo(wo.z, t)) * slotAlbedo(wo.z);
+        return (1.0 - metalness) * (1.0 - transmission) * (1.0 - vEd) * vSlot;
     }
 
     float3 albedo(float3 wo, OpenPBRTables t)
@@ -1288,9 +1315,9 @@ struct OpenPBRBase
     // its share of the albedo's luminance.
     float specularShare(float3 wo, OpenPBRTables t)
     {
-        const float ed = dielectricAlbedo(wo.z, t);
-        const float spec = metalness * pbrLuminance(metalAlbedo(wo.z, t)) + (1.0 - metalness) * pbrLuminance(specColor) * ed;
-        const float diff = (1.0 - metalness) * (1.0 - transmission) * (1.0 - ed) * pbrLuminance(slotAlbedo(wo.z));
+        const float ed = vEd;
+        const float spec = metalness * pbrLuminance(vEm) + (1.0 - metalness) * pbrLuminance(specColor) * ed;
+        const float diff = (1.0 - metalness) * (1.0 - transmission) * (1.0 - ed) * pbrLuminance(vSlot);
         const float total = spec + diff;
         return total > 0.0 ? spec / total : 1.0;
     }
@@ -1688,21 +1715,21 @@ struct OpenPBRSurface
         const bool bs = base.rough < cut;
         const bool cs = coatWeight > 0.0 && coat.rough < cut;
         float3 w = float3(0.0);
+        const OpenPBRView v = view(wo, t);
         if (base.transmissive() && wo.z < 0.0)
         {
             if (!bs) return w;
             if (!base.thinWalled)
             {
-                const float pr = base.insideReflection(wo, t);
+                const float pr = v.b.insideReflection(wo, t);
                 return float3(pr, 1.0 - pr, 0.0);
             }
-            const float4 p = base.transmissiveShares(base.flipZ(wo), t);
+            const float4 p = v.b.transmissiveShares(base.flipZ(wo), t);
             w = float3(p.x, p.z, 0.0);
         }
         else
         {
             if (wo.z <= 0.0) return w;
-            const OpenPBRView v = view(wo, t);
             if (bs)
             {
                 w.x = pbrLuminance(baseScale(v.pathO, v) * v.b.specularAlbedo(wo, t));

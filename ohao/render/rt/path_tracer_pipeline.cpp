@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <thread>
 #include <vector>
 #include "core/log.hpp"
 
@@ -36,6 +37,53 @@ static std::vector<char> readFile(const std::string& path) {
         }
     }
     return {};
+}
+
+// vkCreateRayTracingPipelinesKHR through a deferred operation (VK_KHR_deferred_host_operations), joined by this
+// thread and up to `workers` more: the driver compiles a program's stages on the joined threads. Since every OpenPBR
+// call site was made single (sub-project 25, W1c) a program's two raygens are about the same size, so they compile
+// side by side; with one 1.1-million-instruction raygen, 1 and 5 threads measured the same (209 s, 212 s). Without
+// the extension's entry points, an ordinary create.
+VkResult createRtPipelineJoined(PFN_vkCreateRayTracingPipelinesKHR createPipelines, VkDevice device, VkPipelineCache cache,
+                                const VkRayTracingPipelineCreateInfoKHR& info, VkPipeline& pipeline, uint32_t workers,
+                                uint32_t& threadsUsed) {
+    const auto create = reinterpret_cast<PFN_vkCreateDeferredOperationKHR>(
+        vkGetDeviceProcAddr(device, "vkCreateDeferredOperationKHR"));
+    const auto destroy = reinterpret_cast<PFN_vkDestroyDeferredOperationKHR>(
+        vkGetDeviceProcAddr(device, "vkDestroyDeferredOperationKHR"));
+    const auto concurrency = reinterpret_cast<PFN_vkGetDeferredOperationMaxConcurrencyKHR>(
+        vkGetDeviceProcAddr(device, "vkGetDeferredOperationMaxConcurrencyKHR"));
+    const auto join = reinterpret_cast<PFN_vkDeferredOperationJoinKHR>(
+        vkGetDeviceProcAddr(device, "vkDeferredOperationJoinKHR"));
+    const auto result = reinterpret_cast<PFN_vkGetDeferredOperationResultKHR>(
+        vkGetDeviceProcAddr(device, "vkGetDeferredOperationResultKHR"));
+    threadsUsed = 1;
+    VkDeferredOperationKHR op = VK_NULL_HANDLE;
+    if (!create || !destroy || !concurrency || !join || !result || create(device, nullptr, &op) != VK_SUCCESS)
+        return createPipelines(device, VK_NULL_HANDLE, cache, 1, &info, nullptr, &pipeline);
+    VkResult r = createPipelines(device, op, cache, 1, &info, nullptr, &pipeline);
+    if (r == VK_OPERATION_DEFERRED_KHR) {
+        // Each joined thread works until the driver has nothing left for it; VK_THREAD_IDLE_KHR asks it to try again.
+        const auto work = [&] {
+            for (;;) {
+                const VkResult j = join(device, op);
+                if (j != VK_THREAD_IDLE_KHR) return;
+                std::this_thread::yield();
+            }
+        };
+        const uint32_t useful = concurrency(device, op);
+        const uint32_t extra = std::min(workers, useful > 1u ? useful - 1u : 0u);
+        std::vector<std::thread> pool;
+        for (uint32_t i = 0; i < extra; ++i) pool.emplace_back(work);
+        work();
+        for (auto& t : pool) t.join();
+        threadsUsed = 1u + extra;
+        r = result(device, op);
+    } else if (r == VK_OPERATION_NOT_DEFERRED_KHR) {
+        r = VK_SUCCESS;
+    }
+    destroy(device, op, nullptr);
+    return r;
 }
 }  // namespace
 
@@ -177,13 +225,13 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
     for (const auto* m : modules) keyed.push_back(*m);
     cache.open(m_device, m_physicalDevice, cacheName, pipelineContentKey(keyed));
     VkPipeline pipeline = VK_NULL_HANDLE;
-    // Timed: minutes cold. A driver's deferred operation joined by up to 6 threads measured no faster (209 s on
-    // 1 thread, 212 s on 5, for the caustics program on 2026-11-04): one huge raygen compiles on one core.
+    // Timed: seconds cold (sub-project 25, W1c), on up to 4 threads (a program has at most 5 stages).
     const auto compileStart = std::chrono::steady_clock::now();
-    VkResult result = vkCreateRayTracingPipelinesKHR(
-        m_device, VK_NULL_HANDLE, cache.handle(), 1, &pipelineInfo, nullptr, &pipeline);
-    OHAO_LOG(Info, render, "PathTracer: {} pipeline in {:.1f} s", cacheName,
-             std::chrono::duration<double>(std::chrono::steady_clock::now() - compileStart).count());
+    uint32_t threads = 1;
+    VkResult result =
+        createRtPipelineJoined(vkCreateRayTracingPipelinesKHR, m_device, cache.handle(), pipelineInfo, pipeline, 3, threads);
+    OHAO_LOG(Info, render, "PathTracer: {} pipeline in {:.1f} s ({} threads)", cacheName,
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - compileStart).count(), threads);
     if (result == VK_SUCCESS) cache.save();
 
     // Cleanup shader modules (no longer needed after pipeline creation)

@@ -12,8 +12,9 @@ NRD's and DLSS's guides and the caustics split, about a million SPIR-V instructi
 - **Compile time.** The driver compiled it cold in 8-11 minutes a program (default, caustics), once per executable, and
   again for a second process beside a live one (AGENTS.md). Every shader edit that reached raygen cost that before any
   image; the gate's GPU suites spent most of their hours there (engine_tests 92 minutes after one shader change).
-  **Solved without the split** (W1c below: every function called from one site; raygen 27x smaller, its program's cold
-  compile 10-27 s). The split stays for the other two.
+  **Solved without the split** (W1c and W1d below: every function called from one site, the tables read once a view,
+  a program's stages compiled side by side; raygen 39x smaller, each program's cold compile about ten seconds with the
+  machine loaded). The split stays for the other two.
 - **Spills.** What raygen keeps alive across a trace is spilled for every pixel (AGENTS.md: a second trace site made the
   whole tracer 8x slower). Each feature added to the loop taxes every scene.
 - **Divergence.** A warp runs every material's code its pixels need, and a long path (glass, a walk) holds its warp's
@@ -101,6 +102,16 @@ film        add each path's radiance to the running mean; NRD's and DLSS's guide
   coin hashed from each ray's bits, so one ulp anywhere re-rolls the frame's noise, its mean 50.7954 to 50.7956; glass
   33 pixels by 1-2 levels). The split is no longer needed for compile time; it is for spills and divergence, measured
   against this megakernel.
+- **W1d — a view reads the tables once; stages compile side by side (measured 2026-11-05).** After W1c the largest part
+  of each kernel was OpenPBR's table reads, repeated per helper: `pbrGridCoord` inlined 542 times in raygen,
+  `dielectricAlbedo` 28. `OpenPBRBase.viewedFrom` now also works out the material's constants (the lobe's mean E1 and
+  both multiple-scattering Fresnels) and the albedos at the view's mu (dielectric, metal, the diffuse slot); the base's
+  functions read them, and its own re-views (transmission, inside a solid) are the view itself. raygen 40,620 to 27,895
+  instructions, raygenCaustics 41,732 to 29,007, cacheUpdate 32,477 to 21,331, causticTrace 41,709 to 29,332,
+  manifoldConnect 24,891 to 19,995. Each program is created through a deferred operation joined by up to 4 threads, so
+  its two raygens (now about the same size) compile side by side. Cold, with other processes using three cores as in
+  W1c's second figure: the default program 27.3 s to 9.0 s, the caustics program 33.7 s to 10.7 s, the manifold
+  program 7.3 s to 5.6 s; the size alone predicts about 14 s and 17 s for the first two.
 - **W2 — the wavefront for the reference.** camera, trace, escaped, emitted, shade (one class), shadow, film; offline
   profile, no cache, no guiding, no caustics. Held to the megakernel: `check_material` (the white furnace, the closed
   box), `check_analytic`, the path-traced goldens within their floor, Cornell and the helmet room's means.

@@ -224,7 +224,7 @@ void run(uint3 id : SV_DispatchThreadID)
     {
         r0.x = (base.anisotropy > 0.0 ? ggxSingleAniso(wo, v, base.alphaXY) : ggxSingle(wo, v, base.alpha * base.alpha)) / v.z;
         r0.yzw = eonEval(mi.baseColor, mi.baseDiffuseRoughness, v, wo);
-        r1.x = base.msLobe(wo, v, t) / v.z;
+        r1.x = base.viewedFrom(wo, t).msLobe(wo, v, t) / v.z;   // a view holds the lobe's mean E1
         r1.y = surface.coat.eval(wo, v, t) / v.z;
     }
     io[b + 6u] = r0;   // (the material rows are inputs only)

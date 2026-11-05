@@ -727,9 +727,9 @@ deferred, reference, path traced); two the transparency scene,
     (`f(wo = toward the eye, wi = toward the light)`, the module is not reciprocal) and applies raygen's own bounce limit.
   - **`RenderScene::Draw::aabbMin/aabbMax` are the mesh's own bounds**; world bounds go through `Draw::world`. Taken raw,
     a moved caster was aimed at where its mesh sits untransformed (half a glass ball's caustic missing; `c3_sphere`).
-  - **The caustics program compiles cold in about half a minute** (`PathTracer: <name> pipeline in N s` in the log:
-    33.7 s with other processes using four cores; about 8 minutes before every call site was made single, below), and
-    how warm a second process is depends on the driver: NVIDIA keeps the binary in its own shader cache
+  - **The caustics program compiles cold in about ten seconds** (`PathTracer: <name> pipeline in N s (T threads)` in the
+    log: 10.7 s with other processes using three cores; about 8 minutes before every call site was made single, below),
+    and how warm a second process is depends on the driver: NVIDIA keeps the binary in its own shader cache
     (`%LOCALAPPDATA%/NVIDIA/DXCache`, size-capped), not in our `VkPipelineCache` file. Keep the caustics raygens free of
     a second material evaluation site (one once made every process compile it).
   - `OHAO_CAUSTICS_SPLIT_ONLY=1` drops the pass's terms without running it (`c1_split_only`); `OHAO_CAUSTIC_RAYS` overrides
@@ -758,10 +758,14 @@ deferred, reference, path traced); two the transparency scene,
   each build one `OpenPBRView` (the surface seen from wo) and call every helper from one site; a path vertex builds its
   view once, draws its light's, the environment's and the bounce's directions, then weighs them in one loop through one
   `terms`, one `pdfFrom` and one shadow ray (nothing draws inside the loop, so every Sobol group and roulette's draw is
-  as it was). raygen went from 1,101,869 SPIR-V instructions to 40,620 and the default program's cold compile from 11
-  minutes to 10.3 s (27.3 s with Unreal Editor and others using four cores). **Never give an OpenPBR entry a second
-  call site in a kernel**: weigh a new direction in the vertex's loop. Count a kernel's instructions with
-  `spirv-dis --no-color X.spv | grep -vc '^\s*;'`.
+  as it was). **A view of wo is the base's tables read once**: `OpenPBRBase.viewedFrom` also works out the material's
+  constants (`vE1Avg`, `vMsD`, `vMsM`) and the albedos at the view's mu (`vEd`, `vEm`, `vSlot`), and the base's
+  functions read them, so **call a base's functions only on a view of the same wo** (`OpenPBRSurface.view`/`baseAt`
+  do it; a base no view made holds NaN there, which shows). A program's stages compile side by side: the pipeline is
+  created through a deferred operation joined by up to 4 threads (`createRtPipelineJoined`). raygen went from 1,101,869
+  SPIR-V instructions to 27,895 and the default program's cold compile from 11 minutes to 9.0 s, with Unreal Editor
+  and others using three cores. **Never give an OpenPBR entry a second call site in a kernel**: weigh a new direction
+  in the vertex's loop. Count a kernel's instructions with `spirv-dis --no-color X.spv | grep -vc '^\s*;'`.
 - **A cold compile happens once per executable, and again beside a live process.** NVIDIA's driver keeps compiled
   pipelines in its own cache (`%LOCALAPPDATA%/NVIDIA/DXCache`), one per executable, so every test executable compiles
   the path tracer once after a shader change, and **a second process creating it while another one holds it compiles
