@@ -43,7 +43,9 @@ bool PathTracer::createDescriptorResources() {
     std::vector<VkDescriptorBindingFlags> bindingFlags;
     const auto add = [&](uint32_t binding, VkDescriptorType type, VkShaderStageFlags stages,
                          uint32_t count = 1, VkDescriptorBindingFlags flags = 0) {
-        bindings.push_back(VkDescriptorSetLayoutBinding{binding, type, count, stages, nullptr});
+        // Every binding is also the compute kernels' (sub-project 25: the path as compute with ray queries).
+        bindings.push_back(VkDescriptorSetLayoutBinding{binding, type, count, stages | VK_SHADER_STAGE_COMPUTE_BIT,
+                                                        nullptr});
         bindingFlags.push_back(flags);
     };
     constexpr VkDescriptorType IMAGE = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;

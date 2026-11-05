@@ -65,6 +65,19 @@ film        add each path's radiance to the running mean; NRD's and DLSS's guide
 - **W1 — the hit, shared.** `fillHit` (today the closest-hit shader) becomes a function of (instance, primitive,
   barycentrics) in a module that a ray query's committed hit feeds, so the megakernel and the wavefront decode hits the
   same way; the megakernel switches to it first (`trace` parity with `TraceRay`, every golden unchanged).
+- **W1b — where the compile goes (a probe).** The same `tracePixel` built as a compute kernel with ray queries
+  (`traceCompute`; tracePixel generic on its tracer, `IPathTracer`: the pipeline's `TraceRay` or a ray query's
+  candidate loop through W1's `anyHitAccepts`), its pipeline created beside the ray-tracing one and timed
+  (`OHAO_PT_COMPUTE_PROBE=1`). The ray-tracing pipeline compiles each trace site as a continuation (everything live
+  across it saved and restored); a compute kernel has none. If the probe compiles in seconds, the compile is the
+  pipeline's, and the stages are for divergence and speed; if in minutes, it is the code's size, and only the split
+  cures it.
+  **Measured 2026-11-05:** the compute kernel's pipeline 688.8 s cold, the ray-tracing pipeline's 620-709 s: the same.
+  The compile is the code's size (one function, the whole path inlined), not the pipeline. Only the split cures it, and
+  each stage kernel must stay small: the shade kernels carry OpenPBR, and must not carry each other. (Mesa's RADV
+  reports the same of merged ray-tracing megashaders, "shader sizes get genuinely ridiculous", fixed by compiling them
+  apart: pixelcluster, "Inside Mesa 26.0's RADV RT improvements".) The probe is deleted; the descriptor set and push
+  constants keep the compute stage for the wavefront's kernels.
 - **W2 — the wavefront for the reference.** camera, trace, escaped, emitted, shade (one class), shadow, film; offline
   profile, no cache, no guiding, no caustics. Held to the megakernel: `check_material` (the white furnace, the closed
   box), `check_analytic`, the path-traced goldens within their floor, Cornell and the helmet room's means.
