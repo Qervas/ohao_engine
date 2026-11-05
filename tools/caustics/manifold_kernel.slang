@@ -2,8 +2,8 @@
 // tests/renderer/manifold_tests calls it, so the tests run the path tracer's own solver. Outside shaders/: never
 // compiled to SPIR-V.
 //
-// One item is 20 float4s of `io`, rows 0-12 in, 13-19 out. Row 0 (op, tol, slope2, thetaSigma); rows 1-6 the
-// triangle (p0, e1, e2, n0, a1, a2); row 7 p; row 8 L; row 9 (uv or sigma, alphas); row 10 u or the box's min;
+// One item is 32 float4s of `io`, rows 0-12 in, 13-19 out (op 9: rows 0-12 and 17-22 in, 23-27 out). Row 0 (op,
+// tol, slope2, thetaSigma); rows 1-6 the triangle (p0, e1, e2, n0, a1, a2); row 7 p; row 8 L; row 9 (uv or sigma, alphas); row 10 u or the box's min;
 // row 11 the box's max; row 12 (axis, half angle). Ops:
 //   0 map      at uv 9.xy           -> 13 (sigma, ok), 14 (du, dv), 15 y, 16 n
 //   1 solve    target 9.xy, tol     -> 13 (uv, converged)
@@ -15,6 +15,9 @@
 //   7 certify  target 9.xy -> 13 (roots, undecided, boxes), 14 (uv0, uv1), 15 (uv2, uv3) (manifoldCertify)
 //   8 enclose  the box (u0, v0) 10.xy to (u1, v1) 11.xy -> 13 (sx lo hi, sy lo hi), 14 (dsx/du, dsx/dv lo hi),
 //              15 (dsy/du, dsy/dv lo hi), 16.x defined (1, 0, -1) (manifoldSigmaT over intervals)
+//   9 pair     the entry triangle rows 1-6, the exit triangle rows 17-22 (its c in 17-19's w), X row 7, (L, eta)
+//              row 8, the slopes (s1, s2) row 9 -> 23 (roots, undecided, boxes), 24-27 each root (u1, v1, u2, v2)
+//              (manifoldCertifyPair)
 // The triangle's c rides in rows 1-3's w.
 import rt.manifold;
 import rt.manifold_cert;
@@ -25,7 +28,7 @@ RWStructuredBuffer<float4> io;
 [numthreads(1, 1, 1)]
 void run(uint3 id : SV_DispatchThreadID)
 {
-    const uint b = id.x * 20u;
+    const uint b = id.x * 32u;
     const float4 h = io[b];
     const uint op = uint(h.x + 0.5);
     ManifoldTri tri;
@@ -100,6 +103,21 @@ void run(uint3 id : SV_DispatchThreadID)
         o14 = float4(sx.d[0].lo, sx.d[0].hi, sx.d[1].lo, sx.d[1].hi);
         o15 = float4(sy.d[0].lo, sy.d[0].hi, sy.d[1].lo, sy.d[1].hi);
         o16 = float4(float(def), 0.0, 0.0, 0.0);
+    }
+    else if (op == 9u)
+    {
+        ManifoldTri t2;
+        t2.p0 = io[b + 17u].xyz;
+        t2.e1 = io[b + 18u].xyz;
+        t2.e2 = io[b + 19u].xyz;
+        t2.n0 = io[b + 20u].xyz;
+        t2.a1 = io[b + 21u].xyz;
+        t2.a2 = io[b + 22u].xyz;
+        t2.c = float3(io[b + 17u].w, io[b + 18u].w, io[b + 19u].w);
+        const float4 r8 = io[b + 8u];
+        const ManifoldPairResult r = manifoldCertifyPair(tri, t2, p, r8.xyz, r8.w, r9);
+        io[b + 23u] = float4(float(r.roots), float(r.undecided), float(r.boxes), 0.0);
+        [ForceUnroll] for (uint k = 0u; k < 4u; ++k) io[b + 24u + k] = r.uv[k];
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

@@ -46,6 +46,14 @@ struct Enclosure {
 // constraint: F = (A - target.x C, B - target.y C) and its Jacobian instead of sigma's.
 Enclosure manifoldEnclose(const Tri& tri, const V3& p, const V3& L, V2 lo, V2 hi, bool constraint = false,
                           V2 target = {});
+// Every path sun -> refraction into a solid at t1 -> refraction out at t2 -> X whose slopes are s1 at the entry and s2
+// at the exit, certified (rt/manifold_cert.slang's manifoldCertifyPair); eta the solid's relative index, the normals
+// outward.
+struct PairResult {
+    int roots{0}, undecided{0}, boxes{0};
+    std::array<float, 4> x[4]{};   // (u1, v1, u2, v2)
+};
+PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const V3& L, float eta, V2 s1, V2 s2);
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 

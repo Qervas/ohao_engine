@@ -507,3 +507,140 @@ TEST(Manifold, t9_certify_complete) {
     EXPECT_EQ(ballUndecided, 0);
     EXPECT_LE(randomUndecided, randomCases / 100);
 }
+
+// ---- step 2b T2: two refractions through a solid (manifoldCertifyPair) ------------------------------------
+
+namespace {
+
+// The module's frame at (u, v) in double: the interpolated normal as authored, t from c, b = n x t.
+void frameD(const Tri& t, double u, double v, D3& n, D3& tt, D3& b) {
+    n = norm(add(d3(t.n0), add(mul(d3(t.a1), u), mul(d3(t.a2), v))));
+    const D3 c = d3(t.c);
+    tt = norm(sub(c, mul(n, dot(c, n))));
+    b = cross(n, tt);
+}
+
+// I refracted through m (I . m < 0) with r = eta_from / eta_to; false at total internal reflection.
+bool refractD(const D3& I, const D3& m, double r, D3& out) {
+    const double ci = -dot(I, m);
+    const double k = 1.0 - r * r * (1.0 - ci * ci);
+    if (k < 0.0) return false;
+    out = norm(add(mul(I, r), mul(m, r * ci - std::sqrt(k))));
+    return true;
+}
+
+// The nearest triangle a ray from o along dir meets past 1e-6 (Moller-Trumbore in double); -1 for none.
+int hitD(const std::vector<Tri>& tris, const D3& o, const D3& dir, double& u, double& v, double& tHit) {
+    int best = -1;
+    tHit = 1e30;
+    for (size_t i = 0; i < tris.size(); ++i) {
+        const D3 e1 = d3(tris[i].e1), e2 = d3(tris[i].e2);
+        const D3 pv = cross(dir, e2);
+        const double det = dot(e1, pv);
+        if (std::abs(det) < 1e-14) continue;
+        const D3 tv = sub(o, d3(tris[i].p0));
+        const double a = dot(tv, pv) / det;
+        if (a < 0.0 || a > 1.0) continue;
+        const D3 qv = cross(tv, e1);
+        const double b = dot(dir, qv) / det;
+        if (b < 0.0 || a + b > 1.0) continue;
+        const double t = dot(e2, qv) / det;
+        if (t > 1e-6 && t < tHit) {
+            tHit = t;
+            best = int(i);
+            u = a;
+            v = b;
+        }
+    }
+    return best;
+}
+
+// F's residual in double at x (the module's constraint, its slopes recovered): max |slope - target|; huge when undefined.
+double pairResidualD(const Tri& t1, const Tri& t2, const D3& X, const D3& L, double eta, const double s[4],
+                     const std::array<float, 4>& x) {
+    const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), x[0]), mul(d3(t1.e2), x[1])));
+    const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), x[2]), mul(d3(t2.e2), x[3])));
+    const D3 d = norm(sub(y2, y1)), w = norm(sub(X, y2));
+    const D3 h1 = mul(add(L, mul(d, eta)), -1.0), h2 = sub(mul(d, eta), w);
+    D3 n1, ta, ba, n2, tb, bb;
+    frameD(t1, x[0], x[1], n1, ta, ba);
+    frameD(t2, x[2], x[3], n2, tb, bb);
+    const double c1 = dot(h1, n1), c2 = dot(h2, n2);
+    if (!(c1 > 0.0) || !(c2 > 0.0)) return 1e30;
+    return std::max({std::abs(dot(h1, ta) / c1 - s[0]), std::abs(dot(h1, ba) / c1 - s[1]),
+                     std::abs(dot(h2, tb) / c2 - s[2]), std::abs(dot(h2, bb) / c2 - s[3])});
+}
+
+} // namespace
+
+// Paths built by hand on the showcase's ball (96 x 48, IOR 1.5): a point on a lit triangle, two slopes in the glass's
+// core (|s| < 0.1), the sun's ray refracted in through the first microfacet normal, the mesh met in double, refracted
+// out through the second, and X placed on the way out. Every root the pair walk reports satisfies the constraint in
+// double (no false path, ever), it certifies the built path wherever it leaves no box undecided, and the cases it
+// leaves undecided (counted by the pass) are measured: 1 of 120, a grazing entry (cos 0.26), 2026-11-05.
+TEST(Manifold, t10_pair_known_paths) {
+    const std::vector<Tri> ball = uvSphere(0.5, 96, 48);
+    const double eta = 1.5;
+    std::mt19937 g(101u);
+    int cases = 0, found = 0, extra = 0, undecided = 0, undecidedCases = 0, boxes = 0, maxBoxes = 0;
+    for (int k = 0; k < 400 && cases < 120; ++k) {
+        const D3 L = norm(add(D3{0, 1, 0}, mul(sphereDir(g), 0.6 * rnd(g))));
+        const Tri& t1 = ball[size_t(rnd(g) * double(ball.size())) % ball.size()];
+        const double u1 = rnd(g), v1r = rnd(g);
+        const double u = u1 * (1.0 - std::sqrt(v1r)), v = std::sqrt(v1r) * rnd(g) * (1.0 - u1);
+        if (u + v > 1.0) continue;
+        D3 n1, ta, ba;
+        frameD(t1, u, v, n1, ta, ba);
+        if (dot(n1, L) < 0.2) continue;   // lit
+        auto slope = [&] {
+            const double r = 0.1 * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
+            return std::array<double, 2>{r * std::cos(phi), r * std::sin(phi)};
+        };
+        const auto a1 = slope(), a2 = slope();
+        const D3 m1 = norm(add(n1, add(mul(ta, a1[0]), mul(ba, a1[1]))));
+        if (dot(m1, L) <= 0.0) continue;
+        const D3 y1 = add(d3(t1.p0), add(mul(d3(t1.e1), u), mul(d3(t1.e2), v)));
+        D3 d;
+        if (!refractD(mul(L, -1.0), m1, 1.0 / eta, d)) continue;
+        double u2, v2, th;
+        const int i2 = hitD(ball, y1, d, u2, v2, th);
+        if (i2 < 0) continue;
+        const Tri& t2 = ball[size_t(i2)];
+        D3 n2, tb, bb;
+        frameD(t2, u2, v2, n2, tb, bb);
+        const D3 m2 = norm(add(n2, add(mul(tb, a2[0]), mul(bb, a2[1]))));
+        if (dot(d, m2) <= 0.0) continue;
+        D3 w;
+        if (!refractD(d, mul(m2, -1.0), eta, w)) continue;   // total internal reflection: no path out
+        const D3 y2 = add(d3(t2.p0), add(mul(d3(t2.e1), u2), mul(d3(t2.e2), v2)));
+        const D3 X = add(y2, mul(w, 0.5 + 1.5 * rnd(g)));
+        const double s[4] = {a1[0], a1[1], a2[0], a2[1]};
+        // The construction itself meets the constraint (the half vectors are the microfacet normals).
+        ASSERT_LT(pairResidualD(t1, t2, X, L, eta, s, {float(u), float(v), float(u2), float(v2)}), 1e-4)
+            << "case " << k;
+        const PairResult r = manifoldCertifyPair(t1, t2, f3(X), f3(L), float(eta), {float(s[0]), float(s[1])},
+                                                 {float(s[2]), float(s[3])});
+        ++cases;
+        undecided += r.undecided;
+        boxes += r.boxes;
+        maxBoxes = std::max(maxBoxes, r.boxes);
+        bool hit = false;
+        for (int i = 0; i < r.roots; ++i) {
+            const auto& x = r.x[i];
+            const bool same = std::abs(x[0] - u) < 1e-3 && std::abs(x[1] - v) < 1e-3 && std::abs(x[2] - u2) < 1e-3 &&
+                              std::abs(x[3] - v2) < 1e-3;
+            hit = hit || same;
+            if (!same) ++extra;
+            EXPECT_LT(pairResidualD(t1, t2, X, L, eta, s, x), 2e-3) << "case " << k << ": a false path";
+        }
+        if (hit) ++found;
+        undecidedCases += r.undecided > 0 ? 1 : 0;
+        EXPECT_TRUE(hit || r.undecided > 0) << "case " << k << ": the built path not certified, nothing undecided";
+    }
+    std::printf("t10_pair_known_paths: %d paths, %d certified, %d other roots, %d boxes (%.1f each, at most %d), "
+                "%d undecided\n",
+                cases, found, extra, boxes, cases ? double(boxes) / cases : 0.0, maxBoxes, undecided);
+    EXPECT_GT(cases, 80);
+    EXPECT_EQ(found + undecidedCases, cases);
+    EXPECT_LE(undecidedCases, cases / 50);
+}

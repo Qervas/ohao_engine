@@ -25,7 +25,7 @@ F4 f4(float x, float y, float z, float w) {
 F4 f4(const V3& v, float w = 0.0f) { return f4(v[0], v[1], v[2], w); }
 
 struct Io {
-    F4 rows[20]{};
+    F4 rows[32]{};
 };
 
 Io base(float op, const Tri* tri, const V3* p, const V3* L) {
@@ -47,7 +47,7 @@ Io base(float op, const Tri* tri, const V3* p, const V3* L) {
 void runItem(Io& io) {
     GlobalParams_0 globals{};
     globals.io_0.data = io.rows;
-    globals.io_0.count = 20;
+    globals.io_0.count = 32;
     ComputeVaryingInput range{};
     range.startGroupID = {0, 0, 0};
     range.endGroupID = {1, 1, 1};
@@ -163,6 +163,25 @@ Enclosure manifoldEnclose(const Tri& tri, const V3& p, const V3& L, V2 lo, V2 hi
     e.dsydv = {io.rows[15].z, io.rows[15].w};
     e.defined = static_cast<int>(io.rows[16].x);
     return e;
+}
+
+PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const V3& L, float eta, V2 s1, V2 s2) {
+    Io io = base(9, &t1, &X, &L);
+    io.rows[8].w = eta;
+    io.rows[9] = f4(s1[0], s1[1], s2[0], s2[1]);
+    io.rows[17] = f4(t2.p0, t2.c[0]);
+    io.rows[18] = f4(t2.e1, t2.c[1]);
+    io.rows[19] = f4(t2.e2, t2.c[2]);
+    io.rows[20] = f4(t2.n0);
+    io.rows[21] = f4(t2.a1);
+    io.rows[22] = f4(t2.a2);
+    runItem(io);
+    PairResult r;
+    r.roots = static_cast<int>(io.rows[23].x);
+    r.undecided = static_cast<int>(io.rows[23].y);
+    r.boxes = static_cast<int>(io.rows[23].z);
+    for (int k = 0; k < 4; ++k) r.x[k] = {io.rows[24 + k].x, io.rows[24 + k].y, io.rows[24 + k].z, io.rows[24 + k].w};
+    return r;
 }
 
 } // namespace ohao::caustics

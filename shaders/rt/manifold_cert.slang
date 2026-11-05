@@ -508,3 +508,382 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
     }
     return res;
 }
+
+// ---- step 2b: the sun through a solid, two refractions -------------------------------------------------
+// Unknowns (u1, v1) on the entry triangle t1 and (u2, v2) on the exit triangle t2, of one solid of relative index eta
+// (inside over outside), its vertex normals outward. The light comes from the sun (L toward it), refracts into the
+// solid at y1, crosses to y2 and refracts out toward X. Each refraction's generalised half vector (Walter et al. 2007,
+// h = -(eta_i i + eta_o o), i and o pointing away from the surface on their own sides) is drawn, as a slope in its
+// triangle's frame (2a's: n the interpolated normal, t from the cluster's c, b = n x t), so the constraint is two of
+// 2a's, one a vertex:
+//   at y1: h1 = -(L + eta d),        d = normalize(y2 - y1)  (i = L outside, o = d inside)
+//   at y2: h2 = eta d - w,           w = normalize(X - y2)   (i = -d inside, o = w outside)
+// both outward (along n) at normal incidence, as (eta - 1) n. F = (A1 - s1.x C1, B1 - s1.y C1, A2 - s2.x C2,
+// B2 - s2.y C2), Ak = hk.tk, Bk = hk.bk, Ck = hk.nk: no division, roots with Ck > 0 are the slopes' roots.
+
+struct ManifoldPairResult
+{
+    uint roots;          // certified paths
+    float4 uv[4];        // each one's (u1, v1, u2, v2)
+    uint undecided;      // boxes given up on: each may hold a path (counted, never dropped silently)
+    uint boxes;          // boxes examined
+}
+
+static const uint kPairMaxBoxes = 2048u;
+static const uint kPairStack = 64u;
+static const float kPairMinWidth = 1.0e-6;
+
+// The frame of a triangle at (u, v): its interpolated normal as authored (a solid's are outward), t from its c.
+// 0 when a length cannot be bounded away from 0.
+int manifoldFrameAtT<T : INum>(ManifoldTri tri, T u, T v, out MV3<T> n, out MV3<T> t, out MV3<T> b)
+{
+    const MV3<T> N = MV3<T>.of(tri.n0).add(MV3<T>.of(tri.a1).scale(u)).add(MV3<T>.of(tri.a2).scale(v));
+    const T nn = N.lengthSq();
+    n = N;
+    t = N;
+    b = N;
+    if (nn.signOf() <= 0) return 0;
+    n = N.divide(nn.sqrtOf());
+    const MV3<T> c = MV3<T>.of(tri.c);
+    const MV3<T> Tv = c.sub(n.scale(c.dotWith(n)));
+    const T tt = Tv.lengthSq();
+    if (tt.signOf() <= 0) return 0;
+    t = Tv.divide(tt.sqrtOf());
+    b = n.crossWith(t);
+    return 1;
+}
+
+// F at (u1, v1, u2, v2) in any number type; c1, c2 receive C1, C2. 0 when undecidable, 1 otherwise.
+int manifoldPairT<T : INum>(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, T u1, T v1,
+                            T u2, T v2, out T f0, out T f1, out T f2, out T f3, out T c1, out T c2)
+{
+    f0 = T.cst(0.0);
+    f1 = f0;
+    f2 = f0;
+    f3 = f0;
+    c1 = f0;
+    c2 = f0;
+    const MV3<T> y1 = MV3<T>.of(t1.p0).add(MV3<T>.of(t1.e1).scale(u1)).add(MV3<T>.of(t1.e2).scale(v1));
+    const MV3<T> y2 = MV3<T>.of(t2.p0).add(MV3<T>.of(t2.e1).scale(u2)).add(MV3<T>.of(t2.e2).scale(v2));
+    const MV3<T> D = y2.sub(y1);
+    const T dd = D.lengthSq();
+    if (dd.signOf() <= 0) return 0;
+    const MV3<T> d = D.divide(dd.sqrtOf());
+    const MV3<T> W = MV3<T>.of(X).sub(y2);
+    const T ww = W.lengthSq();
+    if (ww.signOf() <= 0) return 0;
+    const MV3<T> w = W.divide(ww.sqrtOf());
+    const MV3<T> h1 = MV3<T>.of(-L).sub(d.scale(T.cst(eta)));
+    const MV3<T> h2 = d.scale(T.cst(eta)).sub(w);
+    MV3<T> n1, ta, ba, n2, tb, bb;
+    if (manifoldFrameAtT<T>(t1, u1, v1, n1, ta, ba) == 0) return 0;
+    if (manifoldFrameAtT<T>(t2, u2, v2, n2, tb, bb) == 0) return 0;
+    c1 = h1.dotWith(n1);
+    c2 = h2.dotWith(n2);
+    f0 = h1.dotWith(ta).sub(c1.mul(T.cst(target.x)));
+    f1 = h1.dotWith(ba).sub(c1.mul(T.cst(target.y)));
+    f2 = h2.dotWith(tb).sub(c2.mul(T.cst(target.z)));
+    f3 = h2.dotWith(bb).sub(c2.mul(T.cst(target.w)));
+    return 1;
+}
+
+typealias MDualF4 = MDual<MFloat, 4>;
+typealias MDualI4 = MDual<MIval, 4>;
+
+// F and its Jacobian at a point (rows: F's components, columns: u1, v1, u2, v2). False where undefined.
+bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
+            out float4x4 J)
+{
+    MDualF4 f0, f1, f2, f3, c1, c2;
+    const int ok = manifoldPairT<MDualF4>(t1, t2, X, L, eta, target, MDualF4.variable(MFloat.cst(x.x), 0),
+                                          MDualF4.variable(MFloat.cst(x.y), 1), MDualF4.variable(MFloat.cst(x.z), 2),
+                                          MDualF4.variable(MFloat.cst(x.w), 3), f0, f1, f2, f3, c1, c2);
+    f = float4(f0.v.v, f1.v.v, f2.v.v, f3.v.v);
+    J = float4x4(f0.d[0].v, f0.d[1].v, f0.d[2].v, f0.d[3].v, f1.d[0].v, f1.d[1].v, f1.d[2].v, f1.d[3].v,
+                 f2.d[0].v, f2.d[1].v, f2.d[2].v, f2.d[3].v, f3.d[0].v, f3.d[1].v, f3.d[2].v, f3.d[3].v);
+    return ok == 1;
+}
+
+// The inverse of a 4 x 4 matrix by Gauss-Jordan with partial pivoting; false when a pivot is under 1e-30.
+bool invert4(float4x4 A, out float4x4 inv)
+{
+    float m[4][8];
+    [ForceUnroll] for (int i = 0; i < 4; ++i)
+    {
+        [ForceUnroll] for (int j = 0; j < 4; ++j)
+        {
+            m[i][j] = A[i][j];
+            m[i][j + 4] = i == j ? 1.0 : 0.0;
+        }
+    }
+    inv = float4x4(0.0);
+    for (int col = 0; col < 4; ++col)
+    {
+        int piv = col;
+        for (int r = col + 1; r < 4; ++r)
+            if (abs(m[r][col]) > abs(m[piv][col])) piv = r;
+        if (!(abs(m[piv][col]) > 1e-30)) return false;
+        for (int k = 0; k < 8; ++k)
+        {
+            const float tmp = m[col][k];
+            m[col][k] = m[piv][k];
+            m[piv][k] = tmp;
+        }
+        const float s = 1.0 / m[col][col];
+        for (int k = 0; k < 8; ++k) m[col][k] *= s;
+        for (int r = 0; r < 4; ++r)
+        {
+            if (r == col) continue;
+            const float fct = m[r][col];
+            for (int k = 0; k < 8; ++k) m[r][k] -= fct * m[col][k];
+        }
+    }
+    [ForceUnroll] for (int i = 0; i < 4; ++i)
+    {
+        [ForceUnroll] for (int j = 0; j < 4; ++j) inv[i][j] = m[i][j + 4];
+    }
+    return true;
+}
+
+// A certified path's checks in float: both refractions physical (light on the right side of each microfacet normal,
+// h1 and h2, which F's roots make the drawn ones) and the slopes met.
+bool pairPhysical(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x)
+{
+    const float3 y1 = t1.p0 + t1.e1 * x.x + t1.e2 * x.y;
+    const float3 y2 = t2.p0 + t2.e1 * x.z + t2.e2 * x.w;
+    const float3 d = normalize(y2 - y1), w = normalize(X - y2);
+    const float3 h1 = -(L + eta * d), h2 = eta * d - w;
+    MFloat A1, B1, C1, A2, B2, C2;
+    MV3<MFloat> n1, ta, ba, n2, tb, bb;
+    if (manifoldFrameAtT<MFloat>(t1, MFloat.cst(x.x), MFloat.cst(x.y), n1, ta, ba) == 0) return false;
+    if (manifoldFrameAtT<MFloat>(t2, MFloat.cst(x.z), MFloat.cst(x.w), n2, tb, bb) == 0) return false;
+    const float3 nn1 = float3(n1.x.v, n1.y.v, n1.z.v), nn2 = float3(n2.x.v, n2.y.v, n2.z.v);
+    const float3 tt1 = float3(ta.x.v, ta.y.v, ta.z.v), bt1 = float3(ba.x.v, ba.y.v, ba.z.v);
+    const float3 tt2 = float3(tb.x.v, tb.y.v, tb.z.v), bt2 = float3(bb.x.v, bb.y.v, bb.z.v);
+    const float k1 = dot(h1, nn1), k2 = dot(h2, nn2);
+    if (!(k1 > 0.0) || !(k2 > 0.0)) return false;
+    const float2 s1 = float2(dot(h1, tt1), dot(h1, bt1)) / k1, s2 = float2(dot(h2, tt2), dot(h2, bt2)) / k2;
+    const float tol = 1e-3;
+    if (any(abs(s1 - target.xy) > tol * max(1.0, length(target.xy))) ||
+        any(abs(s2 - target.zw) > tol * max(1.0, length(target.zw))))
+        return false;
+    // Light outside at y1 and inside after it; inside before y2 and outside after it (each against its microfacet
+    // normal, the half vector).
+    return dot(L, h1) > 0.0 && dot(d, h1) < 0.0 && dot(d, h2) > 0.0 && dot(w, h2) > 0.0;
+}
+
+// One Krawczyk test of the pair map on the box c +- half (c need not be the box's centre of any split: a root found by
+// Newton may anchor it). Returns -1 when the box certainly holds no path (C certainly negative, F certainly missing 0
+// by the natural or the mean-value form, or K disjoint), 1 when it holds exactly one root of F (K inside), 2 when a
+// guard cannot be decided, 0 otherwise; K and the width of Y F(c) (the centre's rounding through Y) come back.
+int pairKrawczyk(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 c, float4 half,
+                 out MIval K[4], out float noise)
+{
+    [ForceUnroll] for (int i = 0; i < 4; ++i) K[i] = MIval.cst(0.0);
+    noise = 0.0;
+    const float4 bl = c - half, bh = c + half;
+    MDualI4 g0, g1, g2, g3, gc1, gc2;
+    const int def = manifoldPairT<MDualI4>(t1, t2, X, L, eta, target, MDualI4.variable(MIval.make(bl.x, bh.x), 0),
+                                           MDualI4.variable(MIval.make(bl.y, bh.y), 1),
+                                           MDualI4.variable(MIval.make(bl.z, bh.z), 2),
+                                           MDualI4.variable(MIval.make(bl.w, bh.w), 3), g0, g1, g2, g3, gc1, gc2);
+    if (def == 0) return 2;
+    if (gc1.v.signOf() < 0 || gc2.v.signOf() < 0 || !g0.v.holdsZero() || !g1.v.holdsZero() || !g2.v.holdsZero() ||
+        !g3.v.holdsZero())
+        return -1;
+    MIval fc0, fc1, fc2, fc3, cc1, cc2;
+    const int defc = manifoldPairT<MIval>(t1, t2, X, L, eta, target, MIval.cst(c.x), MIval.cst(c.y), MIval.cst(c.z),
+                                          MIval.cst(c.w), fc0, fc1, fc2, fc3, cc1, cc2);
+    float4 fcf;
+    float4x4 Jc, Y;
+    if (defc == 0 || !pairAt(t1, t2, X, L, eta, target, c, fcf, Jc) || !invert4(Jc, Y)) return 2;
+    MIval FC[4] = { fc0, fc1, fc2, fc3 };
+    MIval dx[4] = { MIval.make(bl.x - c.x, bh.x - c.x), MIval.make(bl.y - c.y, bh.y - c.y),
+                    MIval.make(bl.z - c.z, bh.z - c.z), MIval.make(bl.w - c.w, bh.w - c.w) };
+    MIval JB[4][4];
+    [ForceUnroll] for (int j = 0; j < 4; ++j)
+    {
+        JB[0][j] = g0.d[j];
+        JB[1][j] = g1.d[j];
+        JB[2][j] = g2.d[j];
+        JB[3][j] = g3.d[j];
+    }
+    // The mean-value form: F(B) in F(c) + J(B) (B - c).
+    [ForceUnroll] for (int i = 0; i < 4; ++i)
+    {
+        MIval s = FC[i];
+        [ForceUnroll] for (int j = 0; j < 4; ++j) s = s.add(JB[i][j].mul(dx[j]));
+        if (!s.holdsZero()) return -1;
+    }
+    // K = c - Y F(c) + (I - Y J(B)) (B - c).
+    [ForceUnroll] for (int i = 0; i < 4; ++i)
+    {
+        MIval yf = MIval.cst(0.0);
+        [ForceUnroll] for (int k = 0; k < 4; ++k) yf = yf.add(MIval.cst(Y[i][k]).mul(FC[k]));
+        noise = max(noise, yf.hi - yf.lo);
+        MIval acc = MIval.cst(c[i]).sub(yf);
+        [ForceUnroll] for (int j = 0; j < 4; ++j)
+        {
+            MIval yj = MIval.cst(0.0);
+            [ForceUnroll] for (int k = 0; k < 4; ++k) yj = yj.add(MIval.cst(Y[i][k]).mul(JB[k][j]));
+            acc = acc.add(MIval.cst(i == j ? 1.0 : 0.0).sub(yj).mul(dx[j]));
+        }
+        K[i] = acc;
+    }
+    bool inside = true;
+    [ForceUnroll] for (int i = 0; i < 4; ++i)
+    {
+        if (K[i].hi < bl[i] || K[i].lo > bh[i]) return -1;
+        inside = inside && K[i].lo > bl[i] && K[i].hi < bh[i];
+    }
+    return inside ? 1 : 0;
+}
+
+// Newton on the pair map from x within [lo, hi]; false unless it converges there.
+bool pairNewton(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 lo, float4 hi,
+                inout float4 x)
+{
+    for (uint it = 0u; it < 24u; ++it)
+    {
+        float4 f;
+        float4x4 J, Ji;
+        if (!pairAt(t1, t2, X, L, eta, target, x, f, J) || !invert4(J, Ji)) return false;
+        const float4 step = mul(Ji, f);
+        x -= step;
+        if (any(x < lo) || any(x > hi)) return false;
+        if (all(abs(step) <= 1e-6)) return true;   // a few ulps at these coordinates: float cannot settle finer
+    }
+    return false;
+}
+
+// Every path through (t1, t2) whose slopes are target.xy at y1 and target.zw at y2, certified: the walk of
+// manifoldCertifyBox in four dimensions (epsilon inflation, F(c) an interval, the mean-value exclusion). Where K is
+// neither inside nor disjoint, Newton from the box's centre anchors a second test on a box centred at the root it finds
+// and covering the grown box (Rump's verification): there F(c) is all but 0, so the centre's rounding no longer swamps
+// K, which at a split's centre kept boxes round a root from ever certifying (two of 120 built paths, 2026-11-05).
+ManifoldPairResult manifoldCertifyPair(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target)
+{
+    ManifoldPairResult res;
+    res.roots = 0u;
+    res.undecided = 0u;
+    res.boxes = 0u;
+    [ForceUnroll] for (uint k = 0u; k < 4u; ++k) res.uv[k] = float4(0.0);
+    float4 lows[kPairStack], highs[kPairStack];
+    uint top = 0u;
+    lows[top] = float4(0.0);
+    highs[top++] = float4(1.0);
+    while (top > 0u)
+    {
+        --top;
+        float4 lo = lows[top], hi = highs[top];
+        if (res.boxes >= kPairMaxBoxes)
+        {
+            res.undecided += top + 1u;
+            break;
+        }
+        ++res.boxes;
+        if (lo.x + lo.y > 1.0 || lo.z + lo.w > 1.0) continue;   // past a triangle's hypotenuse
+        const float4 cx = 0.5 * (lo + hi);
+        const float4 half = 0.6 * (hi - lo) + 1e-7;   // the box grown by a tenth a side
+        MIval K[4];
+        float noise;
+        int verdict = pairKrawczyk(t1, t2, X, L, eta, target, cx, half, K, noise);
+        float4 root = cx, testedC = cx, testedHalf = half;
+        if (verdict == 0 && 4.0 * noise > min(min(half.x, half.y), min(half.z, half.w)))
+        {
+            // The centre's rounding swamps K: retry once on the box grown to 8 times it.
+            const float4 grown = max(half, float4(8.0 * noise));
+            MIval K1[4];
+            float noise1;
+            const int again = pairKrawczyk(t1, t2, X, L, eta, target, cx, grown, K1, noise1);
+            if (again == 1 || again == -1)
+            {
+                verdict = again;
+                testedHalf = grown;
+            }
+            else if (again == 0)
+            {
+                // Shrink below by the grown box's K, which the centre's rounding does not swamp.
+                [ForceUnroll] for (int i = 0; i < 4; ++i) K[i] = K1[i];
+            }
+        }
+        if (verdict == 0)
+        {
+            // Anchor at the root Newton finds near the box, on a box covering the grown one.
+            float4 x = cx;
+            if (pairNewton(t1, t2, X, L, eta, target, cx - 4.0 * half, cx + 4.0 * half, x))
+            {
+                MIval K2[4];
+                float noise2;
+                float4 cover = abs(x - cx) + half * 1.05 + 1e-7;
+                int anchored = pairKrawczyk(t1, t2, X, L, eta, target, x, cover, K2, noise2);
+                if (anchored == 0 && 4.0 * noise2 > min(min(cover.x, cover.y), min(cover.z, cover.w)))
+                {
+                    // Even at the root F's rounding through Y can outgrow a tiny box: test one 8 times that wide.
+                    cover = max(cover, float4(8.0 * noise2));
+                    anchored = pairKrawczyk(t1, t2, X, L, eta, target, x, cover, K2, noise2);
+                }
+                if (anchored != 0 && anchored != 2)
+                {
+                    verdict = anchored;
+                    root = x;
+                    testedC = x;
+                    testedHalf = cover;
+                }
+            }
+        }
+        if (verdict == -1) continue;   // no path in the grown box, so none in this one
+        if (verdict == 1)
+        {
+            // Exactly one root of F in the box tested (it may lie in a neighbour's part of it).
+            float4 x = root;
+            pairNewton(t1, t2, X, L, eta, target, float4(-1.0), float4(2.0), x);
+            bool seen = false;
+            for (uint q = 0u; q < res.roots; ++q)
+                seen = seen || all(abs(res.uv[q] - testedC) <= testedHalf) || all(abs(res.uv[q] - x) <= 1e-6);
+            const bool inTris = all(x >= 0.0) && x.x + x.y <= 1.0 && x.z + x.w <= 1.0;
+            if (!seen && inTris && pairPhysical(t1, t2, X, L, eta, target, x))
+            {
+                if (res.roots < 4u)
+                {
+                    res.uv[res.roots] = x;
+                    ++res.roots;
+                }
+                else
+                {
+                    ++res.undecided;
+                }
+            }
+            continue;
+        }
+        if (verdict == 0)
+        {
+            // Shrink to K (every root in the grown box lies in it), then split.
+            [ForceUnroll] for (int i = 0; i < 4; ++i)
+            {
+                lo[i] = max(lo[i], K[i].lo);
+                hi[i] = min(hi[i], K[i].hi);
+            }
+            if (any(lo > hi)) continue;
+        }
+        // Split along the widest side.
+        const float4 wd = hi - lo;
+        int axis = 0;
+        [ForceUnroll] for (int i = 1; i < 4; ++i)
+            if (wd[i] > wd[axis]) axis = i;
+        if (wd[axis] < kPairMinWidth || top + 2u > kPairStack)
+        {
+            ++res.undecided;
+            continue;
+        }
+        const float m = 0.5 * (lo[axis] + hi[axis]);
+        float4 hiA = hi, loB = lo;
+        hiA[axis] = m;
+        loB[axis] = m;
+        lows[top] = lo;
+        highs[top++] = hiA;
+        lows[top] = loB;
+        highs[top++] = hi;
+    }
+    return res;
+}

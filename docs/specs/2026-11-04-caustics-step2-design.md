@@ -195,6 +195,15 @@ budget (117 with natural enclosures alone, before F(c) became an interval, the m
 ill-conditioned box was retried grown to its rounding's scale). Affine arithmetic is the next tightening if the pass's
 undecided counter shows them on real geometry.
 
+**T2 measured (2026-11-05, `manifoldCertifyPair`, `manifold_tests` t10).** Paths built by hand on the showcase's ball
+(96 x 48, IOR 1.5: a point on a lit triangle, two slopes in the glass's core, the sun's ray refracted in, the mesh met in
+double, refracted out, X on the way out): 119 of 120 certified, never a false path, 284 boxes a pair (at most 2,048);
+one, entering at a grazing angle (cosine 0.26), stays undecided at any budget (8,192 too): float's rounding there keeps
+every box round the path from certifying. What it took beyond T1's walk: Newton from a box's centre anchoring a second
+test on a box centred at the root it finds (F(c) all but 0 there), that box too grown past F's rounding through Y, and
+Newton stopping at a few ulps (1e-6), not one. The walk is 3.5 MB of SPIR-V (the 4-D interval dual unrolled): the
+manifold program's compile time is measured when the pass takes it.
+
 **Pairs.** An exit triangle is a candidate as in 2a (its disc test at X, with the inside direction unknown: the test runs
 on the cone of directions toward the draw's bounding sphere); for each, entry triangles come from the same draw's
 hierarchy, pruned by the interval map on the pair's node boxes (node pairs whose constraint intervals exclude the drawn
