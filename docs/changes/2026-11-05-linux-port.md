@@ -52,7 +52,10 @@ inlined from `manifoldSurface(hit, -1, ...)` into dead code) that spirv-val refu
 - **Validation on Linux:** Arch's validation layer (1.4.363) reports VUID-StandaloneSpirv-None-10684 at
   `vkCreateShaderModule` for slangc 2025.11's SPIR-V in nearly every shader (`ArrayStride` on arrays outside blocks:
   function-local constant arrays, the bindless texture table), so every validation-on gate fails on Linux for that alone
-  (checked on the iGPU with the layer). slangc 2026.18 emits valid SPIR-V for the same sources. Moving the pin moves
+  (checked on the iGPU with the layer). slangc 2026.18 (Arch's) compiles all 75 entry points with the same flags and
+  every one passes spirv-val 2026.4; its path tracer kernels are 5-7% larger (raygen 29,431 instructions against
+  27,901; manifoldConnect 36,306 against 34,168). Its C++ is what the CPU twins cannot compile, so the choices are a
+  2026 release from Slang itself for both, or 2026.18 for SPIR-V beside 2025.11 for the twins. Moving the pin moves
   every shader's code: a ruling, then the goldens on the GPU.
 
 ## 6. How to run
