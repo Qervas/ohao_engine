@@ -65,6 +65,7 @@
 #include "common/harness.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1036,6 +1037,173 @@ void t6_thin_symmetric() {
 }
 
 
+// ---- caustics step 2 (sub-project 24, 2a T1): the smooth part's core -------------------------------
+
+// The core is a subset of the smooth part: at every (wo, wi) it is the smooth part or 0 per lobe, never more,
+// and a refraction or a view from below has none.
+void t7_core_le_smooth() {
+    uint32_t seed = 71u;
+    for (const Case& c : partsCases()) {
+        std::vector<Item> cores, parts;
+        for (unsigned i = 0; i < 24; ++i)
+            for (unsigned j = 0; j < 24; ++j) {
+                const float mu = -1.0f + 2.0f * (i + rnd(seed)) / 24.0f;
+                const float phi = static_cast<float>(2.0 * kPi) * (j + rnd(seed)) / 24.0f;
+                const float sn = std::sqrt(std::max(0.0f, 1.0f - mu * mu));
+                Item it;
+                it.op = Op::SmoothCore;
+                it.material = c.m;
+                it.wo = view(c.mu, c.phi);
+                it.v = {sn * std::cos(phi), sn * std::sin(phi), mu};
+                cores.push_back(it);
+                it.op = Op::Parts;
+                parts.push_back(it);
+            }
+        ohao::material::run(cores, kTables);
+        ohao::material::run(parts, kTables);
+        bool ok = true;
+        for (size_t k = 0; k < cores.size(); ++k)
+            for (int ch = 0; ch < 3; ++ch) {
+                const float core = cores[k].r0[ch], sm = parts[k].r0[ch];
+                if (!(core >= 0.0f && core <= sm * (1.0f + 1e-5f) + 1e-12f)) ok = false;
+                if ((cores[k].wo[2] <= 0.0f || cores[k].v[2] <= 0.0f) && core != 0.0f) ok = false;
+            }
+        if (!ok) std::printf("\n    %s", describe(c.m, c.mu).c_str());
+        CHECK(ok, "0 <= core <= smooth part; no core for refractions");
+    }
+}
+
+// With an unbounded core the core is the smooth part of every reflection.
+void t7_core_whole() {
+    uint32_t seed = 72u;
+    for (const Case& c : partsCases()) {
+        if (c.mu <= 0.0f) continue;
+        std::vector<Item> cores, parts;
+        for (unsigned k = 0; k < 256; ++k) {
+            const float mu = 0.02f + 0.98f * rnd(seed), phi = static_cast<float>(2.0 * kPi) * rnd(seed);
+            const float sn = std::sqrt(1.0f - mu * mu);
+            Item it;
+            it.op = Op::SmoothCore;
+            it.slope2 = 1e30f;
+            it.material = c.m;
+            it.wo = view(c.mu, c.phi);
+            it.v = {sn * std::cos(phi), sn * std::sin(phi), mu};
+            cores.push_back(it);
+            it.op = Op::Parts;
+            parts.push_back(it);
+        }
+        ohao::material::run(cores, kTables);
+        ohao::material::run(parts, kTables);
+        bool ok = true;
+        for (size_t k = 0; k < cores.size(); ++k)
+            for (int ch = 0; ch < 3; ++ch)
+                if (!(std::abs(cores[k].r0[ch] - parts[k].r0[ch]) <= 1e-6f * std::max(1e-3f, parts[k].r0[ch]))) ok = false;
+        if (!ok) std::printf("\n    %s", describe(c.m, c.mu).c_str());
+        CHECK(ok, "an unbounded core is the whole smooth reflection");
+    }
+}
+
+// The core's edge: a metal at roughness 0.1 (alpha 0.01), slope^2 4 (a slope of 2 alpha): half vectors at
+// slopes 1.9 alpha (in) and 2.1 alpha (out), at four azimuths.
+void t7_core_indicator() {
+    Material metal;
+    metal.baseMetalness = 1.0f;
+    metal.baseColor = {0.9f, 0.8f, 0.6f};
+    metal.specularRoughness = 0.1f;
+    const double a = 0.01;
+    bool ok = true;
+    for (double k : {1.9, 2.1})
+        for (double phi : {0.0, 1.0, 2.5, 4.0}) {
+            const double sx = k * a * std::cos(phi), sy = k * a * std::sin(phi);
+            const double len = std::sqrt(sx * sx + sy * sy + 1.0);
+            const double mx = sx / len, my = sy / len, mz = 1.0 / len;
+            const double wo[3] = {0.3, -0.2, std::sqrt(1.0 - 0.13)};
+            const double d = 2.0 * (wo[0] * mx + wo[1] * my + wo[2] * mz);
+            Item it;
+            it.op = Op::SmoothCore;
+            it.slope2 = 4.0f;
+            it.minSlope2 = 0.0f;
+            it.material = metal;
+            it.wo = {float(wo[0]), float(wo[1]), float(wo[2])};
+            it.v = {float(d * mx - wo[0]), float(d * my - wo[1]), float(d * mz - wo[2])};
+            Item p = it;
+            p.op = Op::Parts;
+            ohao::material::run(std::span<Item>(&it, 1), kTables);
+            ohao::material::run(std::span<Item>(&p, 1), kTables);
+            const bool in = k < 2.0;
+            if (in && !(std::abs(it.r0[0] - p.r0[0]) <= 1e-6f * p.r0[0] && p.r0[0] > 0.0f)) ok = false;
+            if (!in && !(it.r0[0] == 0.0f && p.r0[0] > 0.0f)) ok = false;
+            if (!ok) std::printf("\n    k %.1f phi %.1f core %g smooth %g", k, phi, it.r0[0], p.r0[0]);
+        }
+    CHECK(ok, "inside the core the smooth part, outside 0");
+}
+
+// A mirror's core reaches the plain slope sqrt(minSlope2) whatever its alpha: roughness 0 (alpha 1e-4), slope2 99
+// (10 alphas) and minSlope2 0.01 (slope 0.1): half vectors at slopes 0.09 in, 0.11 out.
+void t7_core_min_slope() {
+    Material mirror;
+    mirror.baseMetalness = 1.0f;
+    mirror.baseColor = {0.9f, 0.9f, 0.9f};
+    mirror.specularRoughness = 0.0f;
+    bool ok = true;
+    for (double k : {0.09, 0.11})
+        for (double phi : {0.0, 2.0}) {
+            const double sx = k * std::cos(phi), sy = k * std::sin(phi);
+            const double len = std::sqrt(sx * sx + sy * sy + 1.0);
+            const double mx = sx / len, my = sy / len, mz = 1.0 / len;
+            const double wo[3] = {0.1, 0.2, std::sqrt(1.0 - 0.05)};
+            const double d = 2.0 * (wo[0] * mx + wo[1] * my + wo[2] * mz);
+            Item it;
+            it.op = Op::SmoothCore;
+            it.material = mirror;
+            it.wo = {float(wo[0]), float(wo[1]), float(wo[2])};
+            it.v = {float(d * mx - wo[0]), float(d * my - wo[1]), float(d * mz - wo[2])};
+            Item p = it;
+            p.op = Op::Parts;
+            ohao::material::run(std::span<Item>(&it, 1), kTables);
+            ohao::material::run(std::span<Item>(&p, 1), kTables);
+            const bool in = k < 0.1;
+            if (in && !(it.r0[0] == p.r0[0] && p.r0[0] > 0.0f)) ok = false;
+            if (!in && !(it.r0[0] == 0.0f && p.r0[0] > 0.0f)) ok = false;
+            if (!ok) std::printf("\n    slope %.2f core %g smooth %g", k, it.r0[0], p.r0[0]);
+        }
+    CHECK(ok, "a mirror's core reaches the fixed slope");
+}
+
+void t7_alpha_bounds() {
+    auto bounds = [](Material m) {
+        Item it;
+        it.op = Op::AlphaBounds;
+        it.material = m;
+        ohao::material::run(std::span<Item>(&it, 1), kTables);
+        return std::array<float, 2>{it.r0[0], it.r0[1]};
+    };
+    Material gold;
+    gold.baseMetalness = 1.0f;
+    gold.specularRoughness = 0.1f;
+    auto b = bounds(gold);
+    CHECK(std::abs(b[0] - 0.01f) < 1e-7f && b[1] == 0.0f, "an isotropic base: rough^2, no coat");
+    Material rough = gold;
+    rough.specularRoughness = 0.6f;
+    b = bounds(rough);
+    CHECK(std::abs(b[0] - 0.0625f) < 1e-7f, "a rough factor: the cut's alpha (a texture may lower it)");
+    Material glass;
+    glass.transmissionWeight = 1.0f;
+    glass.specularRoughness = 0.0f;
+    b = bounds(glass);
+    CHECK(std::abs(b[0] - 1e-4f) < 1e-9f, "roughness 0: the module's floor, alpha 1e-4");
+    Material paint = gold;
+    paint.specularRoughness = 0.4f;
+    paint.coatWeight = 1.0f;
+    paint.coatRoughness = 0.02f;
+    b = bounds(paint);
+    CHECK(std::abs(b[1] - 0.0004f) < 1e-8f && std::abs(b[0] - 0.0625f) < 1e-7f, "a coat's own alpha; the base at the cut");
+    Material aniso = gold;
+    aniso.specularRoughnessAnisotropy = 0.5f;
+    b = bounds(aniso);
+    CHECK(b[0] > 0.01f && b[0] < 0.0142f, "anisotropic: the larger alpha");
+}
+
 int main(int argc, char** argv) {
     std::printf("material_tests (OpenPBR on the CPU)\n");
     // material_tests [NAME]: only the test NAME (t2_albedo); every test without one.
@@ -1073,5 +1241,10 @@ int main(int argc, char** argv) {
     RUN_ONE(t6_parts_threshold);
     RUN_ONE(t6_sample_smooth);
     RUN_ONE(t6_thin_symmetric);
+    RUN_ONE(t7_core_le_smooth);
+    RUN_ONE(t7_core_whole);
+    RUN_ONE(t7_core_indicator);
+    RUN_ONE(t7_core_min_slope);
+    RUN_ONE(t7_alpha_bounds);
     return ohao::test::finish("material_tests");
 }

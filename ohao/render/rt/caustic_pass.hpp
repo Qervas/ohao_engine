@@ -17,6 +17,7 @@
 
 #include "render/rt/caustic_casters.hpp"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -54,6 +55,9 @@ public:
 
     // Splats that did not fit their word since the last clear (a reset).
     [[nodiscard]] uint32_t clamped() const;
+    // The manifold pass's counters since the last clear (words 1-7 of the stats): requests, triangles solved, roots,
+    // connections that carried light, and the pruning's cluster, sub-cluster and triangle tests.
+    [[nodiscard]] std::array<uint32_t, 7> manifoldCounts() const;
     void clearCounts() noexcept { m_clearCounts = true; }
 
     [[nodiscard]] VkBuffer table() const noexcept { return m_table.buffer; }

@@ -612,10 +612,11 @@ deferred, reference, path traced); two the transparency scene,
   scatter weight `albedo sigmaT tr / dot(p, sigmaT tr)`, the exit's `tr / dot(p, tr)`), roulette only once the largest
   weight is under 1 (a white walk is never cut), rays from TMin 0 (a step must not pass the boundary
   unseen), at most `kWalkSteps` 1024 steps, then out along its direction. The exit is a Lambertian vertex: light and the
-  environment are sampled there by MIS, by the loop's own light sampling. **Raygen has one trace and one light and one
-  environment shadow ray**: every `TraceRay` site inlined into raygen spills its live state for every pixel, so a walk of
-  its own beside the loop made the whole tracer 8x slower on scenes without subsurface (213 ms against 27 on the helmet
-  room). A new feature in raygen reuses those sites; `OHAO_PIPELINE_STATS=1` logs raygen's stack (`raygen stack N bytes`),
+  environment are sampled there by MIS, by the loop's own light sampling. **Raygen has one trace and one shadow ray**:
+  every `TraceRay` site inlined into raygen spills its live state for every pixel, so a walk of its own beside the loop
+  made the whole tracer 8x slower on scenes without subsurface (213 ms against 27 on the helmet room); the light's and
+  the environment's samples share the vertex's one shadow ray in its weighing loop ("Every call site is compiled
+  whole", below). A new feature in raygen reuses those sites; `OHAO_PIPELINE_STATS=1` logs raygen's stack (`raygen stack N bytes`),
   the cost's measure (callable shaders cannot trace in Vulkan). **Every other reader shades a local diffuse lobe** in `subsurface_color` (the
   default), and the deferred frame's SSS pass spreads it by Burley's profile at the pixel's free path, read from material
   rows 15-16 through the layers target (`kMaterialRows` is 17). **The SSS pass blurs the diffuse alone:** lighting writes
@@ -726,15 +727,21 @@ deferred, reference, path traced); two the transparency scene,
     (`f(wo = toward the eye, wi = toward the light)`, the module is not reciprocal) and applies raygen's own bounce limit.
   - **`RenderScene::Draw::aabbMin/aabbMax` are the mesh's own bounds**; world bounds go through `Draw::world`. Taken raw,
     a moved caster was aimed at where its mesh sits untransformed (half a glass ball's caustic missing; `c3_sphere`).
-  - **The caustics program compiles for minutes cold** (`PathTracer: <name> pipeline in N s` in the log), and how warm
-    a second process is depends on the driver: for programs this size NVIDIA keeps the binary in its own shader cache
-    (`%LOCALAPPDATA%/NVIDIA/DXCache`, size-capped), not in our `VkPipelineCache` file. Keep the caustics raygens free of
-    extra inlined material evaluations (two of them once made every process compile it). A driver deferred operation
-    joined by 1 or 5 threads measured the same (209 s, 212 s).
+  - **The caustics program compiles cold in about ten seconds** (`PathTracer: <name> pipeline in N s (T threads)` in the
+    log: 10.0 s with other processes using four cores; about 8 minutes before every call site was made single, below),
+    once per shader change: later processes load it from the pipeline cache file (below). Keep the caustics raygens free
+    of a second material evaluation site.
   - `OHAO_CAUSTICS_SPLIT_ONLY=1` drops the pass's terms without running it (`c1_split_only`); `OHAO_CAUSTIC_RAYS` overrides
     the rays a pixel (`kCausticRaysPerPixel`).
   Measured on the showcase at equal time: the whole image's error 190x lower, the sun's glints off the helmet 33x their
   neighbours to 1.8x, the glass ball's 1,283x to 1x, typical pixels unchanged.
+  **Step 2a** (`docs/specs/2026-11-04-caustics-step2-design.md`, `docs/changes/2026-11-05-caustics-step2a.md`): the sun
+  through the core of a smooth reflection onto a rough reflection at camera depth 1-2 is solved for (`manifoldConnect`, its
+  own program; `rt/manifold.slang`; casters gathered a meshlet a cluster by `pt.manifold.gather`), and `raygenCaustics`
+  drops it (`chainOne`). Owned only at materials without a normal map whose every draw is gathered (ruling M7).
+  `OHAO_MANIFOLD_OFF=1`, `OHAO_MANIFOLD_SPLIT_ONLY=1`; `OHAO_MANIFOLD_STAGE` for profiling. Gotchas: a slope's frame is
+  fixed per cluster (`ManifoldTri.c`), or pruning tests a ring round a sphere; the pass's cost is its pruning, not its
+  tests (time `pt.manifold` with `render.capture {timings}`, never wall time: a cold compile hides in it).
 - **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
   frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
   transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any
@@ -744,14 +751,29 @@ deferred, reference, path traced); two the transparency scene,
   a staging buffer with the map. Keep the draw a continuous warp: an alias table was 1.1 ms faster
   but scattered neighbouring Sobol points across the map, 14% more error at 16 samples. A view of a 1080p render through an image tool may be palette-reduced and look
   posterized; judge renders from crops or pixel statistics.
-- **The path tracer's pipeline is cached on disk** (`render/rt/pipeline_disk_cache.*`): it compiles for minutes
-  cold, and a second process beside a live one (`check_live`'s headless host beside its window) was measured
-  compiling it again from scratch, 239 s, past the test's 120 s reply wait. Its `VkPipelineCache` is a file per
-  pipeline, shader version (a hash of its SPIR-V), device and driver, `<name>@<hash>-<vendor>-<device>-<driver>.bin`
-  under `$OHAO_PIPELINE_CACHE_DIR`, else `%LOCALAPPDATA%/ohao/pipeline_cache`, loaded before the pipeline is created and
-  saved right after; a save prunes that pipeline's other versions but the newest. (One file per pipeline once kept
-  every version, passed its 64 MB cap and was then ignored: every process compiled cold.) The first process after a
-  shader change still compiles cold (`PathTracer: <name> pipeline in N s`).
+- **Every call site is compiled whole** (sub-project 25, W1c). Slang inlines every call for SPIR-V (`[noinline]` is
+  not honoured there), so a function reached from k sites is compiled k times, and the driver's cold compile grows
+  faster than the code (about size^1.8: 62,000 instructions took 4.4 s, 1.1 million 11 minutes). OpenPBR's entries
+  each build one `OpenPBRView` (the surface seen from wo) and call every helper from one site; a path vertex builds its
+  view once, draws its light's, the environment's and the bounce's directions, then weighs them in one loop through one
+  `terms`, one `pdfFrom` and one shadow ray (nothing draws inside the loop, so every Sobol group and roulette's draw is
+  as it was). **A view of wo is the base's tables read once**: `OpenPBRBase.viewedFrom` also works out the material's
+  constants (`vE1Avg`, `vMsD`, `vMsM`) and the albedos at the view's mu (`vEd`, `vEm`, `vSlot`), and the base's
+  functions read them, so **call a base's functions only on a view of the same wo** (`OpenPBRSurface.view`/`baseAt`
+  do it; a base no view made holds NaN there, which shows). A program's stages compile side by side: the pipeline is
+  created through a deferred operation joined by 4 threads (`createRtPipelineJoined`; `OHAO_RT_COMPILE_THREADS` 1-8:
+  cold, the default program 13.7 s on 1, 8.5 s on 4; caustics' 18.3 s and 10.0 s). raygen went from 1,101,869 SPIR-V
+  instructions to 27,895 and the default program's cold compile from 11 minutes to 8.5 s, with Unreal Editor and
+  others using three to four cores. **Never give an OpenPBR entry a second call site in a kernel**: weigh a new
+  direction in the vertex's loop. Count a kernel's instructions with `spirv-dis --no-color X.spv | grep -vc '^\s*;'`.
+- **A cold compile happens once per shader change, for every executable.** Our `VkPipelineCache` file
+  (`render/rt/pipeline_disk_cache.*`: per pipeline, shader version, device and driver, under `$OHAO_PIPELINE_CACHE_DIR`
+  or `%LOCALAPPDATA%/ohao/pipeline_cache`) holds the path tracer's programs since they became small (W1d): a fresh
+  executable loads each in 0.1-0.2 s, and so does a second process beside a live one holding them (both measured
+  2026-11-05). At the old size NVIDIA ignored the file and kept the binary in its own cache
+  (`%LOCALAPPDATA%/NVIDIA/DXCache`), one per executable, so every executable compiled the path tracer cold and a second
+  process beside a live one compiled again (625 s); `VK_KHR_pipeline_binary` was refused across executables. A truly
+  cold compile, for timing: a fresh copy of the CLI with `OHAO_PIPELINE_CACHE_DIR` set to an empty directory.
 - **Emission is light** (frontier F3, ruling F-R7; `render/rt/emissive_lights.*`). Every triangle of an
   emissive material (`MaterialTable::emissive`: emission colour and luminance above 0) is a light of the
   path tracer: the `emissive.lights` pass (before `pt.cache.update`) writes each one's world corners, uvs

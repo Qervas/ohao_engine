@@ -80,7 +80,8 @@ MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
     const bool transmissive = desc.transmissionWeight > 0.0f && desc.metallic < 1.0f;
     m_alphaMode.push_back(static_cast<uint8_t>(transmissive && desc.alphaMode == AlphaMode::Opaque ? AlphaMode::Blend
                                                                                                  : desc.alphaMode));
-    m_smoothness.push_back({desc.roughness, desc.roughTexMin, desc.coatWeight, desc.coatRoughness, desc.coatRoughTexMin});
+    m_smoothness.push_back({desc.roughness, desc.roughTexMin, desc.coatWeight, desc.coatRoughness, desc.coatRoughTexMin,
+                            desc.normalTex != kNoTexture});
     m_emissive.push_back(desc.emissiveStrength > 0.0f && glm::any(glm::greaterThan(desc.emissionColor, glm::vec3(0.0f))) ? 1u
                                                                                                                        : 0u);
     if (layered(desc)) ++m_layered;

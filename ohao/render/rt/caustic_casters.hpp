@@ -10,6 +10,7 @@
 // inputs from the RenderScene, and caustic_casters_test holds these to their sampling.
 
 #include <glm/glm.hpp>
+#include <algorithm>
 
 #include <cstdint>
 #include <span>
@@ -26,11 +27,15 @@ struct MaterialSmoothness {
     float coatWeight{0.0f};
     float coatRoughness{0.0f};
     float coatTexMin{1.0f};
+    bool normalMap{false};   // caustics step 2: a normal-mapped material stays with the camera side (ruling M7)
 };
 
 // Whether any lobe can be under `cut` anywhere on the material (the module clamps roughness at 0.01;
 // a coat widens the base's lobe, never narrows it, so the base's own roughness is a lower bound).
 [[nodiscard]] bool canBeSmooth(const MaterialSmoothness& m, float cut);
+// Each lobe on its own (caustics step 2: the manifold pass draws slopes for the lobes that can be smooth).
+[[nodiscard]] bool baseCanBeSmooth(const MaterialSmoothness& m, float cut);
+[[nodiscard]] bool coatCanBeSmooth(const MaterialSmoothness& m, float cut);
 
 // The smallest value of one channel of an RGBA8 image, over 255.
 [[nodiscard]] float textureChannelMin(std::span<const uint8_t> rgba, int width, int height, int channel);
@@ -90,5 +95,53 @@ struct CausticOrigin {
 
 // An orthonormal pair perpendicular to n (Duff et al. 2017), the disks' plane's axes.
 void causticBasis(glm::vec3 n, glm::vec3& t, glm::vec3& b);
+
+// ---- caustics step 2: the manifold pass's owned draws (render/rt/manifold_casters.hpp) ----
+
+// The bits of a material's word (the draws buffer, after its draws).
+constexpr uint32_t kManifoldOwned = 1u;       // the pass owns its smooth reflections' cores
+constexpr uint32_t kManifoldBaseSmooth = 2u;  // its base's specular can be smooth somewhere
+constexpr uint32_t kManifoldCoatSmooth = 4u;  // its coat can be smooth somewhere
+
+// One draw as the host sees it, for choosing the owned set (pure: manifold tests drive it without a GPU).
+struct ManifoldDrawInput {
+    uint32_t firstIndex{0}, triangles{0};
+    int32_t vertexOffset{0};
+    uint32_t slot{0}, material{0};
+    bool skinned{false}, emitter{false}, viewModel{false};
+    uint32_t firstMeshlet{0}, meshlets{0};
+    bool hasMeshlets{true};   // the gather clusters a draw by its meshlets: one without stays with the camera side
+};
+
+struct ManifoldSelection {
+    std::vector<uint32_t> draws;       // indices into the input, the gathered ones
+    std::vector<uint32_t> materialBits;   // a word a material (0 to the largest material index used + 1)
+};
+
+// The owned materials and the draws to gather. `smoothness(material)` the host's record of it.
+template <class Smoothness>
+ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness, float cut);
+
+template <class Smoothness>
+ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness, float cut) {
+    ManifoldSelection s;
+    uint32_t materials = 0;
+    for (const auto& d : draws) materials = std::max(materials, d.material + 1);
+    s.materialBits.assign(materials, 0u);
+    std::vector<uint8_t> blocked(materials, 0);
+    for (const auto& d : draws) {
+        const MaterialSmoothness m = smoothness(d.material);
+        uint32_t bits = 0;
+        if (baseCanBeSmooth(m, cut)) bits |= kManifoldBaseSmooth;
+        if (coatCanBeSmooth(m, cut)) bits |= kManifoldCoatSmooth;
+        s.materialBits[d.material] = bits;
+        if (bits == 0 || m.normalMap || d.skinned || d.emitter || d.viewModel || !d.hasMeshlets) blocked[d.material] = 1;
+    }
+    for (uint32_t k = 0; k < materials; ++k)
+        if (s.materialBits[k] != 0 && !blocked[k]) s.materialBits[k] |= kManifoldOwned;
+    for (uint32_t i = 0; i < draws.size(); ++i)
+        if ((s.materialBits[draws[i].material] & kManifoldOwned) != 0 && draws[i].triangles > 0) s.draws.push_back(i);
+    return s;
+}
 
 } // namespace ohao::render

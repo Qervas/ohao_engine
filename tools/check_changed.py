@@ -96,6 +96,10 @@ RULES: list[tuple[str, list[str]]] = [
     # Caustics (sub-project 24): the casters on the CPU, the pass on the GPU.
     ("ohao/render/rt/caustic_*", ["caustic_casters_test", "check_caustics", "check_caustics_showcase"]),
     ("tests/renderer/caustic_casters_test.cpp", ["caustic_casters_test"]),
+    # Caustics step 2: the manifold solver and its CPU twin, the casters' triangles on the GPU.
+    ("shaders/rt/manifold*", ["manifold_tests", "check_caustics"]), ("tools/caustics/*", ["manifold_tests"]),
+    ("tests/renderer/manifold_tests.cpp", ["manifold_tests"]),
+    ("ohao/render/rt/manifold_*", ["caustic_casters_test", "check_caustics", "check_caustics_showcase"]),
     ("ohao/render/rt/pipeline_disk_cache.*", ["pipeline_cache_files_test", "label:gpu"]),
     ("tests/renderer/pipeline_cache_files_test.cpp", ["pipeline_cache_files_test"]),
 ]

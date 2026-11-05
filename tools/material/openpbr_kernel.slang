@@ -46,6 +46,8 @@
 //   14 parts    6.rgb = the smooth part, 7.rgb = the rough part at cut 11.z (caustics)
 //   15 smooth   sampleSmooth at cut 11.z, laid out as sample (6 = (wi, pdf), 7 = (weight, lobe))
 //   16 psmooth  6.x = pdfSmooth at cut 11.z
+//   17 core     6.xyz = evalSmoothCore at cut 11.z, the core's stretched slope^2 11.w and plain slope^2 15.y (caustics step 2)
+//   18 alphas   6.xy = smoothAlphaBounds at cut 11.z
 //   13 quad     6.x = ltcQuad at the view wo and specular_roughness over the quad z = v.z, x and y from
 //               coat_weight, coat_roughness (lower corner) to v.x, v.y (upper)
 import material.openpbr;
@@ -210,11 +212,19 @@ void run(uint3 id : SV_DispatchThreadID)
     {
         r0.x = surface.pdfSmooth(wo, v, t, io[b + 11u].z);
     }
+    else if (op == 17u)
+    {
+        r0.xyz = surface.evalSmoothCore(wo, v, t, io[b + 11u].z, float2(io[b + 11u].w, io[b + 15u].y));
+    }
+    else if (op == 18u)
+    {
+        r0.xy = surface.smoothAlphaBounds(io[b + 11u].z);
+    }
     else if (op == 6u)
     {
         r0.x = (base.anisotropy > 0.0 ? ggxSingleAniso(wo, v, base.alphaXY) : ggxSingle(wo, v, base.alpha * base.alpha)) / v.z;
         r0.yzw = eonEval(mi.baseColor, mi.baseDiffuseRoughness, v, wo);
-        r1.x = base.msLobe(wo, v, t) / v.z;
+        r1.x = base.viewedFrom(wo, t).msLobe(wo, v, t) / v.z;   // a view holds the lobe's mean E1
         r1.y = surface.coat.eval(wo, v, t) / v.z;
     }
     io[b + 6u] = r0;   // (the material rows are inputs only)

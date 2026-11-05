@@ -35,18 +35,16 @@ import rt.path_guiding;
 import sampling.vmf;
 import rt.lights;
 import rt.caustics;
+import rt.manifold;
+import rt.pt_hit;
 import display.display;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> accumBuffer;
 [[vk::binding(2, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> outputImage;
 [[vk::binding(3, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> accumHistory;
-[[vk::binding(4, 0)]] StructuredBuffer<float> vertices;       // Vertex: 25 floats
-[[vk::binding(5, 0)]] StructuredBuffer<uint> indices;         // mesh-local
 [[vk::binding(6, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> albedoAOV;
 [[vk::binding(7, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> normalAOV;
-[[vk::binding(8, 0)]] StructuredBuffer<uint4> meshes;         // vertexOffset, indexOffset, indexCount, triangleSlotOffset
-[[vk::binding(9, 0)]] StructuredBuffer<uint> triangleSlots;
 [[vk::binding(13, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> emissionAOV;   // the camera ray's emission
 [[vk::binding(17, 0)]] StructuredBuffer<float> envCdf;   // the marginal CDF (H), then each row's conditional (W x H)
 [[vk::binding(19, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> motionVector;
@@ -57,9 +55,6 @@ import display.display;
 [[vk::binding(24, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> diffuseAlbedoAOV;
 [[vk::binding(25, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> specColorAOV;
 [[vk::binding(26, 0)]] [[vk::image_format("rgb10_a2")]] RWTexture2D<float4> normalRoughnessAOV;
-[[vk::binding(36, 0)]] StructuredBuffer<float4> instances;    // InstanceGpu, kInstanceGpuStride / 16 rows
-[[vk::binding(37, 0)]] StructuredBuffer<uint> materialRefs;
-[[vk::binding(38, 0)]] StructuredBuffer<float> openpbrTables; // OpenPBRTables (kPbrTableFloats)
 [[vk::binding(39, 0)]] RWStructuredBuffer<uint> cacheKeys;      // the radiance cache (rt/radiance_cache.slang)
 [[vk::binding(40, 0)]] RWStructuredBuffer<uint4> cacheAccum;
 [[vk::binding(41, 0)]] RWStructuredBuffer<uint4> cacheResolved;
@@ -73,6 +68,12 @@ import display.display;
 [[vk::binding(51, 0)]] StructuredBuffer<float4> causticCasters;
 [[vk::binding(52, 0)]] RWStructuredBuffer<uint> causticSplat;
 [[vk::binding(53, 0)]] RWStructuredBuffer<uint> causticStats;
+// Caustics step 2 (render/rt/manifold_casters.hpp): the owned casters' triangles, their clusters and groups, the owned
+// draws and a bit word a material, and the camera side's requests (kManifoldDepths a pixel, 3 float4 each).
+[[vk::binding(54, 0)]] StructuredBuffer<float4> manifoldTris;
+[[vk::binding(55, 0)]] StructuredBuffer<float4> manifoldNodes;
+[[vk::binding(56, 0)]] StructuredBuffer<uint4> manifoldDraws;
+[[vk::binding(57, 0)]] RWStructuredBuffer<float4> manifoldRequests;
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -95,64 +96,43 @@ static const uint kFlagCache = 32u;   // realtime: paths end in the radiance cac
 static const uint kFlagGuiding = 64u; // path guiding (sub-project 23): bounces drawn from the BSDF and learned lobes
 static const uint kFlagGuideDebug = 128u;   // OHAO_GUIDE_DEBUG: the first hit's lobes instead of light
 static const uint kFlagCaustics = 1024u;    // caustics (sub-project 24): the light pass owns sun -> smooth chain -> first hit
+// OHAO_PT_CLASS (bits 11-18, caustics' raygen and the manifold pass only): keep only the light of these path classes, to find what a
+// pixel's light is. A vertex is smooth when its specular roughness is under kCausticRough; "after a rough
+// bounce": some earlier vertex scattered by a rough lobe.
+static const uint kClassSunDirect = 1u;       // the sun's sample at a rough vertex
+static const uint kClassSunGlint = 2u;        // the sun's sample at a smooth vertex after a rough bounce (step 2's)
+static const uint kClassSunSpecular = 4u;     // the sun's sample at a smooth vertex, no rough bounce before
+static const uint kClassEnv = 8u;             // the environment, sampled or met
+static const uint kClassLights = 16u;         // every other light: points, spots, areas, emissive triangles
+static const uint kClassSplat = 32u;          // the light pass's splat
+static const uint kClassEnvCaustic = 64u;     // the environment through a smooth vertex after a rough bounce
+static const uint kClassManifold = 128u;      // the manifold pass's connections (caustics step 2)
+// Caustics step 2 (bit 19): the camera side drops the terms the manifold pass owns (sun -> the core of a smooth
+// reflection at an owned material -> a rough reflection at depth 1 to kManifoldDepths); bit 20: it writes requests
+// for the pass (off under OHAO_MANIFOLD_SPLIT_ONLY, which drops the terms without adding them).
+static const uint kFlagManifold = 1u << 19u;
+static const uint kFlagManifoldRequests = 1u << 20u;
+static const uint kManifoldOwnedBit = 1u;
+static const uint kManifoldBaseBit = 2u;
+static const uint kManifoldCoatBit = 4u;
+// A material's word (the draws buffer after its draws: row 1 + 2 D + w / 4).
+uint manifoldMaterialBits(uint material)
+{
+    const uint4 h = manifoldDraws[0];
+    const uint row = 1u + 3u * h.x + material / 4u;
+    const uint4 r = manifoldDraws[row];
+    const uint k = material & 3u;
+    return h.x == 0u ? 0u : (k == 0u ? r.x : k == 1u ? r.y : k == 2u ? r.z : r.w);
+}
+float classKeep(uint mask, uint cls) { return mask == 0u || (mask & cls) != 0u ? 1.0 : 0.0; }
 // A guided bounce's coin, lobe pick and vMF direction: Sobol group kGuideGroup + depth (outside the
 // bounce groups 1 + 3d to 3 + 3d, whose sequences stay as they are).
 static const uint kGuideGroup = 0x4000u;
-static const uint kVertexFloats = 25u;
-static const uint kNoTex = 0xFFFFFFFFu;
-
-// ---- the payload ---------------------------------------------------------------------------
-
-static const uint kHit = 1u;
-static const uint kHitEmitter = 2u;
-static const uint kHitEmissive = 4u;   // an emissive triangle light (payload.light its index)
-static const uint kHitBack = 8u;       // the ray leaves a closed mesh (met from inside: along its outward normal)
-// The path tracer's shadow and bounce rays: the scene and the blended instances (kTlasMaskTransparent:
-// glass, panes), which the hybrid frame's rays leave out but a path must meet (anyHit decides a
-// blended surface stochastically; glass is shaded). Without them a ray inside a glass ball never met
-// its far side, refracting once: the lens was too weak, and glass cast no shadow.
-static const uint kPathMask = kRayMaskScene | kTlasMaskTransparent;
-static const uint kCrossings = 16u;    // glass events (refractions, reflections inside) beyond the bounces
-static const uint kShadowRay = 16u;    // visible()'s ray: anyHit lets a pane through (paneMaterial), times its transmission
-static const uint kHitCulled = 64u;    // the back face of a one-sided material (the raster culls it)
-static const uint kCullSkips = 8u;     // culled faces a camera ray passes
-
-// What a ray brings back: a surface's place and its OpenPBR inputs (resolved from its material
-// and textures by the closest hit), a light's emitter (its light), or nothing (a miss).
-struct PathPayload
-{
-    float3 position;
-    float t;
-    float3 geoNormal;      // facing the ray
-    uint flags;
-    float3 normal;         // shading, facing the ray's side
-    uint light;            // an emitter's light index, or an emissive triangle's (kHitEmissive)
-    float3 baseColor;
-    float baseWeight;
-    float3 specularColor;
-    float specularWeight;
-    float3 emission;
-    float metalness;
-    float diffuseRoughness;
-    float specularRoughness;
-    float specularIor;
-    uint material;         // the hit's material: its layer rows (material/material_layers.slang) at uv
-    float2 uv;
-    float3 tangent;        // an anisotropic material's tangent (rotated, in the plane of normal); else 0
-    float pad;
-};
 
 // ---- random numbers -------------------------------------------------------------------------
 // The path's draws are Owen-scrambled Sobol (sampling/sobol.slang): group 0 the camera's jitter;
 // bounce d's light choice and point in group 1 + 3d, its environment sample in 2 + 3d, its BSDF
 // sample and Russian roulette in 3 + 3d. PCG hashes the pixel's seed and the any-hit's coin.
-
-uint pcg(uint v)
-{
-    const uint state = v * 747796405u + 2891336453u;
-    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
 
 // ---- geometry helpers ------------------------------------------------------------------------
 
@@ -272,22 +252,6 @@ PathPayload trace(float3 origin, float3 dir, uint mask, float tMax, float tMin =
     return p;
 }
 
-// A pane (ruling O14): a thin-walled transmissive surface smooth enough to pass light straight through
-// (specular_roughness at most kPaneRough, by its constants, as anyHit and the path both read them).
-// Shadow rays pass panes, tinted by what each transmits; a bounce ray that refracts through one keeps
-// the last vertex's density for MIS (a null crossing), so light through a window is light sampled and
-// BSDF sampled once each. Rougher thin walls and solids still block shadow rays: their light arrives by
-// bounce rays alone, in full.
-static const float kPaneRough = 0.05;
-
-bool paneMaterial(uint material)
-{
-    const uint m = material * kMaterialRows;
-    const float4 r1 = materials[m + 1u], r12 = materials[m + kTransmissionRowFirst];
-    const float4 r13 = materials[m + kTransmissionRowFirst + 1u];
-    return r12.w > 0.0 && r13.y > 0.5 && r1.y < 1.0 && r1.x <= kPaneRough;
-}
-
 // Whether the segment is unblocked, and what it carries through panes (T: 1 without any). A shadow
 // ray's payload carries the product of the panes' straight transmission in `emission`, which anyHit
 // multiplies (the order does not matter); a pane that lets nothing through is a hit. Kept to one trace:
@@ -309,32 +273,6 @@ bool visible(float3 origin, float3 dir, float dist, out float3 T)
     if ((p.flags & kHit) != 0u) return false;
     T = p.emission;
     return true;
-}
-
-struct PathTextures : IMaterialTextures
-{
-    float4 sample(uint index, float2 uv) { return sampleTex(index, uv); }
-};
-
-MaterialInputs inputsOf(PathPayload p)
-{
-    MaterialInputs m = defaultMaterialInputs();
-    m.baseColor = p.baseColor;
-    m.baseWeight = p.baseWeight;
-    m.baseMetalness = p.metalness;
-    m.baseDiffuseRoughness = p.diffuseRoughness;
-    m.specularWeight = p.specularWeight;
-    m.specularColor = p.specularColor;
-    m.specularRoughness = p.specularRoughness;
-    m.specularIor = p.specularIor;
-    const uint r = p.material * kMaterialRows + kLayerRowFirst;
-    PathTextures tex;
-    applyLayerRows(m, materials[r], materials[r + 1u], materials[r + 2u], materials[r + 3u], materials[r + 4u], p.uv, tex);
-    const uint t = p.material * kMaterialRows + kTransmissionRowFirst;
-    applyTransmissionRows(m, materials[t], materials[t + 1u], materials[t + 2u]);
-    applySubsurfaceRows(m, materials[p.material * kMaterialRows + 2u], materials[p.material * kMaterialRows + kSubsurfaceRowFirst]);
-    m.subsurfaceLocal = false;   // walked: lobe 5 (raygen's walk)
-    return m;
 }
 
 // ---- the subsurface walk (OpenPBR step 4) --------------------------------------------------
@@ -470,9 +408,8 @@ float4 nrdPackRadianceHitDist(float3 radiance, float hitDist, float viewZ, float
 // The camera's path through one pixel. CAUSTICS compiles in caustics' split (sub-project 24): its own
 // entry and pipeline (raygenCaustics), so the default raygen carries none of its code. In the default
 // one, behind a flag, it measured 8.5% of pt.trace on helmet_rt_1080p with the flag off (69.0 -> 75.0 ms).
-void tracePixel<let CAUSTICS : bool>()
+void tracePixel<let CAUSTICS : bool>(uint2 pixel)
 {
-    const uint2 pixel = DispatchRaysIndex().xy;
     const uint2 size = pc.params.xy;
     const uint bounces = pc.params.w & 0xFFFFu;
     const uint flags = pc.control.x;
@@ -547,6 +484,16 @@ void tracePixel<let CAUSTICS : bool>()
     // directional light's sample past the first hit subtracts chainThroughput x the smooth part there.
     const bool caustics = CAUSTICS && (flags & kFlagCaustics) != 0u;
     float3 chainThroughput = float3(0.0);
+    const uint classMask = CAUSTICS ? (flags >> 11u) & 255u : 0u;   // OHAO_PT_CLASS; 0: every class
+    // Caustics step 2 (docs/specs/2026-11-04-caustics-step2-design.md): chainOne is the throughput of the terms the
+    // manifold pass owns since the last bounce, a rough reflection at depth 1 to kManifoldDepths (every factor
+    // throughput takes until the next bounce resets it); the next vertex's directional light sample drops chainOne x
+    // the core of its smooth reflection when its material is owned.
+    const bool manifold = caustics && (flags & kFlagManifold) != 0u;
+    float3 chainOne = float3(0.0);
+    if (CAUSTICS && (flags & kFlagManifoldRequests) != 0u)
+        for (uint k = 0u; k < kManifoldDepths; ++k) manifoldRequests[(pixel.y * size.x + pixel.x) * kManifoldDepths * 3u + k * 3u] = float4(0.0);
+    bool roughBefore = false;                                        // an earlier vertex scattered by a rough lobe
     WalkRng wr;
     wr.state = 0u;
 #define walkWeight misOrigin
@@ -623,6 +570,7 @@ void tracePixel<let CAUSTICS : bool>()
                 const float3 absorbed = exp(-sigmaA * ((hit.flags & kHit) != 0u ? hit.t : 1.0e4));
                 throughput *= absorbed;
                 chainThroughput *= absorbed;
+                if (CAUSTICS) chainOne *= absorbed;
             }
             float3 add = float3(0.0);
             bool stop = false;
@@ -655,7 +603,13 @@ void tracePixel<let CAUSTICS : bool>()
                 add = throughput * hit.emission * emissiveHitWeight(hit, misOrigin, lastPdf, depth);   // weighed against light sampling
             }
             if (depth == 1u) secondHitT = (hit.flags & kHit) != 0u ? hit.t : 0.0;
-            radiance += add;
+            if (CAUSTICS)
+            {
+                const uint addClass = (hit.flags & kHit) != 0u ? kClassLights
+                                      : depth > 0u && lastRough < kCausticRough && roughBefore ? kClassEnvCaustic : kClassEnv;
+                radiance += add * classKeep(classMask, addClass);
+            }
+            else radiance += add;
             if (guidePending != kGuideNoSlot)
             {
                 // The light guiding learns is what this hit reflects: what it emits (a light's mesh,
@@ -774,15 +728,24 @@ void tracePixel<let CAUSTICS : bool>()
                 const float3 pick = float3(channel == 0 ? 3.0 : 0.0, channel == 1 ? 3.0 : 0.0, channel == 2 ? 3.0 : 0.0);
                 throughput *= pick;
                 chainThroughput *= pick;
+                if (CAUSTICS) chainOne *= pick;
             }
             mi.specularIor = dispersedIor(mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
         }
         const OpenPBRSurface base = OpenPBRSurface(mi);
+        // The surface seen from wo, once for every direction below (a thin wall seen from its back as its front,
+        // mirrored, as OpenPBR's sample() and pdf() see it). Each OpenPBR call site is inlined whole (Slang, for
+        // SPIR-V): this vertex weighs its light's, the environment's and the bounce's directions at one site each,
+        // in one loop (sub-project 25: raygen was 1.1 million instructions, an 11-minute cold compile).
+        const bool back = base.thinBack(wo);
+        const float3 o = back ? base.mirrored(wo) : wo;
+        const OpenPBRView surfView = base.view(o, tables);
+        const float4 shares = base.drawShares(o, surfView, tables);
         if (depth == 0u)
         {
             firstRough = clamp(hit.specularRoughness, 0.01, 1.0);
             roughnessAOV[pixel] = firstRough;
-            const float3 a = base.albedo(wo, tables);
+            const float3 a = base.albedoFrom(wo, surfView, tables);
             if ((flags & kFlagAOVs) != 0u)
             {
                 albedoAOV[pixel] = float4(a, 1.0);
@@ -833,7 +796,11 @@ void tracePixel<let CAUSTICS : bool>()
             guideDebugColor = mode == 2u ? hit.position : mode == 3u ? bestMu : float3(valid, sharp, best / (best + 1.0));
         }
 
-        // Next-event estimation: a light, then the environment, each weighed against the BSDF.
+        // ---- the vertex's directions ----
+        // Next-event estimation's (a light, then the environment, each weighed against the BSDF) and the bounce's,
+        // all drawn before any is weighed. The draws are the groups they always were: 1 + 3 depth the light, 2 + 3
+        // depth the environment, kGuideGroup + depth the guide, 3 + 3 depth the bounce; nothing draws while they are
+        // weighed, so Russian roulette after reads the bounce group's fourth coordinate, as a walk's exit does.
         float lu0, lu1, lu2;
         if (walkExitVertex)
         {
@@ -849,68 +816,175 @@ void tracePixel<let CAUSTICS : bool>()
             lu2 = rng.next();
         }
         const LightSample ls = sampleLight(walkExitVertex ? origin : hit.position, p, lu0, lu1, lu2);
-        if (ls.valid)
+        const bool envOn = envSampled();
+        float pdfL = 0.0;
+        float3 L = float3(0.0, 0.0, 1.0);
+        if (envOn)
         {
-            const float3 wi = toLocal(ls.L, t, b, n);
-            float3 fs = float3(0.0), fd;
-            float3 smoothNee = float3(0.0);
-            if (walkExitVertex) fd = float3(max(dot(ls.L, n), 0.0) * (1.0 / kPi));
-            else if (CAUSTICS) base.evalLobesSmooth(wo, wi, tables, kCausticRough, fs, fd, smoothNee);
-            else base.evalLobes(wo, wi, tables, fs, fd);
-            const float3 f = fs + fd;
-            float3 vis1;
-            if (any(f > 0.0) && dot(ls.L, ng) > 0.0 && visible(p, ls.L, ls.dist, vis1))
-            {
-                // A sun is a delta (its radiance already over its choice); a light without an
-                // emitter mesh only light sampling finds: full weight.
-                float w = 1.0;
-                if (ls.pdf > 0.0)
-                {
-                    float bsdfPdf = fd.x;
-                    if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, base.pdf(wo, wi, tables));
-                    w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
-                }
-                const float3 le = ls.radiance * vis1 * w;
-                float3 c = throughput * f * le;
-                if (caustics && depth > 0u && ls.pdf == 0.0 && any(chainThroughput > 0.0))
-                {
-                    // A directional light through an all-smooth chain from the first hit: the light pass's.
-                    c -= chainThroughput * smoothNee * le;
-                }
-                radiance += c;
-                // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
-                if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
-                else if (firstLobe == 1u) diffuseOut += c;
-                else specularOut += c;
-            }
-        }
-        if (envSampled())
-        {
-            float pdfL;
-            float3 L;
             if (walkExitVertex) L = sampleEnvAt(float4(wr.next(), wr.next(), wr.next(), wr.next()), pdfL);
             else
             {
                 rng.group(2u + 3u * depth);
                 L = sampleEnv(rng, pdfL);
             }
-            const float3 wi = toLocal(L, t, b, n);
-            float3 fs = float3(0.0), fd;
-            if (walkExitVertex) fd = float3(max(dot(L, n), 0.0) * (1.0 / kPi));
-            else base.evalLobes(wo, wi, tables, fs, fd);
-            const float3 f = fs + fd;
-            float3 vis2;
-            if (pdfL > 0.0 && any(f > 0.0) && dot(L, ng) > 0.0 && visible(p, L, 1.0e4, vis2))
+        }
+
+        // Caustics step 2: a vertex at depth 1 to kManifoldDepths whose next vertex's light sample the bounce limit
+        // allows (a reflection from outside a solid, not inside an absorbing one; not a walk's exit) is a manifold pass's X: its request is the
+        // ray that met it and the throughput before its bounce, whatever the bounce then draws.
+        bool manifoldX = false;
+        // The next direction: the BSDF's draw, or at a guided vertex the mixture's (a lobe with probability gm.g),
+        // weighed below by f cos over the mixture's exact density either way.
+        BsdfSample s = bsdfSampleNone();
+        bool bounce = false;      // s's direction is weighed below (else s is final: none, or the walk's)
+        bool baseDrawn = false;   // a layered glass's base drew it
+        bool guided = false;
+        float3 guideDir = float3(0.0);
+        uint guideSlot = kGuideNoSlot;
+        if (!walkExitVertex)
+        {
+            if (manifold)
             {
-                float bsdfPdf = fd.x;
-                if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, base.pdf(wo, wi, tables));
-                const float3 le = envRadiance(L) * vis2 * powerHeuristic(pdfL, bsdfPdf) / pdfL;
-                const float3 c = throughput * f * le;
-                radiance += c;
-                if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
-                else if (firstLobe == 1u) diffuseOut += c;
-                else specularOut += c;
+                manifoldX = depth >= 1u && depth <= kManifoldDepths && !fromInside && !insideVolume &&
+                            depth + 1u - crossings <= bounces && crossings <= kCrossings;
+                if (manifoldX && (flags & kFlagManifoldRequests) != 0u)
+                {
+                    const uint r = (pixelIndex * kManifoldDepths + depth - 1u) * 3u;
+                    manifoldRequests[r] = float4(origin, asfloat(1u | uint(channel + 1) << 1u));
+                    manifoldRequests[r + 1u] = float4(dir, 0.0);
+                    manifoldRequests[r + 2u] = float4(throughput, 0.0);
+                }
             }
+            float3 bu;
+            if (guidable)
+            {
+                rng.group(kGuideGroup + depth);
+                const float4 gu = float4(rng.next(), rng.next(), rng.next(), rng.next());
+                rng.group(3u + 3u * depth);
+                bu = float3(rng.next(), rng.next(), rng.next());   // the BSDF's draws (Russian roulette follows them)
+                guided = gu.x < gm.g;
+                if (guided)
+                {
+                    const uint i = guidePick(gm, gu.y);
+                    guideSlot = gm.slot[i];
+                    guideDir = vmfSample(gm.mu[i], gm.kappa[i], gu.zw);
+                    s.wi = toLocal(guideDir, t, b, n);
+                    bounce = true;
+                }
+            }
+            else
+            {
+                rng.group(3u + 3u * depth);
+                bu = float3(rng.next(), rng.next(), rng.next());
+            }
+            if (!guided) bounce = base.sampleDirectionFrom(o, bu, surfView, shares, tables, s, baseDrawn);
+            if (back) s.wi = base.mirrored(s.wi);
+        }
+
+        // ---- each direction weighed ----
+        // k = 0 the light's, 1 the environment's (each through the vertex's one shadow ray), 2 the bounce's.
+        float3 smoothNee = float3(0.0), coreNee = float3(0.0);   // caustics: the light sample's smooth part and its core
+        float3 sB = float3(0.0), cB = float3(0.0), dB = float3(0.0);   // the bounce's terms (its caustic split)
+        [loop]
+        for (uint k = 0u; k < 3u; ++k)
+        {
+            if (k == 0u ? !ls.valid : k == 1u ? !envOn : !bounce) continue;
+            const float3 Lw = k == 0u ? ls.L : L;   // a light sample's direction, in the world
+            const float3 wi = k == 2u ? s.wi : toLocal(Lw, t, b, n);
+            const float3 iFront = back ? base.mirrored(wi) : wi;
+            float3 fs = float3(0.0), fd, sT = float3(0.0), cT = float3(0.0);
+            if (walkExitVertex) fd = float3(max(dot(Lw, n), 0.0) * (1.0 / kPi));
+            else
+            {
+                // The bounce and the caustic light sample are weighed in the front frame (as OpenPBR's sample() and
+                // evalParts() take them); light sampling's split is evalLobes()' (the camera side meets a thin wall
+                // from its front, where both are one).
+                const bool front = k == 2u || (CAUSTICS && k == 0u);
+                base.terms(front ? o : wo, front ? iFront : wi, surfView, tables, sT, cT, fd);
+                fs = sT + cT;
+            }
+            const float3 f = fs + fd;
+            float3 vis = float3(1.0);
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, ng) > 0.0 &&
+                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
+                continue;
+            float bsdfPdf = fd.x, basePdf = 0.0;
+            if (!walkExitVertex && (k != 0u || (ls.pdf > 0.0 && ls.mis)))
+                bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
+            if (k == 2u)
+            {
+                sB = sT;
+                cB = cT;
+                dB = fd;
+                if (guided)
+                {
+                    s.pdf = guidePdf(gm, guideDir, bsdfPdf);
+                    s.weight = s.pdf > 0.0 ? f / s.pdf : float3(0.0);
+                    if (bsdfPdf > 0.0) rrRatio *= s.pdf / bsdfPdf;
+                    s.lobe = luminance(fd) >= luminance(fs) ? 1u : 0u;
+                }
+                else
+                {
+                    base.sampleWeigh(s, bsdfPdf, basePdf, baseDrawn, f);
+                    if (guidable && s.pdf > 0.0)
+                    {
+                        const float q = guidePdf(gm, toWorld(s.wi, t, b, n), s.pdf);
+                        s.weight *= s.pdf / q;
+                        rrRatio *= q / s.pdf;
+                        s.pdf = q;
+                    }
+                }
+                continue;
+            }
+            float3 le;
+            if (k == 0u)
+            {
+                // A sun is a delta (its radiance already over its choice); a light without an
+                // emitter mesh only light sampling finds: full weight.
+                float w = 1.0;
+                if (ls.pdf > 0.0)
+                {
+                    if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, bsdfPdf);
+                    w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
+                }
+                le = ls.radiance * vis * w;
+            }
+            else
+            {
+                if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, bsdfPdf);
+                le = envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL;
+            }
+            float3 c = throughput * f * le;
+            if (CAUSTICS && k == 0u && !walkExitVertex)
+            {
+                float3 rough;
+                base.split(sT, cT, fd, kCausticRough, smoothNee, rough);
+                coreNee = back ? float3(0.0) : base.coreOf(o, iFront, sT, cT, kCausticRough,
+                                                           float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2));
+                if (caustics && depth > 0u && ls.pdf == 0.0 && any(chainThroughput > 0.0))
+                {
+                    // A directional light through an all-smooth chain from the first hit: the light pass's.
+                    c -= chainThroughput * smoothNee * le;
+                }
+                if (manifold && ls.pdf == 0.0 && any(chainOne > 0.0) && (manifoldMaterialBits(hit.material) & kManifoldOwnedBit) != 0u)
+                {
+                    // A directional light through the core of a smooth reflection after a rough one: the manifold pass's.
+                    c -= chainOne * coreNee * le;
+                }
+            }
+            if (CAUSTICS)
+            {
+                const bool smoothVertex = !walkExitVertex && hit.specularRoughness < kCausticRough;
+                const uint sunClass = !smoothVertex ? kClassSunDirect : roughBefore ? kClassSunGlint : kClassSunSpecular;
+                const uint cls = k == 0u ? (ls.pdf == 0.0 ? sunClass : kClassLights)
+                                         : smoothVertex && roughBefore ? kClassEnvCaustic : kClassEnv;
+                radiance += c * classKeep(classMask, cls);
+            }
+            else radiance += c;
+            // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
+            if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
+            else if (firstLobe == 1u) diffuseOut += c;
+            else specularOut += c;
         }
 
         if (walkExitVertex)
@@ -921,6 +995,7 @@ void tracePixel<let CAUSTICS : bool>()
             if (depth == 1u) firstLobe = 1u;
             lastLobe = 1u;
             lastRough = 1.0;
+            if (CAUSTICS) roughBefore = true;
             lastPdf = max(dot(dir, n), 0.0) * (1.0 / kPi);
             misOrigin = origin;
             insideVolume = false;
@@ -932,68 +1007,28 @@ void tracePixel<let CAUSTICS : bool>()
                 if (rng.next() >= q) break;
                 throughput /= q;
                 chainThroughput /= q;
+                if (CAUSTICS) chainOne /= q;
             }
             continue;
         }
 
-        // The next direction: the BSDF's sample, or at a guided vertex the mixture's (a lobe with
-        // probability gm.g), weighed by f cos over the mixture's exact density either way.
-        BsdfSample s;
-        uint guideSlot = kGuideNoSlot;
-        if (guidable)
+        if (guidable && s.pdf > 0.0 && guideProposed < kGuideTrainVertices)
         {
-            rng.group(kGuideGroup + depth);
-            const float4 gu = float4(rng.next(), rng.next(), rng.next(), rng.next());
-            rng.group(3u + 3u * depth);
-            const float3 bu = float3(rng.next(), rng.next(), rng.next());   // the BSDF's draws (Russian roulette follows them)
-            if (gu.x < gm.g)
-            {
-                const uint i = guidePick(gm, gu.y);
-                guideSlot = gm.slot[i];
-                const float3 d = vmfSample(gm.mu[i], gm.kappa[i], gu.zw);
-                s.wi = toLocal(d, t, b, n);
-                float3 fs, fd;
-                base.evalLobes(wo, s.wi, tables, fs, fd);
-                const float bsdfPdf = base.pdf(wo, s.wi, tables);
-                s.pdf = guidePdf(gm, d, bsdfPdf);
-                s.weight = s.pdf > 0.0 ? (fs + fd) / s.pdf : float3(0.0);
-                if (bsdfPdf > 0.0) rrRatio *= s.pdf / bsdfPdf;
-                s.lobe = luminance(fd) >= luminance(fs) ? 1u : 0u;
-            }
-            else
-            {
-                s = base.sample(wo, bu, tables);
-                if (s.pdf > 0.0)
-                {
-                    const float q = guidePdf(gm, toWorld(s.wi, t, b, n), s.pdf);
-                    s.weight *= s.pdf / q;
-                    rrRatio *= q / s.pdf;
-                    s.pdf = q;
-                }
-            }
-            if (s.pdf > 0.0 && guideProposed < kGuideTrainVertices)
-            {
-                // A proposal for the grid: this vertex, the light the path had before the bounce and the
-                // throughput reaching it; the ray's end is written after the next trace.
-                const uint pi = pixelIndex * kGuideTrainVertices + guideProposed;
-                GuideProposal gp;
-                gp.x = hit.position;
-                gp.normal = guideOctPack(hit.geoNormal);
-                gp.xnext = float3(0.0);
-                gp.flags = 0u;
-                gp.rk = radiance;
-                gp.meanW = gm.total / float(kGuideCandidates);
-                gp.beta = throughput;
-                gp.srcSlot = guideSlot;
-                guideProposals[pi] = gp;
-                guidePending = pi;
-                ++guideProposed;
-            }
-        }
-        else
-        {
-            rng.group(3u + 3u * depth);
-            s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+            // A proposal for the grid: this vertex, the light the path had before the bounce and the
+            // throughput reaching it; the ray's end is written after the next trace.
+            const uint pi = pixelIndex * kGuideTrainVertices + guideProposed;
+            GuideProposal gp;
+            gp.x = hit.position;
+            gp.normal = guideOctPack(hit.geoNormal);
+            gp.xnext = float3(0.0);
+            gp.flags = 0u;
+            gp.rk = radiance;
+            gp.meanW = gm.total / float(kGuideCandidates);
+            gp.beta = throughput;
+            gp.srcSlot = guideSlot;
+            guideProposals[pi] = gp;
+            guidePending = pi;
+            ++guideProposed;
         }
         if (!(s.pdf > 0.0)) break;
         if (s.lobe == 5u)
@@ -1001,6 +1036,7 @@ void tracePixel<let CAUSTICS : bool>()
             // Into the volume: the walk decides where the light leaves, and the path goes on from
             // there; what it meets counts in full (light sampling at the entry did not see it).
             chainThroughput = float3(0.0);
+            if (CAUSTICS) chainOne = float3(0.0);
             walkMaterial = hit.material;
             wr.state = pcg(pixel.x ^ pcg(pixel.y ^ pcg(pc.params.z ^ pcg(depth ^ 0xA511E9B3u))));
             origin = hit.position - hit.geoNormal * 1e-3;
@@ -1020,11 +1056,15 @@ void tracePixel<let CAUSTICS : bool>()
         if (depth == 0u) firstLobe = s.lobe;
         lastLobe = s.lobe;
         lastRough = s.lobe == 2u ? mi.coatRoughness : s.lobe == 3u ? 1.0 : hit.specularRoughness;
+        if (CAUSTICS && (s.lobe == 1u || s.lobe == 3u || s.lobe == 5u || lastRough >= kCausticRough)) roughBefore = true;
         if (caustics)
         {
             float3 sm, ro;
-            base.evalParts(wo, s.wi, tables, kCausticRough, sm, ro);
+            base.split(sB, cB, dB, kCausticRough, sm, ro);
             chainThroughput = depth == 0u ? throughput * ro / s.pdf : chainThroughput * sm / s.pdf;
+            // Caustics step 2: a rough reflection at depth 1 to kManifoldDepths starts a chain of one (its request was
+            // written before the draw); any other bounce ends it.
+            if (CAUSTICS) chainOne = manifold && manifoldX && !crosses ? throughput * ro / s.pdf : float3(0.0);
         }
         throughput *= s.weight;
         // A ray that crossed the surface could not have been drawn by light sampling there (it
@@ -1065,6 +1105,7 @@ void tracePixel<let CAUSTICS : bool>()
             if (rng.next() >= q) break;
             throughput /= q;
             chainThroughput /= q;
+            if (CAUSTICS) chainOne /= q;
         }
     }
 
@@ -1077,7 +1118,7 @@ void tracePixel<let CAUSTICS : bool>()
         causticSplat[c] = 0u;
         causticSplat[c + 1u] = 0u;
         causticSplat[c + 2u] = 0u;
-        radiance += light;
+        radiance += light * classKeep(classMask, kClassSplat);
         diffuseOut += light;
     }
     if (guiding) guidePixel[pixelIndex] = float4(radiance, asfloat(guideProposed));
@@ -1114,13 +1155,272 @@ void tracePixel<let CAUSTICS : bool>()
 [shader("raygeneration")]
 void raygen()
 {
-    tracePixel<false>();
+    tracePixel<false>(DispatchRaysIndex().xy);
 }
 
 [shader("raygeneration")]
 void raygenCaustics()
 {
-    tracePixel<true>();
+    tracePixel<true>(DispatchRaysIndex().xy);
+}
+
+// ---- caustics step 2: manifold connections (docs/specs/2026-11-04-caustics-step2-design.md) ----------------------
+
+// A hit's surface as tracePixel builds it (its inputs, the dispersion's IOR at `channel`, its frame), with its shading
+// normal replaced by `normal` when that is not zero (the manifold's solved normal at S).
+struct ManifoldSurface
+{
+    MaterialInputs mi;
+    float3 n, t, b;
+    bool fromInside;
+};
+
+ManifoldSurface manifoldSurface(PathPayload hit, int channel, float3 normal)
+{
+    ManifoldSurface s;
+    s.mi = inputsOf(hit);
+    const bool transmissive = s.mi.transmissionWeight > 0.0 && s.mi.baseMetalness < 1.0;
+    s.fromInside = transmissive && !s.mi.thinWalled && (hit.flags & kHitBack) != 0u;
+    const float3 hn = dot(normal, normal) > 0.0 ? normal : hit.normal;
+    s.n = s.fromInside ? -hn : hn;
+    if (dot(hit.tangent, hit.tangent) > 0.0)
+    {
+        const float3 tt = hit.tangent - s.n * dot(s.n, hit.tangent);
+        if (!(dot(tt, tt) > 1e-12)) basisOf(s.n, s.t, s.b);
+        else
+        {
+            s.t = normalize(tt);
+            s.b = cross(s.n, s.t);
+        }
+    }
+    else
+    {
+        basisOf(s.n, s.t, s.b);
+    }
+    const float4 row13 = materials[hit.material * kMaterialRows + kTransmissionRowFirst + 1u];
+    if (transmissive && row13.z > 0.0 && channel >= 0)
+        s.mi.specularIor = dispersedIor(s.mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
+    return s;
+}
+
+// A draw's weight for its choice from p: its world bounding sphere's solid angle (over 2 pi), 0 when no lobe of it can
+// be smooth (the draws buffer's third row: centre, radius; its alpha bounds in the gather's record).
+float manifoldDrawWeight(uint d, uint4 header, float3 p)
+{
+    const float2 alphas = manifoldNodes[(header.w + header.z + d) * 4u].xy;
+    if (!(alphas.x > 0.0 || alphas.y > 0.0)) return 0.0;
+    const float4 s = asfloat(manifoldDraws[3u + 3u * d]);
+    const float3 v = s.xyz - p;
+    const float d2 = dot(v, v), r2 = s.w * s.w;
+    if (!(d2 > r2)) return 1.0;
+    return 1.0 - sqrt(1.0 - r2 / d2);
+}
+
+uint manifoldHash(uint a, uint b, uint c, uint d) { return pcg(a ^ pcg(b ^ pcg(c ^ pcg(d ^ 0x3C6EF372u)))); }
+float manifoldUnit(uint h) { return float(h >> 8u) * (1.0 / 16777216.0); }
+
+// The manifold pass (render/rt/path_tracer_render.cpp, after raygenCaustics): a thread a pixel over its requests. Each
+// retraces the ray that met X, and for each directional light and owned draw draws one slope in the draw's smooth
+// lobes' cores, solves every triangle the cones keep for the points whose half vector between X and the light has that
+// slope, and connects them (X -> y and y -> the light visible): the term sun -> the core at y -> X's rough reflection,
+// by the change of variables from the slope to y's area. The sum goes into the running mean the raygen just wrote.
+[shader("raygeneration")]
+void manifoldConnect()
+{
+    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 size = pc.params.xy;
+    const uint pixelIndex = pixel.y * size.x + pixel.x;
+    const uint flags = pc.control.x;
+    const uint classMask = (flags >> 11u) & 255u;
+    const uint debugStage = (flags >> 21u) & 3u;   // OHAO_MANIFOLD_STAGE: 3 stop after X, 1 at the candidates, 2 at the roots
+    OpenPBRTables tables;
+    tables.data = openpbrTables;
+    const uint4 header = manifoldDraws[0];   // (D, T, C, G)
+    const uint lights = asuint(causticCasters[0].x);
+    float3 sum = float3(0.0);
+    uint requests = 0u, candidates = 0u, roots = 0u, connections = 0u;
+    uint clusterTests = 0u, subTests = 0u, triTests = 0u;
+    for (uint slot = 0u; slot < kManifoldDepths; ++slot)
+    {
+        const uint r = (pixelIndex * kManifoldDepths + slot) * 3u;
+        const float4 r0 = manifoldRequests[r];
+        const uint meta = asuint(r0.w);
+        if ((meta & 1u) == 0u) continue;
+        ++requests;
+        const float3 rayDir = manifoldRequests[r + 1u].xyz;
+        const float3 beta = manifoldRequests[r + 2u].xyz;
+        const int channel = int((meta >> 1u) & 3u) - 1;
+        const PathPayload hx = trace(r0.xyz, rayDir, kPathMask | kTlasMaskEmitter, 1.0e4);
+        if ((hx.flags & kHit) == 0u || (hx.flags & kHitEmitter) != 0u) continue;
+        const ManifoldSurface sx = manifoldSurface(hx, channel, float3(0.0));
+        if (sx.fromInside) continue;
+        const OpenPBRSurface bx = OpenPBRSurface(sx.mi);
+        const float3 wo = toLocal(-rayDir, sx.t, sx.b, sx.n);
+        const float3 pX = hx.position + hx.geoNormal * 1e-3;
+        if (debugStage == 3u) continue;
+        for (uint l = 0u; l < lights; ++l)
+        {
+            const float4 la = causticCasters[2u + 3u * l], lb = causticCasters[3u + 3u * l];
+            const float3 L = -normalize(la.xyz);
+            const float3 E = lb.rgb;
+            // One owned draw a request and light, chosen by its solid angle from X: the estimate divides by its
+            // probability (exact while every draw that can hold a root has one above 0), and a convex caster's glint
+            // at X scales with its solid angle. Six draws walked a request cost the showcase 300 ms a frame.
+            float wSum = 0.0;
+            for (uint e = 0u; e < header.x; ++e) wSum += manifoldDrawWeight(e, header, pX);
+            if (!(wSum > 0.0)) continue;
+            // Russian roulette on the request by the casters' solid angle from X (their glints scale with it): one far
+            // from every caster runs with probability wSum / kManifoldRouletteWeight, weighed by its inverse (exact).
+            const float keep = min(wSum / kManifoldRouletteWeight, 1.0);
+            if (keep < 1.0 && manifoldUnit(manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, 0x0B5EEDu)) >= keep) continue;
+            const float uPick = manifoldUnit(manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, 0x5EEDu)) * wSum;
+            uint d = 0u;
+            float wPick = 0.0, acc = 0.0;
+            for (uint e = 0u; e < header.x; ++e)
+            {
+                const float w = manifoldDrawWeight(e, header, pX);
+                acc += w;
+                if (w > 0.0)
+                {
+                    d = e;
+                    wPick = w;
+                    if (uPick < acc) break;
+                }
+            }
+            const float invP = wSum / (wPick * keep);
+            {
+                const uint4 da = manifoldDraws[1u + 3u * d], db = manifoldDraws[2u + 3u * d];
+                // The draw's lobes' alpha bounds, from its material's factors (the gather's record).
+                const float2 alphas = manifoldNodes[(header.w + header.z + d) * 4u].xy;
+                if (!(alphas.x > 0.0 || alphas.y > 0.0)) continue;
+                const uint h0 = manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, d);
+                const uint h1 = pcg(h0), h2 = pcg(h1);
+                const float2 coreSlope = float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2);
+                const float2 target = manifoldDrawSlope(alphas, coreSlope,
+                                                        float3(manifoldUnit(h0), manifoldUnit(h1), manifoldUnit(h2)));
+                const float thetaS = atan(length(target));
+                const float aMin = alphas.x > 0.0 && alphas.y > 0.0 ? min(alphas.x, alphas.y) : max(alphas.x, alphas.y);
+                const float tol = max(1e-3 * aMin, 1e-6);
+                const uint clustersInDraw = da.y;   // a cluster a meshlet (rt/manifold_gather.slang)
+                const uint groupsInDraw = (clustersInDraw + kManifoldCluster - 1u) / kManifoldCluster;
+                for (uint g = 0u; g < groupsInDraw; ++g)
+                {
+                    const uint gn = (db.y + g) * 4u;
+                    const float4 g0 = manifoldNodes[gn], g1 = manifoldNodes[gn + 1u], g2 = manifoldNodes[gn + 2u];
+                    if (!manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, pX, L, thetaS)) continue;
+                    const uint cEnd = min(clustersInDraw, (g + 1u) * kManifoldCluster);
+                    for (uint c = g * kManifoldCluster; c < cEnd; ++c)
+                    {
+                        ++clusterTests;
+                        const uint cn = (header.w + db.x + c) * 4u;
+                        const float4 c0 = manifoldNodes[cn], c1 = manifoldNodes[cn + 1u], c2 = manifoldNodes[cn + 2u];
+                        const float3 cRef = manifoldNodes[cn + 3u].xyz;   // the cluster's frame of reference
+                        if (!manifoldDiscTestTerm(c0.xyz, c1.xyz, c2.xyz, c0.w, c2.w, cRef, target, pX, L)) continue;
+                        const uint count = asuint(c1.w);
+                        for (uint sc = 0u; sc * 16u < count; ++sc)
+                        {
+                        ++subTests;
+                        const uint sn = (header.w + header.z + header.x + (db.x + c) * 8u + sc) * 4u;
+                        const float4 s0 = manifoldNodes[sn], s1 = manifoldNodes[sn + 1u], s2 = manifoldNodes[sn + 2u];
+                        if (!manifoldDiscTestTerm(s0.xyz, s1.xyz, s2.xyz, s0.w, s2.w, cRef, target, pX, L)) continue;
+                        const uint kEnd = min(count, sc * 16u + 16u);
+                        for (uint k = sc * 16u; k < kEnd; ++k)
+                        {
+                            const uint i = ((db.x + c) * 128u + k) * 9u;
+                            ++triTests;
+                            const float4 b0 = manifoldTris[i + 6u], b1 = manifoldTris[i + 7u], b2 = manifoldTris[i + 8u];
+                            if (!manifoldDiscTestTerm(b0.xyz, b1.xyz, b2.xyz, b0.w, b2.w, cRef, target, pX, L)) continue;
+                            ManifoldTri tri;
+                            tri.p0 = manifoldTris[i].xyz;
+                            tri.e1 = manifoldTris[i + 1u].xyz;
+                            tri.e2 = manifoldTris[i + 2u].xyz;
+                            tri.n0 = manifoldTris[i + 3u].xyz;
+                            tri.a1 = manifoldTris[i + 4u].xyz;
+                            tri.a2 = manifoldTris[i + 5u].xyz;
+                            tri.c = cRef;
+                            ++candidates;
+                            if (debugStage == 1u) continue;
+                            float2 uv;
+                            if (!manifoldSolve(tri, pX, L, target, tol, uv)) continue;
+                            if (!(uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)) continue;
+                            float2 sigma, du, dv;
+                            float3 y, nS;
+                            if (!manifoldMap(tri, pX, L, uv, sigma, du, dv, y, nS)) continue;
+                            ++roots;
+                            if (debugStage == 2u) continue;
+                            // X and the light on opposite sides of the triangle: no reflection there reaches X.
+                            const float3 gS = cross(tri.e1, tri.e2);
+                            if (dot(gS, pX - y) * dot(gS, L) <= 0.0) continue;
+                            const float3 toY = y - pX;
+                            const float dist = length(toY);
+                            const float3 w = toY / dist;
+                            if (dot(w, hx.geoNormal) <= 0.0) continue;
+                            // The sun's shadow ray first (an any-hit ray: a root on a solid's far side, or in shadow, is
+                            // turned away before the closest-hit trace), from y off its side toward X, as the camera's
+                            // light sample leaves its hit.
+                            float3 T;
+                            if (!visible(y + normalize(gS) * (dot(gS, pX - y) > 0.0 ? 1e-3 : -1e-3), L, 1.0e4, T)) continue;
+                            // X -> y as the camera's bounce ray traces it: the first thing it meets must be y.
+                            const PathPayload hs = trace(pX, w, kPathMask | kTlasMaskEmitter, 1.0e4);
+                            if ((hs.flags & kHit) == 0u || (hs.flags & kHitEmitter) != 0u || hs.material != db.z ||
+                                abs(hs.t - dist) > 1e-4 * dist + 1e-5) continue;
+                            if (dot(L, hs.geoNormal) <= 0.0) continue;
+                            int ch = channel;
+                            float chWeight = 1.0;
+                            const float4 row13 = materials[hs.material * kMaterialRows + kTransmissionRowFirst + 1u];
+                            ManifoldSurface ss = manifoldSurface(hs, -1, nS);
+                            if (ss.fromInside) continue;
+                            if (ch < 0 && row13.z > 0.0 && ss.mi.transmissionWeight > 0.0 && ss.mi.baseMetalness < 1.0)
+                            {
+                                // A dispersive surface draws the path's wavelength, as the camera side does there.
+                                ch = int(min(manifoldUnit(pcg(h2 ^ k)) * 3.0, 2.0));
+                                chWeight = 3.0;
+                            }
+                            if (ch >= 0) ss = manifoldSurface(hs, ch, nS);
+                            const float3 woS = toLocal(-w, ss.t, ss.b, ss.n), wiS = toLocal(L, ss.t, ss.b, ss.n);
+                            const float3 core =
+                                OpenPBRSurface(ss.mi).evalSmoothCore(woS, wiS, tables, kCausticRough, coreSlope);
+                            if (!any(core > 0.0)) continue;
+                            float3 sm, ro;
+                            bx.evalParts(wo, toLocal(w, sx.t, sx.b, sx.n), tables, kCausticRough, sm, ro);
+                            const float3 e12 = cross(tri.e1, tri.e2);
+                            const float area2 = length(e12);
+                            const float cosY = abs(dot(e12, w)) / area2;
+                            const float det = abs(du.x * dv.y - dv.x * du.y);
+                            const float dens = manifoldSlopeDensity(alphas, coreSlope, sigma);
+                            if (!(det > 0.0) || !(dens > 0.0)) continue;
+                            const float3 c = beta * ro * core * E * T * (invP * chWeight * cosY * area2 / (dist * dist * det * dens));
+                            if (all(isfinite(c)))
+                            {
+                                sum += c;
+                                ++connections;
+                            }
+                        }
+                        }
+                    }
+                }
+            }
+        }
+        manifoldRequests[r] = float4(0.0);
+    }
+    if (requests > 0u)
+    {
+        InterlockedAdd(causticStats[1], requests);
+        InterlockedAdd(causticStats[2], candidates);
+        InterlockedAdd(causticStats[3], roots);
+        InterlockedAdd(causticStats[4], connections);
+        InterlockedAdd(causticStats[5], clusterTests);
+        InterlockedAdd(causticStats[6], subTests);
+        InterlockedAdd(causticStats[7], triTests);
+    }
+    sum *= classKeep(classMask, kClassManifold);
+    if (any(sum != 0.0))
+    {
+        float4 acc = accumBuffer[pixel];
+        acc.rgb += sum / max(acc.w, 1.0);
+        accumBuffer[pixel] = acc;
+        outputImage[pixel] = float4(displayPixel(acc.rgb, pc.tuning.z, asuint(pc.tuning.w)), 1.0);
+    }
 }
 
 // Whether the camera sees p first along its ray (the camera's mask and its pass through culled back
@@ -1422,35 +1722,58 @@ void cacheUpdate()
         const float3 wo = toLocal(-dir, t, b, n);
         const OpenPBRSurface base = OpenPBRSurface(inputsOf(hit));
         const float3 p = hit.position + hit.geoNormal * 1e-3;
+        // As tracePixel's vertex: the surface seen from wo once, every direction drawn first, then each weighed at
+        // one site (OpenPBR inlined once).
+        const bool back = base.thinBack(wo);
+        const float3 o = back ? base.mirrored(wo) : wo;
+        const OpenPBRView surfView = base.view(o, tables);
+        const float4 shares = base.drawShares(o, surfView, tables);
 
         rng.group(1u + 3u * depth);
         const float lu0 = rng.next(), lu1 = rng.next(), lu2 = rng.next();
         const LightSample ls = sampleLight(hit.position, p, lu0, lu1, lu2);
-        if (ls.valid)
-        {
-            const float3 wi = toLocal(ls.L, t, b, n);
-            const float3 f = base.eval(wo, wi, tables);
-            float3 vis5;
-            if (any(f > 0.0) && dot(ls.L, hit.geoNormal) > 0.0 && visible(p, ls.L, ls.dist, vis5))
-            {
-                const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, base.pdf(wo, wi, tables)) : 1.0) / ls.pdf : 1.0;
-                cacheContribute(verts, count, throughput * f * ls.radiance * vis5 * w);
-            }
-        }
-        if (envSampled())
+        const bool envOn = envSampled();
+        float pdfL = 0.0;
+        float3 L = float3(0.0, 0.0, 1.0);
+        if (envOn)
         {
             rng.group(2u + 3u * depth);
-            float pdfL;
-            const float3 L = sampleEnv(rng, pdfL);
-            const float3 wi = toLocal(L, t, b, n);
-            const float3 f = base.eval(wo, wi, tables);
-            float3 vis6;
-            if (pdfL > 0.0 && any(f > 0.0) && dot(L, hit.geoNormal) > 0.0 && visible(p, L, 1.0e4, vis6))
-                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis6 * powerHeuristic(pdfL, base.pdf(wo, wi, tables)) / pdfL);
+            L = sampleEnv(rng, pdfL);
         }
-
         rng.group(3u + 3u * depth);
-        const BsdfSample s = base.sample(wo, float3(rng.next(), rng.next(), rng.next()), tables);
+        BsdfSample s = bsdfSampleNone();
+        bool baseDrawn;
+        const bool bounce = base.sampleDirectionFrom(o, float3(rng.next(), rng.next(), rng.next()), surfView, shares, tables,
+                                                     s, baseDrawn);
+        if (back) s.wi = base.mirrored(s.wi);
+
+        // k = 0 the light's, 1 the environment's (each through one shadow ray), 2 the bounce's.
+        [loop]
+        for (uint k = 0u; k < 3u; ++k)
+        {
+            if (k == 0u ? !ls.valid : k == 1u ? !envOn : !bounce) continue;
+            const float3 Lw = k == 0u ? ls.L : L;
+            const float3 wi = k == 2u ? s.wi : toLocal(Lw, t, b, n);
+            const float3 iFront = back ? base.mirrored(wi) : wi;
+            float3 sT, cT, dT;
+            base.terms(o, iFront, surfView, tables, sT, cT, dT);
+            const float3 f = sT + cT + dT;
+            float3 vis = float3(1.0);
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, hit.geoNormal) > 0.0 &&
+                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
+                continue;
+            float bsdfPdf = 0.0, basePdf = 0.0;
+            if (k != 0u || (ls.pdf > 0.0 && ls.mis)) bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
+            if (k == 2u)
+                base.sampleWeigh(s, bsdfPdf, basePdf, baseDrawn, f);
+            else if (k == 0u)
+            {
+                const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf : 1.0;
+                cacheContribute(verts, count, throughput * f * ls.radiance * vis * w);
+            }
+            else
+                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL);
+        }
         if (!(s.pdf > 0.0)) break;
         const float3 next = toWorld(s.wi, t, b, n);
         if (dot(next, hit.geoNormal) <= 0.0) break;
@@ -1463,220 +1786,36 @@ void cacheUpdate()
 
 // ---- hit shaders ----------------------------------------------------------------------------
 
-float vertexFloat(uint v, uint k) { return vertices[v * kVertexFloats + k]; }
-float3 vertexF3(uint v, uint k) { return float3(vertexFloat(v, k), vertexFloat(v, k + 1u), vertexFloat(v, k + 2u)); }
-
-struct Corners
-{
-    uint v0, v1, v2;
-    uint material;
-    uint flags;
-    float4 instanceRow9;
-};
-
-Corners cornersOf(uint slot, uint primitive)
-{
-    const uint stride = kInstanceGpuStride / 16u;
-    const uint4 info = asuint(instances[slot * stride + 8u]);   // mesh, refOffset, refCount, flags
-    const uint4 mesh = meshes[info.x];
-    const uint baseIndex = mesh.y + primitive * 3u;
-    Corners c;
-    c.v0 = mesh.x + indices[baseIndex];
-    c.v1 = mesh.x + indices[baseIndex + 1u];
-    c.v2 = mesh.x + indices[baseIndex + 2u];
-    const uint triSlot = triangleSlots[mesh.w + primitive];
-    c.material = triSlot < info.z ? materialRefs[info.y + triSlot] : 0u;
-    c.flags = info.w;
-    c.instanceRow9 = instances[slot * stride + 9u];
-    return c;
-}
-
-float4 sampleTex(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0); }
-
-// The hit as closestHit reports it; anyHit fills one for a pane a shadow ray passes.
-void fillHit(inout PathPayload payload, float2 bary)
-{
-    const float w = 1.0 - bary.x - bary.y;
-    const Corners c = cornersOf(InstanceID(), PrimitiveIndex());
-    const float3 dir = WorldRayDirection();
-    payload.t = RayTCurrent();
-    payload.position = WorldRayOrigin() + dir * payload.t;
-    payload.flags = kHit;
-
-    // The geometric normal from the triangle's corners, and the interpolated shading normal,
-    // into world space (normals by the inverse transpose), both turned toward the ray.
-    const float3x3 w2o = (float3x3)WorldToObject3x4();
-    const float3 p0 = vertexF3(c.v0, 0u), p1 = vertexF3(c.v1, 0u), p2 = vertexF3(c.v2, 0u);
-    float3 geo = normalize(mul(cross(p1 - p0, p2 - p0), w2o));
-    const float3 nObj = vertexF3(c.v0, 6u) * w + vertexF3(c.v1, 6u) * bary.x + vertexF3(c.v2, 6u) * bary.y;
-    float3 n = dot(nObj, nObj) > 1e-8 ? normalize(mul(nObj, w2o)) : geo;
-    const bool front = dot(geo, dir) < 0.0;   // the side the winding faces (emitters emit from it)
-    // What the raster culls (glTF's doubleSided false, material row 10's w): the side the world-space
-    // winding faces away from the ray; a mirroring transform turns the winding (the normal's inverse
-    // transpose does not).
-    {
-        const bool mirrored = determinant((float3x3)ObjectToWorld3x4()) < 0.0;
-        if (front == mirrored && materials[c.material * kMaterialRows + 10u].w > 0.5) payload.flags |= kHitCulled;
-    }
-    if (!front) geo = -geo;
-    if (dot(n, geo) < 0.0) n = -n;
-    payload.geoNormal = geo;
-    // From inside: the ray runs along the outward normal, the interpolated vertex normal's side (a
-    // winding is not the same across assets: the generated sphere's is inverted, which shaded every
-    // glass ball's entry as an exit, refracting the wrong way and absorbing outside it); a mesh
-    // without vertex normals by its winding.
-    if (dot(nObj, nObj) > 1e-8 ? dot(mul(nObj, w2o), dir) > 0.0 : !front) payload.flags |= kHitBack;
-
-    if ((c.flags & kInstanceEmitter) != 0u)
-    {
-        payload.flags |= kHitEmitter;
-        payload.light = uint(c.instanceRow9.w + 0.5);
-        payload.normal = geo;
-        payload.emission = front ? c.instanceRow9.rgb : float3(0.0);
-        return;
-    }
-
-    const uint m = c.material * kMaterialRows;
-    const float4 row0 = materials[m], row1 = materials[m + 1u], row2 = materials[m + 2u];
-    const float4 row4 = materials[m + 4u], row5 = materials[m + 5u], row6 = materials[m + 6u];
-    const float2 uv = float2(vertexFloat(c.v0, 9u), vertexFloat(c.v0, 10u)) * w +
-                      float2(vertexFloat(c.v1, 9u), vertexFloat(c.v1, 10u)) * bary.x +
-                      float2(vertexFloat(c.v2, 9u), vertexFloat(c.v2, 10u)) * bary.y;
-
-    // A normal map in the vertex tangents' frame, as the G-buffer reads it.
-    const uint normalTex = asuint(row1.z);
-    if (normalTex < 4096u)
-    {
-        const float4 tObj = float4(vertexF3(c.v0, 13u), vertexFloat(c.v0, 16u)) * w +
-                            float4(vertexF3(c.v1, 13u), vertexFloat(c.v1, 16u)) * bary.x +
-                            float4(vertexF3(c.v2, 13u), vertexFloat(c.v2, 16u)) * bary.y;
-        float3 tw = mul((float3x3)ObjectToWorld3x4(), tObj.xyz);
-        float3 T, B;
-        if (dot(tw, tw) > 1e-12)
-        {
-            T = normalize(tw - n * dot(n, tw));
-            B = normalize(cross(n, T)) * (vertexFloat(c.v0, 16u) < 0.0 ? -1.0 : 1.0);
-        }
-        else
-        {
-            basisOf(n, T, B);
-        }
-        const float3 tn = sampleTex(normalTex, uv).rgb * 2.0 - 1.0;
-        const float3 mapped = T * tn.x + B * tn.y + n * tn.z;
-        if (dot(mapped, mapped) > 1e-8) n = normalize(mapped);
-        if (dot(n, geo) < 1e-3) n = normalize(n + geo * (1e-3 - dot(n, geo)));
-    }
-    payload.normal = n;
-
-    float3 baseColor = row0.rgb;
-    const uint albedoTex = asuint(row0.w);
-    if (albedoTex < 4096u) baseColor *= sampleTex(albedoTex, uv).rgb;
-    float roughness = row1.x, metalness = row1.y;
-    const uint roughMetalTex = asuint(row2.x);
-    if (roughMetalTex < 4096u)
-    {
-        const float4 rm = sampleTex(roughMetalTex, uv);
-        roughness *= rm.g;
-        metalness *= rm.b;
-    }
-    float specularWeight = row4.w;
-    float3 specularColor = row4.rgb;
-    const uint specTex = asuint(row5.w);
-    if (specTex < 4096u) specularWeight *= sampleTex(specTex, uv).a;
-    const uint specColorTex = asuint(row6.w);
-    if (specColorTex < 4096u) specularColor *= sampleTex(specColorTex, uv).rgb;
-    // Emission: emission_color x emission_luminance, times the emissive texture when there is one.
-    float3 emission = row6.rgb * row2.y;
-    const uint emissiveTex = asuint(row1.w);
-    if (emissiveTex < 4096u) emission *= sampleTex(emissiveTex, uv).rgb;
-
-    // An emissive triangle is a light (render/rt/emissive_lights.hpp): its index, for the bounce's weight.
-    if (any(emission > 0.0))
-    {
-        const uint first = emissiveFirst[InstanceID()];
-        if (first != ~0u)
-        {
-            payload.flags |= kHitEmissive;
-            payload.light = first + PrimitiveIndex();
-        }
-    }
-    payload.baseColor = baseColor;
-    payload.baseWeight = row5.z;
-    payload.metalness = saturate(metalness);
-    payload.diffuseRoughness = row5.y;
-    payload.specularWeight = specularWeight;
-    payload.specularColor = specularColor;
-    payload.specularRoughness = saturate(roughness);
-    payload.specularIor = row5.x;
-    payload.emission = emission;
-    payload.material = c.material;
-    payload.uv = uv;
-    // Anisotropy's tangent: the vertex tangents' (as a normal map reads them), else any in the plane
-    // of n, turned by geometry_tangent_rotation.
-    payload.tangent = float3(0.0);
-    const float4 row10 = materials[m + 10u];
-    if (row10.y > 0.0 || (materials[m + 7u].w > 0.0 && materials[m + 8u].y > 0.0))
-    {
-        const float4 tObj = float4(vertexF3(c.v0, 13u), vertexFloat(c.v0, 16u)) * w +
-                            float4(vertexF3(c.v1, 13u), vertexFloat(c.v1, 16u)) * bary.x +
-                            float4(vertexF3(c.v2, 13u), vertexFloat(c.v2, 16u)) * bary.y;
-        const float3 tw = mul((float3x3)ObjectToWorld3x4(), tObj.xyz);
-        const float3 sn = payload.normal;
-        float3 T, B;
-        if (dot(tw, tw) > 1e-12 && dot(tw - sn * dot(sn, tw), tw - sn * dot(sn, tw)) > 1e-12) T = normalize(tw - sn * dot(sn, tw));
-        else basisOf(sn, T, B);
-        payload.tangent = rotatedTangent(sn, T, row10.z);
-    }
-}
-
 [shader("closesthit")]
 void closestHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes attr)
 {
-    fillHit(payload, attr.barycentrics);
+    fillHitAt(payload, hitContextHere(attr.barycentrics));
 }
 
 [shader("anyhit")]
 void anyHit(inout PathPayload payload, BuiltInTriangleIntersectionAttributes attr)
 {
-    const Corners c = cornersOf(InstanceID(), PrimitiveIndex());
-    if ((payload.flags & kShadowRay) != 0u && paneMaterial(c.material))
-    {
-        // Its straight transmission at the ray's angle (the geometry's NO_DUPLICATE_ANY_HIT flag: once each).
-        PathPayload h;
-        h.flags = 0u;
-        fillHit(h, attr.barycentrics);
-        OpenPBRTables tables;
-        tables.data = openpbrTables;
-        const float cs = clamp(abs(dot(WorldRayDirection(), h.geoNormal)), 1e-4, 1.0);
-        payload.emission *= OpenPBRSurface(inputsOf(h)).transmissionAlbedo(float3(sqrt(1.0 - cs * cs), 0.0, cs), tables);
-        if (any(payload.emission > 0.0)) IgnoreHit();   // else a hit: nothing gets through
-        return;
-    }
-    const uint m = c.material * kMaterialRows;
-    const float4 row3 = materials[m + 3u];   // mode, cutoff, opacity, base alpha
-    const uint mode = uint(row3.x + 0.5);
-    if (mode == kAlphaOpaque) return;
-    float alpha = row3.w * row3.z;
-    const uint albedoTex = asuint(materials[m].w);
-    if (albedoTex < 4096u)
-    {
-        const float2 bary = attr.barycentrics;
-        const float w = 1.0 - bary.x - bary.y;
-        const float2 uv = float2(vertexFloat(c.v0, 9u), vertexFloat(c.v0, 10u)) * w +
-                          float2(vertexFloat(c.v1, 9u), vertexFloat(c.v1, 10u)) * bary.x +
-                          float2(vertexFloat(c.v2, 9u), vertexFloat(c.v2, 10u)) * bary.y;
-        alpha *= sampleTex(albedoTex, uv).a;
-    }
-    if (mode == kAlphaMask)
-    {
-        if (alpha < row3.y) IgnoreHit();
-        return;
-    }
-    // Blended: stochastically present, by a hash of the ray and the triangle.
-    const uint2 launch = DispatchRaysIndex().xy;
-    uint h = pcg(launch.x ^ pcg(launch.y ^ pcg(PrimitiveIndex() ^ pcg(InstanceID()))));
-    h = pcg(h ^ asuint(WorldRayOrigin().x) ^ pcg(asuint(WorldRayOrigin().y) ^ asuint(WorldRayDirection().z)));
-    if (float(h >> 8u) * (1.0 / 16777216.0) >= alpha) IgnoreHit();
+    float3 transmission = payload.emission;
+    const bool keep = anyHitAccepts(hitContextHere(attr.barycentrics), (payload.flags & kShadowRay) != 0u, transmission);
+    // Written before IgnoreHit, which ends the shader: a pane's transmission must ride on with the shadow ray.
+    payload.emission = transmission;
+    if (!keep) IgnoreHit();
+}
+
+// The hit's context from the hit shader's intrinsics.
+HitContext hitContextHere(float2 bary)
+{
+    HitContext h;
+    h.instance = InstanceID();
+    h.primitive = PrimitiveIndex();
+    h.bary = bary;
+    h.origin = WorldRayOrigin();
+    h.dir = WorldRayDirection();
+    h.t = RayTCurrent();
+    h.objectToWorld = (float3x3)ObjectToWorld3x4();
+    h.worldToObject = (float3x3)WorldToObject3x4();
+    h.launch = DispatchRaysIndex().xy;
+    return h;
 }
 
 [shader("miss")]

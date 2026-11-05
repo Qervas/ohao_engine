@@ -114,6 +114,10 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         OHAO_LOG(Error, render, "PathTracer: failed to create caustics' buffers");
         return false;
     }
+    if (!m_manifold.create(m_device, m_physicalDevice)) {
+        OHAO_LOG(Error, render, "PathTracer: failed to create the manifold pass's buffers");
+        return false;
+    }
 
     if (!createDescriptorResources()) {
         OHAO_LOG(Error, render, "PathTracer: failed to create descriptor resources");
@@ -370,17 +374,22 @@ void PathTracer::destroy() {
     m_radianceCache.destroy();
     m_guiding.destroy();
     m_caustics.destroy();
+    m_manifold.destroy();
 
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
     if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }
     if (m_causticsSbtBuffer) { vkDestroyBuffer(m_device, m_causticsSbtBuffer, nullptr); m_causticsSbtBuffer = VK_NULL_HANDLE; }
     if (m_causticsSbtMemory) { vkFreeMemory(m_device, m_causticsSbtMemory, nullptr); m_causticsSbtMemory = VK_NULL_HANDLE; }
+    if (m_manifoldSbtBuffer) { vkDestroyBuffer(m_device, m_manifoldSbtBuffer, nullptr); m_manifoldSbtBuffer = VK_NULL_HANDLE; }
+    if (m_manifoldSbtMemory) { vkFreeMemory(m_device, m_manifoldSbtMemory, nullptr); m_manifoldSbtMemory = VK_NULL_HANDLE; }
 
     // Pipeline
     if (m_rtPipeline) { vkDestroyPipeline(m_device, m_rtPipeline, nullptr); m_rtPipeline = VK_NULL_HANDLE; }
     if (m_causticsPipeline) { vkDestroyPipeline(m_device, m_causticsPipeline, nullptr); m_causticsPipeline = VK_NULL_HANDLE; }
     m_causticsPipelineFailed = false;
+    if (m_manifoldPipeline) { vkDestroyPipeline(m_device, m_manifoldPipeline, nullptr); m_manifoldPipeline = VK_NULL_HANDLE; }
+    m_manifoldPipelineFailed = false;
     if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
 
     // Descriptors

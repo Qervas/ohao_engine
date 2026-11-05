@@ -40,6 +40,10 @@ constexpr uint32_t kPTFlagRadianceCache = 1u << 5;
 constexpr uint32_t kPTFlagGuiding = 1u << 6;
 // Caustics (sub-project 24): rt/path_tracer.slang's kFlagCaustics (bits 7-9 are guiding's debug).
 constexpr uint32_t kPTFlagCaustics = 1u << 10;
+// Caustics step 2: kFlagManifold (the camera side drops the manifold pass's terms) and kFlagManifoldRequests (it
+// writes the pass's requests); bits 11-18 are OHAO_PT_CLASS.
+constexpr uint32_t kPTFlagManifold = 1u << 19;
+constexpr uint32_t kPTFlagManifoldRequests = 1u << 20;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -61,6 +65,15 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const bool causticsOn = causticsWanted && m_caustics.active() && m_caustics.ensure(m_width * m_height) &&
                             ensureCausticsPipeline();
     static const bool causticsSplitOnly = std::getenv("OHAO_CAUSTICS_SPLIT_ONLY") != nullptr;
+    // Caustics step 2 (docs/specs/2026-11-04-caustics-step2-design.md): with caustics, whenever an owned caster is
+    // in the scene. OHAO_MANIFOLD_OFF=1 leaves step 1 alone (check_caustics' m3_sum); OHAO_MANIFOLD_SPLIT_ONLY=1 drops
+    // the pass's terms without running it.
+    static const bool manifoldOff = std::getenv("OHAO_MANIFOLD_OFF") != nullptr;
+    static const bool manifoldSplitOnly = std::getenv("OHAO_MANIFOLD_SPLIT_ONLY") != nullptr;
+    if (causticsOn && !manifoldOff && m_scene) m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
+    const bool manifoldOn = causticsOn && !manifoldOff && m_scene && m_manifold.active() &&
+                            m_manifold.ensureRequests(m_width * m_height) && (manifoldSplitOnly || ensureManifoldPipeline());
+    const bool manifoldPass = manifoldOn && !manifoldSplitOnly;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
     timePass("emissive.lights");
@@ -68,6 +81,12 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                        {m_vertexArena, m_indexArena, m_meshTable, m_triangleSlots, m_materialTable, m_instances,
                         m_materialRefs},
                        m_textureSet);
+    // Caustics step 2: the owned casters' triangles, clusters and cones, rebuilt every frame the pass runs.
+    if (manifoldOn) {
+        timePass("pt.manifold.gather");
+        m_manifold.record(cmd, frameSlot, m_vertexArena, m_scene->meshletArena(), m_scene->meshletVertexArena(),
+                          m_scene->meshletTriangleArena(), m_instances, m_materialTable);
+    }
     // The frame's setup is timed with its first trace.
     timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update"
              : causticsOn                                                     ? "pt.caustics"
@@ -163,7 +182,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
 
-    VkWriteDescriptorSet writes[56] = {};
+    VkWriteDescriptorSet writes[64] = {};
     uint32_t writeCount = 0;
     const auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info) {
         VkWriteDescriptorSet& w = writes[writeCount++];
@@ -211,6 +230,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         {41, m_radianceCache.resolved()}, {42, m_emissive->lightBuffer()}, {44, m_emissive->rangeBuffer(frameSlot)},
         {45, m_emissive->firstBuffer(frameSlot)}, {46, m_guiding.states()}, {49, m_guiding.proposals()},
         {50, m_guiding.pixel()}, {51, m_caustics.table()}, {52, m_caustics.splat()}, {53, m_caustics.stats()},
+        {54, m_manifold.tris()}, {55, m_manifold.nodes()}, {56, m_manifold.draws(frameSlot)}, {57, m_manifold.requests()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -567,6 +587,17 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     }
     static const char* guideDebug = std::getenv("OHAO_GUIDE_DEBUG");
     if (guideOn && guideDebug) pc.control.x |= (1u << 7) | ((uint32_t(std::atoi(guideDebug)) & 3u) << 8u);   // kFlagGuideDebug, its mode
+    // OHAO_PT_CLASS=mask: caustics' raygen keeps only the light of these path classes (rt/path_tracer.slang's
+    // kClass*), to find what a pixel's light is.
+    static const char* ptClass = std::getenv("OHAO_PT_CLASS");
+    if (causticsOn && ptClass) pc.control.x |= (uint32_t(std::atoi(ptClass)) & 255u) << 11u;
+    if (manifoldOn) {
+        pc.control.x |= kPTFlagManifold;
+        if (manifoldPass) pc.control.x |= kPTFlagManifoldRequests;
+        static const char* stage = std::getenv("OHAO_MANIFOLD_STAGE");   // profiling: where manifoldConnect stops
+        if (stage) pc.control.x |= (uint32_t(std::atoi(stage)) & 3u) << 21u;
+        m_manifoldRan = true;
+    }
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
     // denoiser takes), and whether last frame's view gives motion vectors.
     pc.control.y = tracerAccumulates(m_renderSettings) ? m_accumFrames : 0u;
@@ -579,9 +610,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;
 
-    vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
-                       0, sizeof(PTPushConstants), &pc);
+    vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
 
     // --- The radiance cache: this frame's update (1 pixel in 5x5) and resolve, before the trace
     //     that ends its paths in it. ---
@@ -592,9 +621,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         timePass("pt.cache.resolve");
         m_radianceCache.recordResolve(cmd);
         // Push constants are shared by the bind points: the resolve's replaced the trace's.
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-                           VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
-                           0, sizeof(PTPushConstants), &pc);
+        vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
     }
 
     // --- Trace rays! ---
@@ -619,6 +646,19 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         timePass("pt.trace");
         vkCmdTraceRaysKHR(cmd, &m_causticsRgenRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
                           m_width, m_height, 1);
+        if (manifoldPass) {
+            // Caustics step 2: the requests raygenCaustics wrote, answered into the running mean it wrote (the same
+            // layout, set and push constants: one program to the next).
+            VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 0, 1, &b, 0, nullptr, 0, nullptr);
+            timePass("pt.manifold");
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_manifoldPipeline);
+            vkCmdTraceRaysKHR(cmd, &m_manifoldRgenRegion, &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
+                              m_width, m_height, 1);
+        }
     } else {
         vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                           m_width, m_height, 1);

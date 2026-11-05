@@ -204,8 +204,10 @@ A new raygen entry point in the tracer's pipeline, `causticTrace`, dispatched be
 
 ### Specular manifold sampling (step 2)
 
-Its own design section is written at the start of step 2 (the spec is extended in the same commit). The outline it must
-keep:
+**Superseded by `docs/specs/2026-11-04-caustics-step2-design.md`**, written at the start of step 2 after measuring what
+the showcase's remaining dots are (five of seven: the sun off a smooth surface onto a matte one past the first hit) and
+weighing the 2024-2025 methods: tuples of triangles chosen by a conservative bound and every root found within one,
+instead of the reciprocal-probability estimator below. The outline as first written:
 - The paths it owns are those the light pass cannot connect: the camera's path reaches a matte point D only through
   smooth vertices (seen through glass or in a mirror), and D receives the sun through one or more smooth surfaces
   (refraction through a ball, reflection off a mirror).
