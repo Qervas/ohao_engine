@@ -16,7 +16,8 @@ Waiting:
   session `e2e_mcp.py` (step 11) to the GPU gates.
 - `build/SKILL.md` (sub-project 4, step 2): new files need no re-configure
   (`CONFIGURE_DEPENDS`), every SPIR-V consumer builds the shaders, and `tools/check.py` is
-  the shortest path.
+  the shortest path; Linux (2026-11-05): Ninja Multi-Config with the pinned slangc, `-j16`,
+  the GCC failure lines, Windows kept as the other platform.
 
 Install (from the repo root), then remove the drafts:
 
