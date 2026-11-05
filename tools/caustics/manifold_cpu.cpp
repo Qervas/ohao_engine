@@ -130,4 +130,39 @@ bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float 
     return io.rows[13].x != 0.0f;
 }
 
+CertResult manifoldCertify(const Tri& tri, const V3& p, const V3& L, V2 target, V2 lo, V2 hi) {
+    Io io = base(7, &tri, &p, &L);
+    io.rows[9] = f4(target[0], target[1], 0, 0);
+    io.rows[10] = f4(lo[0], lo[1], 0, 0);
+    io.rows[11] = f4(hi[0], hi[1], 0, 0);
+    runItem(io);
+    CertResult r;
+    r.roots = static_cast<int>(io.rows[13].x);
+    r.undecided = static_cast<int>(io.rows[13].y);
+    r.boxes = static_cast<int>(io.rows[13].z);
+    r.uv[0] = {io.rows[14].x, io.rows[14].y};
+    r.uv[1] = {io.rows[14].z, io.rows[14].w};
+    r.uv[2] = {io.rows[15].x, io.rows[15].y};
+    r.uv[3] = {io.rows[15].z, io.rows[15].w};
+    return r;
+}
+
+Enclosure manifoldEnclose(const Tri& tri, const V3& p, const V3& L, V2 lo, V2 hi, bool constraint, V2 target) {
+    Io io = base(8, &tri, &p, &L);
+    io.rows[0].y = constraint ? 1.0f : 0.0f;
+    io.rows[9] = f4(target[0], target[1], 0, 0);
+    io.rows[10] = f4(lo[0], lo[1], 0, 0);
+    io.rows[11] = f4(hi[0], hi[1], 0, 0);
+    runItem(io);
+    Enclosure e;
+    e.sx = {io.rows[13].x, io.rows[13].y};
+    e.sy = {io.rows[13].z, io.rows[13].w};
+    e.dsxdu = {io.rows[14].x, io.rows[14].y};
+    e.dsxdv = {io.rows[14].z, io.rows[14].w};
+    e.dsydu = {io.rows[15].x, io.rows[15].y};
+    e.dsydv = {io.rows[15].z, io.rows[15].w};
+    e.defined = static_cast<int>(io.rows[16].x);
+    return e;
+}
+
 } // namespace ohao::caustics

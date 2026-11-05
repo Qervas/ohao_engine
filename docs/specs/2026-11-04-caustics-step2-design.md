@@ -156,6 +156,64 @@ Working the outline into the tracer's code changed five things; the outline stay
   and which has no normal map (a bit per material). The partition is still exact; the helmet's normal-mapped glints are
   then step 1's and the camera side's, as today.
 
+## Step 2b as designed (2026-11-05)
+
+**What it owns.** `sun → S₁ (into a solid, refracting) → S₂ (out of it, refracting) → X (rough, depth 1 … R) → … →
+camera`, both refractions within their cores, S₁ and S₂ on the same draw of a transmissive, owned material (a glass ball,
+a slab). The camera side drops it as 2a's terms: `chain₂ ← chain₁ × f_smooth,core / pdf` at the bounce after X when it
+refracts into an owned solid, and its sun sample at S₁ subtracts `chain₂ × f_smooth,core(wo, l) × Le` when that bounce
+refracts back out at the same draw. Every other chain of two (two reflections, a reflection then a refraction) stays
+the camera side's. It is missing today, not noisy: the showcase's glow under the glass ball, seen through the ball, is
+camera depth 2 behind two refractions, and nothing renders it.
+
+**The map.** Unknowns `(u₁, v₁)` on an entry triangle T₁ and `(u₂, v₂)` on an exit triangle T₂ of the same draw; two slope
+constraints, one at each vertex, on the generalised half vector of refraction (Walter et al. 2007,
+`h = −(ηᵢ ωᵢ + ηₒ ωₒ)` normalised): at y₁ between the sun and `y₂ − y₁`, at y₂ between `y₁ − y₂` and `X − y₂`, each
+in its triangle's cluster frame (2a's `c`). Four equations, four unknowns, a 4 x 4 Jacobian. Two slopes are drawn, each
+from its lobe's core density; the estimator divides by both densities and `|det J|` as 2a's divides by one and its 2 x 2.
+
+**Every root, certified: interval Newton.** 2a solves a triangle by Newton from its centroid and checks it against a
+21-start search on a sphere (ruling M1 still open); a pair has no such guarantee at all. Step 2b's first task is a
+solver that proves what it finds:
+
+- The maps (2a's, 2b's) are written once, generic over a number type (`float`; a dual number, whose derivatives give
+  the Jacobian with no hand-written one; an interval, rounded outward (an ulp for addition and multiplication, 3 for division and square roots: Vulkan allows
+  2.5 and 2 ulp there); an interval dual).
+  Slang's generics compile to SPIR-V and to the C++ twin alike (probed).
+- On a box B of the unknowns, the Krawczyk operator `K(B) = c − Y F(c) + (I − Y J(B))(B − c)` (Y the inverse of the
+  Jacobian at the centre, J(B) the interval Jacobian over B): `K(B) ∩ B = ∅` proves no root, `K(B) ⊂ interior(B)` proves
+  exactly one (Newton from c then converges to it), else B is split along its widest side. A box whose centre's Jacobian is singular (a caustic's fold) is split too. A box left undecided at
+  the depth limit is counted (the pass's counters): the closed forms must show none.
+- This is Path Cuts' enumeration (Wang, Hašan, Yan 2020) on the slope maps. It closes M1 for 2a (each candidate
+  triangle certified), it is 2b's pair solver, and step 2c's cell solver (M11).
+
+**T1 measured (2026-11-05, `rt/manifold_cert.slang`, `manifold_tests` t9).** On the showcase's ball every root a
+14 x 14 double search finds is certified, none falsely, no box undecided, 7.7 boxes a candidate triangle (at most 83).
+On random near triangles (spanning 30-60 degrees from X, vertex normals turned up to 25 degrees: 18 held two roots) it
+never certifies a false root and finds every root wherever it decides every box, but 117 of 4,000 cases spend the
+512-box budget: natural interval enclosures are loose on so near and curved a triangle. Tighter enclosures (centred
+forms on the frame's sub-expressions, affine arithmetic) come before the pass uses it on such geometry; the undecided
+count is the pass's counter until then.
+
+**Pairs.** An exit triangle is a candidate as in 2a (its disc test at X, with the inside direction unknown: the test runs
+on the cone of directions toward the draw's bounding sphere); for each, entry triangles come from the same draw's
+hierarchy, pruned by the interval map on the pair's node boxes (node pairs whose constraint intervals exclude the drawn
+slopes are dropped, Path Cuts' pair pruning). Measured as candidate pairs a request on `c3_sphere`'s ball before the
+pass is built.
+
+**Tests.**
+- **t9_krawczyk_complete** (CPU twin): random triangles, points and slopes, 2a's map: every root a dense double search
+  finds is certified by the Krawczyk walk, no root is reported twice, undecided boxes 0; then the same for pairs on a
+  sphere.
+- **t9_interval_enclosure**: the interval map and Jacobian contain the float map and Jacobian at 10⁵ random points of
+  each box (outward rounding holds).
+- **m4_slab_seen**, **m5_ball_seen**, **m6_through_glass** (above), and c3's caustic seen through the ball against a numpy
+  ray simulation of the same scene in double precision.
+
+**Build order.** T1 the generic map and the Krawczyk solver (CPU twin, tests t9), applied to 2a's triangles (m1, m2
+unchanged, M1 closed); T2 refraction's half vector and the pair map (twin, tests); T3 pair candidates and their count
+on c3's ball; T4 the camera side's `chain₂` and the pass's pairs; T5 the closed forms; T6 cost.
+
 ## Step 2c: normal-mapped glints (proposed, 2026-11-05)
 
 **Why.** Step 2a left normal-mapped casters to the camera side (ruling M7), and the showcase's remaining dots are theirs:
@@ -298,6 +356,7 @@ or PSMS ReSTIR's, its licence is checked; GPL code is never read (as merian-quak
 - Zeltner, Georgiev, Jakob, "Specular Manifold Sampling for Rendering High-Frequency Caustics and Glints", SIGGRAPH 2020.
 - Hanika, Droske, Fascione, "Manifold Next Event Estimation", EGSR 2015.
 - Wang, Hašan, Yan, "Path Cuts: Efficient Rendering of Pure Specular Light Transport", SIGGRAPH Asia 2020.
+- Walter, Marschner, Li, Torrance, "Microfacet Models for Refraction through Rough Surfaces", EGSR 2007.
 - Fan, Guo, Wang, Xiao, Zhang, Zhou, Chen, Hu, Guo, "Specular Polynomials", SIGGRAPH 2024 (arXiv 2405.13409).
 - Fan, Wang, "Bernstein Bounds for Caustics", SIGGRAPH 2025 (arXiv 2504.19163).
 - Hong, Duan, Wang, Yuksel, Zeltner, Lin, "Sample Space Partitioning and Spatiotemporal Resampling for Specular

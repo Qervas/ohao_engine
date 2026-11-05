@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <random>
 #include <vector>
 
@@ -103,11 +104,11 @@ std::vector<Tri> uvSphere(double r, int sectors, int stacks) {
 struct Roots {
     std::vector<std::array<double, 2>> inside, nearEdge;
 };
-Roots referenceRoots(const Tri& t, const D3& p, const D3& L, const double target[2], double margin) {
+Roots referenceRoots(const Tri& t, const D3& p, const D3& L, const double target[2], double margin, int grid = 6) {
     Roots r;
-    for (int a = 0; a < 6; ++a)
-        for (int b = 0; a + b < 6; ++b) {
-            double u = (a + 0.5) / 6.5, v = (b + 0.5) / 6.5;
+    for (int a = 0; a < grid; ++a)
+        for (int b = 0; a + b < grid; ++b) {
+            double u = (a + 0.5) / (grid + 0.5), v = (b + 0.5) / (grid + 0.5);
             bool conv = false;
             for (int it = 0; it < 60; ++it) {
                 double s[2], su[2], sv[2];
@@ -377,4 +378,132 @@ TEST(Manifold, t8_disc_conservative) {
     }
     EXPECT_GT(cases, 50000);
     EXPECT_GT(rejected, cases / 4);
+}
+
+// ---- step 2b T1: certified roots (rt/manifold_cert.slang) -------------------------------------------------
+
+// The interval map over a box holds the float map and its Jacobian at every point of the box, and where it says the
+// map is undefined over the box no point has it defined (outward rounding holds).
+TEST(Manifold, t9_interval_enclosure) {
+    std::mt19937 g(91u);
+    int boxes = 0, points = 0;
+    for (int k = 0; k < 1500; ++k) {
+        const Tri t = randomTri(g, 0.05 + 0.5 * rnd(g));
+        const D3 p = mul(sphereDir(g), 0.5 + 2.0 * rnd(g));
+        const D3 L = sphereDir(g);
+        const double w = std::pow(10.0, -3.0 * rnd(g));   // boxes from 1 to 1e-3 wide
+        const double u0 = rnd(g) * (1.0 - w), v0 = rnd(g) * (1.0 - w);
+        const V2 lo{float(u0), float(v0)}, hi{float(u0 + w), float(v0 + w)};
+        const Enclosure e = manifoldEnclose(t, f3(p), f3(L), lo, hi);
+        if (e.defined == 0) continue;
+        ++boxes;
+        for (int s = 0; s < 40; ++s) {
+            const V2 uv{lo[0] + float(rnd(g)) * (hi[0] - lo[0]), lo[1] + float(rnd(g)) * (hi[1] - lo[1])};
+            const MapResult m = manifoldMap(t, f3(p), f3(L), uv);
+            if (e.defined < 0) {
+                ASSERT_FALSE(m.ok) << "case " << k << ": the box was certified undefined";
+                continue;
+            }
+            if (!m.ok) continue;   // the float map's own guards (C <= 1e-7)
+            ++points;
+            auto in = [](float x, V2 iv) { return x >= iv[0] && x <= iv[1]; };
+            ASSERT_TRUE(in(m.sigma[0], e.sx) && in(m.sigma[1], e.sy)) << "case " << k << " sigma outside its enclosure";
+            ASSERT_TRUE(in(m.du[0], e.dsxdu) && in(m.dv[0], e.dsxdv) && in(m.du[1], e.dsydu) && in(m.dv[1], e.dsydv))
+                << "case " << k << " the Jacobian outside its enclosure";
+        }
+    }
+    EXPECT_GT(boxes, 800);
+    EXPECT_GT(points, 20000);
+}
+
+// Krawczyk's walk (rt/manifold_cert.slang) against a dense double search (a 14 x 14 grid of Newton starts):
+// - it never certifies a root the search does not find (no false root, ever);
+// - on the showcase's ball (96 x 48, the pass's real case) it certifies every root and leaves no box undecided;
+// - on random near triangles (each spanning 30-60 degrees from p, vertex normals turned up to 25 degrees: two roots in
+//   one triangle happen there) it certifies every root wherever it leaves no box undecided, and the cases it leaves
+//   undecided (each one counted by the pass, never dropped silently) are measured: its interval enclosures are loose
+//   on so near and curved a triangle, and 512 boxes do not always reach a decision (2.9% measured, 2026-11-05).
+TEST(Manifold, t9_certify_complete) {
+    const double kTiltTan = 0.4663;   // tan 25 degrees
+    std::mt19937 g(92u);
+    int roots = 0, twos = 0, boxes = 0, cases = 0, undecidedCases = 0;
+    int ballCases = 0, ballBoxes = 0, ballUndecided = 0, ballMax = 0;
+    auto check = [&](const Tri& t, const D3& p, const D3& L, const double target[2], bool ball, int k) {
+        const Roots ref = referenceRoots(t, p, L, target, 1e-4, 14);
+        const CertResult c = manifoldCertify(t, f3(p), f3(L), {float(target[0]), float(target[1])});
+        const char* what = ball ? "ball" : "random";
+        boxes += c.boxes;
+        ++cases;
+        undecidedCases += c.undecided > 0 ? 1 : 0;
+        if (ball) {
+            ++ballCases;
+            ballBoxes += c.boxes;
+            ballUndecided += c.undecided;
+            ballMax = std::max(ballMax, c.boxes);
+        }
+        // No false root: every certified root is one the search finds (inside or within the edge margin).
+        for (int i = 0; i < c.roots; ++i) {
+            bool found = false;
+            for (const auto* list : {&ref.inside, &ref.nearEdge})
+                for (const auto& q : *list)
+                    found = found || (std::abs(c.uv[i][0] - q[0]) < 1e-3 && std::abs(c.uv[i][1] - q[1]) < 1e-3);
+            ASSERT_TRUE(found) << what << " case " << k << ": certified a root no search finds at (" << c.uv[i][0]
+                               << ", " << c.uv[i][1] << ")";
+        }
+        // Every root the search finds well inside: certified, wherever the walk decided every box.
+        if (c.undecided == 0) {
+            for (const auto& q : ref.inside) {
+                bool found = false;
+                for (int i = 0; i < c.roots; ++i)
+                    found = found || (std::abs(c.uv[i][0] - q[0]) < 1e-3 && std::abs(c.uv[i][1] - q[1]) < 1e-3);
+                ASSERT_TRUE(found) << what << " case " << k << ": a root at (" << q[0] << ", " << q[1]
+                                   << ") not certified, and no box left undecided";
+            }
+        }
+        roots += int(ref.inside.size());
+        twos += ref.inside.size() >= 2 ? 1 : 0;
+    };
+    int randomCases = 0;
+    for (int k = 0; k < 4000; ++k) {
+        const D3 p0 = mul(sphereDir(g), 0.2 * rnd(g));
+        const D3 p1 = add(p0, mul(sphereDir(g), 0.3 + 0.3 * rnd(g)));
+        const D3 p2 = add(p0, mul(sphereDir(g), 0.3 + 0.3 * rnd(g)));
+        const D3 f = norm(cross(sub(p1, p0), sub(p2, p0)));
+        auto tilt = [&] {
+            const D3 d = sphereDir(g);
+            return norm(add(f, mul(norm(sub(d, mul(f, dot(d, f)))), kTiltTan * rnd(g))));
+        };
+        const Tri t = makeTri(p0, p1, p2, tilt(), tilt(), tilt());
+        const D3 p = add(mul(f, 0.5 + rnd(g)), mul(sphereDir(g), 0.5 * rnd(g)));
+        const D3 L = norm(add(f, mul(sphereDir(g), 0.8 * rnd(g))));
+        // Aim the slope at the map's value somewhere on the triangle, so most cases hold roots.
+        double s0[2];
+        if (!sigmaD(t, p, L, rnd(g) * 0.5, rnd(g) * 0.5, s0)) continue;
+        const double target[2] = {s0[0] + 0.05 * (rnd(g) - 0.5), s0[1] + 0.05 * (rnd(g) - 0.5)};
+        ++randomCases;
+        check(t, p, L, target, false, k);
+    }
+    const int randomUndecided = undecidedCases;
+    const std::vector<Tri> ball = uvSphere(0.5, 96, 48);
+    for (int k = 0; k < 40; ++k) {
+        const D3 p = mul(sphereDir(g), 1.0 + 2.0 * rnd(g));
+        const D3 L = sphereDir(g);
+        const double r = 0.1 * std::sqrt(rnd(g)), phi = 2.0 * kPi * rnd(g);
+        const double target[2] = {r * std::cos(phi), r * std::sin(phi)};
+        for (const Tri& t : ball) {
+            // Only the triangles that can hold a root (2a's test): the walk on the others is the pass's cost, not
+            // its correctness.
+            if (!manifoldTriangleTest(t, f3(p), f3(L), {float(target[0]), float(target[1])})) continue;
+            check(t, p, L, target, true, k);
+        }
+    }
+    std::printf("t9_certify_complete: %d cases, %d roots, %d triangles with two or more, %d boxes\n", cases, roots,
+                twos, boxes);
+    std::printf("  the ball: %d candidate triangles, %.1f boxes each (at most %d), %d undecided\n", ballCases,
+                ballCases ? double(ballBoxes) / ballCases : 0.0, ballMax, ballUndecided);
+    std::printf("  random near triangles: %d of %d cases left a box undecided\n", randomUndecided, randomCases);
+    EXPECT_GT(roots, 2000);
+    EXPECT_GT(twos, 5);
+    EXPECT_EQ(ballUndecided, 0);
+    EXPECT_LE(randomUndecided, randomCases / 20);
 }

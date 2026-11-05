@@ -12,8 +12,12 @@
 //   4 cone     box 10-11, cone 12, p, L, thetaSigma -> 13.x (1: may hold a root)
 //   5 tri      the triangle, p, L, sigma 9.xy -> 13.x (manifoldTriangleTest)
 //   6 disc     box 10-11, cone 12, c (the triangle's), sigma 9.xy, p, L -> 13.x (manifoldDiscTest)
+//   7 certify  target 9.xy -> 13 (roots, undecided, boxes), 14 (uv0, uv1), 15 (uv2, uv3) (manifoldCertify)
+//   8 enclose  the box (u0, v0) 10.xy to (u1, v1) 11.xy -> 13 (sx lo hi, sy lo hi), 14 (dsx/du, dsx/dv lo hi),
+//              15 (dsy/du, dsy/dv lo hi), 16.x defined (1, 0, -1) (manifoldSigmaT over intervals)
 // The triangle's c rides in rows 1-3's w.
 import rt.manifold;
+import rt.manifold_cert;
 
 RWStructuredBuffer<float4> io;
 
@@ -74,6 +78,28 @@ void run(uint3 id : SV_DispatchThreadID)
     {
         const float4 c = io[b + 12u];
         o13.x = manifoldDiscTest(io[b + 10u].xyz, io[b + 11u].xyz, c.xyz, c.w, tri.c, r9.xy, p, L) ? 1.0 : 0.0;
+    }
+    else if (op == 7u)
+    {
+        const float4 bl = io[b + 10u], bh = io[b + 11u];
+        const CertResult r = bh.x > 0.0 ? manifoldCertifyBox(tri, p, L, r9.xy, float4(bl.xy, bh.xy))
+                                        : manifoldCertify(tri, p, L, r9.xy);
+        o13 = float4(float(r.roots), float(r.undecided), float(r.boxes), 0.0);
+        o14 = float4(r.uv[0], r.uv[1]);
+        o15 = float4(r.uv[2], r.uv[3]);
+    }
+    else if (op == 8u)
+    {
+        const float4 lo = io[b + 10u], hi = io[b + 11u];
+        MDualI2 sx, sy;
+        const MDualI2 iu = MDualI2.variable(MIval.make(lo.x, hi.x), 0), iv = MDualI2.variable(MIval.make(lo.y, hi.y), 1);
+        // 0.y = 1: the constraint F = (A - target.x C, B - target.y C) with target 9.xy instead of sigma.
+        const int def = h.y > 0.5 ? manifoldConstraintT<MDualI2>(tri, p, L, r9.xy, iu, iv, sx, sy)
+                                  : manifoldSigmaT<MDualI2>(tri, p, L, iu, iv, sx, sy);
+        o13 = float4(sx.v.lo, sx.v.hi, sy.v.lo, sy.v.hi);
+        o14 = float4(sx.d[0].lo, sx.d[0].hi, sx.d[1].lo, sx.d[1].hi);
+        o15 = float4(sy.d[0].lo, sy.d[0].hi, sy.d[1].lo, sy.d[1].hi);
+        o16 = float4(float(def), 0.0, 0.0, 0.0);
     }
     io[b + 13u] = o13;
     io[b + 14u] = o14;

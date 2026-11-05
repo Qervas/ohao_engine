@@ -31,6 +31,21 @@ float manifoldSlopeDensity(V2 alphas, float slope2, float minSlope2, V2 sigma);
 bool manifoldTriangleTest(const Tri& tri, const V3& p, const V3& L, V2 sigma);
 bool manifoldDiscTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& c, V2 sigma,
                       const V3& p, const V3& L);
+// Every root of sigma = target on the triangle, certified by the Krawczyk operator (rt/manifold_cert.slang).
+struct CertResult {
+    int roots{0}, undecided{0}, boxes{0};
+    V2 uv[4]{};
+};
+CertResult manifoldCertify(const Tri& tri, const V3& p, const V3& L, V2 target, V2 lo = {0, 0}, V2 hi = {0, 0});
+// The interval map over the box [lo, hi] (u, v): sigma's and its Jacobian's enclosures; defined 1, 0 (unknown), -1.
+struct Enclosure {
+    int defined{0};
+    V2 sx{}, sy{};               // (lo, hi)
+    V2 dsxdu{}, dsxdv{}, dsydu{}, dsydv{};
+};
+// constraint: F = (A - target.x C, B - target.y C) and its Jacobian instead of sigma's.
+Enclosure manifoldEnclose(const Tri& tri, const V3& p, const V3& L, V2 lo, V2 hi, bool constraint = false,
+                          V2 target = {});
 bool manifoldConeTest(const V3& boxMin, const V3& boxMax, const V3& axis, float halfAngle, const V3& p, const V3& L,
                       float thetaSigma);
 

@@ -8,6 +8,7 @@ add_custom_command(
     COMMAND ${SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/manifold_kernel.slang -I ${CMAKE_SOURCE_DIR}/shaders
             -target cpp -entry run -stage compute -o ${OHAO_MANIFOLD_KERNEL_CPP}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/manifold_kernel.slang ${CMAKE_SOURCE_DIR}/shaders/rt/manifold.slang
+            ${CMAKE_SOURCE_DIR}/shaders/rt/manifold_cert.slang
     COMMENT "slangc: the manifold connections to C++"
     VERBATIM)
 
