@@ -491,6 +491,11 @@ private:
     VkStridedDeviceAddressRegionKHR m_manifoldHitRegion{};
 
     // Push constants — 256 bytes (Vulkan max on most RT GPUs)
+    // The stages PTPushConstants is pushed to: the range and every vkCmdPushConstants of it name all of them
+    // (VUID-vkCmdPushConstants-offset-01796), the compute stage included for the wavefront's kernels.
+    static constexpr VkShaderStageFlags kPushStages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                                      VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                                                      VK_SHADER_STAGE_COMPUTE_BIT;
     struct PTPushConstants {
         glm::mat4 invView;              // 64 bytes
         glm::mat4 invProj;              // 64 bytes

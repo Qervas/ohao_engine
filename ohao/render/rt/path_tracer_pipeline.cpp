@@ -41,8 +41,7 @@ static std::vector<char> readFile(const std::string& path) {
 
 bool PathTracer::createRTPipeline() {
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
-                           VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_COMPUTE_BIT;
+    pushRange.stageFlags = kPushStages;
     pushRange.offset = 0;
     pushRange.size = sizeof(PTPushConstants);
 

@@ -610,9 +610,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;
 
-    vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
-                       0, sizeof(PTPushConstants), &pc);
+    vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
 
     // --- The radiance cache: this frame's update (1 pixel in 5x5) and resolve, before the trace
     //     that ends its paths in it. ---
@@ -623,9 +621,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         timePass("pt.cache.resolve");
         m_radianceCache.recordResolve(cmd);
         // Push constants are shared by the bind points: the resolve's replaced the trace's.
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-                           VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
-                           0, sizeof(PTPushConstants), &pc);
+        vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
     }
 
     // --- Trace rays! ---
