@@ -156,6 +156,70 @@ Working the outline into the tracer's code changed five things; the outline stay
   and which has no normal map (a bit per material). The partition is still exact; the helmet's normal-mapped glints are
   then step 1's and the camera side's, as today.
 
+## Step 2c: normal-mapped glints (proposed, 2026-11-05)
+
+**Why.** Step 2a left normal-mapped casters to the camera side (ruling M7), and the showcase's remaining dots are theirs:
+removing casters one group at a time put two dots on the helmet (normal-mapped metal), one on the helmet and the glass
+ball together, one on Sponza's own surfaces. At equal time 2a does not improve the showcase until these are owned.
+
+**What changes for a normal-mapped triangle.** Its shading normal is `normalize(T tn.x + B tn.y + n tn.z)`, `tn` the map
+at the hit's uv. On one texel cell (the square between four texel centres) `tn` is a bilinear function of uv, so the
+half vector's slope σ(y) is smooth there, with an analytic Jacobian (2a's, times the map's bilinear derivative), and it
+may have several roots per triangle (one per bump the sun glints off). Newton from one start finds one of them: the
+bias M7 avoided. Step 2c finds **every** root, cell by cell.
+
+1. **The same normal on both sides.** The tracer samples the map with the hardware's bilinear filter
+   (`SampleLevel(uv, 0)`), whose weights NVIDIA quantises to 1/256 of a texel: the normal is piecewise constant at that
+   scale, not the smooth function a root solver needs. Owned normal-mapped materials read their map as four `Load`s
+   blended in fp32 (the same expression in `fillHit` and the solver), so the camera side and the pass integrate the
+   same function. Goldens with normal maps move by that quantisation (ruling M10).
+2. **Pruning to cells.** A pyramid of normal cones per normal map (tangent space; each level's texel the cone of the
+   four below, the base the cone of a cell's four corners), built once at upload. A triangle's cone is its TBN cone
+   composed with the pyramid's cone over its uv box, so 2a's disc test runs unchanged on triangles; a triangle that
+   passes descends the pyramid over its uv footprint (a quadtree walk, the disc test at each node with the node's cone
+   and the triangle's position bounds), down to cells.
+3. **Every root in a cell: interval Newton.** On a cell (clipped to the triangle) the Krawczyk operator over the cell's
+   box either excludes a root, proves exactly one (then Newton from the centre converges to it), or splits the box
+   (to a depth limit). This is Path Cuts' enumeration (Wang, Hašan, Yan 2020), on 2a's slope map instead of their
+   chains. A box left undecided at the depth limit is a counted miss (`manifold` counters): the closed forms must show
+   none.
+4. **Owned.** M7's bit drops "no normal map": owned is "every draw static, gathered, not an emitter or a gun", and a
+   normal map now only routes the triangle through the pyramid.
+
+**Alternatives weighed.**
+- **Specular Polynomials** (Fan et al. 2024): the reflection constraint on a bilinear normal patch, with unnormalised
+  normals and segments, is a pair of polynomials in the cell's (u, v); a resultant gives every root exactly. Exact and
+  branch-free, but degree around 18 a cell and its numerics in fp32 are untested here; it is the fallback if interval
+  Newton's undecided boxes measure non-zero.
+- **Zeltner et al. 2020's glints**: Newton from random starts, each root's probability estimated by Bernoulli trials
+  (unbiased 1/p). Unbiased but its estimate of 1/p is a noise source of its own: the dots again, in another form.
+- **Filtering the map for the pass** (a pre-blurred normal, a P-NDF): an approximation, refused ("real solution, not
+  approximation").
+
+**Tests.**
+- **m9_bumped_mirror**: a mirror with a normal map of known analytic bumps (a sine height field baked to a map) lit by
+  the sun, seen by a matte wall past the first hit: the wall's light against a numpy root enumeration of the same
+  bilinear normals (every cell, double precision), within 1%.
+- **m10_cells_complete**: CPU twin, random cells and slopes: every root a dense double-precision search finds is found
+  by the Krawczyk walk; undecided boxes 0.
+- **m11_fp32_normal**: the blended normal equals the twin's in the tracer and the pass to 1 ulp; goldens with normal
+  maps within their noise after the switch (M10).
+- **m7_showcase** again: the helmet's dots at equal time.
+
+**Risks.** Cost: the helmet's map is 2048 x 2048, 2.8 M cells on the mesh. Measured on the CPU (the helmet's mesh and
+maps at the showcase's place and sun, 12 rough points on the plinth and the floor, 4 slopes drawn each): the cells whose
+four corners' slopes bracket the drawn slope, which an exact walk must at least solve, number 47 a request on average
+(0 to 425), against about 2 triangles a request on 2a's sphere. The pass may cost tens of times 2a's share on the
+helmet; it is measured per stage before anything else is built, as 2a's was. The composed
+cone (the vertex frame's cone with the map's) must be proven conservative, the tangents varying across the triangle too
+(`t8_disc_conservative`'s method, with maps).
+
+**Rulings.**
+- **M10 (OPEN) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
+  hardware's quantisation. Recommended: yes, for owned materials only.
+- **M11 (OPEN) — the solver.** Interval Newton (Path Cuts) recommended; Specular Polynomials if undecided boxes are
+  ever counted.
+
 ## Tests
 
 Closed forms first; each case fails before its code exists.
@@ -221,6 +285,9 @@ Closed forms first; each case fails before its code exists.
   in step 2 ("Step 2a as designed"). If the showcase's remaining dots turn out to be the helmet's, normal-mapped glints
   get their own step (roots per texel, as Zeltner et al. 2020's glints do).
 
+- **M10 (OPEN) — the map read in fp32** (step 2c): see "Step 2c".
+- **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
+
 ## Licences
 
 Every method here is built from its paper. Before anyone opens Specular Polynomials' code (`github.com/mollnn/spoly`)
@@ -230,6 +297,7 @@ or PSMS ReSTIR's, its licence is checked; GPL code is never read (as merian-quak
 
 - Zeltner, Georgiev, Jakob, "Specular Manifold Sampling for Rendering High-Frequency Caustics and Glints", SIGGRAPH 2020.
 - Hanika, Droske, Fascione, "Manifold Next Event Estimation", EGSR 2015.
+- Wang, Hašan, Yan, "Path Cuts: Efficient Rendering of Pure Specular Light Transport", SIGGRAPH Asia 2020.
 - Fan, Guo, Wang, Xiao, Zhang, Zhou, Chen, Hu, Guo, "Specular Polynomials", SIGGRAPH 2024 (arXiv 2405.13409).
 - Fan, Wang, "Bernstein Bounds for Caustics", SIGGRAPH 2025 (arXiv 2504.19163).
 - Hong, Duan, Wang, Yuksel, Zeltner, Lin, "Sample Space Partitioning and Spatiotemporal Resampling for Specular
