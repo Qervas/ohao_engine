@@ -37,72 +37,78 @@ import subprocess
 import sys
 import tempfile
 
+
+
+def _bin(path):
+    """A built binary's path: Windows names it .exe."""
+    return path + (".exe" if os.name == "nt" else "")
+
 SCENES = [
     ("cornell_box deferred",
-     ["build/Release/cornell_box.exe", "{out}", "4", "deferred", "--denoise=none"]),
+     [_bin("build/Release/cornell_box"), "{out}", "4", "deferred", "--denoise=none"]),
     ("damaged_helmet deferred",
-     ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
+     [_bin("build/Release/model_viewer"), "assets/test_models/DamagedHelmet.glb", "{out}", "4",
       "deferred", "--denoise=none"]),
     # The path tracer: offline, realtime, and realtime through NRD (its push-descriptor path) and DLSS RR.
     ("cornell_box rt_offline",
-     ["build/Release/cornell_box.exe", "{out}", "4", "rt_offline", "--denoise=none"]),
+     [_bin("build/Release/cornell_box"), "{out}", "4", "rt_offline", "--denoise=none"]),
     ("cornell_box rt_realtime",
-     ["build/Release/cornell_box.exe", "{out}", "4", "rt_realtime", "--denoise=none"]),
+     [_bin("build/Release/cornell_box"), "{out}", "4", "rt_realtime", "--denoise=none"]),
     ("cornell_box rt_realtime nrd",
-     ["build/Release/cornell_box.exe", "{out}", "4", "rt_realtime", "--denoise=nrd"]),
+     [_bin("build/Release/cornell_box"), "{out}", "4", "rt_realtime", "--denoise=nrd"]),
     # DLSS Ray Reconstruction (NGX): its guides, the feature's evaluation and its tonemap. Where the SDK
     # is absent (tools/fetch_dlss.py) --denoise dlss falls back to none and the case still runs.
     ("cornell_box rt_realtime dlss",
-     ["build/Release/ohao.exe", "run", "assets/scenes/cornell_box.scene.json", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/cornell_box.scene.json", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
     ("damaged_helmet rt_offline",
-     ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
+     [_bin("build/Release/model_viewer"), "assets/test_models/DamagedHelmet.glb", "{out}", "4",
       "rt_offline", "--denoise=none"]),
     # A skinned instance (sub-project 10): the skin, bounds and BLAS refit passes, then every
     # consumer of the deformed mesh (G-buffer, RT shadows and GI, the path tracer, NRD).
     ("anim_rig deferred",
-     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
       "--mode", "deferred", "--frames", "4", "--size", "640x360"]),
     ("anim_rig rt_offline",
-     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
       "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     ("anim_rig rt_realtime",
-     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     ("anim_rig rt_realtime nrd",
-     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
     # The play scene's two skinned enemies (sub-project 10 step 2) a second into the fight: attacking,
     # their rifles and muzzle lights in hand, through every renderer.
     ("play deferred",
-     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "deferred", "--frames", "4", "--size", "640x360", "--hud"]),
     ("play rt_offline",
-     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     ("play rt_realtime",
-     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     ("play rt_realtime nrd",
-     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
     ("play rt_realtime dlss",
-     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
     # sub-project 24: caustics' light pass (its own pipeline, the splat buffer and its barriers).
     ("caustics rt_offline",
-     ["build/Release/ohao.exe", "run", "assets/scenes/caustics.scene.json", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/caustics.scene.json", "--render", "{out}",
       "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     # sub-project 12: the doorway's smoke (a VfxEmitter's spheres in the shadow and GI traces, its particles
     # and the forward pass), through the raster and both path-traced modes.
     ("smoke doorway deferred",
-     ["build/Release/ohao.exe", "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "deferred", "--frames", "4", "--size", "640x360", "--hud"]),
     ("smoke doorway rt_offline",
-     ["build/Release/ohao.exe", "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
     ("smoke doorway rt_realtime",
-     ["build/Release/ohao.exe", "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
+     [_bin("build/Release/ohao"), "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
 ]
 

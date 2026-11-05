@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from check_parity import read_pfm  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe")
+OHAO = os.path.join(ROOT, "build", "Release", "ohao" + (".exe" if os.name == "nt" else ""))
 OUT = os.path.join(ROOT, "build", "caustics")
 W, H = 320, 180
 SUN_E = 3.0
@@ -617,7 +617,7 @@ def m1_mirror_seen(failures):
 # the core's share, the camera side's sun after a rough bounce (class 2) the tail's.
 
 def m2_reference(rough):
-    exe = os.path.join(ROOT, "build", "Release", "manifold_reference.exe")
+    exe = os.path.join(ROOT, "build", "Release", "manifold_reference" + (".exe" if os.name == "nt" else ""))
     r = subprocess.run([exe, str(rough)], capture_output=True, text=True, cwd=ROOT)
     if r.returncode != 0:
         raise RuntimeError("manifold_reference: " + r.stderr)

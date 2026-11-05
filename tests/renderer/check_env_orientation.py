@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe")
+OHAO = os.path.join(ROOT, "build", "Release", "ohao" + (".exe" if os.name == "nt" else ""))
 OUT = "build/check_env_orientation"
 SKY = (0.2, 0.4, 1.0)       # upper half: elevation > 0
 GROUND = (1.0, 0.4, 0.2)    # lower half

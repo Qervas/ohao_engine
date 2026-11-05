@@ -95,7 +95,7 @@ def measure(stereo, start, frames):
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--out", default=DEFAULT_OUT)
-    ap.add_argument("--exe", default=os.path.join(ROOT, "build", "Release", "audio_bench.exe"))
+    ap.add_argument("--exe", default=os.path.join(ROOT, "build", "Release", "audio_bench" + (".exe" if os.name == "nt" else "")))
     ap.add_argument("--no-run", action="store_true", help="measure the WAV already in --out")
     args = ap.parse_args()
     out = os.path.abspath(args.out)

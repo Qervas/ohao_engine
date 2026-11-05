@@ -9,6 +9,7 @@ Exit 0 on success; the last line is a JSON summary.
     python tests/reflect/check_scene_schema.py [path/to/reflect_tests.exe]
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -21,7 +22,7 @@ ROOT = HERE.parent.parent
 
 
 def main() -> int:
-    exe = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build" / "Release" / "reflect_tests.exe"
+    exe = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build" / "Release" / ("reflect_tests.exe" if os.name == "nt" else "reflect_tests")
     failures = []
     passed = 0
     with tempfile.TemporaryDirectory() as tmp:

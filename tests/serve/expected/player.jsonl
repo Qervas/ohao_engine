@@ -5,7 +5,7 @@
 {"jsonrpc":"2.0","id":5,"result":{"queued":1,"firstStep":0,"lastStep":0}}
 {"jsonrpc":"2.0","id":6,"result":{"frame":30}}
 {"jsonrpc":"2.0","id":7,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,-4],"ground":true,"on":"Floor","surface":"concrete","footsteps":2}}
-{"jsonrpc":"2.0","id":8,"result":{"hash":"ec317dec0d068bf1","frame":30}}
+{"jsonrpc":"2.0","id":8,"result":{"hash":"552751bda733a77d","frame":30}}
 {"jsonrpc":"2.0","id":9,"result":{"queued":1,"firstStep":30,"lastStep":30}}
 {"jsonrpc":"2.0","id":10,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":2}}
 {"jsonrpc":"2.0","id":11,"result":{"frame":35}}
@@ -14,7 +14,7 @@
 {"jsonrpc":"2.0","id":14,"result":{"created":0,"destroyed":0,"changed":20,"frame":0}}
 {"jsonrpc":"2.0","id":15,"result":{"queued":1,"firstStep":0,"lastStep":0}}
 {"jsonrpc":"2.0","id":16,"result":{"frame":30}}
-{"jsonrpc":"2.0","id":17,"result":{"hash":"ec317dec0d068bf1","frame":30}}
+{"jsonrpc":"2.0","id":17,"result":{"hash":"552751bda733a77d","frame":30}}
 {"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"PlayerTeleportParams.pos is outside its limits","data":[{"code":"E_RANGE","path":"/pos","message":"PlayerTeleportParams.pos is outside its limits","expected":"each component in [-1e+05, 1e+05]","got":"[0,0,200000]"}]}}
 {"jsonrpc":"2.0","id":19,"error":{"code":1,"message":"entity 5c0b1a7e00000002 is not a player (no PlayerController)","data":{"code":"E_NOT_FOUND","diagnostics":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b1a7e00000002 is not a player (no PlayerController)","expected":"the id of an entity with a PlayerController","got":"\"5c0b1a7e00000002\""}]}}}
 {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"PhysicsContactsParams.max is outside its limits","data":[{"code":"E_RANGE","path":"/max","message":"PhysicsContactsParams.max is outside its limits","expected":"in [1, 64]","got":"0"}]}}

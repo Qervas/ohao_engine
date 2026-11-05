@@ -134,7 +134,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --script doc
 {"method":"world.apply","result":{"applied":2,"results":[null,null],"inverse":[{"op":"field.set","id":"506f14503a54ecba","path":"/Transform/position","value":[1.3,0.8,-1.7]},{"op":"field.set","id":"5cfbb21776b390b8","path":"/Transform/position","value":[1.3,0.3,-1.7]}]}}
 {"method":"world.step","result":{"frame":90}}
 {"method":"physics.events","result":{"events":[{"seq":1,"step":28,"kind":"contact_begin","a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
-{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.78999555,-1.700009]}}],"count":2}}
+{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.7899956,-1.700009]}}],"count":2}}
 ```
 
 A 1 m fall lands at 4.57 m/s in step 28 (0.45 s), the 2 m one at 6.19 m/s in step 39. Resting
@@ -180,11 +180,11 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 00000
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
-{"method":"world.hash","result":{"hash":"e874acfb6fdb10fc","frame":30}}
+{"method":"world.hash","result":{"hash":"45ac1f54bcd712ef","frame":30}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":22,"frame":0}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
-{"method":"world.hash","result":{"hash":"e874acfb6fdb10fc","frame":30}}
+{"method":"world.hash","result":{"hash":"45ac1f54bcd712ef","frame":30}}
 {"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
 {"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
 ```
@@ -336,11 +336,11 @@ $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":60}}
 {"method":"world.step","result":{"frame":61,"watch":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,27.53422]}}],"count":1}}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":61,"events":2}}
-{"method":"world.hash","result":{"hash":"3f19245b577e33f4","frame":61}}
+{"method":"world.hash","result":{"hash":"4495a7523295ce81","frame":61}}
 {"method":"world.diff","result":{"changed":[{"id":"0c6901342a294695","name":"MainCamera","fields":{"/Transform/position":[[0,-6.891139,30.534174],[0,-6.891139,27.53422]]}}],"created":[],"destroyed":[],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":2,"frame":0}}
 {"method":"input.replay","result":{"steps":61,"events":2,"checkpoints":2,"frame":61}}
-{"method":"world.hash","result":{"hash":"3f19245b577e33f4","frame":61}}
+{"method":"world.hash","result":{"hash":"4495a7523295ce81","frame":61}}
 ```
 
 ## Look

@@ -29,7 +29,7 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe")
+OHAO = os.path.join(ROOT, "build", "Release", "ohao" + (".exe" if os.name == "nt" else ""))
 OUT = "build/parity"
 SIZE = "640x360"
 BLOCK = 8

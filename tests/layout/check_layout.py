@@ -100,9 +100,21 @@ def compile_ok(cmd):
     return r.returncode == 0, (r.stdout + r.stderr)[-600:]
 
 
+def configured_slangc():
+    """The slangc the build was configured with (build/CMakeCache.txt's SLANGC), if any."""
+    cache = os.path.join(ROOT, "build", "CMakeCache.txt")
+    if os.path.isfile(cache):
+        for line in open(cache, encoding="utf-8", errors="replace"):
+            if line.startswith("SLANGC:"):
+                path = line.split("=", 1)[1].strip()
+                if os.path.isfile(path):
+                    return path
+    return None
+
+
 def s6_the_generated_slang_compiles():
-    slangc = None
-    for d in sorted(os.listdir("C:/VulkanSDK"), reverse=True) if os.path.isdir("C:/VulkanSDK") else []:
+    slangc = configured_slangc()
+    for d in sorted(os.listdir("C:/VulkanSDK"), reverse=True) if os.path.isdir("C:/VulkanSDK") and not slangc else []:
         cand = os.path.join("C:/VulkanSDK", d, "Bin", "slangc.exe")
         if os.path.isfile(cand):
             slangc = cand

@@ -22,6 +22,7 @@ Standard library only.
 """
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -159,7 +160,7 @@ def t3_an_unknown_label_is_an_environment_error():
 
 RB_FIXTURE = ROOT / "tests" / "check" / "render_bench"
 RB_SCRATCH = FIXTURE_BUILD / "render_bench"
-RENDER_BENCH = MAIN_BUILD / "Release" / "render_bench.exe"
+RENDER_BENCH = MAIN_BUILD / "Release" / ("render_bench.exe" if os.name == "nt" else "render_bench")
 
 
 def evaluate_render_bench(name, results_edit=None, budgets_edit=None):
@@ -239,8 +240,10 @@ def t3_every_test_executable_is_registered():
     registered = json.loads(r.stdout).get("tests", [])
     assert registered, "the main build has tests"
     commands = {Path(t["command"][0]).stem.lower() for t in registered if t.get("command")}
-    exes = sorted(p.stem for p in (MAIN_BUILD / "Release").glob("*.exe")
-                  if p.stem.endswith(("_test", "_tests", "_bench")))
+    # The built executables: Windows names them .exe; elsewhere they are the executable files without a suffix.
+    built = ((MAIN_BUILD / "Release").glob("*.exe") if os.name == "nt" else
+             (p for p in (MAIN_BUILD / "Release").iterdir() if p.is_file() and not p.suffix and os.access(p, os.X_OK)))
+    exes = sorted(p.stem for p in built if p.stem.endswith(("_test", "_tests", "_bench")))
     assert exes, "the main build produced test executables"
     missing = [e for e in exes if e.lower() not in commands]
     assert not missing, f"test executables no CTest test runs: {missing}"

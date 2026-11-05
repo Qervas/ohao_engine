@@ -33,7 +33,7 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe")
+OHAO = os.path.join(ROOT, "build", "Release", "ohao" + (".exe" if os.name == "nt" else ""))
 OUT = "build/check_fireflies"
 SCENE = "assets/scenes/blockout_play.scene.json"
 VIEW = ([1.5, 0.0, 2.2], 90.0)      # the spawn, looking west

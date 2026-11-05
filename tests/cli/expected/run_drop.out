@@ -2,5 +2,5 @@
 {"method":"world.apply","result":{"applied":2,"results":[null,null],"inverse":[{"op":"field.set","id":"506f14503a54ecba","path":"/Transform/position","value":[1.3,0.8,-1.7]},{"op":"field.set","id":"5cfbb21776b390b8","path":"/Transform/position","value":[1.3,0.3,-1.7]}]}}
 {"method":"world.step","result":{"frame":90}}
 {"method":"physics.events","result":{"events":[{"seq":1,"step":28,"kind":"contact_begin","a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
-{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.78999555,-1.700009]}}],"count":2}}
+{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.7899956,-1.700009]}}],"count":2}}
 {"method":"physics.info","result":{"bodies":{"static":12,"dynamic":2},"shapes":{"box":13,"mesh":1},"steps":90,"awake":0,"contacts":2,"buildMs":0}}

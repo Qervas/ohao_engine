@@ -7,7 +7,8 @@ Every command in a `console` block below is run by `python tests/docs/check_docs
 OHAO is a C++20 game engine: a Vulkan 1.3 hybrid renderer (deferred raster with ray-traced
 direct light (ReSTIR DI) and GI, plus a path tracer), an EnTT world, reflection and canonical scene files, an
 API for agents (`ohao/api`), the headless `ohao` CLI and `ohao serve`, the same API as a
-JSON-RPC/MCP server on stdio (`ohao/rpc`). Windows/MSVC is the platform in daily use.
+JSON-RPC/MCP server on stdio (`ohao/rpc`). Linux (Omarchy, Arch; GCC 16, Ninja) is the platform in daily use
+since 2026-11-05, on an RTX 4060 laptop; Windows/MSVC still builds ("Build").
 
 - **Code map, data flow, recipes:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Driving the engine from an agent:** [docs/agents/ohao-cli.md](docs/agents/ohao-cli.md)
@@ -19,14 +20,19 @@ JSON-RPC/MCP server on stdio (`ohao/rpc`). Windows/MSVC is the platform in daily
 
 ## Build
 
-Use the real CMake. On this machine conda's `cmake` shadows it on PATH, so name the scoop
-shim. Build with `-j6` at most: heavier parallel load has crashed this machine.
+Linux: the Ninja Multi-Config generator (it keeps the `build/Release/` layout every harness reads) and the
+pinned slangc, unpacked from Slang's own release into `~/.local/opt/slang-2025.11` (Arch's `shader-slang`,
+2026.18, writes C++ the CPU twins cannot compile: its prelude carries another glibc's headers).
 
 ```console
-$ C:/Users/djmax/scoop/shims/cmake -B build -S .   # slow
-$ C:/Users/djmax/scoop/shims/cmake --build build --config Release -j6   # slow
-$ C:/Users/djmax/scoop/shims/cmake --build build --config Release --target shaders   # slow
+$ cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2025.11/bin/slangc   # slow
+$ cmake --build build --config Release -j16   # slow
+$ cmake --build build --config Release --target shaders   # slow
 ```
+
+Windows: the Visual Studio generator through the real CMake (conda's `cmake` shadows it on PATH there, so
+name the scoop shim, `C:/Users/djmax/scoop/shims/cmake`), at most `-j6` (heavier parallel load crashed that
+laptop). Binaries are `*.exe` there; the docs name them so, and `check_docs` drops the suffix elsewhere.
 
 - **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a
   globbed directory is picked up by the next build, which re-runs the configure step
@@ -416,17 +422,18 @@ deferred, reference, path traced); two the transparency scene,
 
 ## Gotchas that have cost this project time
 
-- conda's `cmake` shadows the real one; use the scoop shim (above). `tools/check.py`
+- On Windows conda's `cmake` shadows the real one; use the scoop shim (above). `tools/check.py`
   refuses conda's.
 - Tests run in parallel under CTest: a test that writes a fixed path (a scratch
   directory under `build/`, a file in `%TEMP%`) races another copy of itself. Give it a
   per-process name or a `LOCKS` entry in its registration.
-- **Git Bash rewrites arguments that start with `/`** into Windows paths. Write
+- **Git Bash (Windows) rewrites arguments that start with `/`** into Windows paths. Write
   `ohao query --fields Transform/position`, not `/Transform/position`.
 - **Line endings:** `core.autocrlf` is on. Byte-compared files (goldens, scene files,
   CLI expectations) are pinned to LF in `.gitattributes`; add a pattern there for any new
   byte-compared directory, or a fresh clone checks out CRLF and the comparison fails.
-- `/FORCE:MULTIPLE` hides duplicate symbols: stb, and a second VMA inside `NRI_VK.lib`.
+- `/FORCE:MULTIPLE` (MSVC) and `--allow-multiple-definition` (GNU ld, set for every target in the root
+  `CMakeLists.txt`) hide duplicate symbols: stb, and a second VMA inside `NRI_VK`.
   Which copy wins depends on link order, so `gpu_allocator.cpp` uses NRI's VMA
   configuration; never change one without the other. A new target that crashes right
   after "resizing to WxH" has picked a mismatched VMA.
@@ -1390,7 +1397,22 @@ deferred, reference, path traced); two the transparency scene,
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
   Cornell). It clears on reboot; it is not your change. `ohao doctor`'s `gpu.wedged`
-  check says so.
+  check says so. On Linux the NVIDIA open kernel module's GSP firmware can fail outright (`journalctl -k`:
+  `Xid 120, GSP task exception`, then `NV_ERR_RESET_REQUIRED`): Vulkan then lists only the Intel GPU, every
+  device creation asks the iGPU for ray tracing and the loader's error fails each GPU test. It needs `sudo
+  nvidia-smi -r` or a reboot (2026-11-05: during `light_cluster_gpu_test`, driver 615.78).
+- **Linux, found by the port (2026-11-05):**
+  - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
+    binding one whose layout was destroyed segfaulted in the driver. Keep every pipeline's layout until teardown
+    (`GpuCulling`, `RTDirectTechnique` keep their extra ones in `m_extraLayouts`).
+  - Physics is deterministic run to run on one compiler, not across: MSVC's and GCC's builds land the blockout's
+    crate one ulp apart, so `world.hash`, `tests/cli/expected` and `tests/serve/expected` are recorded on the Linux
+    build. The helmet's merged model bytes differ too (`scene_tests` pins each platform's hash).
+  - `openpbr_tables --check` is byte for byte on the platform that wrote the tables; elsewhere every number within
+    1e-5 (another math library's last digits: MSVC to GCC, at most 5.4e-6).
+  - libstdc++ runs `std::execution::par` on oneTBB, linked where found (`TBB::tbb`).
+  - Slang 2026 made `expand` a keyword; no entry point may be named so.
+  - `ohao serve` on stdio interrupts its reader with SIGUSR1 (no `SA_RESTART`), the POSIX `CancelSynchronousIo`.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
   is the one exception: it imports `tools.monograph`, so it runs from `site/`.

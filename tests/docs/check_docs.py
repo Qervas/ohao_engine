@@ -115,6 +115,8 @@ def main(argv):
                 skipped += 1
                 print(f"  [SKIP]  {path}:{no}  {cmd}")
                 continue
+            if os.name != "nt":   # the docs name Windows binaries; elsewhere the same binary has no suffix
+                cmd = re.sub(r"(build/Release/[\w-]+)\.exe\b", r"\1", cmd)
             p = subprocess.run([sh, "-c", cmd], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                timeout=3600)
             got = [l.rstrip() for l in p.stdout.decode("utf-8", "replace").replace("\r\n", "\n").splitlines()]
