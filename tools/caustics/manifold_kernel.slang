@@ -18,8 +18,6 @@
 //   9 pair     the entry triangle rows 1-6, the exit triangle rows 17-22 (its c in 17-19's w), X row 7, (L, eta)
 //              row 8, the slopes (s1, s2) row 9 -> 23 (roots, undecided, boxes), 24-27 each root (u1, v1, u2, v2)
 //              (manifoldCertifyPair)
-//  10 pair node box 1 rows 17-18, (axis1, half1) 19, box 2 rows 20-21, (axis2, half2) 22, X row 7, (L, eta) row 8,
-//              the slopes row 9 -> 23.xy (1: may hold a path; its score: manifoldPairNodeScore)
 //  12 walk      X row 7, (L, eta) row 8, the slopes row 9, the seed's direction row 10, the scene in `mesh` (6 rows a triangle, its c in rows
 //              0-2's w) -> 23 (found, steps, roots, undecided), 24 (u1, v1, u2, v2), 25 (entry, exit)
 //              (manifoldWalkPair)
@@ -174,15 +172,6 @@ void run(uint3 id : SV_DispatchThreadID)
         const ManifoldPairResult r = manifoldCertifyPair(tri, t2, p, r8.xyz, r8.w, r9);
         io[b + 23u] = float4(float(r.roots), float(r.undecided), float(r.boxes), 0.0);
         [ForceUnroll] for (uint k = 0u; k < 4u; ++k) io[b + 24u + k] = r.uv[k];
-    }
-    else if (op == 10u)
-    {
-        const float4 a1 = io[b + 19u], a2 = io[b + 22u], r8 = io[b + 8u];
-        const bool may = manifoldPairNodeTest(io[b + 17u].xyz, io[b + 18u].xyz, a1.xyz, a1.w, io[b + 20u].xyz,
-                                              io[b + 21u].xyz, a2.xyz, a2.w, p, r8.xyz, r8.w, r9);
-        const float score = manifoldPairNodeScore(io[b + 17u].xyz, io[b + 18u].xyz, a1.xyz, a1.w, io[b + 20u].xyz,
-                                                  io[b + 21u].xyz, a2.xyz, a2.w, p, r8.xyz, r8.w, r9);
-        io[b + 23u] = float4(may ? 1.0 : 0.0, score, 0.0, 0.0);
     }
     else if (op == 12u)
     {

@@ -188,37 +188,6 @@ PairResult manifoldCertifyPair(const Tri& t1, const Tri& t2, const V3& X, const 
     return r;
 }
 
-bool manifoldPairNodeTest(const V3& min1, const V3& max1, const V3& axis1, float half1, const V3& min2, const V3& max2,
-                          const V3& axis2, float half2, const V3& X, const V3& L, float eta, V2 s1, V2 s2) {
-    Io io = base(10, nullptr, &X, &L);
-    io.rows[8].w = eta;
-    io.rows[9] = f4(s1[0], s1[1], s2[0], s2[1]);
-    io.rows[17] = f4(min1);
-    io.rows[18] = f4(max1);
-    io.rows[19] = f4(axis1, half1);
-    io.rows[20] = f4(min2);
-    io.rows[21] = f4(max2);
-    io.rows[22] = f4(axis2, half2);
-    runItem(io);
-    return io.rows[23].x != 0.0f;
-}
-
-float manifoldPairNodeScore(const V3& min1, const V3& max1, const V3& axis1, float half1, const V3& min2,
-                            const V3& max2, const V3& axis2, float half2, const V3& X, const V3& L, float eta, V2 s1,
-                            V2 s2) {
-    Io io = base(10, nullptr, &X, &L);
-    io.rows[8].w = eta;
-    io.rows[9] = f4(s1[0], s1[1], s2[0], s2[1]);
-    io.rows[17] = f4(min1);
-    io.rows[18] = f4(max1);
-    io.rows[19] = f4(axis1, half1);
-    io.rows[20] = f4(min2);
-    io.rows[21] = f4(max2);
-    io.rows[22] = f4(axis2, half2);
-    runItem(io);
-    return io.rows[23].y;
-}
-
 WalkResult manifoldWalkPair(const std::vector<Tri>& tris, const V3& X, const V3& L, float eta, V2 s1, V2 s2,
                             const V3& seedDir) {
     std::vector<F4> mesh;
