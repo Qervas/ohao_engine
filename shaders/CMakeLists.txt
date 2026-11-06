@@ -5,26 +5,50 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/shaders)
 set(SHADER_BINARY_FILES "")
 
 # ---- Slang (sub-project 2b spec, "Slang") -------------------------------------------------
-# slangc from the Vulkan SDK's Bin ($VULKAN_SDK, then C:/VulkanSDK/<newest>), then PATH. The
-# version the SPIR-V was made with is pinned in slangc.version: another one may emit other
-# SPIR-V, so a mismatch is a warning here and in `ohao doctor` (tools.slangc).
+# The version the SPIR-V and the CPU twins are made with is pinned in slangc.version: another
+# one may emit other SPIR-V, so a mismatch is a warning here and in `ohao doctor` (tools.slangc).
+# slangc from Slang's own release unpacked at ~/.local/opt/slang-<pin> (Linux), the Vulkan SDK's
+# Bin ($VULKAN_SDK, then C:/VulkanSDK/<newest>), then PATH; -DSLANGC=<path> overrides them all.
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/slangc.version OHAO_SLANGC_PINNED LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/slangc.version)
 file(GLOB OHAO_VULKAN_SDK_BINS "C:/VulkanSDK/*/Bin")
 list(SORT OHAO_VULKAN_SDK_BINS)
 list(REVERSE OHAO_VULKAN_SDK_BINS)
-find_program(SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" ${OHAO_VULKAN_SDK_BINS})
+find_program(SLANGC slangc HINTS "$ENV{HOME}/.local/opt/slang-${OHAO_SLANGC_PINNED}/bin" "$ENV{VULKAN_SDK}/Bin"
+             ${OHAO_VULKAN_SDK_BINS})
 if(NOT SLANGC)
-    message(FATAL_ERROR "slangc not found: install the Vulkan SDK (it ships slangc), or put slangc on PATH")
+    message(FATAL_ERROR "slangc not found: unpack Slang's release ${OHAO_SLANGC_PINNED} into "
+                        "~/.local/opt/slang-${OHAO_SLANGC_PINNED}, or pass -DSLANGC=<path>")
 endif()
 execute_process(COMMAND ${SLANGC} -v OUTPUT_VARIABLE OHAO_SLANGC_OUT ERROR_VARIABLE OHAO_SLANGC_ERR)
 string(STRIP "${OHAO_SLANGC_OUT}${OHAO_SLANGC_ERR}" OHAO_SLANGC_VERSION)
-file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/slangc.version OHAO_SLANGC_PINNED LIMIT_COUNT 1)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/slangc.version)
 string(FIND "${OHAO_SLANGC_VERSION}" "${OHAO_SLANGC_PINNED}" OHAO_SLANGC_AT)
 if(NOT OHAO_SLANGC_AT EQUAL 0)
     message(WARNING "slangc ${OHAO_SLANGC_VERSION} (${SLANGC}) is not the pinned ${OHAO_SLANGC_PINNED} "
                     "(shaders/slangc.version): the SPIR-V may differ from the goldens' build")
 endif()
 message(STATUS "slangc: ${SLANGC} (${OHAO_SLANGC_VERSION})")
+
+# The CPU twins (tools/caustics, display, material, sampling: the same modules through slangc's C++ target) are made
+# by the version pinned in slangc_cpp.version, SLANGC_CPP, looked for where SLANGC is. 2026.20's C++ emitter
+# re-reads a member after a store to it (`Sampler.next()` returned the next coordinate; its SPIR-V is right), so a
+# twin from it is not the module's code.
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/slangc_cpp.version OHAO_SLANGC_CPP_PINNED LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/slangc_cpp.version)
+find_program(SLANGC_CPP slangc HINTS "$ENV{HOME}/.local/opt/slang-${OHAO_SLANGC_CPP_PINNED}/bin" "$ENV{VULKAN_SDK}/Bin"
+             ${OHAO_VULKAN_SDK_BINS})
+if(NOT SLANGC_CPP)
+    message(FATAL_ERROR "slangc for the CPU twins not found: unpack Slang's release ${OHAO_SLANGC_CPP_PINNED} into "
+                        "~/.local/opt/slang-${OHAO_SLANGC_CPP_PINNED}, or pass -DSLANGC_CPP=<path>")
+endif()
+execute_process(COMMAND ${SLANGC_CPP} -v OUTPUT_VARIABLE OHAO_SLANGC_CPP_OUT ERROR_VARIABLE OHAO_SLANGC_CPP_ERR)
+string(STRIP "${OHAO_SLANGC_CPP_OUT}${OHAO_SLANGC_CPP_ERR}" OHAO_SLANGC_CPP_VERSION)
+string(FIND "${OHAO_SLANGC_CPP_VERSION}" "${OHAO_SLANGC_CPP_PINNED}" OHAO_SLANGC_CPP_AT)
+if(NOT OHAO_SLANGC_CPP_AT EQUAL 0)
+    message(WARNING "slangc ${OHAO_SLANGC_CPP_VERSION} (${SLANGC_CPP}) is not the CPU twins' pinned "
+                    "${OHAO_SLANGC_CPP_PINNED} (shaders/slangc_cpp.version)")
+endif()
+message(STATUS "slangc for the CPU twins: ${SLANGC_CPP} (${OHAO_SLANGC_CPP_VERSION})")
 
 # Every *.slang. A file with [shader("stage")] entry points is compiled, one SPIR-V per entry:
 # a single entry gives <flattened path>.spv, several give <flattened path>.<entry>.spv. A file

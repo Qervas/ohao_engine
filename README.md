@@ -125,7 +125,7 @@ The engine is built to be developed by agents too. [AGENTS.md](AGENTS.md) is the
 
 ## Quick start
 
-You need Windows with MSVC (the platform in daily use), CMake 3.20 or newer, the Vulkan SDK 1.3 with `slangc` (pinned in `shaders/slangc.version`), Python 3, and a GPU with Vulkan ray tracing for the RT paths. Use a real CMake: if conda's `cmake` comes first on your PATH, call the real one by its full path.
+You need Linux with GCC and Ninja (the platform in daily use) or Windows with MSVC, CMake 3.20 or newer, the Vulkan SDK 1.3, `slangc` from Slang's own release at the versions pinned in `shaders/slangc.version` (SPIR-V) and `shaders/slangc_cpp.version` (the CPU twins' C++), on Linux unpacked into `~/.local/opt/slang-<version>`, where configure finds them, Python 3, and a GPU with Vulkan ray tracing for the RT paths. Use a real CMake: if conda's `cmake` comes first on your PATH, call the real one by its full path.
 
 ```console
 $ cmake -B build -S .

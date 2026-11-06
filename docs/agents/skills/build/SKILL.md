@@ -14,11 +14,12 @@ a build. Run one build at a time, and never while tests are using the binaries.
    `CONFIGURE_DEPENDS`, so the next build re-runs the configure step itself.
 
 Linux (the platform in daily use): Ninja Multi-Config, which keeps the `build/Release/`
-layout every harness reads, and the pinned slangc from Slang's own release (Arch's
-`shader-slang` writes C++ the CPU twins cannot compile).
+layout every harness reads, and two pinned slangc from Slang's own release in
+`~/.local/opt/slang-<version>`: `shaders/slangc.version` for SPIR-V, and
+`shaders/slangc_cpp.version` for the CPU twins' C++ (`SLANGC_CPP`; why: `AGENTS.md`).
 
 ```console
-$ cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2025.11/bin/slangc   # slow
+$ cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc -DSLANGC_CPP=$HOME/.local/opt/slang-2025.11/bin/slangc   # slow
 ```
 
 2. **Build** (Release, everything). One target only, when you know which:
@@ -37,8 +38,8 @@ $ cmake --build build --config Release --target shaders   # slow
 
 Windows: the same three steps through the real CMake, the scoop shim
 `C:/Users/djmax/scoop/shims/cmake` (conda's `cmake` shadows it on PATH), with the Visual
-Studio generator (no `-G`, no `-DSLANGC`: slangc comes from the Vulkan SDK) and at most
-`-j6` (heavier load crashed that laptop). Binaries are `*.exe` there.
+Studio generator (no `-G`; `-DSLANGC=` naming Slang 2026.20's `slangc.exe`, while the
+Vulkan SDK's 2025.11 serves the twins) and at most `-j6` (heavier load crashed that laptop). Binaries are `*.exe` there.
 
 ## Reading failures
 

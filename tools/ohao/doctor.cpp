@@ -317,9 +317,9 @@ void assetCheck(const Options& o, std::vector<Check>& out) {
                            "restore the files (git checkout, or git lfs pull for large assets)"));
 }
 
-// The slangc this build compiled its shaders with (OHAO_SLANGC, from the configure step), else where
-// shaders/CMakeLists.txt looks: $VULKAN_SDK/Bin, the newest C:/VulkanSDK/*/Bin, then PATH. Its version against
-// shaders/slangc.version: the pin the SPIR-V was made with.
+// The slangc this build compiled its shaders with (OHAO_SLANGC, from the configure step), else $VULKAN_SDK/Bin, the
+// newest C:/VulkanSDK/*/Bin, then PATH. Its version against shaders/slangc.version: the pin the SPIR-V was made
+// with (the CPU twins' slangc, shaders/slangc_cpp.version, is the configure step's to check).
 fs::path findSlangc() {
     std::error_code ec;
 #ifdef OHAO_SLANGC
@@ -366,7 +366,8 @@ void slangcCheck(const Options& o, std::vector<Check>& out) {
     const fs::path slangc = findSlangc();
     if (slangc.empty()) {
         out.push_back(fail("tools.slangc", "error", "slangc not in $VULKAN_SDK, C:/VulkanSDK nor on PATH",
-                           "install the Vulkan SDK (it ships slangc)"));
+                           "unpack Slang's own release at shaders/slangc.version's version into "
+                           "~/.local/opt/slang-<version> and configure again"));
         return;
     }
 #ifdef _WIN32   // cmd /c strips one outer pair of quotes
@@ -382,7 +383,9 @@ void slangcCheck(const Options& o, std::vector<Check>& out) {
     if (!pinned.empty() && version.rfind(pinned, 0) != 0)
         out.push_back(fail("tools.slangc", "warn",
                            detail + ", not the pinned " + pinned + ": the SPIR-V may differ from the goldens' build",
-                           "install the Vulkan SDK whose slangc is " + pinned + " (shaders/slangc.version)"));
+                           "configure with -DSLANGC naming Slang " + pinned +
+                               "'s slangc (shaders/slangc.version; on Linux ~/.local/opt/slang-" + pinned +
+                               "/bin/slangc)"));
     else
         out.push_back(pass("tools.slangc", "error", detail));
 }

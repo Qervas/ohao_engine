@@ -220,7 +220,7 @@ void run(uint3 id : SV_DispatchThreadID)
         }
         else
         {
-            MDualF2 A, B, C;
+            MDualF2 A = MDualF2.cst(0.0), B = MDualF2.cst(0.0), C = MDualF2.cst(1.0);
             const int def = ok ? cm.frame<MDualF2>(MDualF2.variable(MFloat.cst(r9.z), 0),
                                                    MDualF2.variable(MFloat.cst(r9.w), 1), A, B, C, 0)
                                : 0;

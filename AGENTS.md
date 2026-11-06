@@ -20,19 +20,22 @@ since 2026-11-05, on an RTX 4060 laptop; Windows/MSVC still builds ("Build").
 
 ## Build
 
-Linux: the Ninja Multi-Config generator (it keeps the `build/Release/` layout every harness reads) and the
-pinned slangc, unpacked from Slang's own release into `~/.local/opt/slang-2025.11` (Arch's `shader-slang`,
-2026.18, writes C++ the CPU twins cannot compile: its prelude carries another glibc's headers).
+Linux: the Ninja Multi-Config generator (it keeps the `build/Release/` layout every harness reads) and two pinned
+slangc, each unpacked from Slang's own release into `~/.local/opt/slang-<version>`, where a fresh configure finds them:
+2026.20 for SPIR-V (`shaders/slangc.version`, `SLANGC`) and 2025.11 for the CPU twins' C++
+(`shaders/slangc_cpp.version`, `SLANGC_CPP`; 2026.20's C++ emitter miscompiles them, "Gotchas"). Arch's
+`shader-slang` package writes C++ the twins cannot compile at all (its prelude carries another glibc's headers).
 
 ```console
-$ cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2025.11/bin/slangc   # slow
+$ cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc -DSLANGC_CPP=$HOME/.local/opt/slang-2025.11/bin/slangc   # slow
 $ cmake --build build --config Release -j16   # slow
 $ cmake --build build --config Release --target shaders   # slow
 ```
 
 Windows: the Visual Studio generator through the real CMake (conda's `cmake` shadows it on PATH there, so
 name the scoop shim, `C:/Users/djmax/scoop/shims/cmake`), at most `-j6` (heavier parallel load crashed that
-laptop). Binaries are `*.exe` there; the docs name them so, and `check_docs` drops the suffix elsewhere.
+laptop), and `-DSLANGC=` naming Slang 2026.20's `slangc.exe` (the Vulkan SDK's 2025.11 serves as `SLANGC_CPP`).
+Binaries are `*.exe` there; the docs name them so, and `check_docs` drops the suffix elsewhere.
 
 - **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a
   globbed directory is picked up by the next build, which re-runs the configure step
@@ -41,8 +44,8 @@ laptop). Binaries are `*.exe` there; the docs name them so, and `check_docs` dro
   it (the `ohao` CLI, the examples, the rendering tests), so building any of them builds
   the shaders. `python tools/check.py` builds it first regardless.
 - Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`.
-- **Every shader is Slang** (frontier F6; `slangc` from the Vulkan SDK, pinned in
-  `shaders/slangc.version`; there is no GLSL and no glslc). A `.slang` with one `[shader(...)]`
+- **Every shader is Slang** (frontier F6; `slangc` from Slang's own release, pinned in
+  `shaders/slangc.version`, the CPU twins' in `shaders/slangc_cpp.version`; there is no GLSL and no glslc). A `.slang` with one `[shader(...)]`
   entry point gives `<flattened path>.spv` (`postprocess/tonemap.slang` →
   `postprocess_tonemap.slang.spv`), with several `<flattened path>.<entry>.spv`
   (`core_gbuffer.slang.opaque.spv`), without one it is a module (`import shared.layout;`).
@@ -1420,8 +1423,13 @@ deferred, reference, path traced); two the transparency scene,
   - Slang 2026 made `expand` a keyword; no entry point may be named so.
   - No custom command may output a path named like a target: the shader directory's `make_directory` edge was named
     `shaders` in Ninja, so `--target shaders` built the directory and no shader (made at configure time now).
-  - SPIRV-Tools 2026.4 (Arch's `spirv-val`) rejects the `ArrayStride` slangc 2025.11 puts on arrays outside blocks
-    (VUID-StandaloneSpirv-None-10684, in nearly every shader); whether the validation layer reports it is the GPU gate's.
+  - slangc 2025.11 put an `ArrayStride` on arrays outside blocks (function-local constant arrays, the bindless table),
+    which SPIRV-Tools 2026 and the validation layer 1.4.363 reject (VUID-StandaloneSpirv-None-10684) in nearly every
+    shader: SPIR-V is made by 2026.20 (since 2026-11-06), whose 75 entry points all pass `spirv-val`.
+  - **slangc 2026.20's C++ emitter re-reads a member after a store to it**: `Sampler.next()` (`const float u =
+    point[dim & 3u]; ++dim; return u;`) became `dim = dim + 1; return point[dim & 3]` in C++, so every draw was the next
+    coordinate (`sobol_test`); its SPIR-V of the same code loads first, as written. The twins stay on 2025.11
+    (`SLANGC_CPP`) until a release's C++ passes every twin's suite.
   - `ohao serve` on stdio interrupts its reader with SIGUSR1 (no `SA_RESTART`), the POSIX `CancelSynchronousIo`.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
