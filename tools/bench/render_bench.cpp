@@ -833,6 +833,10 @@ VkShaderModule loadKernel(VkDevice device) {
 #ifdef _WIN32
     wchar_t self[MAX_PATH];
     if (GetModuleFileNameW(nullptr, self, MAX_PATH)) dir = fs::path(self).parent_path();
+#else
+    std::error_code ec;
+    const fs::path self = fs::read_symlink("/proc/self/exe", ec);
+    if (!ec) dir = self.parent_path();
 #endif
     const std::string code = readText(dir / "bin" / "shaders" / "bench_gpu_calibrate.slang.spv");
     if (code.empty() || code.size() % 4) return VK_NULL_HANDLE;
