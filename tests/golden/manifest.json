@@ -42,7 +42,15 @@
     "It overwrites without comparing, so it cannot tell an intentional refresh",
     "from laundering a regression. Look at what drifted FIRST. The goldens these",
     "replaced were 78 renderer commits stale and nobody knew, because the harness",
-    "could not run at all on a multi-config generator."
+    "could not run at all on a multi-config generator.",
+    "",
+    "Recorded on Linux (NVIDIA 615.78, RTX 4060 Laptop, SPIR-V from slangc 2026.20)",
+    "on 2026-11-06, after looking at every scene that drifted from the Windows",
+    "recording: the deferred and reference frames moved by 1-3 levels, and the",
+    "noisiest reflections (the floor seen in the lower halves of glossy balls in",
+    "materials_step2, glass and subsurface) by up to 48 on a few hundred pixels,",
+    "with no change in any scene's mean. Another driver or platform drifts the",
+    "same way: compare against its own recording, never widen a tolerance."
   ],
   "scenes": [
     {
