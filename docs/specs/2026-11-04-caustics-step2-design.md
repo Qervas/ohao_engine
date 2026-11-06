@@ -327,6 +327,41 @@ in the inputs) carry the dependency instead. Interval Newton on this map, with n
 solver; precision is not its limit (above). M11 chose Specular Polynomials (resultants: no intervals at all) over
 tighter enclosures (affine arithmetic, Taylor models).
 
+**T2 measured (2026-11-06, CPU prototype in numpy: the reflection on random cells, 3-8 mm triangles, texels 0.5 mm,
+tilted up to 27 or 45 degrees, against a dense double-precision Newton search).**
+- **The cell's constraint is a polynomial only with MikkTSpace's normal.** The tracer and the G-buffer build a mapped
+  normal from the normalised interpolated normal and a Gram-Schmidt tangent; MikkTSpace, which glTF's normal maps are
+  baked against, uses the interpolated `vN`, `vT`, `vB` as they are and normalises only the result
+  (`normalize(tn.x vT + tn.y vB + tn.z vN)`, the bitangent `sign vN x vT` per vertex). With it the mapped normal `m` is
+  a polynomial on a cell (bidegree (2, 2), total 3): the texels' bilinear `tn` times the linear frame, without the
+  square roots T1's division-free map still carried (`|N|`, `|T'|`; the slope frame's `|m|` and `|m x c|` go with the
+  next item).
+- **The drawn slope in the vertex tangent frame**: `h = m - sigma.x vT - sigma.y vB`. The estimator divides by the
+  density of `sigma` and `|det d sigma / dA|` at each root, so any smooth frame is exact; this one only moves variance
+  (where a texel tilts `m` away from `vN`, `sigma` stretches by the tilt's cosine). The core's indicator is read at the
+  root from the true slope.
+- **The reflection as polynomials**: `r = d (h.h) - 2 (d.h) h` (`d = p - X`, no square root), `r.a = r.b = 0` for `a`,
+  `b` perpendicular to the sun, `r.L > 0`: bidegree (5, 5), total 7. (Specular Polynomials' own pair, coplanarity and
+  the product form, is (3, 3) and (5, 5), with spurious roots to filter.)
+- **The resultant fails in fp32.** In double, Bezout's resultant (s eliminated, its determinant interpolated in
+  Chebyshev's basis, roots by the colleague matrix) found every root the dense search did (19 of 19, 20 cells, 4 with
+  two roots). In float32 it missed 30 of 136 roots (27 degrees) and 33 of 151 (45 degrees), with 27-41 spurious. The
+  determinant is 1e-41 to 1e-53 over [0, 1], under fp32's normal range, and varies by 12 orders: across a 0.5 mm cell the
+  positions and the frame barely vary, so the high-order coefficients are 1e-8 to 1e-12 of the rest, and the resultant
+  carries roots far outside the cell (|s| about 1e3 to 1e4) whose factors dominate it. Rescaling does not remove that.
+- **Bernstein subdivision works in fp32.** The same polynomials' Bernstein coefficients over a box enclose them (the
+  convex hull property: no dependency problem, unlike T1's natural interval extensions), de Casteljau's split is convex
+  combinations, and Krawczyk's test with the derivatives' Bernstein bounds proves one root (Newton from the box's
+  centre) or none (K misses the box). The grids built in float32 from the cell's corner values by Bernstein products,
+  as the GPU would: every root found, none spurious, no box undecided (96 of 96 roots, 100 cells at 27 degrees; 97 of
+  97 at 45), 29-33 boxes a cell at the median (mean 56-84, max 1,301). With the grids from double: 180 of 180 and 198 of
+  198 (200 cells each), one cell of 400 at the 4,096-box budget (33 boxes undecided beside a root 8e-4 inside the
+  cell's edge, before Krawczyk's exclusion was added; its rerun was lost to a reboot, so that case is open). The exclusion test must keep a margin of
+  the grids' own rounding (float32 against double: 1e-7 to 1e-5 of the coefficients).
+- **Cost, estimated, not measured**: a box about 2,000 flops (three 6 x 6 grids split twice, Krawczyk), 29 boxes a cell,
+  47 cells a request on the helmet (T1's count): a few million flops a request, of the order of 2a's pass on the
+  showcase. Measured on the GPU before anything else is built, as 2a's was.
+
 **Rulings.**
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.
@@ -334,6 +369,17 @@ tighter enclosures (affine arithmetic, Taylor models).
   enclosure to overestimate. Interval Newton (Path Cuts) leaves too many cells undecided (T1 above: 79% at the 512-box
   budget, 44% with the division-free map; the enclosures' overestimation the cause, not precision: double changed 1,300
   to 1,250).
+- **M11b (PROPOSED 2026-11-06) — M11's solver amended: Specular Polynomials' formulation, solved by Bernstein
+  subdivision.** T2 above: the polynomial form (MikkTSpace's normal, the slope in the vertex frame) is what makes a
+  cell exact, but its resultant underflows and loses about a fifth of the roots in fp32, while Bernstein subdivision
+  with Krawczyk's test on the same polynomials found every root in float32 with no box undecided. Alternatives: the
+  resultant in double (the GPU's fp64 is 1/64 of its fp32 here), or the resultant on subdivided cells (Nakatsukasa,
+  Noferini and Townsend 2015's remedy; the dynamic range comes from the cell's own geometry, so it is unclear that it
+  shrinks). Recommended: Bernstein subdivision.
+- **M13 (PROPOSED 2026-11-06) — MikkTSpace's normal mapping in both renderers.** `normalize(tn.x vT + tn.y vB + tn.z
+  vN)` from the interpolated vectors as they are, the bitangent per vertex, in the G-buffer, the tracer's hit and the
+  pass alike. It is the convention glTF's normal maps are baked against (today's per-pixel Gram-Schmidt is not), and
+  T2 needs it. Moves every normal-mapped golden (by how much, measured before the change). Recommended: yes.
 
 ## Tests
 
@@ -456,6 +502,10 @@ Closed forms first; each case fails before its code exists.
   (`modulatedIor` of the specular IOR and weight), and a coat or a specular-weight texture, which have no single one, is
   refused (`m9_ball_weight`); under NRD the manifold pass is off (its light never reaches NRD's packed inputs).
 - **M11 (ACCEPTED 2026-11-06) — step 2c's solver**: Specular Polynomials (interval Newton leaves 44% of cells undecided); see "Step 2c".
+- **M11b (PROPOSED 2026-11-06) — M11 amended**: Specular Polynomials' formulation, solved by Bernstein subdivision (its
+  resultant loses a fifth of the roots in fp32); see "Step 2c", T2.
+- **M13 (PROPOSED 2026-11-06) — MikkTSpace's normal mapping in both renderers** (glTF's convention; step 2c's polynomial
+  form needs it); see "Step 2c", T2.
 
 ## Licences
 
