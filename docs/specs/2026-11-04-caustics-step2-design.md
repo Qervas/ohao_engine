@@ -449,7 +449,12 @@ Closed forms first; each case fails before its code exists.
   dispersive solid draws the wavelength the path does not have yet (that channel alone, x3). The walk evaluates the
   dual-number map at one call site and the three BSDFs (X's rough part, the two refractions) at one OpenPBR site:
   manifoldConnect is 34,168 SPIR-V instructions (2a alone 19,997; three walk sites and two OpenPBR sites made it 46,739).
-  Off until m4-m6 hold it on the GPU (`OHAO_MANIFOLD_GLASS=1`); the pass's counters add walks, paths and connections.
+  On by default since m4-m6 hold it on the GPU (2026-11-06: 1.09%, 0.18%, 0.59%; `docs/changes/2026-11-06-caustics-step2b.md`);
+  `OHAO_MANIFOLD_GLASS_OFF=1` drops it. The pass's counters add walks, paths and connections. **Corrected by the review
+  before it went on (2026-11-06):** the walk takes a whole instance, so it runs for one draw of each (instance, material),
+  or a merged model's runs of one glass count its light once each (`m7_split_ball`); it refracts at the BSDF's IOR
+  (`modulatedIor` of the specular IOR and weight), and a coat or a specular-weight texture, which have no single one, is
+  refused (`m9_ball_weight`); under NRD the manifold pass is off (its light never reaches NRD's packed inputs).
 - **M11 (ACCEPTED 2026-11-06) — step 2c's solver**: Specular Polynomials (interval Newton leaves 44% of cells undecided); see "Step 2c".
 
 ## Licences

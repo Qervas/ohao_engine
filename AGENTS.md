@@ -599,7 +599,7 @@ deferred, reference, path traced); two the transparency scene,
   camera's traces `kPathMask` (`kRayMaskScene | kTlasMaskTransparent`)**, or bounce and shadow rays pass glass unseen (one
   refraction, no lens, no shadow). `kHitBack` is the ray running along the interpolated vertex normal (the geometric
   winding only without normals: the generated sphere is wound inside out, and every entry into a ball shaded as an exit).
-  **Glass has its own bounce budget** (`kCrossings`, 8: refractions and reflections inside a solid, beyond `bounces`; the
+  **Glass has its own bounce budget** (`kCrossings`, 16: refractions and reflections inside a solid, beyond `bounces`; the
   realtime profile's 2 bounces ended paths inside a ball). In the path tracer a ray that crossed a surface counts what it
   meets in full, not by MIS (light sampling only looks above the surface), and a solid's inside absorbs by
   `transmission_color` at `transmission_depth`. **Panes pass shadow rays** (ruling O14, `paneMaterial`: thin-walled,
@@ -754,10 +754,17 @@ deferred, reference, path traced); two the transparency scene,
   tests (time `pt.manifold` with `render.capture {timings}`, never wall time: a cold compile hides in it).
   **Step 2b** (same spec, "Step 2b as designed", M12): the sun through an owned solid (two refractions) onto X, which the
   camera side never renders (nothing to drop), by the seeded walk (`manifoldGlass`, `rt/manifold_cert.slang`'s
-  `manifoldWalkPair<S, false>`; `manifold_tests` t15 holds its form to light traced through a glass ball). **Off until its
-  GPU tests (m4-m6) hold it:** `OHAO_MANIFOLD_GLASS=1`. Gotchas: an uncertified root must be polished in its own pair's
-  parameters and kept only inside both triangles, or a focus counts a root in two pairs; one frame reference for every
-  walk of a request; the walk's dual-number map and the BSDFs each at one call site (manifoldConnect 34k instructions).
+  `manifoldWalkPair<S, false>`; `manifold_tests` t15 holds its form to light traced through a glass ball; `check_caustics`
+  m4-m6 on the GPU). On by default with step 2; `OHAO_MANIFOLD_GLASS_OFF=1` drops it (nothing else renders that light: the
+  frame is darker, not split). Gotchas: it walks a whole instance, so one draw of each (instance, material) runs it (the
+  host's mark in the draw record's word 7: a merged model's runs of one glass are several draws, which counted the light
+  once each, `m7_split_ball`); it walks at the IOR the BSDF refracts at (`modulatedIor` of the specular IOR and weight,
+  `m9_ball_weight`) and refuses a coat or a specular-weight texture, whose IOR no single walk has; under NRD the manifold
+  pass (2a and 2b) stays off, since it adds to the running mean after the denoiser's inputs are packed; an uncertified
+  root must be polished in its own pair's parameters and kept only inside both triangles, or a focus counts a root in two
+  pairs; one frame reference for every walk of a request; the walk's dual-number map and the BSDFs each at one call site
+  (manifoldConnect 36.5k instructions), the path checked before its re-find walks (`manifoldGlassPath`), the walk's rays
+  clipped to the solid's bounding sphere.
 - **The path tracer's frame cost** (frontier F1 T6) is timed by stage: `pt.cache.update` (with the
   frame's setup), `pt.cache.resolve`, `pt.trace`, `pt.denoise` (a denoiser and the display
   transform); `render_bench`'s `helmet_rt_1080p`, `play_rt_1080p` and `play_rt_dlss_1080p`. **Any

@@ -71,8 +71,13 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // the pass's terms without running it.
     static const bool manifoldOff = std::getenv("OHAO_MANIFOLD_OFF") != nullptr;
     static const bool manifoldSplitOnly = std::getenv("OHAO_MANIFOLD_SPLIT_ONLY") != nullptr;
-    if (causticsOn && !manifoldOff && m_scene) m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
-    const bool manifoldOn = causticsOn && !manifoldOff && m_scene && m_manifold.active() &&
+    // The manifold pass adds its light to the running mean after raygenCaustics has packed the denoiser's diffuse and
+    // specular inputs, so a denoiser that builds the frame from those (NRD) would never show it, while the camera side
+    // dropped step 2a's share: under NRD the pass stays off and the camera side keeps those terms.
+    const bool manifoldFrame = !denoiseNeedsDiffSpecSplit(m_renderSettings.denoiseMode);
+    if (causticsOn && !manifoldOff && manifoldFrame && m_scene)
+        m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
+    const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_scene && m_manifold.active() &&
                             m_manifold.ensureRequests(m_width * m_height) && (manifoldSplitOnly || ensureManifoldPipeline());
     const bool manifoldPass = manifoldOn && !manifoldSplitOnly;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
@@ -597,9 +602,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         if (manifoldPass) pc.control.x |= kPTFlagManifoldRequests;
         static const char* stage = std::getenv("OHAO_MANIFOLD_STAGE");   // profiling: where manifoldConnect stops
         if (stage) pc.control.x |= (uint32_t(std::atoi(stage)) & 3u) << 21u;
-        // Step 2b (manifoldGlass) runs only with OHAO_MANIFOLD_GLASS=1 until its GPU tests (m4-m6) have held it.
-        static const bool glass = std::getenv("OHAO_MANIFOLD_GLASS") != nullptr;
-        if (glass) pc.control.x |= kPTFlagManifoldGlass;
+        // Step 2b (manifoldGlass), the sun through owned solids; OHAO_MANIFOLD_GLASS_OFF=1 drops it (for comparisons:
+        // nothing else renders that light, so the frame is darker without it, not split).
+        static const bool glassOff = std::getenv("OHAO_MANIFOLD_GLASS_OFF") != nullptr;
+        if (!glassOff) pc.control.x |= kPTFlagManifoldGlass;
         m_manifoldRan = true;
     }
     // The frames already in the running mean (0: this frame's sample alone, which a temporal

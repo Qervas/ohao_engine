@@ -225,11 +225,12 @@ def sphere_scene():
     }
 
 
-def sphere_reference(w, h, orders=5):
-    # orders: the paths through the ball kept, by internal reflections (1: in and out only, step 2b's K = 2).
+def sphere_reference(w, h, orders=5, n_glass=1.5):
+    # orders: the paths through the ball kept, by internal reflections (1: in and out only, step 2b's K = 2). n_glass:
+    # the IOR the ball refracts at (OpenPBR's, after specular_weight: modulated_ior).
     import numpy as np
     c = np.array(SPHERE_C)
-    rad, n_glass = 0.5, 1.5
+    rad = 0.5
     x, y, z, qw = SPHERE_SUN_Q
     u = np.array([x, y, z])
     v = np.array([0.0, 0.0, -1.0])
@@ -306,7 +307,9 @@ def sphere_reference(w, h, orders=5):
 def c3_sphere(failures):
     import numpy as np
     w, h = 320, 180
-    img, log = render("c3_sphere", sphere_scene(), 2048)
+    # Direct light only, as the simulation (and c3_slab): with every bounce the ball's outside also reflects the floor
+    # under it into its shadow, the caustic included once step 2b lights a point seen in a reflection (+1.8%).
+    img, log = render("c3_sphere", sphere_scene(), 2048, ["--bounces", "1"])
     lum = img.mean(2)
     lit = float(np.median(lum[5:30, 5:60]))
     got = lum / lit
@@ -408,7 +411,6 @@ def c4_through_glass(failures):
 
 def c5_showcase(failures):
     import numpy as np
-    from scipy.ndimage import median_filter
     global W, H
     w0, h0 = W, H
     W, H = 480, 270
@@ -425,8 +427,8 @@ def c5_showcase(failures):
         x = img.mean(2)
         rel = float(((x - r) ** 2 / (r ** 2 + 1e-3)).mean())
         dots = int((x > 4 * r + 0.01).sum())
-        m5 = median_filter(x, 5)
-        glass = float(x[261, 295] / max(m5[261, 295], 1e-6))
+        m5 = float(np.median(x[259:264, 293:298]))   # the 5 x 5 median at the clear ball's pixel
+        glass = float(x[261, 295] / max(m5, 1e-6))
         out[tag] = {"relMSE": rel, "dots": dots, "glass_dot": glass}
         print("c5_showcase %s: relMSE %.5f, dots %d, the glass ball's pixel %.1fx its neighbours" % (tag, rel, dots, glass))
     if not out["with"]["relMSE"] <= 0.1 * out["without"]["relMSE"]:
@@ -660,9 +662,9 @@ def m2_glossy_mirror(failures):
 
 # ---- m4-m6: step 2b, the sun through a solid seen past the first hit ---------------------------------
 # The camera side never renders it (its light samples look above a surface, its shadow rays stop at solids, no BSDF
-# ray meets the sun), so without the pass these floors are black. Step 2b takes the two refractions only (K = 2): every
-# closed form below is that order, (1 - F)^2 through the slab; the orders with internal reflections (F^2 ~ 0.002 of it)
-# are no one's. 2b runs with OHAO_MANIFOLD_GLASS=1 until these hold it.
+# ray meets the sun), so without the pass these floors take no light through the solid. Step 2b takes the two
+# refractions only (K = 2): every closed form below is that order, (1 - F)^2 through the slab; the orders with internal
+# reflections (F^2 ~ 0.002 of it) are no one's. 2b is on by default (OHAO_MANIFOLD_GLASS_OFF=1 drops it).
 
 def slab_floor():
     f = fresnel(math.cos(math.radians(30)), 1.5)
@@ -730,7 +732,7 @@ def m4_mask(margin=0.06):
 def m4_slab_seen(failures):
     want = slab_floor()
     mask = m4_mask()
-    img, _ = render("m4_slab_seen", m4_scene(), 256, ["--bounces", "2"], {"OHAO_MANIFOLD_GLASS": "1"})
+    img, _ = render("m4_slab_seen", m4_scene(), 256, ["--bounces", "2"])
     off, _ = render("m4_slab_seen_off", m4_scene(), 64, ["--bounces", "2"], {"OHAO_MANIFOLD_OFF": "1"})
     m, mo = float(img.mean(2)[mask].mean()), float(off.mean(2)[mask].mean())
     err = abs(m - want) / want
@@ -763,28 +765,122 @@ def m5_scene():
     return s
 
 
-def m5_ball_seen(failures):
+def ball_seen(failures, name, scene, n_glass=1.5):
+    # m5's measure: the caustic's energy in the ball's shadow, seen through the periscope, against the simulation.
     import numpy as np
-    img, _ = render("m5_ball_seen", m5_scene(), 2048, ["--bounces", "2"], {"OHAO_MANIFOLD_GLASS": "1"})
+    img, _ = render(name, scene, 2048, ["--bounces", "2"])
     lum = img.mean(2)[::-1]   # c3_sphere's orientation
     lit = float(np.median(lum[5:30, 5:60]))
     got = lum / lit
-    ref, mask = sphere_reference(W, H, orders=1)
+    ref, mask = sphere_reference(W, H, orders=1, n_glass=n_glass)
     e_ref, e_got = float(ref[mask].sum()), float(got[mask].sum())
     err = abs(e_got - e_ref) / e_ref
-    print("m5_ball_seen: the caustic in the mirrored shadow %.1f, reference (straight through) %.1f (%.2f%%); lit floor %.4f"
-          % (e_got, e_ref, 100 * err, lit))
+    print("%s: the caustic in the mirrored shadow %.1f, reference (straight through) %.1f (%.2f%%); lit floor %.4f"
+          % (name, e_got, e_ref, 100 * err, lit))
     if not err <= 0.05:
-        failures.append("m5_ball_seen: the caustic's energy %.1f against the ray-simulated %.1f (%.2f%%, bar 5%%)"
-                        % (e_got, e_ref, 100 * err))
+        failures.append("%s: the caustic's energy %.1f against the ray-simulated %.1f (%.2f%%, bar 5%%)"
+                        % (name, e_got, e_ref, 100 * err))
     return {"energy": e_got, "reference": e_ref, "error": err, "lit": lit}
+
+
+def m5_ball_seen(failures):
+    return ball_seen(failures, "m5_ball_seen", m5_scene())
+
+
+def modulated_ior(ior, weight):
+    # OpenPBR's IOR at a specular_weight (shaders/material/openpbr.slang modulatedIor): F0 scaled by the weight.
+    f0 = ((1 - ior) / (1 + ior)) ** 2
+    eps = math.copysign(math.sqrt(min(max(weight, 0.0), 1.0 / f0) * f0), ior - 1)
+    return (1 + eps) / (1 - eps)
+
+
+# m9: m5's ball at specular_ior 1.8 and specular_weight 0.5. The BSDF refracts at modulated_ior(1.8, 0.5) = 1.506, so
+# must the walk: at the material's raw 1.8 its paths miss the BSDF's peak and the caustic is dark. (At specular_ior 1.5 the
+# weight would make it 1.329, whose focus is on the floor, where step 2b reads 29% dark: a known gap, not this test's.)
+def m9_ball_weight(failures):
+    s = m5_scene()
+    for e in s["entities"]:
+        if e.get("Name", {}).get("value") == "Glass":
+            e["Material"]["specular_ior"] = 1.8
+            e["Material"]["specular_weight"] = 0.5
+    return ball_seen(failures, "m9_ball_weight", s, n_glass=modulated_ior(1.8, 0.5))
+
+
+# m7: m5's ball as one model of three primitives, a glass top half, a 1 mm opaque triangle at the centre and a glass
+# bottom half (build/caustics/split_ball.gltf, written here): two draws of one instance with one glass material. Step
+# 2b walks the whole instance, so it must run once for the pair, not once a draw (which read the caustic twice).
+def write_split_ball(path, sectors=96, stacks=48):
+    import base64
+    import struct
+    verts, norms = [], []
+    for i in range(stacks + 1):
+        th = math.pi * i / stacks
+        for j in range(sectors + 1):
+            ph = 2 * math.pi * j / sectors
+            nrm = (math.sin(th) * math.cos(ph), math.cos(th), math.sin(th) * math.sin(ph))
+            norms.append(nrm)
+            verts.append(tuple(0.5 * c for c in nrm))
+
+    def band(i0, i1):
+        idx = []
+        for i in range(i0, i1):
+            for j in range(sectors):
+                a, b = i * (sectors + 1) + j, (i + 1) * (sectors + 1) + j
+                idx += [a, a + 1, b, a + 1, b + 1, b]   # outward (counter-clockwise seen from outside)
+        return idx
+    top, bottom = band(0, stacks // 2), band(stacks // 2, stacks)
+    tri = [(0.0, 0.0, 0.0), (0.001, 0.0, 0.0), (0.0, 0.0, 0.001)]
+    blob = b"".join(struct.pack("<3f", *v) for v in verts) + b"".join(struct.pack("<3f", *n) for n in norms)
+    blob += b"".join(struct.pack("<3f", *v) for v in tri) + b"".join(struct.pack("<3f", 0, 1, 0) for _ in tri)
+    ib = len(blob)
+    blob += struct.pack("<%dI" % len(top), *top) + struct.pack("<%dI" % len(bottom), *bottom) + struct.pack("<3I", 0, 1, 2)
+    nv = len(verts)
+    views = [{"buffer": 0, "byteOffset": 0, "byteLength": 12 * nv}, {"buffer": 0, "byteOffset": 12 * nv, "byteLength": 12 * nv},
+             {"buffer": 0, "byteOffset": 24 * nv, "byteLength": 36}, {"buffer": 0, "byteOffset": 24 * nv + 36, "byteLength": 36},
+             {"buffer": 0, "byteOffset": ib, "byteLength": 4 * len(top)},
+             {"buffer": 0, "byteOffset": ib + 4 * len(top), "byteLength": 4 * len(bottom)},
+             {"buffer": 0, "byteOffset": ib + 4 * (len(top) + len(bottom)), "byteLength": 12}]
+    acc = [{"bufferView": 0, "componentType": 5126, "count": nv, "type": "VEC3", "min": [-0.5, -0.5, -0.5], "max": [0.5, 0.5, 0.5]},
+           {"bufferView": 1, "componentType": 5126, "count": nv, "type": "VEC3"},
+           {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [0.001, 0, 0.001]},
+           {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC3"},
+           {"bufferView": 4, "componentType": 5125, "count": len(top), "type": "SCALAR"},
+           {"bufferView": 5, "componentType": 5125, "count": len(bottom), "type": "SCALAR"},
+           {"bufferView": 6, "componentType": 5125, "count": 3, "type": "SCALAR"}]
+    glass = {"name": "glass", "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 0},
+             "extensions": {"KHR_materials_transmission": {"transmissionFactor": 1}, "KHR_materials_ior": {"ior": 1.5}}}
+    opaque = {"name": "opaque", "pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1], "metallicFactor": 0, "roughnessFactor": 1}}
+    gltf = {"asset": {"version": "2.0"}, "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior"],
+            "buffers": [{"byteLength": len(blob), "uri": "data:application/octet-stream;base64," + base64.b64encode(blob).decode()}],
+            "bufferViews": views, "accessors": acc, "materials": [glass, opaque],
+            "meshes": [{"name": "top", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 4, "material": 0}]},
+                       {"name": "inside", "primitives": [{"attributes": {"POSITION": 2, "NORMAL": 3}, "indices": 6, "material": 1}]},
+                       {"name": "bottom", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 5, "material": 0}]}],
+            "nodes": [{"mesh": 0}, {"mesh": 1}, {"mesh": 2}], "scenes": [{"nodes": [0, 1, 2]}], "scene": 0}
+    with open(path, "w") as f:
+        json.dump(gltf, f)
+
+
+def m7_split_ball(failures):
+    os.makedirs(OUT, exist_ok=True)
+    path = os.path.join(OUT, "split_ball.gltf")
+    write_split_ball(path)
+    s = m5_scene()
+    for e in s["entities"]:
+        if e.get("Name", {}).get("value") == "Glass":
+            e["MeshSource"] = {"source": {"ModelAsset": {"asset": {"path": os.path.relpath(path, ROOT)}}}}
+            e.pop("Material", None)
+    return ball_seen(failures, "m7_split_ball", s)
 
 
 # m6: c3_slab's floor seen through glass: a clear pane (a 5 cm box at x = 3.9 .. 3.95, edge-on to the sun, outside the
 # slab) between the camera at (4.5, 0.6, 0) and the floor under the slab, which the camera meets at depth 2 (both
 # refractions crossings). Each pixel's closed form is the floor under the slab times the pane's transmittance plus the
 # sunlit floor behind the camera (no slab over it) times the pane's reflectance, at its ray's incidence, with the
-# pane's inside reflections: T = (1 - F) / (1 + F), R = 2F / (1 + F). Without the pass only the reflection is there.
+# pane's inside reflections: T = (1 - F) / (1 + F), R = 2F / (1 + F). Without the pass only the reflection is there, and
+# one more term no form here has: the floor under the slab lit by sunlit floor whose light reflected inside the slab on
+# the way (glass events are no bounces, so --bounces 1 lets the path through): about 0.003 by a path simulation, within
+# the checks' bars. m4's 0.0031 without the pass is the same term.
 M6_CAM, M6_LOOK, M6_FOV = (4.5, 0.6, 0.0), (0.5, 0.0, 0.0), 50.0
 
 
@@ -816,7 +912,7 @@ def m6_through_glass(failures):
     lit = slab_floor() / (1 - fresnel(math.cos(math.radians(30)), 1.5)) ** 2   # the floor in the sun, no slab
     through, reflected = slab_floor() * (1 - f) / (1 + f), lit * 2 * f / (1 + f)
     want = through + reflected
-    img, _ = render("m6_through_glass", m6_scene(), 256, ["--bounces", "1"], {"OHAO_MANIFOLD_GLASS": "1"})
+    img, _ = render("m6_through_glass", m6_scene(), 256, ["--bounces", "1"])
     off, _ = render("m6_through_glass_off", m6_scene(), 64, ["--bounces", "1"], {"OHAO_MANIFOLD_OFF": "1"})
     m, w_, mo = float(img.mean(2)[mask].mean()), float(want[mask].mean()), float(off.mean(2)[mask].mean())
     wr = float(reflected[mask].mean())
@@ -840,7 +936,7 @@ def m8_repeat(failures):
     return out
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m8_repeat": m8_repeat}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m7_split_ball": m7_split_ball, "m8_repeat": m8_repeat, "m9_ball_weight": m9_ball_weight}
 
 
 def main(argv):

@@ -72,6 +72,7 @@ private:
     uint32_t m_triangles{0}, m_clusters{0}, m_groups{0}, m_drawCount{0};
     uint32_t m_requestPixels{0};
     bool m_requestsFull{false};
+    bool m_growthFailed{false};   // the triangles or nodes could not grow: the pass stays off
     bool m_clearRequests{true};
 
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};

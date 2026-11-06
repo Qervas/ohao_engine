@@ -113,7 +113,7 @@ static const uint kClassManifold = 128u;      // the manifold pass's connections
 // for the pass (off under OHAO_MANIFOLD_SPLIT_ONLY, which drops the terms without adding them).
 static const uint kFlagManifold = 1u << 19u;
 static const uint kFlagManifoldRequests = 1u << 20u;
-// Bit 23: step 2b, the sun through owned solids (manifoldGlass; OHAO_MANIFOLD_GLASS=1 while it is checked on the GPU).
+// Bit 23: step 2b, the sun through owned solids (manifoldGlass; set unless OHAO_MANIFOLD_GLASS_OFF=1).
 static const uint kFlagManifoldGlass = 1u << 23u;
 static const uint kManifoldOwnedBit = 1u;
 static const uint kManifoldBaseBit = 2u;
@@ -1228,21 +1228,33 @@ float manifoldUnit(uint h) { return float(h >> 8u) * (1.0 / 16777216.0); }
 // The walk's scene (rt/manifold_cert.slang's IManifoldScene): one instance's triangles in world space. Its rays are forced
 // non-opaque, so every candidate comes to the loop and only the instance's own are committed; every triangle takes the
 // request's frame reference c (a pair's slopes are in frames that must not change between the walks of one request).
+// Each ray is clipped to the instance's bounding sphere (grown 2%), which holds every triangle of it: outside it the
+// traversal would hand back every other instance's triangles along the ray for nothing.
 struct ManifoldInstanceScene : IManifoldScene
 {
     uint slot;
     float3 c;
+    float4 sphere;   // centre, radius: the mesh's world bounds
 
     bool trace(float3 o, float3 d, float tMax, out uint tri, out float2 uv, out float t)
     {
         tri = 0u;
         uv = float2(0.0);
         t = 0.0;
+        const float3 oc = o - sphere.xyz;
+        const float dd = dot(d, d);
+        const float bh = dot(oc, d);
+        const float rad = 1.02 * sphere.w + 1e-4;
+        const float disc = bh * bh - dd * (dot(oc, oc) - rad * rad);
+        if (!(disc >= 0.0) || !(dd > 0.0)) return false;
+        const float sq = sqrt(disc);
+        const float t1 = (-bh + sq) / dd;
+        if (!(t1 > 1e-6)) return false;
         RayDesc ray;
         ray.Origin = o;
         ray.Direction = d;
-        ray.TMin = 1e-6;
-        ray.TMax = min(tMax, 1.0e4);
+        ray.TMin = max((-bh - sq) / dd, 1e-6);
+        ray.TMax = min(min(tMax, 1.0e4), t1);
         RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
         q.TraceRayInline(scene, RAY_FLAG_FORCE_NON_OPAQUE, kPathMask, ray);
         while (q.Proceed())
@@ -1271,89 +1283,18 @@ struct ManifoldInstanceScene : IManifoldScene
     }
 }
 
-// Re-find trials a found path is counted by, at most (the first walk among them).
-static const uint kManifoldGlassTrials = 64u;
-
-// Step 2b's light at X from one directional light (direction L, illuminance E) through one solid instance: sun -> into
-// the solid at y1 -> out at y2 -> X's rough part, each refraction over its whole lobe (the camera side renders none of
-// it: its light samples look above a surface only and its shadow rays stop at solids, ruling M12). Without beta and the
-// draw's choice. The slopes s1, s2 are drawn from GGX's at the draw's alpha; the seeded walk (rt/manifold_cert.slang,
-// uncertified) finds a path from a seed drawn in the cone the solid's bounding sphere subtends from X, counted by the
-// walks it takes to find the same path again (Zeltner et al. 2020: exact in expectation for every path a seed reaches;
-// capped at kManifoldGlassTrials). The estimate and its walk are manifold_tests t15's GPU form, held there to light
-// traced through a rough glass ball. counts: (walks, paths found, connections).
-float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float3 pX, float3 gX, float3 woX,
-                     ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E, int channel, uint h, inout uint3 counts)
+// A path the walk found (y1 on A at first.x.xy, y2 on B at first.x.zw), checked as the camera side would trace it, and
+// its light before the re-find count: X -> y2 and y2 -> y1 must meet the solid first at the walk's distances (its
+// material; from outside at y2, from inside at y1), the sun must reach y1's outer side, and the three vertices' BSDFs in
+// the camera's roles (OpenPBR is not reciprocal), at one evaluation site (each OpenPBR call site is compiled whole):
+// X's rough part, wo toward the camera side and wi toward y2; the refraction at y2, wo toward X and wi toward y1; at
+// y1, wo toward y2 (below its outward frame) and wi toward the sun (smooth + rough: the whole lobe). 0 if refused.
+float3 manifoldGlassPath(ManifoldTri A, ManifoldTri B, ManifoldWalkResult first, uint material, float alpha, float4 target,
+                         float3 pX, float3 gX, float3 woX, ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E,
+                         int ch, float3 chMask)
 {
     const float4 row12 = materials[material * kMaterialRows + kTransmissionRowFirst];
     const float4 row13 = materials[material * kMaterialRows + kTransmissionRowFirst + 1u];
-    // A dispersive solid draws the path's wavelength unless the path has one, as the camera side does there: that
-    // channel alone, three times over.
-    int ch = channel;
-    float3 chMask = float3(1.0);
-    if (ch < 0 && row13.z > 0.0)
-    {
-        ch = int(min(manifoldUnit(h) * 3.0, 2.0));
-        chMask = float3(ch == 0 ? 3.0 : 0.0, ch == 1 ? 3.0 : 0.0, ch == 2 ? 3.0 : 0.0);
-    }
-    const float ior = materials[material * kMaterialRows + 5u].x;
-    const float eta = ch >= 0 && row13.z > 0.0 ? dispersedIor(ior, row13.w, row13.z, kDispersionLambda[max(ch, 0)]) : ior;
-    uint r = pcg(h ^ 0x2B5EED5u);
-    const uint r0 = pcg(r), r1 = pcg(r0), r2 = pcg(r1), r3 = pcg(r2);
-    r = r3;
-    const float2 s1 = manifoldGgxSlope(alpha, float2(manifoldUnit(r0), manifoldUnit(r1)));
-    const float2 s2 = manifoldGgxSlope(alpha, float2(manifoldUnit(r2), manifoldUnit(r3)));
-    const float4 target = float4(s1, s2);
-    // The slopes' frame, the same at every walk of the request: perpendicular to the sun and to the solid's direction
-    // from X, so a normal along it (the frame's pole) is one the sun grazes or one X sees edge-on.
-    const float3 toC = sphere.xyz - pX;
-    const float dC = length(toC);
-    float3 c = cross(L, toC);
-    if (dot(c, c) > 1e-8 * dC * dC) c = normalize(c);
-    else
-    {
-        float3 cb;
-        basisOf(L, c, cb);
-    }
-    ManifoldInstanceScene sc;
-    sc.slot = slot;
-    sc.c = c;
-    // Seeds uniform in the cone the solid's bounding sphere (grown 2%) subtends from X; every direction from inside it.
-    const float3 axis = toC / dC;
-    const float sinA = min(1.0, 1.02 * sphere.w / dC);
-    const float cosA = dC > 1.02 * sphere.w ? sqrt(1.0 - sinA * sinA) : -1.0;
-    float3 ta, tb;
-    basisOf(axis, ta, tb);
-    ManifoldWalkResult first;
-    first.found = false;
-    first.entry = 0u;
-    first.exit = 0u;
-    first.x = float4(0.0);
-    first.slopeDet = 0.0;
-    uint trials = 0u;
-    for (uint k = 0u; k < kManifoldGlassTrials; ++k)
-    {
-        r = pcg(r);
-        const float uc = manifoldUnit(r);
-        r = pcg(r);
-        const float cz = cosA + (1.0 - cosA) * uc, sz = sqrt(max(0.0, 1.0 - cz * cz));
-        const float ph = 2.0 * kManifoldPi * manifoldUnit(r);
-        const float3 seedDir = axis * cz + ta * (sz * cos(ph)) + tb * (sz * sin(ph));
-        const ManifoldWalkResult w = manifoldWalkPair<ManifoldInstanceScene, false>(sc, pX, L, eta, target, seedDir);
-        ++counts.x;
-        if (k == 0u)
-        {
-            if (!w.found || !(w.slopeDet > 0.0)) return float3(0.0);
-            first = w;
-            trials = 1u;
-            continue;
-        }
-        // The same path: the same pair and root (the walk polishes it in the pair's own parameters).
-        if (w.found && w.entry == first.entry && w.exit == first.exit && all(abs(w.x - first.x) < 1e-3)) break;
-        ++trials;
-    }
-    ++counts.y;
-    const ManifoldTri A = sc.triangle(first.entry), B = sc.triangle(first.exit);
     const float3 y1 = manifoldPoint(A, first.x.xy), y2 = manifoldPoint(B, first.x.zw);
     const float3 toY2 = y2 - pX;
     const float rX = length(toY2);
@@ -1362,8 +1303,6 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
     const float3 inner = y1 - y2;
     const float rIn = length(inner);
     const float3 back = inner / rIn;   // y2 -> y1
-    // X -> y2 as the camera's bounce ray traces it, then y2 -> y1 inside: each must meet the solid first, at that point
-    // (its material at the walk's distance; from outside at y2, from inside at y1).
     PathPayload hs[2];
     for (uint k = 0u; k < 2u; ++k)
     {
@@ -1381,10 +1320,6 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
     if (dot(L, out1) <= 0.0) return float3(0.0);
     float3 T;
     if (!visible(y1 + out1 * 1e-3, L, 1.0e4, T)) return float3(0.0);
-    // The three vertices' BSDFs in the camera's roles (OpenPBR is not reciprocal), at one evaluation site (each OpenPBR
-    // call site is compiled whole): X's rough part, wo toward the camera side and wi toward y2; the refraction at y2, wo
-    // toward X and wi toward y1; at y1, wo toward y2 (below its outward frame) and wi toward the sun (smooth + rough:
-    // the whole lobe). Each holds its shading cosine at wi.
     float3 f = float3(1.0);
     for (uint k = 0u; k < 3u; ++k)
     {
@@ -1407,13 +1342,107 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
     // Area to slopes: |det ds / dA| = slopeDet / (|e1 x e2| at y1 x at y2); each area to its solid angle at the vertex
     // before it by its geometric cosine over the distance squared.
     const float3 g1 = cross(A.e1, A.e2), g2 = cross(B.e1, B.e2);
-    const float pdf = manifoldGgxSlopeDensity(alpha, s1) * manifoldGgxSlopeDensity(alpha, s2);
-    const float k = float(trials) * abs(dot(wX, g2)) * abs(dot(back, g1)) /
-                    (rX * rX * rIn * rIn * first.slopeDet * pdf);
-    const float3 c3 = f * E * T * absorb * chMask * k;
-    if (!all(isfinite(c3))) return float3(0.0);
-    if (any(c3 > 0.0)) ++counts.z;
-    return c3;
+    const float pdf = manifoldGgxSlopeDensity(alpha, target.xy) * manifoldGgxSlopeDensity(alpha, target.zw);
+    const float k = abs(dot(wX, g2)) * abs(dot(back, g1)) / (rX * rX * rIn * rIn * first.slopeDet * pdf);
+    const float3 c = f * E * T * absorb * chMask * k;
+    return all(isfinite(c)) ? c : float3(0.0);
+}
+
+// Re-find trials a found path is counted by, at most (the first walk among them).
+static const uint kManifoldGlassTrials = 64u;
+
+// Step 2b's light at X from one directional light (direction L, illuminance E) through one solid instance: sun -> into
+// the solid at y1 -> out at y2 -> X's rough part, each refraction over its whole lobe (the camera side renders none of
+// it: its light samples look above a surface only and its shadow rays stop at solids, ruling M12). Without beta and the
+// draw's choice. The slopes s1, s2 are drawn from GGX's at the draw's alpha; the seeded walk (rt/manifold_cert.slang,
+// uncertified) finds a path from a seed drawn in the cone the solid's bounding sphere subtends from X, counted by the
+// walks it takes to find the same path again (Zeltner et al. 2020: exact in expectation for every path a seed reaches;
+// capped at kManifoldGlassTrials). The estimate and its walk are manifold_tests t15's GPU form, held there to light
+// traced through a rough glass ball. The first walk's path is checked and weighed (manifoldGlassPath) before any
+// re-find walk: a refused path costs none. The walk has one call site (each is compiled whole). counts: (walks, paths
+// found, connections).
+float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float3 pX, float3 gX, float3 woX,
+                     ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E, int channel, uint h, inout uint3 counts)
+{
+    const float4 row13 = materials[material * kMaterialRows + kTransmissionRowFirst + 1u];
+    // A dispersive solid draws the path's wavelength unless the path has one, as the camera side does there: that
+    // channel alone, three times over.
+    int ch = channel;
+    float3 chMask = float3(1.0);
+    if (ch < 0 && row13.z > 0.0)
+    {
+        ch = int(min(manifoldUnit(h) * 3.0, 2.0));
+        chMask = float3(ch == 0 ? 3.0 : 0.0, ch == 1 ? 3.0 : 0.0, ch == 2 ? 3.0 : 0.0);
+    }
+    // The walk refracts at the IOR the BSDF refracts at: the specular IOR (dispersed for the channel) modulated by
+    // specular_weight and clamped, as OpenPBRBase. A coat makes the base's IOR the coat-relative one and adds an
+    // interface the two refractions do not model, and a specular-weight texture gives each texel its own IOR: neither
+    // is step 2b's (the caller's gate).
+    const float ior = materials[material * kMaterialRows + 5u].x;
+    const float etaSpec = ch >= 0 && row13.z > 0.0 ? dispersedIor(ior, row13.w, row13.z, kDispersionLambda[max(ch, 0)]) : ior;
+    const float eta = clamp(modulatedIor(etaSpec, materials[material * kMaterialRows + 4u].w), 1.0, kPbrEtaMax);
+    uint r = pcg(h ^ 0x2B5EED5u);
+    const uint r0 = pcg(r), r1 = pcg(r0), r2 = pcg(r1), r3 = pcg(r2);
+    r = r3;
+    const float4 target = float4(manifoldGgxSlope(alpha, float2(manifoldUnit(r0), manifoldUnit(r1))),
+                                 manifoldGgxSlope(alpha, float2(manifoldUnit(r2), manifoldUnit(r3))));
+    // The slopes' frame, the same at every walk of the request: perpendicular to the sun and to the solid's direction
+    // from X, so a normal along it (the frame's pole) is one the sun grazes or one X sees edge-on.
+    const float3 toC = sphere.xyz - pX;
+    const float dC = length(toC);
+    if (!(dC > 0.0)) return float3(0.0);
+    float3 c = cross(L, toC);
+    if (dot(c, c) > 1e-8 * dC * dC) c = normalize(c);
+    else
+    {
+        float3 cb;
+        basisOf(L, c, cb);
+    }
+    ManifoldInstanceScene sc;
+    sc.slot = slot;
+    sc.c = c;
+    sc.sphere = sphere;
+    // Seeds uniform in the cone the solid's bounding sphere (grown 2%) subtends from X; every direction from inside it.
+    const float3 axis = toC / dC;
+    const float sinA = min(1.0, 1.02 * sphere.w / dC);
+    const float cosA = dC > 1.02 * sphere.w ? sqrt(1.0 - sinA * sinA) : -1.0;
+    float3 ta, tb;
+    basisOf(axis, ta, tb);
+    ManifoldWalkResult first;
+    first.found = false;
+    first.entry = 0u;
+    first.exit = 0u;
+    first.x = float4(0.0);
+    first.slopeDet = 0.0;
+    float3 light = float3(0.0);
+    uint trials = 0u;
+    for (uint k = 0u; k < kManifoldGlassTrials; ++k)
+    {
+        r = pcg(r);
+        const float uc = manifoldUnit(r);
+        r = pcg(r);
+        const float cz = cosA + (1.0 - cosA) * uc, sz = sqrt(max(0.0, 1.0 - cz * cz));
+        const float ph = 2.0 * kManifoldPi * manifoldUnit(r);
+        const float3 seedDir = axis * cz + ta * (sz * cos(ph)) + tb * (sz * sin(ph));
+        const ManifoldWalkResult w = manifoldWalkPair<ManifoldInstanceScene, false>(sc, pX, L, eta, target, seedDir);
+        ++counts.x;
+        if (k == 0u)
+        {
+            if (!w.found || !(w.slopeDet > 0.0)) return float3(0.0);
+            first = w;
+            ++counts.y;
+            light = manifoldGlassPath(sc.triangle(w.entry), sc.triangle(w.exit), w, material, alpha, target, pX, gX, woX,
+                                      sx, tables, L, E, ch, chMask);
+            if (!any(light > 0.0)) return float3(0.0);
+            trials = 1u;
+            continue;
+        }
+        // The same path: the same pair and root (the walk polishes it in the pair's own parameters).
+        if (w.found && w.entry == first.entry && w.exit == first.exit && all(abs(w.x - first.x) < 1e-3)) break;
+        ++trials;
+    }
+    ++counts.z;
+    return light * float(trials);
 }
 
 // The manifold pass (render/rt/path_tracer_render.cpp, after raygenCaustics): a thread a pixel over its requests. Each
@@ -1598,12 +1627,18 @@ void manifoldConnect()
                         }
                     }
                 }
-                // Step 2b: the same draw, a transmissive solid, refracting the sun through itself onto X.
-                if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0)
+                // Step 2b: the same draw, a transmissive solid, refracting the sun through itself onto X. The walk takes
+                // the whole instance, so one draw of each (instance, material) runs it (db.w, the host's mark: a merged
+                // model's runs of one glass are several draws), with that draw's own choice probability. Not for a solid
+                // that cannot refract (metalness 1, thin-walled), nor for a coat or a specular-weight texture (the walk's
+                // single interface and IOR would not be the BSDF's: manifoldGlass).
+                if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0 && db.w != 0u)
                 {
-                    const float4 row12 = materials[db.z * kMaterialRows + kTransmissionRowFirst];
-                    const float4 row13 = materials[db.z * kMaterialRows + kTransmissionRowFirst + 1u];
-                    if (row12.w > 0.0 && row13.y <= 0.5)
+                    const uint mrow = db.z * kMaterialRows;
+                    const float4 row12 = materials[mrow + kTransmissionRowFirst];
+                    const float4 row13 = materials[mrow + kTransmissionRowFirst + 1u];
+                    const bool single = materials[mrow + kLayerRowFirst].w <= 0.0 && asuint(materials[mrow + 5u].w) >= 4096u;
+                    if (row12.w > 0.0 && row13.y <= 0.5 && materials[mrow + 1u].y < 1.0 && single)
                         sum += beta * invP *
                                manifoldGlass(da.w, db.z, asfloat(manifoldDraws[3u + 3u * d]), alphas.x, pX, hx.geoNormal,
                                              -rayDir, sx, tables, L, E, channel, pcg(h2 ^ 0x6B1A55u), glassCounts);

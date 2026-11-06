@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstring>
+#include <unordered_set>
 
 namespace ohao::render {
 
@@ -141,6 +142,9 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
     const uint32_t K = gpu::shared::kManifoldCluster;
     std::vector<uint32_t> words(4 + 12 * D + ((sel.materialBits.size() + 3) / 4) * 4, 0u);
     uint32_t T = 0, C = 0, G = 0;
+    // Step 2b walks a whole instance, so only the first draw of each (instance, material) runs it (word 7): a merged
+    // model's runs of one glass are several draws of one instance, and each would add the instance's light again.
+    std::unordered_set<uint64_t> glassOwners;
     for (uint32_t k = 0; k < D; ++k) {
         const ManifoldDrawInput& d = inputs[sel.draws[k]];
         const uint32_t clusters = d.meshlets, groups = (clusters + K - 1) / K;
@@ -152,7 +156,7 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
         r[4] = C;
         r[5] = G;
         r[6] = d.material;
-        r[7] = 0;
+        r[7] = glassOwners.insert((uint64_t{d.slot} << 32) | d.material).second ? 1u : 0u;
         const glm::vec4& sp = spheres[sel.draws[k]];
         for (int i = 0; i < 4; ++i) r[8 + i] = std::bit_cast<uint32_t>(sp[i]);
         C += clusters;
@@ -168,7 +172,9 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
     // Device buffers only grow (frames in flight read the old ones: the device idles once).
     const VkDeviceSize trisBytes = std::max<VkDeviceSize>(VkDeviceSize{T} * kTriBytes, kTriBytes);
     const VkDeviceSize nodesBytes = std::max<VkDeviceSize>(VkDeviceSize{C * 9 + G + D} * kNodeBytes, kNodeBytes);   // 8 sub-clusters a cluster
-    if (trisBytes > m_tris.size || nodesBytes > m_nodes.size) {
+    // A failed growth keeps the pass off from then on (no idle and retry every frame).
+    if (m_growthFailed) T = 0;
+    else if (trisBytes > m_tris.size || nodesBytes > m_nodes.size) {
         vkDeviceWaitIdle(m_device);
         if (trisBytes > m_tris.size) {
             release(m_tris);
@@ -180,20 +186,40 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
         }
         if (T == 0) {
             OHAO_LOG(Error, render, "manifold casters: {} triangles could not be allocated; the pass stays off", words[1]);
+            m_growthFailed = true;
+            release(m_tris);   // whichever grew, or never failed, before the smallest pair
+            release(m_nodes);
             allocate(m_tris, kTriBytes);
             allocate(m_nodes, kNodeBytes);
-            words[0] = words[1] = words[2] = words[3] = 0;
-            C = G = D = 0;
         }
     }
-    const VkDeviceSize bytes = words.size() * sizeof(uint32_t);
+    if (T == 0) {
+        words.assign(4, 0u);
+        C = G = D = 0;
+    }
+    VkDeviceSize bytes = words.size() * sizeof(uint32_t);
     if (bytes > m_drawsBytes[frameSlot]) {
         rtc::destroyHostBuffer(m_device, m_draws[frameSlot]);
         const VkDeviceSize cap = std::max(bytes, m_drawsBytes[frameSlot] * 2);
-        rtc::createHostBuffer(m_device, m_physical, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_draws[frameSlot]);
-        m_drawsBytes[frameSlot] = cap;
+        if (rtc::createHostBuffer(m_device, m_physical, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_draws[frameSlot])) {
+            m_drawsBytes[frameSlot] = cap;
+        } else {
+            // The smallest buffer again, holding no draw: every binding stays valid and the pass does nothing.
+            OHAO_LOG(Error, render, "manifold casters: a draws buffer of {} bytes could not be created; the pass stays off",
+                     cap);
+            rtc::destroyHostBuffer(m_device, m_draws[frameSlot]);
+            m_drawsBytes[frameSlot] = 0;
+            if (rtc::createHostBuffer(m_device, m_physical, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_draws[frameSlot]))
+                m_drawsBytes[frameSlot] = 64;
+            words.assign(4, 0u);
+            bytes = words.size() * sizeof(uint32_t);
+            T = C = G = D = 0;
+        }
     }
-    std::memcpy(m_draws[frameSlot].mapped, words.data(), bytes);
+    if (m_draws[frameSlot].mapped && bytes <= m_drawsBytes[frameSlot])
+        std::memcpy(m_draws[frameSlot].mapped, words.data(), bytes);
+    else
+        T = C = G = D = 0;
     m_triangles = T;
     m_clusters = C;
     m_groups = G;
