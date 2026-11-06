@@ -782,7 +782,9 @@ def m5_ball_seen(failures):
 
 # m6: c3_slab's floor seen through glass: a clear pane (a 5 cm box at x = 3.9 .. 3.95, edge-on to the sun, outside the
 # slab) between the camera at (4.5, 0.6, 0) and the floor under the slab, which the camera meets at depth 2 (both
-# refractions crossings). Each pixel's closed form is the floor's times the pane's (1 - F)^2 at its ray's incidence.
+# refractions crossings). Each pixel's closed form is the floor under the slab times the pane's transmittance plus the
+# sunlit floor behind the camera (no slab over it) times the pane's reflectance, at its ray's incidence, with the
+# pane's inside reflections: T = (1 - F) / (1 + F), R = 2F / (1 + F). Without the pass only the reflection is there.
 M6_CAM, M6_LOOK, M6_FOV = (4.5, 0.6, 0.0), (0.5, 0.0, 0.0), 50.0
 
 
@@ -811,18 +813,23 @@ def m6_through_glass(failures):
     d = camera_rays(M6_CAM, M6_LOOK, M6_FOV, 0.5, 0.5)
     cos_i = np.abs(d[..., 0])
     f = np.vectorize(lambda c: fresnel(float(c), 1.5))(cos_i)
-    want = slab_floor() * (1 - f) ** 2
+    lit = slab_floor() / (1 - fresnel(math.cos(math.radians(30)), 1.5)) ** 2   # the floor in the sun, no slab
+    through, reflected = slab_floor() * (1 - f) / (1 + f), lit * 2 * f / (1 + f)
+    want = through + reflected
     img, _ = render("m6_through_glass", m6_scene(), 256, ["--bounces", "1"], {"OHAO_MANIFOLD_GLASS": "1"})
     off, _ = render("m6_through_glass_off", m6_scene(), 64, ["--bounces", "1"], {"OHAO_MANIFOLD_OFF": "1"})
     m, w_, mo = float(img.mean(2)[mask].mean()), float(want[mask].mean()), float(off.mean(2)[mask].mean())
+    wr = float(reflected[mask].mean())
     err = abs(m - w_) / w_
-    print("m6_through_glass (%d px): the floor through the pane %.4f, closed form %.4f (%.2f%%); without the pass %.4f"
-          % (int(mask.sum()), m, w_, 100 * err, mo))
+    print("m6_through_glass (%d px): the floor through the pane %.4f, closed form %.4f (%.2f%%); without the pass %.4f, "
+          "the reflection alone %.4f" % (int(mask.sum()), m, w_, 100 * err, mo, wr))
     if not err <= 0.02:
         failures.append("m6_through_glass: %.4f against the closed form %.4f (%.2f%%, bar 2%%)" % (m, w_, 100 * err))
-    if not mo < 0.01 * w_:
-        failures.append("m6_through_glass: without the pass the floor through the pane is %.4f, not missing" % mo)
-    return {"px": int(mask.sum()), "mean": m, "closed_form": w_, "error": err, "without_pass": mo}
+    # Without the pass the light through the pane is missing: what is left is the reflection, within 1% of the whole.
+    if not abs(mo - wr) <= 0.01 * w_:
+        failures.append("m6_through_glass: without the pass %.4f, the reflection alone %.4f: the floor through the pane "
+                        "is not missing" % (mo, wr))
+    return {"px": int(mask.sum()), "mean": m, "closed_form": w_, "error": err, "without_pass": mo, "reflection": wr}
 
 
 def m8_repeat(failures):
