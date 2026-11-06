@@ -137,18 +137,16 @@ did not), fixed:
 - **Spiky where X is near a caustic's focus**: the walk's Jacobian goes to zero there, so a connection to a focused
   caustic seen after a bounce is rare and large. In c3's scene step 2b's light in the ball's shadow (the caustic in the
   ball's reflection) puts 59% of itself in 10 pixels at 1,024 spp. Unbiased; it converges slowly.
-- **Dark where the solid focuses onto X, a bias**: m5's ball through the periscope reads, against the simulation, -0.5%
-  at IOR 1.5, -1.1% at 1.45, -5.3% at 1.42, -17.7% at 1.39, -27.9% at 1.36 and -29.4% at 1.33 (512 spp; at 1.329,
-  -30.9%, -29.1% and -30.0% at 512, 2,048 and 8,192 spp: it does not shrink with samples), while step 1 renders the
-  same caustic seen directly within 1.25%. What is missing is the core near the focus (the simulation's brightest
-  pixel 420 at 1.36, the render's 204). The CPU twin of the walk (`manifold_tests` t15's GPU form, X drawn over the
-  reference's disc) is unbiased near a focus at the same roughness (0.01: +0.48% at 3 cm, -1.9% at 8 cm; at the focus
-  itself a heavy tail, Hill index 1.4-1.8), so the loss is in what only the GPU pass does (`manifoldGlassPath`'s
-  retraced checks, OpenPBR's BSDFs, the request's seeds) or in this scene's geometry (a 35-degree sun); not the
-  trials cap (1.2 walks to re-find a path) and not the walk's inversion (it fails only at an exactly zero pivot).
-- **The trials cap** (64 re-find walks) biases low where a path is found less often than 1 in 64 seeds: on the CPU twin
-  (the review), a glass rod 1 m x 2 cm at roughness 0.1 reads 34% of the light traced from the sun; a ball or a slab
-  reads within 0.2%. Russian roulette past the cap would make it exact.
+- **Dark where the solid focuses onto X: found, the re-find trials' cap** (fixed after this record, uncommitted
+  verification below). m5's ball through the periscope read, against the simulation, -0.5% at IOR 1.5, -1.1% at 1.45,
+  -5.3% at 1.42, -17.7% at 1.39, -27.9% at 1.36 and -29.4% at 1.33 (512 spp; at 1.329 -30.9%, -29.1%, -30.0% at 512,
+  2,048 and 8,192 spp: not noise). Paths near the fold are found again by few seeds and weigh much; the cap of 64 cut
+  them (the average, 1.2 walks to re-find a path, hid them). Loosening the path checks, the walk's steps or its tolerance
+  changed nothing; a cap of 1,024 read -1.44%, and 4,096 and 16,384 the same bits. `kManifoldGlassTrials` is now a
+  ceiling of 4,096 and paths reaching it are counted (stats word 11, the teardown log); the showcase's `pt.manifold`
+  315.2 / 325.7 ms against 313.8-315.4 at 64. `check_caustics` `m10_ball_focus` (IOR 1.33, bar 5%, none at the ceiling)
+  holds it; it, and the whole of `check_caustics` with the ceiling, have not yet run to the end: the GPU's firmware
+  crashed during that run (driver 615.78.08, AGENTS.md).
 - **The polish's acceptance** is an absolute slope tolerance, 10 alpha at roughness 0.01: within about 1e-4 m of a fold,
   0.05-0.15% of roots are a few alpha off (+0.05% to +0.4% there, as occasional large samples; the review's CPU runs).
 - **Coated glass and specular-weight textures** are refused (above), so their light through the solid is no one's.

@@ -913,12 +913,12 @@ TEST(Manifold, t15_estimator_brightness) {
             };
             // The GPU's form (manifoldConnect's manifoldGlass): the walk uncertified, its own slope Jacobian
             // (det dF/dx / (C1 C2)^2), the BSDFs' cosines at the shading normals and the area conversions at the
-            // triangles' geometric ones; its re-find trials capped at 64, as the pass caps them.
+            // triangles' geometric ones; its re-find trials up to 4,096, the pass's ceiling (kManifoldGlassTrials).
             {
                 const WalkResult r = manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir(), false);
                 if (r.found && r.slopeDet > 0.0f) {
                     int trials = 1;
-                    while (trials < 64) {
+                    while (trials < 4096) {
                         const WalkResult again =
                             manifoldWalkPair(ball, f3(X), f3(L), float(eta), s1, s2, seedDir(), false);
                         // The same path: the same pair and the same polished root (the walk polishes it in the pair's

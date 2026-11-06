@@ -29,6 +29,7 @@ c6, determinism: two captures with the pass in one `ohao serve` process are the 
 """
 import json
 import math
+import re
 import os
 import subprocess
 import sys
@@ -777,10 +778,12 @@ def m5_scene():
     return s
 
 
-def ball_seen(failures, name, scene, n_glass=1.5):
+def ball_seen(failures, name, scene, n_glass=1.5, logs=None):
     # m5's measure: the caustic's energy in the ball's shadow, seen through the periscope, against the simulation.
     import numpy as np
-    img, _ = render(name, scene, 2048, ["--bounces", "2"])
+    img, log = render(name, scene, 2048, ["--bounces", "2"])
+    if logs is not None:
+        logs.append(log)
     lum = img.mean(2)[::-1]   # c3_sphere's orientation
     lit = float(np.median(lum[5:30, 5:60]))
     got = lum / lit
@@ -807,8 +810,7 @@ def modulated_ior(ior, weight):
 
 
 # m9: m5's ball at specular_ior 1.8 and specular_weight 0.5. The BSDF refracts at modulated_ior(1.8, 0.5) = 1.506, so
-# must the walk: at the material's raw 1.8 its paths miss the BSDF's peak and the caustic is dark. (At specular_ior 1.5 the
-# weight would make it 1.329, whose focus is on the floor, where step 2b reads 29% dark: a known gap, not this test's.)
+# must the walk: at the material's raw 1.8 its paths miss the BSDF's peak and the caustic is dark.
 def m9_ball_weight(failures):
     s = m5_scene()
     for e in s["entities"]:
@@ -816,6 +818,23 @@ def m9_ball_weight(failures):
             e["Material"]["specular_ior"] = 1.8
             e["Material"]["specular_weight"] = 0.5
     return ball_seen(failures, "m9_ball_weight", s, n_glass=modulated_ior(1.8, 0.5))
+
+
+# m10: m5's ball at IOR 1.33, whose caustic focuses onto the floor. A path near the fold is found again by few seeds and
+# weighs much; with the re-find trials capped at 64 the caustic read 30% dark, at any spp. The trials' ceiling (4,096)
+# must reach every path here (the log's count at the ceiling 0).
+def m10_ball_focus(failures):
+    s = m5_scene()
+    for e in s["entities"]:
+        if e.get("Name", {}).get("value") == "Glass":
+            e["Material"]["specular_ior"] = 1.33
+    logs = []
+    r = ball_seen(failures, "m10_ball_focus", s, n_glass=1.33, logs=logs)
+    ceiling = re.search(r"(\d+) at the trials' ceiling", "".join(logs))
+    r["at_ceiling"] = int(ceiling.group(1)) if ceiling else None
+    if r["at_ceiling"] != 0:
+        failures.append("m10_ball_focus: %s paths at the re-find trials' ceiling (want 0)" % r["at_ceiling"])
+    return r
 
 
 # m7: m5's ball as one model of three primitives, a glass top half, a 1 mm opaque triangle at the centre and a glass
@@ -948,7 +967,7 @@ def m8_repeat(failures):
     return out
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_slab_guided": c3_slab_guided, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m7_split_ball": m7_split_ball, "m8_repeat": m8_repeat, "m9_ball_weight": m9_ball_weight}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_slab_guided": c3_slab_guided, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m7_split_ball": m7_split_ball, "m8_repeat": m8_repeat, "m9_ball_weight": m9_ball_weight, "m10_ball_focus": m10_ball_focus}
 
 
 def main(argv):

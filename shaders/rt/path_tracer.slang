@@ -1378,8 +1378,12 @@ float3 manifoldGlassPath(ManifoldTri A, ManifoldTri B, ManifoldWalkResult first,
     return all(isfinite(c)) ? c : float3(0.0);
 }
 
-// Re-find trials a found path is counted by, at most (the first walk among them).
-static const uint kManifoldGlassTrials = 64u;
+// Re-find trials a found path is counted by, at most (the first walk among them): a ceiling, not a cap. Zeltner et
+// al.'s count is exact only uncapped, and a path near a fold is found again rarely and weighs much: at 64 the ball
+// focused on the floor read 30% dark (check_caustics m10_ball_focus); no path there needs 1,024. Uncapped the walks
+// a sample costs are on average one a reachable root (a path found with probability p takes 1/p walks); the ceiling
+// only bounds a warp's worst lane, and paths that reach it are counted (the stats' word 11, the teardown log).
+static const uint kManifoldGlassTrials = 4096u;
 
 // Step 2b's light at X from one directional light (direction L, illuminance E) through one solid instance: sun -> into
 // the solid at y1 -> out at y2 -> X's rough part, each refraction over its whole lobe (the camera side renders none of
@@ -1387,12 +1391,12 @@ static const uint kManifoldGlassTrials = 64u;
 // draw's choice. The slopes s1, s2 are drawn from GGX's at the draw's alpha; the seeded walk (rt/manifold_cert.slang,
 // uncertified) finds a path from a seed drawn in the cone the solid's bounding sphere subtends from X, counted by the
 // walks it takes to find the same path again (Zeltner et al. 2020: exact in expectation for every path a seed reaches;
-// capped at kManifoldGlassTrials). The estimate and its walk are manifold_tests t15's GPU form, held there to light
+// up to kManifoldGlassTrials). The estimate and its walk are manifold_tests t15's GPU form, held there to light
 // traced through a rough glass ball. The first walk's path is checked and weighed (manifoldGlassPath) before any
 // re-find walk: a refused path costs none. The walk has one call site (each is compiled whole). counts: (walks, paths
-// found, connections).
+// found, connections, paths at the trials' ceiling).
 float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float3 pX, float3 gX, float3 woX,
-                     ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E, int channel, uint h, inout uint3 counts)
+                     ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E, int channel, uint h, inout uint4 counts)
 {
     const float4 row13 = materials[material * kMaterialRows + kTransmissionRowFirst + 1u];
     // A dispersive solid draws the path's wavelength unless the path has one, as the camera side does there: that
@@ -1472,6 +1476,7 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
         ++trials;
     }
     ++counts.z;
+    if (trials == kManifoldGlassTrials) ++counts.w;
     return light * float(trials);
 }
 
@@ -1496,7 +1501,7 @@ void manifoldConnect()
     float3 sum = float3(0.0);
     uint requests = 0u, candidates = 0u, roots = 0u, connections = 0u;
     uint clusterTests = 0u, subTests = 0u, triTests = 0u;
-    uint3 glassCounts = uint3(0u);   // step 2b: walks, paths found, connections
+    uint4 glassCounts = uint4(0u);   // step 2b: walks, paths found, connections, at the trials' ceiling
     for (uint slot = 0u; slot < kManifoldDepths; ++slot)
     {
         const uint r = (pixelIndex * kManifoldDepths + slot) * 3u;
@@ -1691,6 +1696,7 @@ void manifoldConnect()
             InterlockedAdd(causticStats[8], glassCounts.x);
             InterlockedAdd(causticStats[9], glassCounts.y);
             InterlockedAdd(causticStats[10], glassCounts.z);
+            InterlockedAdd(causticStats[11], glassCounts.w);
         }
     }
     sum *= classKeep(classMask, kClassManifold);
