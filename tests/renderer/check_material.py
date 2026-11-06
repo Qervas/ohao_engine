@@ -11,7 +11,7 @@ The closed box: six walls of Lambertian albedo rho (specular_weight 0, diffuse r
 emitting Le, the camera inside, no lights. Every point's radiance is Le / (1 - rho) with every
 bounce. With N bounces (0: direct light only, which here is the walls' light reflected once) it is
 Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the reference's bounces),
-1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces, then the
+1.75 at --bounces 1, 1.5 at --bounces 0; 2 within 1% with path guiding (its own program, raygenGuided); the realtime profile (the same tracer at 2 bounces, then the
 radiance cache) 2 within 3%, the same bits captured twice in one process (across processes the driver
 may build the BVH differently: a ray on a shared edge takes either triangle, its hit moves by an ulp,
 and since emissive triangles are lights (F3) that can change the cache's integer sums). Deferred: RT GI with its radiance cache behind each
@@ -62,7 +62,7 @@ def write_white_hdr(path, w=16, h=8):
 NO_CAUSTICS = "--no-caustics" in sys.argv
 
 
-def capture(name, scene, mode, args):
+def capture(name, scene, mode, args, with_log=False):
     rel = "%s/%s" % (OUT, name)
     with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
         json.dump(scene, f, indent=1)
@@ -72,8 +72,10 @@ def capture(name, scene, mode, args):
         cmd.append("--no-caustics")
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if r.returncode != 0:
-        return None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:])
-    return read_pfm(os.path.join(ROOT, "%s.%s.pfm" % (rel, mode))), None
+        out = (None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:]))
+    else:
+        out = (read_pfm(os.path.join(ROOT, "%s.%s.pfm" % (rel, mode))), None)
+    return out + (r.stdout + r.stderr,) if with_log else out
 
 
 def capture_twice(name, scene, mode, spp):
@@ -216,6 +218,25 @@ def closed_box(failures, results):
                                                                           "ok" if ok else "FAIL"))
         if not ok:
             failures.append("closed box, bounces %s: x%.4f of %.4f" % (tag, ratio, expected))
+    # Path guiding (sub-project 23) on its own program (raygenGuided: the default raygen has none of its code) is
+    # unbiased, so the closed form holds with it too; the log shows the program built.
+    checks += 1
+    img, err, log = capture("box_guided", box_scene(rho, le), "rt_offline",
+                            ["--spp", "256", "--denoise", "none", "--guiding"], with_log=True)
+    if err:
+        failures.append("closed box, guided: %s" % err)
+    else:
+        expected = le / (1 - rho)
+        got = float((img @ np.array([0.2126, 0.7152, 0.0722])).mean())
+        ratio = got / expected
+        results["box_guided"] = round(ratio, 4)
+        built = "path_tracer_guided pipeline" in log
+        ok = abs(ratio - 1.0) <= BOX_TOLERANCE and built
+        print("closed box  guided       expected %.4f got %.4f (x%.4f)%s %s" % (
+            expected, got, ratio, "" if built else " (raygenGuided never built)", "ok" if ok else "FAIL"))
+        if not ok:
+            failures.append("closed box, guided: x%.4f of %.4f%s" % (ratio, expected,
+                                                                     "" if built else ", raygenGuided never built"))
     # The cache sums integers and is emptied by the capture's reset: two captures in one process (one
     # BVH) are the same bits.
     checks += 1

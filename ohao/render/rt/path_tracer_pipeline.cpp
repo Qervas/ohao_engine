@@ -298,6 +298,28 @@ bool PathTracer::ensureManifoldPipeline() {
     return true;
 }
 
+// Path guiding's programs: the default raygen or caustics' with guiding compiled in (tracePixel's GUIDING), made the
+// first time a frame guides, so neither default raygen carries guiding's code (it cost 18 ms of the helmet's realtime
+// trace while off). The caustics one carries causticTrace as caustics' program does.
+bool PathTracer::ensureGuidedProgram(bool caustics) {
+    GuidedProgram& g = m_guided[caustics ? 1 : 0];
+    if (g.pipeline) return true;
+    if (g.failed) return false;
+    g.pipeline = caustics ? buildRtPipeline(m_shaderSet.raygenCausticsGuidedSpv, m_shaderSet.raygenCausticsGuidedEntry,
+                                            m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry,
+                                            "path_tracer_caustics_guided")
+                          : buildRtPipeline(m_shaderSet.raygenGuidedSpv, m_shaderSet.raygenGuidedEntry, nullptr, nullptr,
+                                            "path_tracer_guided");
+    if (!g.pipeline ||
+        !buildShaderBindingTable(g.pipeline, g.sbtBuffer, g.sbtMemory, g.rgen, g.miss, g.hit, caustics ? &g.extra : nullptr)) {
+        OHAO_LOG(Error, render, "PathTracer: path guiding's {} pipeline unavailable: guiding stays off",
+                 caustics ? "caustics" : "default");
+        g.failed = true;
+        return false;
+    }
+    return true;
+}
+
 // ─── Shader Binding Table ────────────────────────────────────────────
 
 bool PathTracer::createShaderBindingTable() {

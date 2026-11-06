@@ -411,7 +411,9 @@ float4 nrdPackRadianceHitDist(float3 radiance, float hitDist, float viewZ, float
 // The camera's path through one pixel. CAUSTICS compiles in caustics' split (sub-project 24): its own
 // entry and pipeline (raygenCaustics), so the default raygen carries none of its code. In the default
 // one, behind a flag, it measured 8.5% of pt.trace on helmet_rt_1080p with the flag off (69.0 -> 75.0 ms).
-void tracePixel<let CAUSTICS : bool>(uint2 pixel)
+// GUIDING compiles in path guiding (sub-project 23) the same way (raygenGuided, raygenCausticsGuided): behind its flag
+// alone, off, it was 18 ms of the helmet's 61 (docs/changes/2026-11-06-pt-trace-bisect.md).
+void tracePixel<let CAUSTICS : bool, let GUIDING : bool>(uint2 pixel)
 {
     const uint2 size = pc.params.xy;
     const uint bounces = pc.params.w & 0xFFFFu;
@@ -466,7 +468,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
     uint walkSteps = kNoWalk;   // scattering events so far (kWalkSteps: the cap's ray)
     // Path guiding: the proposals written (at most kGuideTrainVertices) and the one whose ray the
     // next trace is (its end point is written after it).
-    const bool guiding = (flags & kFlagGuiding) != 0u;
+    const bool guiding = GUIDING && (flags & kFlagGuiding) != 0u;
     const uint pixelIndex = pixel.y * size.x + pixel.x;
     uint guideProposed = 0u;
     uint guidePending = kGuideNoSlot;
@@ -885,9 +887,14 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
         }
 
         // ---- each direction weighed ----
-        // k = 0 the light's, 1 the environment's (each through the vertex's one shadow ray), 2 the bounce's.
-        float3 smoothNee = float3(0.0), coreNee = float3(0.0);   // caustics: the light sample's smooth part and its core
+        // k = 0 the light's, 1 the environment's, 2 the bounce's, every term before any shadow ray: a sample's light is
+        // kept without its visibility (every term of it is linear in it) and the vertex's one shadow ray multiplies it in
+        // below, so neither the surface nor its view is live across a trace (they were: 7 ms of the helmet's 61).
         float3 sB = float3(0.0), cB = float3(0.0), dB = float3(0.0);   // the bounce's terms (its caustic split)
+        // The light's (0) and the environment's (1): the light before visibility, its diffuse and specular parts (NRD's).
+        float3 nee0 = float3(0.0), neeD0 = float3(0.0), neeS0 = float3(0.0);
+        float3 nee1 = float3(0.0), neeD1 = float3(0.0), neeS1 = float3(0.0);
+        bool shadow0 = false, shadow1 = false;
         [loop]
         for (uint k = 0u; k < 3u; ++k)
         {
@@ -907,10 +914,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                 fs = sT + cT;
             }
             const float3 f = fs + fd;
-            float3 vis = float3(1.0);
-            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, ng) > 0.0 &&
-                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
-                continue;
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, ng) > 0.0)) continue;
             float bsdfPdf = fd.x, basePdf = 0.0;
             if (!walkExitVertex && (k != 0u || (ls.pdf > 0.0 && ls.mis)))
                 bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
@@ -939,7 +943,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                 }
                 continue;
             }
-            float3 le;
+            float3 le;   // before visibility
             if (k == 0u)
             {
                 // A sun is a delta (its radiance already over its choice); a light without an
@@ -950,17 +954,17 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                     if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, bsdfPdf);
                     w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
                 }
-                le = ls.radiance * vis * w;
+                le = ls.radiance * w;
             }
             else
             {
                 if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, bsdfPdf);
-                le = envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL;
+                le = envRadiance(L) * powerHeuristic(pdfL, bsdfPdf) / pdfL;
             }
             float3 c = throughput * f * le;
             if (CAUSTICS && k == 0u && !walkExitVertex)
             {
-                float3 rough;
+                float3 smoothNee, coreNee, rough;   // the light sample's smooth part and its core
                 base.split(sT, cT, fd, kCausticRough, smoothNee, rough);
                 coreNee = back ? float3(0.0) : base.coreOf(o, iFront, sT, cT, kCausticRough,
                                                            float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2));
@@ -975,19 +979,33 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                     c -= chainOne * coreNee * le;
                 }
             }
+            float3 kept = c;
             if (CAUSTICS)
             {
                 const bool smoothVertex = !walkExitVertex && hit.specularRoughness < kCausticRough;
                 const uint sunClass = !smoothVertex ? kClassSunDirect : roughBefore ? kClassSunGlint : kClassSunSpecular;
                 const uint cls = k == 0u ? (ls.pdf == 0.0 ? sunClass : kClassLights)
                                          : smoothVertex && roughBefore ? kClassEnvCaustic : kClassEnv;
-                radiance += c * classKeep(classMask, cls);
+                kept = c * classKeep(classMask, cls);
             }
-            else radiance += c;
             // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
-            if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
-            else if (firstLobe == 1u) diffuseOut += c;
-            else specularOut += c;
+            float3 dPart = float3(0.0), sPart = float3(0.0);
+            if (depth == 0u) { dPart = throughput * fd * le; sPart = throughput * fs * le; }
+            else if (firstLobe == 1u) dPart = c;
+            else sPart = c;
+            if (k == 0u) { nee0 = kept; neeD0 = dPart; neeS0 = sPart; shadow0 = true; }
+            else { nee1 = kept; neeD1 = dPart; neeS1 = sPart; shadow1 = true; }
+        }
+        // The light's and the environment's shadow ray, the vertex's one (panes multiply their transmittance in).
+        [loop]
+        for (uint k = 0u; k < 2u; ++k)
+        {
+            if (!(k == 0u ? shadow0 : shadow1)) continue;
+            float3 vis = float3(1.0);
+            if (!visible(p, k == 0u ? ls.L : L, k == 0u ? ls.dist : 1.0e4, vis)) continue;
+            radiance += (k == 0u ? nee0 : nee1) * vis;
+            diffuseOut += (k == 0u ? neeD0 : neeD1) * vis;
+            specularOut += (k == 0u ? neeS0 : neeS1) * vis;
         }
 
         if (walkExitVertex)
@@ -1158,13 +1176,25 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
 [shader("raygeneration")]
 void raygen()
 {
-    tracePixel<false>(DispatchRaysIndex().xy);
+    tracePixel<false, false>(DispatchRaysIndex().xy);
 }
 
 [shader("raygeneration")]
 void raygenCaustics()
 {
-    tracePixel<true>(DispatchRaysIndex().xy);
+    tracePixel<true, false>(DispatchRaysIndex().xy);
+}
+
+[shader("raygeneration")]
+void raygenGuided()
+{
+    tracePixel<false, true>(DispatchRaysIndex().xy);
+}
+
+[shader("raygeneration")]
+void raygenCausticsGuided()
+{
+    tracePixel<true, true>(DispatchRaysIndex().xy);
 }
 
 // ---- caustics step 2: manifold connections (docs/specs/2026-11-04-caustics-step2-design.md) ----------------------
@@ -1997,7 +2027,9 @@ void cacheUpdate()
                                                      s, baseDrawn);
         if (back) s.wi = base.mirrored(s.wi);
 
-        // k = 0 the light's, 1 the environment's (each through one shadow ray), 2 the bounce's.
+        // k = 0 the light's, 1 the environment's, 2 the bounce's, every term before the shadow ray (tracePixel's order).
+        float3 nee0 = float3(0.0), nee1 = float3(0.0);   // the light's and the environment's light before visibility
+        bool shadow0 = false, shadow1 = false;
         [loop]
         for (uint k = 0u; k < 3u; ++k)
         {
@@ -2008,10 +2040,7 @@ void cacheUpdate()
             float3 sT, cT, dT;
             base.terms(o, iFront, surfView, tables, sT, cT, dT);
             const float3 f = sT + cT + dT;
-            float3 vis = float3(1.0);
-            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, hit.geoNormal) > 0.0 &&
-                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
-                continue;
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, hit.geoNormal) > 0.0)) continue;
             float bsdfPdf = 0.0, basePdf = 0.0;
             if (k != 0u || (ls.pdf > 0.0 && ls.mis)) bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
             if (k == 2u)
@@ -2019,10 +2048,22 @@ void cacheUpdate()
             else if (k == 0u)
             {
                 const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf : 1.0;
-                cacheContribute(verts, count, throughput * f * ls.radiance * vis * w);
+                nee0 = throughput * f * ls.radiance * w;
+                shadow0 = true;
             }
             else
-                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL);
+            {
+                nee1 = throughput * f * envRadiance(L) * powerHeuristic(pdfL, bsdfPdf) / pdfL;
+                shadow1 = true;
+            }
+        }
+        [loop]
+        for (uint k = 0u; k < 2u; ++k)
+        {
+            if (!(k == 0u ? shadow0 : shadow1)) continue;
+            float3 vis = float3(1.0);
+            if (visible(p, k == 0u ? ls.L : L, k == 0u ? ls.dist : 1.0e4, vis))
+                cacheContribute(verts, count, (k == 0u ? nee0 : nee1) * vis);
         }
         if (!(s.pdf > 0.0)) break;
         const float3 next = toWorld(s.wi, t, b, n);

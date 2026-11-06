@@ -724,7 +724,11 @@ deferred, reference, path traced); two the transparency scene,
   (`path_guiding_update.slang`: update, owner, write; deterministic). The paper's authors' code is GPL-2.0: never read it.
   **Russian roulette at a guided vertex uses `throughput * max(rrRatio, 1)`**, `rrRatio` the product of `q / p_bsdf`:
   roulette by the true throughput killed exactly the paths guiding aimed at a small source (a large `q`, a small weight).
-  Unguided, `rrRatio` is exactly 1 and the tracer is bit for bit what it was. Measured: the spot-lit patch room 1.8x lower
+  Unguided, `rrRatio` is exactly 1 and the tracer is bit for bit what it was. **Guiding is compiled into its own
+  raygens only** (`tracePixel`'s `GUIDING`: `raygenGuided`, `raygenCausticsGuided`, each a program made the first time
+  a frame guides, `PathTracer::ensureGuidedProgram`): its code behind the flag in the default raygen, off, was 18 ms of
+  the helmet's realtime `pt.trace` (`docs/changes/2026-11-06-pt-trace-bisect.md`). Code the default path never runs
+  belongs in a variant, not behind a flag. Measured: the spot-lit patch room 1.8x lower
   error at full depth; the Sponza showcase about 1.4x higher (typical pixels), so it stays off.
 - **Caustics** (sub-project 24, `docs/specs/2026-11-03-caustics-design.md`; step 1 built, **on by default** in `rt_offline` (ruling C1): `ohao run
   --no-caustics`, `render.capture {caustics: false}`, `render.stats` `caustics {casters, clamped}`). Light traced from each
@@ -779,8 +783,12 @@ deferred, reference, path traced); two the transparency scene,
   faster than the code (about size^1.8: 62,000 instructions took 4.4 s, 1.1 million 11 minutes). OpenPBR's entries
   each build one `OpenPBRView` (the surface seen from wo) and call every helper from one site; a path vertex builds its
   view once, draws its light's, the environment's and the bounce's directions, then weighs them in one loop through one
-  `terms`, one `pdfFrom` and one shadow ray (nothing draws inside the loop, so every Sobol group and roulette's draw is
-  as it was). **A view of wo is the base's tables read once**: `OpenPBRBase.viewedFrom` also works out the material's
+  `terms` and one `pdfFrom` (nothing draws inside the loop, so every Sobol group and roulette's draw is as it was), and
+  only then traces the light's and the environment's shadow rays, at one site in a loop of their own that multiplies
+  each sample's light (kept before visibility: every term is linear in it) by what the ray brings back. **Nothing of the
+  surface or its view may be live across a trace**: each holds an `OpenPBRBase` (49 values), and with the shadow ray
+  inside the weighing loop they were live across it: the helmet's realtime `pt.trace` went from 68 to 53 ms on the RTX
+  4060 when the shadow rays moved after the loop (`docs/changes/2026-11-06-pt-trace-bisect.md`). **A view of wo is the base's tables read once**: `OpenPBRBase.viewedFrom` also works out the material's
   constants (`vE1Avg`, `vMsD`, `vMsM`) and the albedos at the view's mu (`vEd`, `vEm`, `vSlot`), and the base's
   functions read them, so **call a base's functions only on a view of the same wo** (`OpenPBRSurface.view`/`baseAt`
   do it; a base no view made holds NaN there, which shows). A program's stages compile side by side: the pipeline is

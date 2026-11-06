@@ -55,8 +55,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
         !m_instances || !m_materialRefs || !m_lightBuffer || !m_emissive) return;   // the renderer's tables
     const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
-    // Path guiding's buffers before this frame's set is written (the first guided frame allocates them).
-    const bool guideOn = m_renderSettings.guiding && m_guiding.ensure(m_width * m_height);
     // Caustics (sub-project 24): offline only (the realtime profile's paths end in the radiance
     // cache), on its own program (raygenCaustics; the default raygen has none of its code), when a
     // directional light and a smooth-capable caster are in the scene. OHAO_CAUSTICS_SPLIT_ONLY=1
@@ -65,6 +63,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (causticsWanted && m_scene) m_caustics.setScene(*m_scene, gpu::shared::kCausticRough);
     const bool causticsOn = causticsWanted && m_caustics.active() && m_caustics.ensure(m_width * m_height) &&
                             ensureCausticsPipeline();
+    // Path guiding's buffers before this frame's set is written (the first guided frame allocates them), and its
+    // program beside the one this frame traces with (raygenGuided or raygenCausticsGuided).
+    const bool guideOn = m_renderSettings.guiding && m_guiding.ensure(m_width * m_height) &&
+                         ensureGuidedProgram(causticsOn);
     static const bool causticsSplitOnly = std::getenv("OHAO_CAUSTICS_SPLIT_ONLY") != nullptr;
     // Caustics step 2 (docs/specs/2026-11-04-caustics-step2-design.md): with caustics, whenever an owned caster is
     // in the scene. OHAO_MANIFOLD_OFF=1 leaves step 1 alone (check_caustics' m3_sum); OHAO_MANIFOLD_SPLIT_ONLY=1 drops
@@ -638,7 +640,13 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (cacheOn) timePass("pt.trace");
     if (guideOn) m_guiding.recordBeginFrame(cmd);
     if (causticsOn) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_causticsPipeline);
+        // Caustics' program, or with guiding its guided twin (the same groups and regions).
+        const GuidedProgram& cg = m_guided[1];
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, guideOn ? cg.pipeline : m_causticsPipeline);
+        const VkStridedDeviceAddressRegionKHR* cRgen = guideOn ? &cg.rgen : &m_causticsRgenRegion;
+        const VkStridedDeviceAddressRegionKHR* cMiss = guideOn ? &cg.miss : &m_causticsMissRegion;
+        const VkStridedDeviceAddressRegionKHR* cHit = guideOn ? &cg.hit : &m_causticsHitRegion;
+        const VkStridedDeviceAddressRegionKHR* cTrace = guideOn ? &cg.extra : &m_causticTraceRegion;
         m_caustics.recordBeginFrame(cmd);
         if (!causticsSplitOnly) {
             // kCausticRaysPerPixel light paths a pixel; OHAO_CAUSTIC_RAYS (any positive number) overrides it for
@@ -649,13 +657,11 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 return v > 0.0f ? v : float(gpu::shared::kCausticRaysPerPixel);
             }();
             const uint32_t rows = std::max(1u, uint32_t(std::lround(double(m_height) * raysPerPixel)));
-            vkCmdTraceRaysKHR(cmd, &m_causticTraceRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
-                              m_width, rows, 1);
+            vkCmdTraceRaysKHR(cmd, cTrace, cMiss, cHit, &m_callRegion, m_width, rows, 1);
             m_caustics.recordAfterTrace(cmd);
         }
         timePass("pt.trace");
-        vkCmdTraceRaysKHR(cmd, &m_causticsRgenRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
-                          m_width, m_height, 1);
+        vkCmdTraceRaysKHR(cmd, cRgen, cMiss, cHit, &m_callRegion, m_width, m_height, 1);
         if (manifoldPass) {
             // Caustics step 2: the requests raygenCaustics wrote, answered into the running mean it wrote (the same
             // layout, set and push constants: one program to the next).
@@ -669,6 +675,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             vkCmdTraceRaysKHR(cmd, &m_manifoldRgenRegion, &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
                               m_width, m_height, 1);
         }
+    } else if (guideOn) {
+        const GuidedProgram& g = m_guided[0];
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, g.pipeline);
+        vkCmdTraceRaysKHR(cmd, &g.rgen, &g.miss, &g.hit, &m_callRegion, m_width, m_height, 1);
     } else {
         vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                           m_width, m_height, 1);

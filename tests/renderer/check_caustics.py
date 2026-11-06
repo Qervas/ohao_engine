@@ -14,7 +14,7 @@ Every path that lights R is one the light pass owns (sun -> mirror -> R -> camer
                  leaves R at exactly 0;
   c1_mirror:     the pass gives L within 2%.
 
-c3, glass. A slab of clear glass (6 x 6 m, IOR 1.5, roughness 0, no absorption, 0.1 m thick) 1 m over a matte
+c3, glass (c3_slab_guided: the same with path guiding, on caustics' guided program). A slab of clear glass (6 x 6 m, IOR 1.5, roughness 0, no absorption, 0.1 m thick) 1 m over a matte
 floor (albedo 0.5, no specular), the sun 30 degrees from the zenith. Every internally reflected beam still
 reaches the floor, so under the slab's middle the floor is lit uniformly, by every order of reflection
 inside summed: E cos 30 (1 - F) / (1 + F), F the unpolarised dielectric Fresnel at 30 degrees (the same
@@ -170,21 +170,33 @@ def c1_mirror(failures):
     return {"r_mean": m, "closed_form": want, "error": err, "without_pass": m_off}
 
 
-def c3_slab(failures):
+def c3_slab(failures, name="c3_slab", extra=(), logs=None):
     os.makedirs(OUT, exist_ok=True)
-    img, log = render("c3_slab", slab_scene(), 1024, ["--bounces", "1"])
+    img, log = render(name, slab_scene(), 1024, ["--bounces", "1"] + list(extra))
+    if logs is not None:
+        logs.append(log)
     h, w, _ = img.shape
     m = float(img[h // 4:3 * h // 4, w // 4:3 * w // 4].mean())   # the middle half: under the slab's middle
     clamped = clamped_from(log)
     if clamped != 0:
-        failures.append("c3_slab: %s splats clamped (want 0)" % clamped)
+        failures.append("%s: %s splats clamped (want 0)" % (name, clamped))
     f = fresnel(math.cos(math.radians(30)), 1.5)
     want = 0.5 / math.pi * SUN_E * math.cos(math.radians(30)) * (1 - f) / (1 + f)
     err = abs(m - want) / want
-    print("c3_slab: floor %.4f, closed form %.4f (F %.4f, %.2f%%)" % (m, want, f, 100 * err))
+    print("%s: floor %.4f, closed form %.4f (F %.4f, %.2f%%)" % (name, m, want, f, 100 * err))
     if not err <= 0.02:
-        failures.append("c3_slab: floor %.4f against the closed form %.4f (%.2f%%, bar 2%%)" % (m, want, 100 * err))
+        failures.append("%s: floor %.4f against the closed form %.4f (%.2f%%, bar 2%%)" % (name, m, want, 100 * err))
     return {"floor": m, "closed_form": want, "error": err}
+
+
+# c3_slab with path guiding (sub-project 23), on caustics' guided program (raygenCausticsGuided, beside causticTrace):
+# guiding is unbiased, so the closed form holds; the log shows that program built.
+def c3_slab_guided(failures):
+    logs = []
+    r = c3_slab(failures, "c3_slab_guided", ["--guiding"], logs)
+    if not any("path_tracer_caustics_guided pipeline" in log for log in logs):
+        failures.append("c3_slab_guided: raygenCausticsGuided was never built")
+    return r
 
 
 
@@ -936,7 +948,7 @@ def m8_repeat(failures):
     return out
 
 
-CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m7_split_ball": m7_split_ball, "m8_repeat": m8_repeat, "m9_ball_weight": m9_ball_weight}
+CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_slab_guided": c3_slab_guided, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m7_split_ball": m7_split_ball, "m8_repeat": m8_repeat, "m9_ball_weight": m9_ball_weight}
 
 
 def main(argv):
