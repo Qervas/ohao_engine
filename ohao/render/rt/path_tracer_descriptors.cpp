@@ -55,12 +55,13 @@ bool PathTracer::createDescriptorResources() {
     add(1, IMAGE, RGEN);                                           // accumulation, this frame's (RGBA32F)
     add(2, IMAGE, RGEN);                                           // output (RGBA8)
     add(3, IMAGE, RGEN);                                           // accumulation, the previous frame's (read)
-    // RenderScene scene data, read by the hit shaders (closestHit / anyHit):
-    add(4, BUFFER, HIT);    // vertex arena (Vertex = 25 floats)
-    add(5, BUFFER, HIT);    // index arena (mesh-local indices)
+    // RenderScene scene data, read by the hit shaders (closestHit / anyHit) and by manifoldConnect's glass walk
+    // (caustics step 2b: the solid's triangles):
+    add(4, BUFFER, RGEN | HIT);    // vertex arena (Vertex = 25 floats)
+    add(5, BUFFER, RGEN | HIT);    // index arena (mesh-local indices)
     add(6, IMAGE, RGEN);    // albedo AOV (RGBA32F)
     add(7, IMAGE, RGEN);    // normal AOV (RGBA32F)
-    add(8, BUFFER, HIT);    // mesh table (MeshGpu)
+    add(8, BUFFER, RGEN | HIT);    // mesh table (MeshGpu)
     add(9, BUFFER, HIT);    // triangle material slots
     add(10, BUFFER, RGEN | HIT);   // material table (kMaterialRows float4s a material; the raygen reads emissive lights')
     add(11, BUFFER, RGEN | MISS);   // RT lights: header {count, envTexIdx, envIntensity} + GPULight[]
@@ -79,7 +80,7 @@ bool PathTracer::createDescriptorResources() {
     add(24, IMAGE, RGEN);   // diffuse albedo AOV (RGBA8) — Sub-plan 3.C.6
     add(25, IMAGE, RGEN);   // specular color AOV (RGBA8) — Sub-plan 3.C.6
     add(26, IMAGE, RGEN);   // normal+roughness packed AOV — Sub-plan 4.B
-    add(36, BUFFER, HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
+    add(36, BUFFER, RGEN | HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
     add(37, BUFFER, HIT);   // instance material refs
     add(38, BUFFER, RGEN | HIT);  // OpenPBR's energy tables (rt/path_tracer.slang; anyHit: a pane's transmission)
     add(39, BUFFER, RGEN);  // the radiance cache: keys,

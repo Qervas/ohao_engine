@@ -76,6 +76,9 @@ private:
 
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};
     VkPipelineLayout m_layout{VK_NULL_HANDLE};
+    // The groups pipeline's own layout (the same set as m_layout's): kept until destroy(), since NVIDIA's Linux driver
+    // reads a pipeline's layout when it is bound and dispatched (destroyed early, the dispatch faulted or wrote nothing).
+    VkPipelineLayout m_groupLayout{VK_NULL_HANDLE};
     VkPipeline m_clusterPipe{VK_NULL_HANDLE}, m_groupPipe{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sets{};

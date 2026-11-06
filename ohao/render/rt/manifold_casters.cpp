@@ -72,13 +72,10 @@ bool ManifoldCasters::create(VkDevice device, VkPhysicalDevice physicalDevice) {
     ai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
     ai.pSetLayouts = layouts.data();
     if (vkAllocateDescriptorSets(device, &ai, m_sets.data()) != VK_SUCCESS) return false;
-    VkPipelineLayout l2 = VK_NULL_HANDLE;
     const bool ok = rtc::createComputePipeline(device, "rt_manifold_gather.slang.clusters.spv", "clusters", m_setLayout, 0,
                                                m_layout, m_clusterPipe) &&
-                    rtc::createComputePipeline(device, "rt_manifold_gather.slang.groups.spv", "groups", m_setLayout, 0, l2,
-                                               m_groupPipe);
-    // One layout serves both (the same set, no push constants).
-    if (l2) vkDestroyPipelineLayout(device, l2, nullptr);
+                    rtc::createComputePipeline(device, "rt_manifold_gather.slang.groups.spv", "groups", m_setLayout, 0,
+                                               m_groupLayout, m_groupPipe);
     if (!ok) {
         OHAO_LOG(Error, render, "manifold casters: the gather pipelines could not be created");
         return false;
@@ -100,10 +97,10 @@ void ManifoldCasters::destroy() {
     for (auto& b : m_draws) rtc::destroyHostBuffer(m_device, b);
     for (VkPipeline* p : {&m_clusterPipe, &m_groupPipe})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
-    if (m_layout) vkDestroyPipelineLayout(m_device, m_layout, nullptr);
+    for (VkPipelineLayout* l : {&m_layout, &m_groupLayout})
+        if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(m_device, m_setLayout, nullptr);
-    m_layout = VK_NULL_HANDLE;
     m_pool = VK_NULL_HANDLE;
     m_setLayout = VK_NULL_HANDLE;
     m_device = VK_NULL_HANDLE;

@@ -1413,7 +1413,9 @@ deferred, reference, path traced); two the transparency scene,
 - **Linux, found by the port (2026-11-05):**
   - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
     binding one whose layout was destroyed segfaulted in the driver. Keep every pipeline's layout until teardown
-    (`GpuCulling`, `RTDirectTechnique` keep their extra ones in `m_extraLayouts`).
+    (`GpuCulling`, `RTDirectTechnique` keep their extra ones in `m_extraLayouts`, `ManifoldCasters` its
+    `m_groupLayout`). It is not always a crash: the manifold gather's groups dispatch also ran writing nothing, or hung
+    the GPU, run to run.
   - Physics is deterministic run to run on one compiler, not across: MSVC's and GCC's builds land the blockout's
     crate one ulp apart, so `world.hash`, `tests/cli/expected` and `tests/serve/expected` are recorded on the Linux
     build. The helmet's merged model bytes differ too (`scene_tests` pins each platform's hash).
