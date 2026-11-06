@@ -324,16 +324,16 @@ t' = m x (c x m) and b' = m x c, so sigma = (H' . t', |m| H' . b') / (|m x c| H'
 multiple of the old one, sigma within 1.6e-6 as before) leaves 1,300 cells (44%) at the budget, 384 boxes a cell:
 better, not the solver either: the products it trades the divisions for (m x (c x m) is quadratic in an M already cubic
 in the inputs) carry the dependency instead. Interval Newton on this map, with natural interval enclosures, is not the
-solver; precision is not its limit (above). M11's remaining choices: tighter enclosures (affine arithmetic, Taylor
-models), or Specular Polynomials (resultants: no intervals at all).
+solver; precision is not its limit (above). M11 chose Specular Polynomials (resultants: no intervals at all) over
+tighter enclosures (affine arithmetic, Taylor models).
 
 **Rulings.**
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.
-- **M11 (OPEN) — the solver.** Interval Newton (Path Cuts) recommended; Specular Polynomials if undecided boxes are
-  ever counted. **They are** (T1 above: 79% of cells at the 512-box budget, 44% with the division-free map; the
-  enclosures' overestimation the cause, not precision: double changed 1,300 to 1,250): the recommendation is now
-  Specular Polynomials (Fan et al. 2024), every root by resultants, no enclosure to overestimate.
+- **M11 (ACCEPTED 2026-11-06) — the solver: Specular Polynomials** (Fan et al. 2024), every root by resultants, no
+  enclosure to overestimate. Interval Newton (Path Cuts) leaves too many cells undecided (T1 above: 79% at the 512-box
+  budget, 44% with the division-free map; the enclosures' overestimation the cause, not precision: double changed 1,300
+  to 1,250).
 
 ## Tests
 
@@ -450,7 +450,7 @@ Closed forms first; each case fails before its code exists.
   dual-number map at one call site and the three BSDFs (X's rough part, the two refractions) at one OpenPBR site:
   manifoldConnect is 34,168 SPIR-V instructions (2a alone 19,997; three walk sites and two OpenPBR sites made it 46,739).
   Off until m4-m6 hold it on the GPU (`OHAO_MANIFOLD_GLASS=1`); the pass's counters add walks, paths and connections.
-- **M11 (OPEN) — step 2c's solver**: Specular Polynomials recommended (interval Newton leaves 44% of cells undecided); see "Step 2c".
+- **M11 (ACCEPTED 2026-11-06) — step 2c's solver**: Specular Polynomials (interval Newton leaves 44% of cells undecided); see "Step 2c".
 
 ## Licences
 
