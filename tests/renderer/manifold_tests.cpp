@@ -881,15 +881,17 @@ TEST(Manifold, t15_estimator_brightness) {
             if (dx * dx + dz * dz <= rho * rho) hits[q] += w;
         }
     }
-    // The estimator at each point.
+    // The estimator over each disc: X uniform in it, as the reference averages over it (near a focus the light varies
+    // steeply across 2 cm, and a point's value is not the disc's mean).
     const int M = 800;
     for (int q = 0; q < 3; ++q) {
         const double ref = hits[q] * E * kPi * R * R / double(N) / (kPi * rho * rho);
-        const D3 X{xs[q], floorY, 0.0};
         double sum = 0.0, sumGpu = 0.0;
         int found = 0, foundGpu = 0;
         long totalTrials = 0, trialsGpu = 0;
         for (int k = 0; k < M; ++k) {
+            const double rx = rho * std::sqrt(rnd(g)), px = 2.0 * kPi * rnd(g);
+            const D3 X{xs[q] + rx * std::cos(px), floorY, rx * std::sin(px)};
             double s[4];
             for (int h = 0; h < 2; ++h) {
                 const double u = std::min(rnd(g), 1.0 - 1e-12), ph = 2.0 * kPi * rnd(g);
