@@ -1423,8 +1423,14 @@ deferred, reference, path traced); two the transparency scene,
   Cornell). It clears on reboot; it is not your change. `ohao doctor`'s `gpu.wedged`
   check says so. On Linux the NVIDIA open kernel module's GSP firmware can fail outright (`journalctl -k`:
   `Xid 120, GSP task exception`, then `NV_ERR_RESET_REQUIRED`): Vulkan then lists only the Intel GPU, every
-  device creation asks the iGPU for ray tracing and the loader's error fails each GPU test. It needs `sudo
-  nvidia-smi -r` or a reboot (2026-11-05: during `light_cluster_gpu_test`, driver 615.78).
+  device creation asks the iGPU for ray tracing and the loader's error fails each GPU test. It needs a reboot (`nvidia-smi
+  -r` refuses while the compositor holds the GPU). **Open (2026-11-06):** on driver 615.78.08 (installed 2026-11-05 with
+  kernel 7.2.11, the day the GPU tests first ran on Linux) the GSP crashed six times in two days, each during a GPU test,
+  light ones included (Xid 120, 62, 119, and Xid 109 context-switch timeouts before the sixth). Not heat (61 C at most), no
+  PCIe errors; neither `nvidia-persistenced` nor `NVreg_DynamicPowerManagement=0x00` (`/etc/modprobe.d/nvidia-pm.conf`)
+  stopped it. A driver regression is suspected (open-gpu-kernel-modules #1522 reports the same firmware build crashing),
+  not proven: the kernel changed the same day. The suspected driver is pinned out only once a test of another version runs
+  clean for hours.
 - **Linux, found by the port (2026-11-05):**
   - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
     binding one whose layout was destroyed segfaulted in the driver. Keep every pipeline's layout until teardown
