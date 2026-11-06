@@ -137,9 +137,15 @@ did not), fixed:
 - **Spiky where X is near a caustic's focus**: the walk's Jacobian goes to zero there, so a connection to a focused
   caustic seen after a bounce is rare and large. In c3's scene step 2b's light in the ball's shadow (the caustic in the
   ball's reflection) puts 59% of itself in 10 pixels at 1,024 spp. Unbiased; it converges slowly.
-- **Dark where the solid focuses onto X**: the same ball at IOR 1.329, whose focus is on the floor, reads 29% dark through
-  the periscope (2862.6 against the simulation's 4039.4), while step 1 renders the same caustic seen directly within
-  1.25% of that simulation. Not yet understood (the walk near a fold, or roots its seeds do not reach).
+- **Dark where the solid focuses onto X, a bias**: m5's ball through the periscope reads, against the simulation, -0.5%
+  at IOR 1.5, -1.1% at 1.45, -5.3% at 1.42, -17.7% at 1.39, -27.9% at 1.36 and -29.4% at 1.33 (512 spp; at 1.329,
+  -30.9%, -29.1% and -30.0% at 512, 2,048 and 8,192 spp: it does not shrink with samples), while step 1 renders the
+  same caustic seen directly within 1.25%. What is missing is the core near the focus (the simulation's brightest
+  pixel 420 at 1.36, the render's 204). The CPU twin of the walk (`manifold_tests` t15's GPU form, X drawn over the
+  reference's disc) is unbiased near a focus at the same roughness (0.01: +0.48% at 3 cm, -1.9% at 8 cm; at the focus
+  itself a heavy tail, Hill index 1.4-1.8), so the loss is in what only the GPU pass does (`manifoldGlassPath`'s
+  retraced checks, OpenPBR's BSDFs, the request's seeds) or in this scene's geometry (a 35-degree sun); not the
+  trials cap (1.2 walks to re-find a path) and not the walk's inversion (it fails only at an exactly zero pivot).
 - **The trials cap** (64 re-find walks) biases low where a path is found less often than 1 in 64 seeds: on the CPU twin
   (the review), a glass rod 1 m x 2 cm at roughness 0.1 reads 34% of the light traced from the sun; a ball or a slab
   reads within 0.2%. Russian roulette past the cap would make it exact.
