@@ -369,14 +369,14 @@ tilted up to 27 or 45 degrees, against a dense double-precision Newton search).*
   enclosure to overestimate. Interval Newton (Path Cuts) leaves too many cells undecided (T1 above: 79% at the 512-box
   budget, 44% with the division-free map; the enclosures' overestimation the cause, not precision: double changed 1,300
   to 1,250).
-- **M11b (PROPOSED 2026-11-06) — M11's solver amended: Specular Polynomials' formulation, solved by Bernstein
+- **M11b (ACCEPTED 2026-11-06) — M11's solver amended: Specular Polynomials' formulation, solved by Bernstein
   subdivision.** T2 above: the polynomial form (MikkTSpace's normal, the slope in the vertex frame) is what makes a
   cell exact, but its resultant underflows and loses about a fifth of the roots in fp32, while Bernstein subdivision
   with Krawczyk's test on the same polynomials found every root in float32 with no box undecided. Alternatives: the
   resultant in double (the GPU's fp64 is 1/64 of its fp32 here), or the resultant on subdivided cells (Nakatsukasa,
   Noferini and Townsend 2015's remedy; the dynamic range comes from the cell's own geometry, so it is unclear that it
   shrinks). Recommended: Bernstein subdivision.
-- **M13 (PROPOSED 2026-11-06) — MikkTSpace's normal mapping in both renderers.** `normalize(tn.x vT + tn.y vB + tn.z
+- **M13 (ACCEPTED 2026-11-06) — MikkTSpace's normal mapping in both renderers.** `normalize(tn.x vT + tn.y vB + tn.z
   vN)` from the interpolated vectors as they are, the bitangent per vertex, in the G-buffer, the tracer's hit and the
   pass alike. It is the convention glTF's normal maps are baked against (today's per-pixel Gram-Schmidt is not), and
   T2 needs it. Moves every normal-mapped golden (by how much, measured before the change). Recommended: yes.
@@ -502,9 +502,9 @@ Closed forms first; each case fails before its code exists.
   (`modulatedIor` of the specular IOR and weight), and a coat or a specular-weight texture, which have no single one, is
   refused (`m9_ball_weight`); under NRD the manifold pass is off (its light never reaches NRD's packed inputs).
 - **M11 (ACCEPTED 2026-11-06) — step 2c's solver**: Specular Polynomials (interval Newton leaves 44% of cells undecided); see "Step 2c".
-- **M11b (PROPOSED 2026-11-06) — M11 amended**: Specular Polynomials' formulation, solved by Bernstein subdivision (its
+- **M11b (ACCEPTED 2026-11-06) — M11 amended**: Specular Polynomials' formulation, solved by Bernstein subdivision (its
   resultant loses a fifth of the roots in fp32); see "Step 2c", T2.
-- **M13 (PROPOSED 2026-11-06) — MikkTSpace's normal mapping in both renderers** (glTF's convention; step 2c's polynomial
+- **M13 (ACCEPTED 2026-11-06) — MikkTSpace's normal mapping in both renderers** (glTF's convention; step 2c's polynomial
   form needs it); see "Step 2c", T2.
 
 ## Licences
