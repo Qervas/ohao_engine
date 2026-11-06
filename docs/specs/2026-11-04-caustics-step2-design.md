@@ -450,7 +450,7 @@ Closed forms first; each case fails before its code exists.
   dual-number map at one call site and the three BSDFs (X's rough part, the two refractions) at one OpenPBR site:
   manifoldConnect is 34,168 SPIR-V instructions (2a alone 19,997; three walk sites and two OpenPBR sites made it 46,739).
   Off until m4-m6 hold it on the GPU (`OHAO_MANIFOLD_GLASS=1`); the pass's counters add walks, paths and connections.
-- **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
+- **M11 (OPEN) — step 2c's solver**: Specular Polynomials recommended (interval Newton leaves 44% of cells undecided); see "Step 2c".
 
 ## Licences
 
