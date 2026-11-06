@@ -1433,6 +1433,12 @@ deferred, reference, path traced); two the transparency scene,
     coordinate (`sobol_test`); its SPIR-V of the same code loads first, as written. The twins stay on 2025.11
     (`SLANGC_CPP`) until a release's C++ passes every twin's suite.
   - `ohao serve` on stdio interrupts its reader with SIGUSR1 (no `SA_RESTART`), the POSIX `CancelSynchronousIo`.
+  - NRI (under NRD) is told of no surface extension (`nrd_denoise.cpp`): given `VK_KHR_surface` it resolves the surface
+    functions of every platform it was built for (Xlib and Wayland), a window's instance on Hyprland has Wayland's alone,
+    and NRI's default handler raised SIGTRAP: a path-traced capture in a window killed `ohao serve`. NRI's messages go
+    through the logger, with no abort.
+  - A Wayland client cannot learn it was minimized (GLFW_ICONIFIED is always false there) and Hyprland has no minimize:
+    a window never reaches the 0x0 drawable the host treats as minimized, so `check_live` skips that check off Windows.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
   is the one exception: it imports `tools.monograph`, so it runs from `site/`.

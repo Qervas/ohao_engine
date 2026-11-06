@@ -280,8 +280,13 @@ def test_live():
             same = False
         check(same, "post effects %s: the window's lockstep capture equals the headless capture bit for bit" % tag)
 
-    # Minimized: no frame to capture.
-    if minimize(s.proc.pid, "OHAO serve"):
+    # Minimized: no frame to capture. Only Windows has the state to test: a minimized window there has a 0x0 drawable,
+    # which is what the host checks. On Wayland a client cannot learn it was minimized (GLFW_ICONIFIED is always false
+    # there; xdg_toplevel.set_minimized has no answer) and its drawable keeps its size; Hyprland has no minimize at all.
+    # A hidden or minimized window there still presents and captures, as every --hidden window in this file does.
+    if os.name != "nt":
+        print("  skip  capture while minimized is E_STATE (no minimized state on this platform: the window still captures)")
+    elif minimize(s.proc.pid, "OHAO serve"):
         time.sleep(0.5)
         check(error_code(s.call("render.capture", {"inline": True})) == "E_STATE", "capture while minimized is E_STATE")
     else:

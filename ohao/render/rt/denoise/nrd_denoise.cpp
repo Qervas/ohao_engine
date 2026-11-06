@@ -27,6 +27,24 @@
 
 namespace ohao {
 
+namespace {
+// NRI's messages through the engine's logger. No AbortExecution: NRI's default raises SIGTRAP on an error, which ended a
+// serving process over a denoiser; without it the error fails RecreateVK, which leaves NRD off and says so.
+void NRI_CALL nriMessage(nri::Message type, const char* file, uint32_t line, const char* message, void*) {
+    if (type == nri::Message::ERROR)
+        OHAO_LOG(Error, render, "NRI: {} ({}:{})", message, file, line);
+    else if (type == nri::Message::WARNING)
+        OHAO_LOG(Warn, render, "NRI: {}", message);
+    else
+        OHAO_LOG(Debug, render, "NRI: {}", message);
+}
+
+// NRD presents nothing, so NRI is told of no surface extension: given VK_KHR_surface it resolves the surface
+// functions of every platform it was built for (Xlib and Wayland on Linux), and a window's instance has one (a
+// Wayland compositor's), so the rest failed to resolve and device creation failed.
+bool isSurfaceExt(const char* e) { return std::strstr(e, "surface") != nullptr; }
+} // namespace
+
 struct NrdDenoiser::Impl {
     VkDevice         device                   = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice           = VK_NULL_HANDLE;
@@ -78,7 +96,10 @@ bool NrdDenoiser::initialize(VkInstance                      instance,
                std::strcmp(e, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) == 0 ||
                std::strcmp(e, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0;
     };
-    m_impl->instanceExtensionsStorage.assign(instanceExtensions.begin(), instanceExtensions.end());
+    m_impl->instanceExtensionsStorage.clear();
+    for (const char* e : instanceExtensions) {
+        if (!isSurfaceExt(e)) m_impl->instanceExtensionsStorage.push_back(e);
+    }
     m_impl->deviceExtensionsStorage.clear();
     m_impl->deviceExtensionsStorage.reserve(deviceExtensions.size());
     for (const char* e : deviceExtensions) {
@@ -102,6 +123,7 @@ bool NrdDenoiser::initialize(VkInstance                      instance,
     vkDesc.vkExtensions.instanceExtensionNum= static_cast<uint32_t>(m_impl->instanceExtensionsStorage.size());
     vkDesc.vkExtensions.deviceExtensions    = m_impl->deviceExtensionsStorage.data();
     vkDesc.vkExtensions.deviceExtensionNum  = static_cast<uint32_t>(m_impl->deviceExtensionsStorage.size());
+    vkDesc.callbackInterface.MessageCallback = nriMessage;
     // vkBindingOffsets, enableNRIValidation, etc. left at defaults.
 
     nrd::DenoiserDesc denoiserDescs[1] = {};
