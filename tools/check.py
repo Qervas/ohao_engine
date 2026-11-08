@@ -16,10 +16,12 @@ Steps (sub-project 4 spec, "One entry point"):
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
-  6. the verdict: <out>/check.json, also printed as the last line of stdout.
+  6. the kernel log read for NVIDIA GPU faults (Xid) during the tests: any fails the run
+     (gpuFaults lists them; "unknown" where the log cannot be read);
+  7. the verdict: <out>/check.json, also printed as the last line of stdout.
 
 check.json: {ok, labels, build: {ok, seconds, tail?}, doctor, tests: [{name, labels, ok,
-seconds, passed?, failed?, failures?, tail?}], counts: {tests, passed, failed}}. passed /
+seconds, passed?, failed?, failures?, tail?}], counts: {tests, passed, failed}, gpuFaults}. passed /
 failed / failures come from the suite's own JSON summary line; tail is the last 40 lines of a
 failing test's output, so no failure is ever reported without what it printed.
 
@@ -233,6 +235,20 @@ def summarize(junit, labels):
 OUTPUT_FLAGS = ["--output-on-failure", "--test-output-size-passed", "65536",
                 "--test-output-size-failed", "1048576", "--test-output-truncation", "head"]
 
+def gpu_faults_since(t0):
+    """NVIDIA's GPU faults (Xid lines) the kernel logged since t0 (epoch seconds), or None when the
+    kernel log cannot be read (not Linux, no journalctl, no permission). A test can pass while the GPU
+    faults under it (a hung channel the driver recovered, a firmware error before a crash), so a run
+    with any fault fails whatever the tests said."""
+    if not sys.platform.startswith("linux") or shutil.which("journalctl") is None:
+        return None
+    r = subprocess.run(["journalctl", "-k", "--no-pager", "-o", "short-iso", "--since", "@%d" % int(t0)],
+                       capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:
+        return None
+    return [line for line in r.stdout.splitlines() if "NVRM: Xid" in line]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build OHAO and run its tests; one JSON verdict.")
     ap.add_argument("--labels", default=",".join(DEFAULT_LABELS),
@@ -331,13 +347,20 @@ def main(argv=None):
     cmd = [str(ctest), "--test-dir", str(build_dir), "-C", args.config, *select_args,
            "--output-junit", str(junit), "--no-tests=error", "-j", str(max(1, args.ctest_jobs))] + OUTPUT_FLAGS
     print(f"check: ctest {' '.join(select_args[:1])} '{regex}'", flush=True)
+    started = time.time() - 1.0
     run_logged(cmd, out / "ctest.log", True)
     labels_of = test_labels(ctest, build_dir, args.config)
     result["tests"] = summarize(junit, labels_of)
     n = len(result["tests"])
     passed = sum(1 for t in result["tests"] if t["ok"])
     result["counts"] = {"tests": n, "passed": passed, "failed": n - passed}
-    result["ok"] = result["build"]["ok"] and n > 0 and passed == n
+    faults = gpu_faults_since(started)
+    result["gpuFaults"] = faults if faults is not None else "unknown: the kernel log could not be read"
+    if faults:
+        print(f"check: {len(faults)} GPU fault(s) in the kernel log during the run:", flush=True)
+        for line in faults[:20]:
+            print("  " + line, flush=True)
+    result["ok"] = result["build"]["ok"] and n > 0 and passed == n and not faults
     return finish(result, out)
 
 
