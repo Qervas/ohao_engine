@@ -246,6 +246,30 @@ before it is built: beams a frame and beams covering X a request, on c3's ball a
 unchanged, M1 closed); T2 refraction's half vector and the pair map (twin, tests); T3 pair candidates and their count
 on c3's ball; T4 the pass's walk (no camera-side change: "What it owns"); T5 the closed forms; T6 cost.
 
+## Step 2b's re-find trials, bounded per dispatch (proposed, 2026-11-08)
+
+**Why.** Step 2b is opt-in since 2026-11-08 (`OHAO_MANIFOLD_GLASS=1`). A found path is counted by the walks it takes to
+be found again, K, geometric with mean 1/p; a lane runs them in one dispatch, the warp waits for it, and a GPU dispatch
+is not preempted. Measured on m9 (320 x 180, `--bounces 2`): at a cap of 64, 256 spp took 14.4 s (13.7 million walks,
+905,404 paths, 2,565 at the cap, about 15 walks a path); 2,048 spp did not finish in 11.7 minutes, alone on the GPU,
+against 41.7 s with step 2b off (not understood: eight times the frames took over fifty times as long). At a ceiling of
+4,096, 256 spp did not finish in 10 minutes. A cap is not the remedy: at 64 m10's focus read 30% dark.
+
+**No bounded count is exact.** An estimate made from at most M Bernoulli trials has an expectation that is a polynomial
+of degree M in p, and 1/p is none, so every exact count of 1/p has unbounded trials. Their mean is bounded (a path found
+with probability p takes 1/p walks: about one walk per reachable root), so only their scheduling must change.
+
+**Proposed: the trials leave the pixel's lane.** `manifoldConnect` runs the first walk and the path's check and weight
+(`manifoldGlassPath`), then appends the path (pixel, its light with every factor but K, the walk's inputs, the root) to
+a queue. Re-find rounds follow, each one walk a thread: the trials of an entry are the walks of fixed seeds
+`hash(entry, i)`, so K = 1 + the first index that finds the root again, computed in parallel (a round gives T threads an
+entry, indices base .. base + T - 1, and keeps the smallest success by `InterlockedMin`: order-free, the same K as
+sequential trials of those seeds). A resolved entry adds light x K to its pixel's running mean (order-free integer
+sums, as the radiance cache's); an unresolved one carries to the next round, and past R rounds to the next frame (the
+running mean is a sum over frames, so a late term is the same term). An offline render drains the queue after its last
+frame. Every dispatch is then at most one walk a thread (292 steps). To be measured before it is built: K's distribution
+on m9 and m10 (the CPU twin, t15's form), and the rounds a frame needs.
+
 ## Step 2c: normal-mapped glints (proposed, 2026-11-05)
 
 **Why.** Step 2a left normal-mapped casters to the camera side (ruling M7), and the showcase's remaining dots are theirs:
