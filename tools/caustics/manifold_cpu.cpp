@@ -196,6 +196,50 @@ CertResult manifoldCertifyCell(const MappedTri& m, const Cell& cell, const V3& p
     return r;
 }
 
+CellPolyResult manifoldCellPoly(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 sigma, V2 st) {
+    Io io = cellIo(16, m, cell, p, L);
+    io.rows[9] = f4(sigma[0], sigma[1], st[0], st[1]);
+    std::vector<F4> grids(18);
+    runItem(io, &grids);
+    CellPolyResult r;
+    r.ok = io.rows[14].z > 0.5f;
+    r.F = {io.rows[13].x, io.rows[13].y};
+    r.mu = {io.rows[13].z, io.rows[13].w};
+    r.direct = {io.rows[14].x, io.rows[14].y};
+    for (int k = 0; k < 9; ++k) {
+        const F4 a = grids[size_t(k)], b = grids[size_t(9 + k)];
+        r.F1[size_t(4 * k)] = a.x;
+        r.F1[size_t(4 * k + 1)] = a.y;
+        r.F1[size_t(4 * k + 2)] = a.z;
+        r.F1[size_t(4 * k + 3)] = a.w;
+        r.F2[size_t(4 * k)] = b.x;
+        r.F2[size_t(4 * k + 1)] = b.y;
+        r.F2[size_t(4 * k + 2)] = b.z;
+        r.F2[size_t(4 * k + 3)] = b.w;
+    }
+    return r;
+}
+
+CellRootsResult manifoldCellRoots(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 sigma,
+                                  int maxBoxes) {
+    Io io = cellIo(17, m, cell, p, L);
+    io.rows[0].y = float(maxBoxes);
+    io.rows[9] = f4(sigma[0], sigma[1], 0, 0);
+    runItem(io);
+    CellRootsResult r;
+    r.roots = static_cast<int>(io.rows[13].x);
+    r.undecided = static_cast<int>(io.rows[13].y);
+    r.boxes = static_cast<int>(io.rows[13].z);
+    r.defined = io.rows[13].w > 0.5f;
+    r.st[0] = {io.rows[14].x, io.rows[14].y};
+    r.st[1] = {io.rows[14].z, io.rows[14].w};
+    r.st[2] = {io.rows[15].x, io.rows[15].y};
+    r.st[3] = {io.rows[15].z, io.rows[15].w};
+    r.st[4] = {io.rows[16].x, io.rows[16].y};
+    r.overflow = static_cast<int>(io.rows[16].z);
+    return r;
+}
+
 Enclosure manifoldEnclose(const Tri& tri, const V3& p, const V3& L, V2 lo, V2 hi, bool constraint, V2 target) {
     Io io = base(8, &tri, &p, &L);
     io.rows[0].y = constraint ? 1.0f : 0.0f;

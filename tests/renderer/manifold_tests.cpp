@@ -1321,3 +1321,357 @@ TEST(Manifold, m10_cells_complete) {
     // divisions): its interval enclosures overestimate F and its Jacobian over a box many times over (ruling M11,
     // docs/specs/2026-11-04-caustics-step2-design.md "Step 2c").
 }
+
+// ---- step 2c, T2's form: the cell's polynomials in Bernstein form (rt/manifold_poly.slang) ------------------
+
+namespace {
+
+// T2's map in double: MikkTSpace's normal (the interpolated normal, tangent and bitangent as they are, the bitangent the
+// interpolation of each vertex's sign N x T), the texels blended bilinearly, and the slope in the vertex tangent frame:
+// the microfacet normal h = m - sigma.x vT - sigma.y vB along H = normalize(p - y) + L.
+struct PolyFrame {
+    D3 y, n, t, b, tn;
+};
+PolyFrame polyFrameD(const CellCase& c, double s, double t) {
+    const Tri& tri = c.m.tri;
+    const double u = c.o[0] + c.ds[0] * s + c.dt[0] * t, v = c.o[1] + c.ds[1] * s + c.dt[1] * t;
+    PolyFrame f;
+    f.y = add(d3(tri.p0), add(mul(d3(tri.e1), u), mul(d3(tri.e2), v)));
+    const D3 n0 = d3(tri.n0), n1 = add(n0, d3(tri.a1)), n2 = add(n0, d3(tri.a2));
+    const D3 t0 = d3(c.m.t0), t1 = add(t0, d3(c.m.ta1)), t2 = add(t0, d3(c.m.ta2));
+    const double sg = c.m.sign < 0.0f ? -1.0 : 1.0;
+    const D3 b0 = mul(cross(n0, t0), sg), b1 = mul(cross(n1, t1), sg), b2 = mul(cross(n2, t2), sg);
+    f.n = add(n0, add(mul(d3(tri.a1), u), mul(d3(tri.a2), v)));
+    f.t = add(t0, add(mul(d3(c.m.ta1), u), mul(d3(c.m.ta2), v)));
+    f.b = add(b0, add(mul(sub(b1, b0), u), mul(sub(b2, b0), v)));
+    for (int k = 0; k < 3; ++k) {
+        const double r0 = c.cell.c00[k] + (double(c.cell.c10[k]) - c.cell.c00[k]) * s;
+        const double r1 = c.cell.c01[k] + (double(c.cell.c11[k]) - c.cell.c01[k]) * s;
+        f.tn[k] = r0 + (r1 - r0) * t;
+    }
+    return f;
+}
+
+// sigma at (s, t): m = lambda H + sigma.x vT + sigma.y vB, solved (Cramer); false where lambda <= 0 or singular.
+bool polySigmaD(const CellCase& c, double s, double t, double out[2]) {
+    const PolyFrame f = polyFrameD(c, s, t);
+    const D3 m = add(add(mul(f.t, f.tn[0]), mul(f.b, f.tn[1])), mul(f.n, f.tn[2]));
+    const D3 H = add(norm(sub(c.p, f.y)), c.L);
+    const double det = dot(H, cross(f.t, f.b));
+    if (!(std::abs(det) > 1e-14)) return false;
+    const double lambda = dot(m, cross(f.t, f.b)) / det;
+    if (!(lambda > 0.0)) return false;
+    out[0] = dot(H, cross(m, f.b)) / det;
+    out[1] = dot(H, cross(f.t, m)) / det;
+    return true;
+}
+
+// a and b perpendicular to L, as the kernel makes them (in fp32, then widened: perpendicular to L only to ~1e-7, so the
+// kernel's F vanishes where r is along a x b, a sun 1e-7 rad off), or exactly (in double).
+void polyAxes(const D3& L, D3& a, D3& b, bool exact = false) {
+    if (exact) {
+        a = norm(std::abs(L[0]) < 0.7 ? cross(L, D3{1, 0, 0}) : cross(L, D3{0, 1, 0}));
+        b = cross(L, a);
+        return;
+    }
+    const V3 l = f3(L);
+    const V3 e = std::abs(l[0]) < 0.7f ? V3{1, 0, 0} : V3{0, 1, 0};
+    const V3 c{l[1] * e[2] - l[2] * e[1], l[2] * e[0] - l[0] * e[2], l[0] * e[1] - l[1] * e[0]};
+    const float cl = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    const V3 af{c[0] / cl, c[1] / cl, c[2] / cl};
+    const V3 bf{l[1] * af[2] - l[2] * af[1], l[2] * af[0] - l[0] * af[2], l[0] * af[1] - l[1] * af[0]};
+    a = d3(af);
+    b = d3(bf);
+}
+
+// F = (r . a, r . b), r = d (h . h) - 2 (d . h) h, in double.
+void polyFD(const CellCase& c, const double sigma[2], double s, double t, double out[2], bool exactAxes = false) {
+    const PolyFrame f = polyFrameD(c, s, t);
+    const D3 m = add(add(mul(f.t, f.tn[0]), mul(f.b, f.tn[1])), mul(f.n, f.tn[2]));
+    const D3 h = sub(sub(m, mul(f.t, sigma[0])), mul(f.b, sigma[1]));
+    const D3 d = sub(f.y, c.p);
+    const D3 r = sub(mul(d, dot(h, h)), mul(h, 2.0 * dot(d, h)));
+    D3 a, b;
+    polyAxes(c.L, a, b, exactAxes);
+    out[0] = dot(r, a);
+    out[1] = dot(r, b);
+}
+
+// The Bernstein coefficients (degree (5, 5), c[i * 6 + j]) of a function sampled at s, t = k / 5: the tensor
+// Bernstein-Vandermonde system solved in double, one direction at a time.
+std::array<double, 36> bernsteinFit(const std::array<double, 36>& values) {
+    double V[6][6], Vi[6][6];
+    const double binom[6] = {1, 5, 10, 10, 5, 1};
+    for (int k = 0; k < 6; ++k)
+        for (int i = 0; i < 6; ++i) {
+            const double x = k / 5.0;
+            V[k][i] = binom[i] * std::pow(x, i) * std::pow(1.0 - x, 5 - i);
+        }
+    // Vi = V^-1 by Gauss-Jordan with pivoting.
+    double A[6][12];
+    for (int r = 0; r < 6; ++r)
+        for (int k = 0; k < 12; ++k) A[r][k] = k < 6 ? V[r][k] : (k - 6 == r ? 1.0 : 0.0);
+    for (int col = 0; col < 6; ++col) {
+        int piv = col;
+        for (int r = col + 1; r < 6; ++r)
+            if (std::abs(A[r][col]) > std::abs(A[piv][col])) piv = r;
+        for (int k = 0; k < 12; ++k) std::swap(A[col][k], A[piv][k]);
+        const double d = A[col][col];
+        for (int k = 0; k < 12; ++k) A[col][k] /= d;
+        for (int r = 0; r < 6; ++r) {
+            if (r == col) continue;
+            const double fct = A[r][col];
+            for (int k = 0; k < 12; ++k) A[r][k] -= fct * A[col][k];
+        }
+    }
+    for (int r = 0; r < 6; ++r)
+        for (int k = 0; k < 6; ++k) Vi[r][k] = A[r][k + 6];
+    // values[ks * 6 + kt] = sum_ij V[ks][i] c_ij V[kt][j]  ->  c = Vi values Vi^T.
+    std::array<double, 36> tmp{}, c{};
+    for (int i = 0; i < 6; ++i)
+        for (int kt = 0; kt < 6; ++kt) {
+            double sum = 0.0;
+            for (int ks = 0; ks < 6; ++ks) sum += Vi[i][ks] * values[size_t(ks * 6 + kt)];
+            tmp[size_t(i * 6 + kt)] = sum;
+        }
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j) {
+            double sum = 0.0;
+            for (int kt = 0; kt < 6; ++kt) sum += tmp[size_t(i * 6 + kt)] * Vi[j][kt];
+            c[size_t(i * 6 + j)] = sum;
+        }
+    return c;
+}
+
+// Roots of T2's sigma = target in the cell and on the triangle, by Newton in double from a grid of starts.
+Roots polyReferenceRoots(const CellCase& c, const double target[2], double margin, int grid) {
+    Roots r;
+    for (int a = 0; a < grid; ++a)
+        for (int b = 0; b < grid; ++b) {
+            double s = (a + 0.5) / grid, t = (b + 0.5) / grid;
+            bool conv = false;
+            for (int it = 0; it < 60; ++it) {
+                double f[2], fs[2], ft[2];
+                if (!polySigmaD(c, s, t, f)) break;
+                const double f0 = f[0] - target[0], f1 = f[1] - target[1];
+                if (f0 * f0 + f1 * f1 < 1e-26) {
+                    conv = true;
+                    break;
+                }
+                const double h = 1e-7;
+                if (!polySigmaD(c, s + h, t, fs) || !polySigmaD(c, s, t + h, ft)) break;
+                const double j00 = (fs[0] - f[0]) / h, j10 = (fs[1] - f[1]) / h, j01 = (ft[0] - f[0]) / h,
+                             j11 = (ft[1] - f[1]) / h;
+                const double det = j00 * j11 - j01 * j10;
+                if (std::abs(det) < 1e-30) break;
+                s -= (j11 * f0 - j01 * f1) / det;
+                t -= (-j10 * f0 + j00 * f1) / det;
+                if (std::abs(s) > 4 || std::abs(t) > 4) break;
+            }
+            if (!conv || !cellInDomain(c, s, t, -margin)) continue;
+            auto& list = cellInDomain(c, s, t, margin) ? r.inside : r.nearEdge;
+            bool dup = false;
+            for (auto& q : r.inside) dup = dup || (std::abs(q[0] - s) < 1e-6 && std::abs(q[1] - t) < 1e-6);
+            for (auto& q : r.nearEdge) dup = dup || (std::abs(q[0] - s) < 1e-6 && std::abs(q[1] - t) < 1e-6);
+            if (!dup) list.push_back({s, t});
+        }
+    return r;
+}
+
+// T2's cells: a normal-mapped triangle of 3-8 mm sides (vertex normals tilted up to 25 degrees, tangents as
+// randomCell's), its texture 6-16 texels of a 2,048 map a side (0.5 mm texels), the cell under a random point of it,
+// texels tilted up to `bump` (tan: 0.51 is 27 degrees, 1.0 45); the receiver 0.3-1.5 m above it, the sun within about
+// 40 degrees of its normal; the target T2's sigma at a random point of the cell, jittered by 0.01.
+bool randomPolyCell(std::mt19937& g, double bump, CellDraw& out) {
+    const double kTiltTan = 0.4663;
+    const D3 p0 = mul(sphereDir(g), 0.01 * rnd(g));
+    const D3 p1 = add(p0, mul(sphereDir(g), 0.003 + 0.005 * rnd(g)));
+    const D3 p2 = add(p0, mul(sphereDir(g), 0.003 + 0.005 * rnd(g)));
+    const D3 fn = cross(sub(p1, p0), sub(p2, p0));
+    if (len(fn) < 1e-7) return false;
+    const D3 f = norm(fn);
+    auto tiltOf = [&](const D3& axis, double tanMax) {
+        const D3 d = sphereDir(g);
+        return norm(add(axis, mul(norm(sub(d, mul(axis, dot(d, axis)))), tanMax * rnd(g))));
+    };
+    const D3 n0 = tiltOf(f, kTiltTan), n1 = tiltOf(f, kTiltTan), n2 = tiltOf(f, kTiltTan);
+    MappedTri m;
+    m.tri = makeTri(p0, p1, p2, n0, n1, n2);
+    const D3 base = perpendicular(f);
+    auto tangentAt = [&](const D3& n) {
+        const double a = 2.0 * kPi * rnd(g);
+        const D3 b2 = cross(n, base);
+        const D3 tdir = add(mul(norm(sub(base, mul(n, dot(base, n)))), std::cos(a)), mul(norm(b2), std::sin(a)));
+        return add(tdir, mul(n, 0.4 * (rnd(g) - 0.5)));
+    };
+    const D3 t0 = tangentAt(n0), t1 = tangentAt(n1), t2 = tangentAt(n2);
+    m.t0 = f3(t0);
+    m.ta1 = f3(sub(t1, t0));
+    m.ta2 = f3(sub(t2, t0));
+    m.sign = rnd(g) < 0.5 ? -1.0f : 1.0f;
+    const double texel = 1.0 / 2048.0;
+    const double la = (6.0 + 10.0 * rnd(g)) * texel, lb = (6.0 + 10.0 * rnd(g)) * texel;
+    const double aa = 2.0 * kPi * rnd(g), ab = aa + (0.5 + 2.0 * rnd(g));
+    m.uv0 = {float(0.2 + 0.6 * rnd(g)), float(0.2 + 0.6 * rnd(g))};
+    m.uvA = {float(la * std::cos(aa)), float(la * std::sin(aa))};
+    m.uvB = {float(lb * std::cos(ab)), float(lb * std::sin(ab))};
+    double u = rnd(g), v = rnd(g);
+    if (u + v > 1.0) {
+        u = 1.0 - u;
+        v = 1.0 - v;
+    }
+    const double tu = m.uv0[0] + m.uvA[0] * u + m.uvB[0] * v, tv = m.uv0[1] + m.uvA[1] * u + m.uvB[1] * v;
+    const double ci = std::floor(tu / texel - 0.5), cj = std::floor(tv / texel - 0.5);
+    Cell cell;
+    cell.origin = {float((ci + 0.5) * texel), float((cj + 0.5) * texel)};
+    cell.size = {float(texel), float(texel)};
+    auto texelNormal = [&] {
+        const double r = bump * std::sqrt(rnd(g)), a = 2.0 * kPi * rnd(g);
+        return f3(norm(D3{r * std::cos(a), r * std::sin(a), 1.0}));
+    };
+    cell.c00 = texelNormal();
+    cell.c10 = texelNormal();
+    cell.c01 = texelNormal();
+    cell.c11 = texelNormal();
+    // p, L and the target as the kernel takes them (fp32), so the double reference solves the kernel's problem.
+    const D3 p = d3(f3(add(mul(f, 0.3 + 1.2 * rnd(g)), mul(sphereDir(g), 0.3 * rnd(g)))));
+    const D3 L = d3(f3(norm(add(f, mul(sphereDir(g), 0.8 * rnd(g))))));
+    out.c = makeCellCase(m, cell, p, L);
+    for (int k = 0; k < 16; ++k) {
+        const double s = rnd(g), t = rnd(g);
+        double s0[2];
+        if (!cellInDomain(out.c, s, t, 0.0) || !polySigmaD(out.c, s, t, s0)) continue;
+        out.target[0] = double(float(s0[0] + 0.01 * (rnd(g) - 0.5)));
+        out.target[1] = double(float(s0[1] + 0.01 * (rnd(g) - 0.5)));
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+// The fp32 grids are the cell's polynomials: each coefficient within its rounding bound mu of the double polynomial's
+// (fitted from F in double at a 6 x 6 lattice), F from the grids within mu of the double F at random points, and F
+// vanishes (to its rounding) at the roots of T2's sigma map: the polynomials are the map's constraint.
+TEST(Manifold, m11_poly_matches_map) {
+    std::mt19937 g(1111u);
+    int cases = 0, rootsChecked = 0;
+    double worstCoef = 0.0, worstEval = 0.0, worstRoot = 0.0, worstRel = 0.0;
+    for (int k = 0; k < 600; ++k) {
+        CellDraw d;
+        if (!randomPolyCell(g, k % 2 == 0 ? 0.51 : 1.0, d)) continue;
+        const V2 sigma{float(d.target[0]), float(d.target[1])};
+        const double sg[2] = {double(sigma[0]), double(sigma[1])};
+        const CellPolyResult r = manifoldCellPoly(d.c.m, d.c.cell, f3(d.c.p), f3(d.c.L), sigma, {0.5f, 0.5f});
+        ASSERT_TRUE(r.ok) << "case " << k;
+        // The double polynomial's coefficients from F at s, t = k / 5. F is computed from the fp32 inputs widened, so
+        // the difference is the grids' own rounding.
+        std::array<double, 36> v1{}, v2{};
+        for (int a = 0; a < 6; ++a)
+            for (int b = 0; b < 6; ++b) {
+                double f[2];
+                polyFD(d.c, sg, a / 5.0, b / 5.0, f);
+                v1[size_t(a * 6 + b)] = f[0];
+                v2[size_t(a * 6 + b)] = f[1];
+            }
+        const auto c1 = bernsteinFit(v1), c2 = bernsteinFit(v2);
+        double scale = 0.0;
+        for (int q = 0; q < 36; ++q) {
+            worstCoef = std::max(worstCoef, std::abs(r.F1[size_t(q)] - c1[size_t(q)]) / r.mu[0]);
+            worstCoef = std::max(worstCoef, std::abs(r.F2[size_t(q)] - c2[size_t(q)]) / r.mu[1]);
+            scale = std::max({scale, std::abs(c1[size_t(q)]), std::abs(c2[size_t(q)])});
+            worstRel = std::max(worstRel, std::max(std::abs(r.F1[size_t(q)] - c1[size_t(q)]),
+                                                   std::abs(r.F2[size_t(q)] - c2[size_t(q)])));
+        }
+        worstRel = scale > 0.0 ? worstRel : worstRel;
+        for (int q = 0; q < 8; ++q) {
+            const double s = rnd(g), t = rnd(g);
+            const CellPolyResult e = manifoldCellPoly(d.c.m, d.c.cell, f3(d.c.p), f3(d.c.L), sigma, {float(s), float(t)});
+            double f[2];
+            polyFD(d.c, sg, double(float(s)), double(float(t)), f);
+            worstEval = std::max(worstEval, std::max(std::abs(e.F[0] - f[0]) / e.mu[0], std::abs(e.F[1] - f[1]) / e.mu[1]));
+        }
+        const Roots ref = polyReferenceRoots(d.c, sg, 1e-4, 8);
+        for (const auto& q : ref.inside) {
+            double f[2];
+            polyFD(d.c, sg, q[0], q[1], f, true);
+            worstRoot = std::max(worstRoot, std::max(std::abs(f[0]) / r.mu[0], std::abs(f[1]) / r.mu[1]));
+            ++rootsChecked;
+        }
+        ++cases;
+    }
+    std::printf("m11_poly_matches_map: %d cells; coefficients within %.3g of mu (their rounding bound), F at points "
+                "within %.3g of mu, F at %d roots of the double map within %.3g of mu\n",
+                cases, worstCoef, worstEval, rootsChecked, worstRoot);
+    EXPECT_GT(cases, 500);
+    EXPECT_GT(rootsChecked, 300);
+    EXPECT_LT(worstCoef, 1.0);
+    EXPECT_LT(worstEval, 1.0);
+    EXPECT_LT(worstRoot, 1e-2);
+}
+
+// Every root of a T2 cell a dense double search finds is found by Bernstein subdivision and Krawczyk's test, every root
+// it reports is a root of the fp32 grids within their rounding (mu) of the double polynomials, and no box is left
+// undecided (the spec's m10_cells_complete for the polynomial form; T2 measured 96 of 96 and 97 of 97 in its numpy
+// prototype). The grids are what is solved (rt/manifold_poly.slang): where a 1e-7 rad turn of the light moves sigma far
+// (grazing, |h| large), the fp32 cell may hold a root the double one does not, and they are counted apart (2 in 4,981
+// cells at 27 degrees in a 10,000-cell run, none at 45).
+TEST(Manifold, m12_cells_complete) {
+    for (const double bump : {0.51, 1.0}) {
+        std::mt19937 g(bump < 0.6 ? 1227u : 1245u);
+        int cases = 0, roots = 0, found = 0, twos = 0, undecidedCases = 0, nearEdge = 0, fp32Only = 0;
+        std::vector<int> boxes;
+        for (int k = 0; k < 400; ++k) {
+            CellDraw d;
+            if (!randomPolyCell(g, bump, d)) continue;
+            const Roots ref = polyReferenceRoots(d.c, d.target, 1e-4, 16);
+            const V2 sigma{float(d.target[0]), float(d.target[1])};
+            const CellRootsResult c = manifoldCellRoots(d.c.m, d.c.cell, f3(d.c.p), f3(d.c.L), sigma);
+            ASSERT_TRUE(c.defined) << "case " << k;
+            ASSERT_EQ(c.overflow, 0) << "case " << k;
+            ++cases;
+            boxes.push_back(c.boxes);
+            undecidedCases += c.undecided > 0 ? 1 : 0;
+            for (int i = 0; i < std::min(c.roots, 5); ++i) {
+                bool known = false;
+                for (const auto* list : {&ref.inside, &ref.nearEdge})
+                    for (const auto& q : *list)
+                        known = known || (std::abs(c.st[i][0] - q[0]) < 1e-3 && std::abs(c.st[i][1] - q[1]) < 1e-3);
+                const CellPolyResult e = manifoldCellPoly(d.c.m, d.c.cell, f3(d.c.p), f3(d.c.L), sigma, c.st[i]);
+                double fd[2];
+                polyFD(d.c, d.target, c.st[i][0], c.st[i][1], fd);
+                EXPECT_TRUE(std::abs(e.F[0]) <= 0.01 * e.mu[0] && std::abs(e.F[1]) <= 0.01 * e.mu[1])
+                    << "case " << k << " (bump " << bump << "): a reported root is no root of the grids, F (" << e.F[0]
+                    << ", " << e.F[1] << ")";
+                EXPECT_TRUE(known || (std::abs(fd[0]) <= e.mu[0] && std::abs(fd[1]) <= e.mu[1]))
+                    << "case " << k << " (bump " << bump << "): a root no search finds at (" << c.st[i][0] << ", "
+                    << c.st[i][1] << "), the double F (" << fd[0] << ", " << fd[1] << ") past mu";
+                fp32Only += known ? 0 : 1;
+            }
+            for (const auto& q : ref.inside) {
+                bool hit = false;
+                for (int i = 0; i < std::min(c.roots, 5); ++i)
+                    hit = hit || (std::abs(c.st[i][0] - q[0]) < 1e-3 && std::abs(c.st[i][1] - q[1]) < 1e-3);
+                found += hit ? 1 : 0;
+                EXPECT_TRUE(hit || c.undecided > 0) << "case " << k << " (bump " << bump << "): a root at (" << q[0]
+                                                    << ", " << q[1] << ") not found, no box undecided";
+            }
+            roots += int(ref.inside.size());
+            nearEdge += int(ref.nearEdge.size());
+            twos += ref.inside.size() >= 2 ? 1 : 0;
+        }
+        std::sort(boxes.begin(), boxes.end());
+        double mean = 0.0;
+        for (int b : boxes) mean += b;
+        mean /= std::max<size_t>(boxes.size(), 1);
+        std::printf("m12_cells_complete (bump tan %.2f): %d cells, %d of %d roots found (%d near an edge apart), %d cells "
+                    "with two or more, %d roots of the fp32 cell only; boxes a cell median %d, mean %.1f, max %d; %d "
+                    "cells left a box undecided\n",
+                    bump, cases, found, roots, nearEdge, twos, fp32Only, boxes.empty() ? 0 : boxes[boxes.size() / 2],
+                    mean, boxes.empty() ? 0 : boxes.back(), undecidedCases);
+        EXPECT_GT(cases, 300);
+        EXPECT_GT(roots, 150);
+        EXPECT_EQ(found, roots);
+        EXPECT_EQ(undecidedCases, 0);
+    }
+}

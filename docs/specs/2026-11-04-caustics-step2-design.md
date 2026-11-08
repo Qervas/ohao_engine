@@ -386,6 +386,33 @@ tilted up to 27 or 45 degrees, against a dense double-precision Newton search).*
   47 cells a request on the helmet (T1's count): a few million flops a request, of the order of 2a's pass on the
   showcase. Measured on the GPU before anything else is built, as 2a's was.
 
+**T3 built (2026-11-08, `shaders/rt/manifold_poly.slang`, the CPU twin's ops 16-17, `manifold_tests` m11-m12; the plan
+`docs/plans/2026-11-08-caustics-step2c.md`, tasks 1-2).** The cell's F1, F2 as degree-(5, 5) Bernstein grids built in
+fp32 from the corner values (MikkTSpace's normal, the slope in the vertex tangent frame), and every root by subdivision
+and Krawczyk's test on boxes grown 10% a side.
+- `m11_poly_matches_map` (595 cells at 27 and 45 degrees): every fp32 coefficient within 0.080 of its rounding bound mu
+  (the same construction on the inputs' absolute values times 64 roundings; the worst measured is 5.5 roundings) of the
+  double polynomial's (fitted from F in double at a 6 x 6 lattice); F at 647 roots of the double map within 0.00085 of mu.
+- `m12_cells_complete` (T2's random cells: 3-8 mm triangles, 0.5 mm texels): 27 degrees, 408 of 408 roots, no box
+  undecided, 27 boxes a cell at the median (mean 36.5, max 232); 45 degrees, 442 of 442, none undecided, 32 (45.0, 453).
+  A one-off run of 10,000 cells (5,000 each): 10,728 of 10,728 roots, none undecided, at most 620 boxes. T2's open case
+  (a root near the cell's edge) is among them: nothing undecided.
+- **What is solved is the fp32 grids** (the cell as the GPU holds it, as fp32 vertices are the mesh). Kept as the
+  solver's margin, mu blurred ill-conditioned roots (|Y| mu, up to 2e-3 cell units) wider than any box that could
+  certify them; the solver's margins are its own arithmetic's (a box's extraction, 24 roundings of the cell grid's
+  largest coefficient, 3 times past [0, 1]; F at a box's centre evaluated on the cell's grid, 12). Where a 1e-7 rad turn
+  of the light moves sigma far (grazing, |h| large), the fp32 cell holds a root the double one does not: 2 in the
+  10,000 cells, each within mu of a root of the double polynomial.
+- What it took beyond T2's prototype, each found by a probe of single boxes: the Jacobian's grids extracted from the
+  cell's derivatives (differenced from a box's own grid, their rounding grew as the box's inverse width and no box near
+  a root contracted); Rump's epsilon inflation, a box round what K leaves of the grown box and K's centre by twice the
+  blur (split halves narrower than the blur never certify, and a sliver beside a root another box certified never
+  decides); one Krawczyk call site (an inflation box rides the stack above the halves it settles).
+- SPIR-V (slangc 2026.20, a scratch compute entry calling `cellPolyOf` and `cellPolySolve`): 18,678 instructions, valid
+  (`spirv-val`); 26,684 with two Krawczyk call sites, 34,316 with the grids built a call per axis.
+- Per-lane cost on the GPU is unmeasured: a cell is 27-32 Krawczyk tests at the median and up to 620 here (each six grid
+  extractions); task 6 bounds it per dispatch.
+
 **Rulings.**
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.

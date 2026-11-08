@@ -27,9 +27,15 @@
 //              23-26, p, L, the target 9.xy -> 13 (roots, undecided, boxes, defined), 14 (st0, st1), 15 (st2, st3)
 //              (manifoldCertifyMap on a CellSlopeMap: every root in the cell, as (s, t))
 //  15 cell map  the same cell at (s, t) 9.zw -> 13 (sigma, defined), 14 (dsx/ds, dsx/dt, dsy/ds, dsy/dt), 15 (u, v)
+//  16 cell poly step 2c's polynomials (rt/manifold_poly.slang, MikkTSpace's normal) of the same cell for the slope 9.xy:
+//              at (s, t) 9.zw -> 13 (F1, F2 from the grids, their rounding bounds mu1, mu2), 14 (r . a, r . b from the
+//              corner values, defined); the grids' coefficients into `mesh` rows 0-8 (F1) and 9-17 (F2)
+//  17 cell roots the same cell's paths for the slope 9.xy, at most 0.y boxes (0: 4,096) -> 13 (roots, undecided, boxes,
+//              defined), 14 (st0, st1), 15 (st2, st3), 16 (st4, overflow) (cellPolySolve)
 // The triangle's c rides in rows 1-3's w.
 import rt.manifold;
 import rt.manifold_cert;
+import rt.manifold_poly;
 
 RWStructuredBuffer<float4> io;
 RWStructuredBuffer<float4> mesh;   // op 12's scene: 6 rows a triangle (p0, e1, e2, n0, a1, a2), its c in rows 0-2's w
@@ -229,6 +235,50 @@ void run(uint3 id : SV_DispatchThreadID)
             o13 = float4(good ? sx.v.v : 0.0, good ? sy.v.v : 0.0, good ? 1.0 : 0.0, 0.0);
             o14 = good ? float4(sx.d[0].v, sx.d[1].v, sy.d[0].v, sy.d[1].v) : float4(0.0);
             o15 = float4(cm.uvAt(r9.zw), 0.0, 0.0);
+        }
+    }
+    else if (op == 16u || op == 17u)
+    {
+        ManifoldMappedTri mt;
+        mt.tri = tri;
+        mt.t0 = io[b + 17u].xyz;
+        mt.sign = io[b + 17u].w;
+        mt.ta1 = io[b + 18u].xyz;
+        mt.ta2 = io[b + 19u].xyz;
+        const float4 r20 = io[b + 20u], r21 = io[b + 21u];
+        mt.uv0 = r20.xy;
+        mt.uvA = r20.zw;
+        mt.uvB = r21.xy;
+        CellPoly cp;
+        const bool ok = cellPolyOf(mt, io[b + 23u].xyz, io[b + 24u].xyz, io[b + 25u].xyz, io[b + 26u].xyz, r21.zw,
+                                   io[b + 22u].xy, p, L, r9.xy, cp);
+        if (op == 16u)
+        {
+            if (ok) cellPolyRounding(cp);
+            float3 hv, y;
+            const float3 r = polyReflectAt(cp, r9.zw, hv, y);
+            o13 = float4(bEval(cp.F1, r9.z, r9.w), bEval(cp.F2, r9.z, r9.w), cp.mu1, cp.mu2);
+            o14 = float4(dot(r, cp.a), dot(r, cp.b), ok ? 1.0 : 0.0, 0.0);
+            for (uint k = 0u; k < 9u; ++k)
+            {
+                mesh[k] = float4(cp.F1.c[4u * k], cp.F1.c[4u * k + 1u], cp.F1.c[4u * k + 2u], cp.F1.c[4u * k + 3u]);
+                mesh[9u + k] = float4(cp.F2.c[4u * k], cp.F2.c[4u * k + 1u], cp.F2.c[4u * k + 2u], cp.F2.c[4u * k + 3u]);
+            }
+        }
+        else
+        {
+            const uint budget = h.y > 0.5 ? uint(h.y + 0.5) : 4096u;
+            PolyCellResult r;
+            r.roots = 0u;
+            r.undecided = 0u;
+            r.boxes = 0u;
+            r.overflow = 0u;
+            for (uint k = 0u; k < kPolyMaxRoots; ++k) r.st[k] = float2(0.0);
+            if (ok) r = cellPolySolve(cp, budget);
+            o13 = float4(float(r.roots), float(r.undecided), float(r.boxes), ok ? 1.0 : 0.0);
+            o14 = float4(r.st[0], r.st[1]);
+            o15 = float4(r.st[2], r.st[3]);
+            o16 = float4(r.st[4], float(r.overflow), 0.0);
         }
     }
     io[b + 13u] = o13;

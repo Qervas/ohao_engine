@@ -63,6 +63,24 @@ CellMapResult manifoldCellMap(const MappedTri& m, const Cell& cell, const V3& p,
 // triangle's texture coordinates are degenerate.
 CertResult manifoldCertifyCell(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 target,
                                bool* defined = nullptr);
+// Step 2c's polynomials (rt/manifold_poly.slang; MikkTSpace's normal, the slope in the vertex tangent frame) of the cell
+// for the slope sigma: F1, F2 at (s, t) from the grids, the grids' rounding bounds, r . a and r . b from the corner values
+// in fp32, and the grids (degree (5, 5), c[i * 6 + j], i along s).
+struct CellPolyResult {
+    bool ok{false};
+    V2 F{}, mu{}, direct{};
+    std::array<float, 36> F1{}, F2{};
+};
+CellPolyResult manifoldCellPoly(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 sigma, V2 st);
+// Every path of the cell for the slope sigma (cellPolySolve: Bernstein subdivision and Krawczyk's test), as (s, t), the
+// first five kept; at most maxBoxes boxes (0: 4,096).
+struct CellRootsResult {
+    bool defined{false};
+    int roots{0}, undecided{0}, boxes{0}, overflow{0};
+    V2 st[5]{};
+};
+CellRootsResult manifoldCellRoots(const MappedTri& m, const Cell& cell, const V3& p, const V3& L, V2 sigma,
+                                  int maxBoxes = 0);
 // The interval map over the box [lo, hi] (u, v): sigma's and its Jacobian's enclosures; defined 1, 0 (unknown), -1.
 struct Enclosure {
     int defined{0};
