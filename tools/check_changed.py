@@ -100,6 +100,10 @@ RULES: list[tuple[str, list[str]]] = [
     ("shaders/rt/manifold*", ["manifold_tests", "check_caustics"]), ("tools/caustics/*", ["manifold_tests"]),
     ("tests/renderer/manifold_tests.cpp", ["manifold_tests"]),
     ("ohao/render/rt/manifold_*", ["caustic_casters_test", "check_caustics", "check_caustics_showcase"]),
+    # check_caustics is `slow` (out of label:gpu): the path tracer's own files and its test select it by name.
+    ("shaders/rt/path_tracer.slang", ["check_caustics"]), ("shaders/rt/pt_hit.slang", ["check_caustics"]),
+    ("shaders/rt/caustics.slang", ["check_caustics"]), ("ohao/render/rt/path_tracer*", ["check_caustics"]),
+    ("tests/renderer/check_caustics.py", ["check_caustics"]),
     ("ohao/render/rt/pipeline_disk_cache.*", ["pipeline_cache_files_test", "label:gpu"]),
     ("tests/renderer/pipeline_cache_files_test.cpp", ["pipeline_cache_files_test"]),
 ]

@@ -496,7 +496,9 @@ Closed forms first; each case fails before its code exists.
   dual-number map at one call site and the three BSDFs (X's rough part, the two refractions) at one OpenPBR site:
   manifoldConnect is 34,168 SPIR-V instructions (2a alone 19,997; three walk sites and two OpenPBR sites made it 46,739).
   On by default since m4-m6 hold it on the GPU (2026-11-06: 1.09%, 0.18%, 0.59%; `docs/changes/2026-11-06-caustics-step2b.md`);
-  `OHAO_MANIFOLD_GLASS_OFF=1` drops it. The pass's counters add walks, paths and connections. **Corrected by the review
+  **Opt-in since 2026-11-08 (`OHAO_MANIFOLD_GLASS=1`):** the re-find trials made some frames' dispatches run for seconds
+  (m9 at 2,048 spp: over 15 minutes, 41.7 s without step 2b); it goes back on once that work is bounded per dispatch with the
+  estimator unchanged. The pass's counters add walks, paths and connections. **Corrected by the review
   before it went on (2026-11-06):** the walk takes a whole instance, so it runs for one draw of each (instance, material),
   or a merged model's runs of one glass count its light once each (`m7_split_ball`); it refracts at the BSDF's IOR
   (`modulatedIor` of the specular IOR and weight), and a coat or a specular-weight texture, which have no single one, is

@@ -1,8 +1,8 @@
 # Caustics, step 2b: the sun through a solid, by a seeded walk
 
 **Spec:** `docs/specs/2026-11-04-caustics-step2-design.md` ("Step 2b as designed", ruling M12; "Tests" m4-m6)
-**Status:** built and tested on branch `caustics-step2`; on with step 2 in `rt_offline` since 2026-11-06
-(`OHAO_MANIFOLD_GLASS_OFF=1` drops it, `OHAO_MANIFOLD_OFF=1` all of step 2). Not merged.
+**Status:** built and tested on branch `caustics-step2`; on with step 2 in `rt_offline` from 2026-11-06, **opt-in since
+2026-11-08** (`OHAO_MANIFOLD_GLASS=1`; known gaps, "Runaway frames"); `OHAO_MANIFOLD_OFF=1` drops all of step 2. Not merged.
 
 ## 1. Summary
 
@@ -120,7 +120,7 @@ did not), fixed:
 - `c5_showcase` (480 x 270, the reference at 8,192 spp with every pass; measured before the review's fixes, which leave
   its materials' paths as they were): with the passes at 512 spp relMSE 0.00108, 8
   dots, the clear ball's pixel 0.9x its neighbours; without caustics at 704 spp 0.18830, 18 dots, 1,283x. Step 2b's own
-  share, the 512 spp frame with `OHAO_MANIFOLD_GLASS_OFF=1` against the same reference: relMSE 0.00099, 7 dots. Its light
+  share, the 512 spp frame without it against the same reference: relMSE 0.00099, 7 dots. Its light
   is 0.044% of the image (22 pixels above 0.01); at 512 spp it adds a little more
   noise than the bias it removes. The sampler is deterministic, so the two frames differ by step 2b's light alone.
   Kept on as step 2a was (ruling M9): the offline profile is the referee and must converge to the light, which nothing
@@ -147,6 +147,14 @@ did not), fixed:
   315.2 / 325.7 ms against 313.8-315.4 at 64. `check_caustics` `m10_ball_focus` (IOR 1.33, bar 5%, none at the ceiling)
   holds it; it, and the whole of `check_caustics` with the ceiling, have not yet run to the end: the GPU's firmware
   crashed during that run (driver 615.78.08, AGENTS.md).
+- **Runaway frames: why step 2b is opt-in (2026-11-08).** m9's ball (`m9_ball_weight`, 2,048 spp) did not finish in
+  15 minutes with step 2b, at the ceiling of 4,096 and at the old cap of 64 alike, and took 41.7 s without it; at 256 spp
+  with the cap of 64 it took 14.4 s with 2,565 paths at the cap. A lane that walks thousands of times holds its warp, and
+  a GPU dispatch is not preempted: such frames ran for seconds, and two firmware crashes (2026-11-07 17:23 and 20:29, Xid
+  109 then 120) came during them. Why m9 passed in seconds on 2026-11-06 (driver 615.78.08, cap 64) is not known. Until
+  the re-find work is bounded per dispatch (trials continued across frames, or a queue of walks dispatched in chunks:
+  the estimator unchanged), step 2b runs only with `OHAO_MANIFOLD_GLASS=1`, which its tests set; without it nothing
+  renders the sun through a solid seen after a bounce (the frame is darker there, as before step 2b).
 - **The polish's acceptance** is an absolute slope tolerance, 10 alpha at roughness 0.01: within about 1e-4 m of a fold,
   0.05-0.15% of roots are a few alpha off (+0.05% to +0.4% there, as occasional large samples; the review's CPU runs).
 - **Coated glass and specular-weight textures** are refused (above), so their light through the solid is no one's.
@@ -156,6 +164,9 @@ did not), fixed:
 - **Normal-mapped solids** stay unowned (ruling M7): step 2c (Specular Polynomials, ruling M11).
 
 ## 7. How to run
+
+Step 2b's cases set `OHAO_MANIFOLD_GLASS=1` themselves. The ball cases (m5, m7, m9, m10) are out of the default run since
+2026-11-08 (the runaway frames above): `--ball` or their names run them.
 
 ```console
 $ python tests/renderer/check_caustics.py m4_slab_seen m5_ball_seen m6_through_glass m7_split_ball m9_ball_weight   # gpu

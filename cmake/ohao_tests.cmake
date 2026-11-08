@@ -125,7 +125,9 @@ function(ohao_register_harness_tests)
     # OpenPBR in the renderers against closed forms: the white furnace and the closed box.
     ohao_add_python_test(check_material LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_material.py)
     # Caustics (sub-project 24): light traced from the sun, the camera side's split, their closed forms.
-    ohao_add_python_test(check_caustics LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py)
+    # The caustics closed forms take about four minutes of heavy path tracing: out of the default set, run by
+    # `check.py --changed` when the path tracer or caustics change (tools/check_changed.py) and to close a caustics step.
+    ohao_add_python_test(check_caustics LABEL slow GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py)
     ohao_add_python_test(check_caustics_showcase LABEL slow GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py ARGS --showcase)
     if(TARGET ohao_game)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1

@@ -85,7 +85,10 @@ something failed, 2 = the environment is wrong (the message says how).
   default set — and `golden`, `bench`, `slow`, which `--all` adds (`monograph`, the frozen
   site's checks, only by name). `--labels gpu,docs`
   picks your own set; `ctest --test-dir build -C Release -L quick` works without the
-  script. GPU tests never run two at once; benchmarks run alone.
+  script. GPU tests never run two at once; benchmarks run alone. **Iterate with `--changed`, not the whole `gpu`
+  label** (Frank, 2026-11-08: the full set after every change was most of a session's time). `check_caustics` (about
+  four minutes of heavy path tracing) is `slow`: `--changed` runs it when the path tracer or caustics change, and a
+  caustics step closes with it; its ball cases (step 2b, "Caustics" below) run only by name or with `--ball`.
 - **Registering a new suite:** `ohao_add_test(<name> LABEL <label> [GPU] COMMAND <exe>)`
   in its `CMakeLists.txt`, and end its `main` with `ohao::test::finish(...)` from
   `tests/common/harness.hpp` (or its `CHECK`/`RUN` macros), so the summary line is
@@ -759,8 +762,9 @@ deferred, reference, path traced); two the transparency scene,
   **Step 2b** (same spec, "Step 2b as designed", M12): the sun through an owned solid (two refractions) onto X, which the
   camera side never renders (nothing to drop), by the seeded walk (`manifoldGlass`, `rt/manifold_cert.slang`'s
   `manifoldWalkPair<S, false>`; `manifold_tests` t15 holds its form to light traced through a glass ball; `check_caustics`
-  m4-m6 on the GPU). On by default with step 2; `OHAO_MANIFOLD_GLASS_OFF=1` drops it (nothing else renders that light: the
-  frame is darker, not split). Gotchas: it walks a whole instance, so one draw of each (instance, material) runs it (the
+  m4-m6 on the GPU). **Opt-in, `OHAO_MANIFOLD_GLASS=1`** (since 2026-11-08; its tests set it): its re-find walks ran some
+  frames for seconds, a dispatch the GPU cannot preempt (two firmware crashes came during them), until the work is bounded
+  per dispatch. Without it nothing renders that light: the frame is darker, not split. Gotchas: it walks a whole instance, so one draw of each (instance, material) runs it (the
   host's mark in the draw record's word 7: a merged model's runs of one glass are several draws, which counted the light
   once each, `m7_split_ball`); it walks at the IOR the BSDF refracts at (`modulatedIor` of the specular IOR and weight,
   `m9_ball_weight`) and refuses a coat or a specular-weight texture, whose IOR no single walk has; under NRD the manifold

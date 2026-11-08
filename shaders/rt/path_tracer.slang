@@ -113,7 +113,7 @@ static const uint kClassManifold = 128u;      // the manifold pass's connections
 // for the pass (off under OHAO_MANIFOLD_SPLIT_ONLY, which drops the terms without adding them).
 static const uint kFlagManifold = 1u << 19u;
 static const uint kFlagManifoldRequests = 1u << 20u;
-// Bit 23: step 2b, the sun through owned solids (manifoldGlass; set unless OHAO_MANIFOLD_GLASS_OFF=1).
+// Bit 23: step 2b, the sun through owned solids (manifoldGlass; set with OHAO_MANIFOLD_GLASS=1, opt-in).
 static const uint kFlagManifoldGlass = 1u << 23u;
 static const uint kManifoldOwnedBit = 1u;
 static const uint kManifoldBaseBit = 2u;

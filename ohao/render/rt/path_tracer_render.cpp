@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <string_view>
 #include <vector>
 #include "core/log.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
@@ -604,10 +605,14 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         if (manifoldPass) pc.control.x |= kPTFlagManifoldRequests;
         static const char* stage = std::getenv("OHAO_MANIFOLD_STAGE");   // profiling: where manifoldConnect stops
         if (stage) pc.control.x |= (uint32_t(std::atoi(stage)) & 3u) << 21u;
-        // Step 2b (manifoldGlass), the sun through owned solids; OHAO_MANIFOLD_GLASS_OFF=1 drops it (for comparisons:
-        // nothing else renders that light, so the frame is darker without it, not split).
-        static const bool glassOff = std::getenv("OHAO_MANIFOLD_GLASS_OFF") != nullptr;
-        if (!glassOff) pc.control.x |= kPTFlagManifoldGlass;
+        // Step 2b (manifoldGlass), the sun through owned solids: opt-in, OHAO_MANIFOLD_GLASS=1. Its re-find walks run
+        // for seconds in a few lanes of some frames (check_caustics m9: 2,048 spp over 15 minutes with it, 42 s without),
+        // a GPU dispatch the driver cannot preempt, until its work is bounded per dispatch.
+        static const bool glassOn = [] {
+            const char* v = std::getenv("OHAO_MANIFOLD_GLASS");
+            return v != nullptr && std::string_view(v) != "0";
+        }();
+        if (glassOn) pc.control.x |= kPTFlagManifoldGlass;
         m_manifoldRan = true;
     }
     // The frames already in the running mean (0: this frame's sample alone, which a temporal

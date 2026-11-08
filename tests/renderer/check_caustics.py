@@ -677,7 +677,10 @@ def m2_glossy_mirror(failures):
 # The camera side never renders it (its light samples look above a surface, its shadow rays stop at solids, no BSDF
 # ray meets the sun), so without the pass these floors take no light through the solid. Step 2b takes the two
 # refractions only (K = 2): every closed form below is that order, (1 - F)^2 through the slab; the orders with internal
-# reflections (F^2 ~ 0.002 of it) are no one's. 2b is on by default (OHAO_MANIFOLD_GLASS_OFF=1 drops it).
+# reflections (F^2 ~ 0.002 of it) are no one's. 2b is opt-in (OHAO_MANIFOLD_GLASS=1): its tests turn it on (GLASS).
+
+GLASS = {"OHAO_MANIFOLD_GLASS": "1"}   # step 2b's tests turn it on (opt-in until its work is bounded per dispatch)
+
 
 def slab_floor():
     f = fresnel(math.cos(math.radians(30)), 1.5)
@@ -745,7 +748,7 @@ def m4_mask(margin=0.06):
 def m4_slab_seen(failures):
     want = slab_floor()
     mask = m4_mask()
-    img, _ = render("m4_slab_seen", m4_scene(), 256, ["--bounces", "2"])
+    img, _ = render("m4_slab_seen", m4_scene(), 256, ["--bounces", "2"], GLASS)
     off, _ = render("m4_slab_seen_off", m4_scene(), 64, ["--bounces", "2"], {"OHAO_MANIFOLD_OFF": "1"})
     m, mo = float(img.mean(2)[mask].mean()), float(off.mean(2)[mask].mean())
     err = abs(m - want) / want
@@ -781,7 +784,7 @@ def m5_scene():
 def ball_seen(failures, name, scene, n_glass=1.5, logs=None):
     # m5's measure: the caustic's energy in the ball's shadow, seen through the periscope, against the simulation.
     import numpy as np
-    img, log = render(name, scene, 2048, ["--bounces", "2"])
+    img, log = render(name, scene, 2048, ["--bounces", "2"], GLASS)
     if logs is not None:
         logs.append(log)
     lum = img.mean(2)[::-1]   # c3_sphere's orientation
@@ -943,7 +946,7 @@ def m6_through_glass(failures):
     lit = slab_floor() / (1 - fresnel(math.cos(math.radians(30)), 1.5)) ** 2   # the floor in the sun, no slab
     through, reflected = slab_floor() * (1 - f) / (1 + f), lit * 2 * f / (1 + f)
     want = through + reflected
-    img, _ = render("m6_through_glass", m6_scene(), 256, ["--bounces", "1"])
+    img, _ = render("m6_through_glass", m6_scene(), 256, ["--bounces", "1"], GLASS)
     off, _ = render("m6_through_glass_off", m6_scene(), 64, ["--bounces", "1"], {"OHAO_MANIFOLD_OFF": "1"})
     m, w_, mo = float(img.mean(2)[mask].mean()), float(want[mask].mean()), float(off.mean(2)[mask].mean())
     wr = float(reflected[mask].mean())
@@ -970,12 +973,21 @@ def m8_repeat(failures):
 CASES = {"c1_split_only": c1_split_only, "c1_mirror": c1_mirror, "c1_emitter": c1_emitter, "c3_slab": c3_slab, "c3_slab_guided": c3_slab_guided, "c3_sphere": c3_sphere, "c6_repeat": c6_repeat, "c2_split": c2_split, "c4_through_glass": c4_through_glass, "c5_showcase": c5_showcase, "m1_mirror_seen": m1_mirror_seen, "m2_glossy_mirror": m2_glossy_mirror, "m4_slab_seen": m4_slab_seen, "m5_ball_seen": m5_ball_seen, "m6_through_glass": m6_through_glass, "m7_split_ball": m7_split_ball, "m8_repeat": m8_repeat, "m9_ball_weight": m9_ball_weight, "m10_ball_focus": m10_ball_focus}
 
 
+# Step 2b through a ball at 2,048 spp: some frames' re-find walks ran for seconds (m9: over 15 minutes), a dispatch the
+# GPU cannot preempt, until that work is bounded per dispatch. Run only by name or with --ball, one at a time.
+BALL = ["m5_ball_seen", "m7_split_ball", "m9_ball_weight", "m10_ball_focus"]
+
+
 def main(argv):
-    # --showcase runs c5 alone (slow: a 8192 spp reference); without arguments every other case.
+    # --showcase runs c5 alone (slow: a 8192 spp reference), --ball the ball cases; without arguments every other case.
     if "--showcase" in argv:
         names = ["c5_showcase"]
+    elif "--ball" in argv:
+        names = BALL
     else:
-        names = argv[1:] or [n for n in CASES if n != "c5_showcase"]
+        names = argv[1:] or [n for n in CASES if n != "c5_showcase" and n not in BALL]
+        if len(argv) == 1:
+            print("check_caustics: left out %s (--ball runs them) and c5_showcase (--showcase)" % ", ".join(BALL))
     failures, results = [], {}
     for n in names:
         results[n] = CASES[n](failures)
