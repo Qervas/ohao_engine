@@ -1,6 +1,0 @@
-{"method":"world.apply","params":{"commands":[{"op":"field.set","id":"499421b6ef3e75a9","path":"/Transform/positon/0","value":1}]}}
-{"method":"world.apply","params":{"commands":[{"op":"field.set","id":"499421b6ef3e75a9","path":"/Light/intensity","value":-5}]}}
-{"method":"world.restore","params":{"name":"never_taken"}}
-{"method":"world.spin","params":{}}
-not json at all
-{"method":"world.query","params":{"ids":["499421b6ef3e75a9"],"fields":["/Transform/position"]}}

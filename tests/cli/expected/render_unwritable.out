@@ -1,1 +1,0 @@
-{"method":"render.capture","error":{"code":"E_RENDER","message":"cannot write build/cli_tmp/no/such/dir/x.png","data":[{"code":"E_RENDER","path":"","message":"cannot write build/cli_tmp/no/such/dir/x.png"}]}}

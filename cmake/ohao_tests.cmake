@@ -1,20 +1,9 @@
-# Test registration (sub-project 4, step 2). Every suite, harness and gate is a CTest test
-# with exactly one primary label; `python tools/check.py` and plain `ctest -L <label>`
-# select by it:
-#
-#   quick     CPU suites and CPU harnesses (seconds)
-#   gpu       suites and harnesses that create a Vulkan device
-#   docs      the doc-command checker
-#   monograph the monograph's checks (site/): frozen during the frontier renderer work (Frank,
-#             2026-10-30), so in no default or --all run; `--labels monograph` runs them
-#   golden    the render goldens (minutes; a GPU)
-#   bench     the benchmark gates (run alone)
-#   slow      exhaustive checks (minutes)
-#   selftest  fixtures of tools/check.py's own test (never part of a normal run)
-#
-# Every test runs from the source root, as the docs' commands do. GPU tests share the
-# resource lock `gpu`, so two never overlap; benchmarks are RUN_SERIAL, so nothing runs
-# beside them.
+# Test registration. The gates serve five requirements (Frank, 2026-11-08): never hurt the
+# machine, the renderer right against closed forms, a handful of goldens, gameplay replays
+# exactly, it builds. Nothing else is a gate; a test is added only when a real bug got through.
+# Labels: quick (CPU), gpu (creates a Vulkan device), golden (the render goldens), slow.
+# Every test runs from the source root. GPU tests share the resource lock `gpu`, so two
+# never overlap.
 
 # The shared harness header (tests/common/harness.hpp) for any suite.
 add_library(ohao_test_harness INTERFACE)
@@ -80,77 +69,30 @@ function(ohao_add_python_test name)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/${P_SCRIPT} ${P_ARGS})
 endfunction()
 
-# The harnesses and gates that are not one suite's executable. Called once, at the end of
-# the top-level CMakeLists, when every target exists.
+# The gates that are not one suite's executable. Called once, at the end of the top-level
+# CMakeLists, when every target exists.
 function(ohao_register_harness_tests)
-    # The CLI check writes build/cli_tmp; it runs as check_cli_cpu, check_cli and inside
-    # check_docs, so those three hold the lock `cli_tmp`.
-    # CPU harnesses
-    ohao_add_python_test(check_cli_cpu LABEL quick LOCKS cli_tmp SCRIPT tests/cli/check_cli.py ARGS --cpu-only)
-    ohao_add_python_test(check_scene_schema LABEL quick SCRIPT tests/reflect/check_scene_schema.py)
-    # tools/check.py's own test (test 3): runs the selftest fixtures in their own build tree,
-    # build/check_fixture (also run inside check_docs: the lock `check_fixture`).
-    ohao_add_python_test(check_tests LABEL quick TIMEOUT 600 LOCKS check_fixture SCRIPT tests/check/check_tests.py)
-    # The golden harness's diff report (test 4) and `ohao doctor` (test 5).
-    ohao_add_python_test(test_golden_diff LABEL quick SCRIPT tests/golden/test_golden_diff.py)
-    ohao_add_python_test(check_doctor LABEL quick SCRIPT tests/doctor/check_doctor.py)
-    ohao_add_python_test(check_doctor_gpu LABEL gpu GPU SCRIPT tests/doctor/check_doctor.py ARGS --gpu)
-    # The shared shader/C++ layout (sub-project 2b, step 6): generated files current, std430.
-    ohao_add_python_test(check_layout LABEL quick SCRIPT tests/layout/check_layout.py)
-    # The level pipeline's checked-in assets (sub-project 5, test 1): hints, the blockout's
-    # contract, its byte-identical Blender rebuild (skip without Blender).
-    ohao_add_python_test(check_level_assets LABEL quick TIMEOUT 600 SCRIPT tests/level/check_level_assets.py)
-    # `ohao serve` as a process (tests 8-10, 15): its goldens write build/serve_tmp/<session>.
-    ohao_add_python_test(check_serve LABEL quick TIMEOUT 600 LOCKS serve_tmp SCRIPT tests/serve/check_serve.py)
-    # The test grenade about a fixed listener (audio ruling 23), rendered without a device and measured:
-    # left/right balance per side, far below near, front centred.
-    ohao_add_python_test(grenade_spatial LABEL quick TIMEOUT 300 SCRIPT tools/audio/grenade_spatial.py
-        ARGS --out ${CMAKE_BINARY_DIR}/grenade_spatial)
-
-    # GPU harnesses and the presentation gate
-    ohao_add_python_test(check_cli LABEL gpu GPU LOCKS cli_tmp SCRIPT tests/cli/check_cli.py)
-    ohao_add_python_test(check_validation LABEL gpu GPU SCRIPT tests/validation/check_validation.py
+    # Requirement 1, never hurt the machine: the Vulkan validation layer over a few renders.
+    ohao_add_python_test(check_validation LABEL gpu GPU TIMEOUT 300 SCRIPT tests/validation/check_validation.py
         ARGS --json build/check_validation.json)
-    # RT GI under an outdoor sky: the HDRI's sun, which a directional light stands for, never
-    # reaches GI's rays as fireflies (docs/changes/2026-10-28-rt-gi-fireflies.md).
-    ohao_add_python_test(check_fireflies LABEL gpu GPU SCRIPT tests/renderer/check_fireflies.py)
-    # The environment map the right way up in deferred (RT GI and IBL) and the path tracer: a sky
-    # blue above, orange below, lights a floor blue (ROADMAP row 16's upside-down HDRI).
-    ohao_add_python_test(check_env_orientation LABEL gpu GPU SCRIPT tests/renderer/check_env_orientation.py)
-    # Both renderers against closed-form radiance (a floor under one sun, point or spot light): the
-    # anchor the referee stands on.
+    # Requirement 2, the renderer right: both renderers against closed-form radiance (a floor under one light;
+    # a sky the right way up) and OpenPBR against closed forms (the white furnace, the closed box).
+    ohao_add_python_test(check_env_orientation LABEL gpu GPU TIMEOUT 300 SCRIPT tests/renderer/check_env_orientation.py)
     ohao_add_python_test(check_analytic LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_analytic.py)
-    ohao_add_python_test(check_direct_light LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_direct_light.py)
-    ohao_add_python_test(check_gi_noise LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_gi_noise.py)
-    # OpenPBR in the renderers against closed forms: the white furnace and the closed box.
     ohao_add_python_test(check_material LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_material.py)
-    # Caustics (sub-project 24): light traced from the sun, the camera side's split, their closed forms.
-    # The caustics closed forms take about four minutes of heavy path tracing: out of the default set, run by
-    # `check.py --changed` when the path tracer or caustics change (tools/check_changed.py) and to close a caustics step.
-    ohao_add_python_test(check_caustics LABEL slow GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py)
-    ohao_add_python_test(check_caustics_showcase LABEL slow GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py ARGS --showcase)
-    if(TARGET ohao_game)
-        ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
-            COMMAND ohao_game --frames 600 --resize-at 200)
-    endif()
-    # The live host (sub-project 4, tests 16 and 17): ohao serve --window driven end to end.
-    ohao_add_python_test(check_live LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/check_live.py)
-    # The end-to-end MCP acceptance session (sub-project 4, test 19).
-    ohao_add_python_test(e2e_mcp LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/e2e_mcp.py)
-
-    # Long gates
-    # The referee: deferred against the path tracer in linear radiance, scene by scene (a report).
-    ohao_add_python_test(check_parity LABEL slow GPU TIMEOUT 1800 SCRIPT tests/renderer/check_parity.py)
-    # Diff images for failing scenes and the per-scene JSON go to build/golden_diff/.
+    # Requirement 3, no visual accident: a handful of goldens; diffs go to build/golden_diff/.
     ohao_add_python_test(render_golden LABEL golden GPU TIMEOUT 1800
         SCRIPT tests/golden/render_golden.py ARGS tests/golden/manifest.json --json build/golden_diff/golden.json)
-    if(TARGET reflect_tests)
-        ohao_add_test(reflect_exhaustive_floats LABEL slow TIMEOUT 1800
-            COMMAND reflect_tests --exhaustive-floats)
-    endif()
 
-    # Docs
-    ohao_add_python_test(check_docs LABEL docs TIMEOUT 1200 LOCKS cli_tmp check_fixture serve_tmp
-        SCRIPT tests/docs/check_docs.py ARGS --cpu-only)
-    ohao_add_python_test(monograph_structure LABEL monograph SCRIPT site/tests/test_monograph_structure.py)
+    # Temporary (Frank, 2026-11-08: deleted when their work is done).
+    # Caustics step 2's closed forms (with manifold_tests, tests/renderer): out of the default set.
+    ohao_add_python_test(check_caustics LABEL slow GPU TIMEOUT 900 SCRIPT tests/renderer/check_caustics.py)
+    # The agent interface: `ohao serve` as a process, and a whole MCP session against a hidden window.
+    ohao_add_python_test(check_serve LABEL quick TIMEOUT 600 LOCKS serve_tmp SCRIPT tests/serve/check_serve.py)
+    ohao_add_python_test(e2e_mcp LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/e2e_mcp.py)
+    # A real window presenting frames, resized at frame 200, under validation.
+    if(TARGET ohao_game)
+        ohao_add_test(ohao_game_presentation LABEL gpu GPU TIMEOUT 120 ENV OHAO_VALIDATION=1
+            COMMAND ohao_game --frames 600 --resize-at 200)
+    endif()
 endfunction()

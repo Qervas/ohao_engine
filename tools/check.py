@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check.py -- build OHAO and run its tests from one command, with one verdict.
 
-    python tools/check.py [--labels quick,gpu,docs] [--all] [--changed [REF]] [--jobs 6] [--config Release]
+    python tools/check.py [--labels quick,gpu] [--all] [--changed [REF]] [--jobs 6] [--config Release]
                           [--no-build] [--no-doctor] [--build-dir build] [--out DIR] [--ctest-jobs 4]
 
 --changed [REF] runs only the tests the files changed since REF (default HEAD: the working tree,
@@ -16,19 +16,14 @@ Steps (sub-project 4 spec, "One entry point"):
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
-     a test whose summary says "noisy" (a benchmark under outside load) is rerun alone, at
-     most twice, and every attempt is reported;
   6. the verdict: <out>/check.json, also printed as the last line of stdout.
 
 check.json: {ok, labels, build: {ok, seconds, tail?}, doctor, tests: [{name, labels, ok,
-seconds, passed?, failed?, failures?, noisy?, attempts?, tail?}], counts: {tests, passed,
-failed}}. passed / failed / failures come from the suite's own JSON summary line; tail is
-the last 40 lines of a failing test's output, so no failure is ever reported without what
-it printed. attempts lists a rerun noisy test's runs, [{ok, noisy, seconds}].
+seconds, passed?, failed?, failures?, tail?}], counts: {tests, passed, failed}}. passed /
+failed / failures come from the suite's own JSON summary line; tail is the last 40 lines of a
+failing test's output, so no failure is ever reported without what it printed.
 
-Labels (cmake/ohao_tests.cmake): quick, gpu, docs (the default set); --all adds golden,
-bench and slow. selftest is only for this script's own test; monograph (site/'s checks, frozen
-during the frontier renderer work) runs only when asked for.
+Labels (cmake/ohao_tests.cmake): quick and gpu (the default set); --all adds golden and slow.
 
 Exit code: 0 when the build and every selected test pass, 1 otherwise, 2 on a usage or
 environment error (wrong cmake, missing module).
@@ -46,9 +41,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LABELS = ["quick", "gpu", "docs"]
-ALL_LABELS = DEFAULT_LABELS + ["golden", "bench", "slow"]
-KNOWN_LABELS = ALL_LABELS + ["selftest", "monograph"]
+DEFAULT_LABELS = ["quick", "gpu"]
+ALL_LABELS = DEFAULT_LABELS + ["golden", "slow"]
+KNOWN_LABELS = ALL_LABELS
 MAX_JOBS = int(os.environ.get("OHAO_MAX_JOBS", "6"))
 TAIL_LINES = 40
 # Modules the harnesses import, by the label whose tests need them.
@@ -227,8 +222,6 @@ def summarize(junit, labels):
             entry["failed"] = s.get("failed")
             if s.get("failures"):
                 entry["failures"] = s["failures"][:20]
-            if s.get("noisy"):
-                entry["noisy"] = True   # a benchmark run under outside load: no verdict
         if failed:
             entry["status"] = status
             entry["tail"] = tail(output)
@@ -239,44 +232,12 @@ def summarize(junit, labels):
 # The summary line is a suite's last: keep the end of long outputs, not the start.
 OUTPUT_FLAGS = ["--output-on-failure", "--test-output-size-passed", "65536",
                 "--test-output-size-failed", "1048576", "--test-output-truncation", "head"]
-MAX_NOISY_RERUNS = 2
-
-
-def rerun_noisy(ctest, build_dir, config, out, tests, labels):
-    """A test that reports itself noisy (a benchmark under outside load) is rerun alone, at
-    most twice; its entry becomes the last attempt's, with every attempt in `attempts`. One
-    still noisy after that has not passed (ok false) and keeps `noisy`, so the verdict tells
-    "the machine was busy" from a regression."""
-    for i, entry in enumerate(tests):
-        if entry["ok"] or not entry.get("noisy"):
-            continue
-        name = entry["name"]
-        attempts = [{"ok": False, "noisy": True, "seconds": entry["seconds"]}]
-        latest = entry
-        for k in range(1, MAX_NOISY_RERUNS + 1):
-            print(f"check: {name} was noisy; rerun {k}/{MAX_NOISY_RERUNS}", flush=True)
-            junit = out / f"rerun_{name}_{k}.xml"
-            if junit.exists():
-                junit.unlink()
-            run_logged([str(ctest), "--test-dir", str(build_dir), "-C", config, "-R", "^" + re.escape(name) + "$",
-                        "--output-junit", str(junit)] + OUTPUT_FLAGS, out / f"rerun_{name}_{k}.log", True)
-            again = summarize(junit, labels)
-            if not again:
-                break
-            latest = again[0]
-            attempts.append({"ok": latest["ok"], "noisy": bool(latest.get("noisy")), "seconds": latest["seconds"]})
-            if latest["ok"] or not latest.get("noisy"):
-                break
-        latest = dict(latest)
-        latest["attempts"] = attempts
-        tests[i] = latest
-
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build OHAO and run its tests; one JSON verdict.")
     ap.add_argument("--labels", default=",".join(DEFAULT_LABELS),
-                    help="comma-separated CTest labels (default: quick,gpu,docs)")
-    ap.add_argument("--all", action="store_true", help="every label but selftest and monograph")
+                    help="comma-separated CTest labels (default: quick,gpu)")
+    ap.add_argument("--all", action="store_true", help="every label")
     ap.add_argument("--jobs", type=int, default=MAX_JOBS, help=f"build parallelism (at most {MAX_JOBS})")
     ap.add_argument("--ctest-jobs", type=int, default=4, help="tests run at once (GPU tests never overlap)")
     ap.add_argument("--config", default="Release")
@@ -373,7 +334,6 @@ def main(argv=None):
     run_logged(cmd, out / "ctest.log", True)
     labels_of = test_labels(ctest, build_dir, args.config)
     result["tests"] = summarize(junit, labels_of)
-    rerun_noisy(ctest, build_dir, args.config, out, result["tests"], labels_of)
     n = len(result["tests"])
     passed = sum(1 for t in result["tests"] if t["ok"])
     result["counts"] = {"tests": n, "passed": passed, "failed": n - passed}

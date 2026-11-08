@@ -39,7 +39,7 @@ import sys
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from check_parity import read_pfm  # noqa: E402
+from pfm import read_pfm  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OHAO = os.path.join(ROOT, "build", "Release", "ohao" + (".exe" if os.name == "nt" else ""))
