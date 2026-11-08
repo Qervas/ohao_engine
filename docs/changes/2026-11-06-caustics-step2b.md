@@ -150,8 +150,9 @@ did not), fixed:
 - **Runaway frames: why step 2b is opt-in (2026-11-08).** m9's ball (`m9_ball_weight`, 2,048 spp) did not finish in
   15 minutes with step 2b, at the ceiling of 4,096 and at the old cap of 64 alike, and took 41.7 s without it; at 256 spp
   with the cap of 64 it took 14.4 s with 2,565 paths at the cap. A lane that walks thousands of times holds its warp, and
-  a GPU dispatch is not preempted: such frames ran for seconds, and two firmware crashes (2026-11-07 17:23 and 20:29, Xid
-  109 then 120) came during them. Why m9 passed in seconds on 2026-11-06 (driver 615.78.08, cap 64) is not known. Until
+  a GPU dispatch is not preempted: such frames ran for seconds, and two firmware crashes came during such runs with the
+  ceiling (2026-11-06 at 17:23 in `check_caustics`, Xid 120 on driver 615.78.08; at 20:29 in m9 and m10, Xid 62 on
+  610.57.04). Why m9 passed in seconds on 2026-11-06 (driver 615.78.08, cap 64) is not known. Until
   the re-find work is bounded per dispatch (trials continued across frames, or a queue of walks dispatched in chunks:
   the estimator unchanged), step 2b runs only with `OHAO_MANIFOLD_GLASS=1`, which its tests set; without it nothing
   renders the sun through a solid seen after a bounce (the frame is darker there, as before step 2b).

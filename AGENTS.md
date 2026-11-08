@@ -1428,13 +1428,15 @@ deferred, reference, path traced); two the transparency scene,
   check says so. On Linux the NVIDIA open kernel module's GSP firmware can fail outright (`journalctl -k`:
   `Xid 120, GSP task exception`, then `NV_ERR_RESET_REQUIRED`): Vulkan then lists only the Intel GPU, every
   device creation asks the iGPU for ray tracing and the loader's error fails each GPU test. It needs a reboot (`nvidia-smi
-  -r` refuses while the compositor holds the GPU). **Open (2026-11-06):** on driver 615.78.08 (installed 2026-11-05 with
-  kernel 7.2.11, the day the GPU tests first ran on Linux) the GSP crashed six times in two days, each during a GPU test,
-  light ones included (Xid 120, 62, 119, and Xid 109 context-switch timeouts before the sixth). Not heat (61 C at most), no
-  PCIe errors; neither `nvidia-persistenced` nor `NVreg_DynamicPowerManagement=0x00` (`/etc/modprobe.d/nvidia-pm.conf`)
-  stopped it. A driver regression is suspected (open-gpu-kernel-modules #1522 reports the same firmware build crashing),
-  not proven: the kernel changed the same day. The suspected driver is pinned out only once a test of another version runs
-  clean for hours.
+  -r` refuses while the compositor holds the GPU). **Open (2026-11-08):** six GSP crashes, each during a GPU test, light
+  ones included: five on driver 615.78.08 (2026-11-05 21:19 to 2026-11-06 18:35: Xid 120, 62, 119, and 109 context-switch
+  timeouts before the fifth), one on 610.57.04 (2026-11-06 20:29, Xid 62), so no driver version is proven at fault. Two
+  came during step 2b's runaway frames (dispatches of seconds; 2b is opt-in since, "Caustics"); the other four are not
+  explained. Not heat (61 C at most), no PCIe errors; neither `nvidia-persistenced` nor
+  `NVreg_DynamicPowerManagement=0x00` stopped one (both since undone). A failed GSP's state can survive a warm reboot
+  (open-gpu-kernel-modules #1473): after a crash power the laptop off fully. Since such a power cycle on 2026-11-08 (driver
+  610.57.04): no Xid, a killed runaway render included. **Never ship a dispatch whose work is unbounded**: a GPU dispatch
+  is not preempted, and a few lanes walking for seconds hold their warps.
 - **Linux, found by the port (2026-11-05):**
   - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
     binding one whose layout was destroyed segfaulted in the driver. Keep every pipeline's layout until teardown
