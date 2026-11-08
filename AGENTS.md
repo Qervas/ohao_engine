@@ -87,8 +87,13 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
 - **Every test exits 0 on success** and nonzero on any failure, and ends with one JSON line `{"suite", "passed",
   "failed", "failures"}`. Register a new one with `ohao_add_python_test`/`ohao_add_test` (`cmake/ohao_tests.cmake`),
   with a `TIMEOUT` and, if it touches the GPU, `GPU` (GPU tests never run two at once).
-- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail (2026-11-08: a no-op
-  physics restore failed `replay_test`; a 1% brightness change in `displayPixel` failed all 5 goldens).
+- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail. 2026-11-08, each caught:
+  a no-op physics restore (`replay_test`, all 3 checkpoints); 1% brightness in `displayPixel` (all 5 goldens);
+  the path tracer's sky upside down (`check_env_orientation`); +8% on a light sample's geometry term
+  (`check_analytic`, deferred x1.10); a rough metal's multiple scattering x0.9 (`check_material`, furnace 0.93);
+  64x sampler anisotropy (`check_validation`, all 20 renders); a planted Xid line (`check.py` fails the run). A
+  dielectric's multiple-scattering Fresnel x0.9 passed the furnace: under a white base the energy moves to the
+  diffuse and the total stays 1, which is what a furnace measures.
 - **`ohao doctor`** says whether this machine can build, run and test OHAO: the Vulkan instance, device, ray
   tracing and validation layer; every shader's SPIR-V present and newer than its sources; the assets the scenes
   reference; slangc at its pinned version; a 64x64 deferred frame within 2 s (a wedged GPU fails here). `--cpu-only`
@@ -1110,8 +1115,12 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
   came during step 2b's runaway frames (dispatches of seconds; 2b is opt-in since, "Caustics"); the other four are not
   explained. Not heat (61 C at most), no PCIe errors; neither `nvidia-persistenced` nor
   `NVreg_DynamicPowerManagement=0x00` stopped one (both since undone). A failed GSP's state can survive a warm reboot
-  (open-gpu-kernel-modules #1473): after a crash power the laptop off fully. Since such a power cycle on 2026-11-08 (driver
-  610.57.04): no Xid, a killed runaway render included. **Never ship a dispatch whose work is unbounded**: a GPU dispatch
+  (open-gpu-kernel-modules #1473): after a crash power the laptop off fully. **On Fedora 45 too** (RPM Fusion's
+  615.78.08, 2026-11-08 19:04): Xid 119, "Timeout after 45s of waiting for RPC response from GPU0 GSP", during
+  `check_env_orientation` (a sub-second render, bounded), after about 2.5 hours of GPU work; `[GPU requires reset]`.
+  `nvidia-powerd` (Dynamic Boost, enabled by RPM Fusion) logged nothing before it and errors only after. So it follows
+  the laptop across two distros and two driver versions; the production branch and the closed kernel module without
+  GSP (`NVreg_EnableGpuFirmware=0`) are untried. **Never ship a dispatch whose work is unbounded**: a GPU dispatch
   is not preempted, and a few lanes walking for seconds hold their warps.
 - **Linux, found by the port (2026-11-05):**
   - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
