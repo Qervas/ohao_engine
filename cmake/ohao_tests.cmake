@@ -80,6 +80,9 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(check_env_orientation LABEL gpu GPU TIMEOUT 300 SCRIPT tests/renderer/check_env_orientation.py)
     ohao_add_python_test(check_analytic LABEL gpu GPU TIMEOUT 600 SCRIPT tests/renderer/check_analytic.py)
     ohao_add_python_test(check_material LABEL gpu GPU TIMEOUT 900 SCRIPT tests/renderer/check_material.py)
+    # Requirement 4, gameplay replays exactly: the play scene's fight, a snapshot restored and replayed, and a
+    # new process, reach the same world.hash (headless ohao serve, no GPU).
+    ohao_add_python_test(replay_test LABEL quick TIMEOUT 300 LOCKS replay_tmp SCRIPT tests/replay/replay_test.py)
     # Requirement 3, no visual accident: a handful of goldens; diffs go to build/golden_diff/.
     ohao_add_python_test(render_golden LABEL golden GPU TIMEOUT 1800
         SCRIPT tests/golden/render_golden.py ARGS tests/golden/manifest.json --json build/golden_diff/golden.json)

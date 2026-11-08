@@ -29,8 +29,12 @@ RULES: list[tuple[str, list[str]]] = [
     ("ohao/render/*", ["label:gpu"]), ("ohao/gpu/*", ["label:gpu"]), ("shaders/*", ["label:gpu"]),
     ("tests/renderer/*", ["label:gpu"]), ("tests/validation/*", ["check_validation"]),
     ("tests/golden/*", ["render_golden"]),
+    # Gameplay: anything a world steps through, and the scenes it plays.
+    ("ohao/ecs/*", ["replay_test"]), ("ohao/physics/*", ["replay_test"]), ("ohao/level/*", ["replay_test"]),
+    ("ohao/anim/*", ["replay_test"]), ("ohao/audio/*", ["replay_test"]), ("ohao/vfx/*", ["replay_test"]),
+    ("assets/*", ["replay_test", "label:gpu"]), ("tests/replay/*", ["replay_test"]),
     # The agent interface (temporary gates).
-    ("ohao/api/*", ["check_serve", "e2e_mcp"]), ("ohao/rpc/*", ["check_serve", "e2e_mcp"]),
+    ("ohao/api/*", ["check_serve", "e2e_mcp", "replay_test"]), ("ohao/rpc/*", ["check_serve", "e2e_mcp", "replay_test"]),
     ("tests/serve/*", ["check_serve", "e2e_mcp"]), ("tests/scenes/*", ["check_serve"]),
     ("ohao/runtime/*", ["ohao_game_presentation", "e2e_mcp"]),
 ]
