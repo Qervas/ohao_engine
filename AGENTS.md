@@ -1,430 +1,112 @@
 # AGENTS.md — working on OHAO
 
 The entry point for any agent (or person) building, testing or changing this repo.
-Every command in a `console` block below is run by `python tests/docs/check_docs.py`
-(`--slow` adds builds and long gates); if one stops working, this file is wrong.
 
 OHAO is a C++20 game engine: a Vulkan 1.3 hybrid renderer (deferred raster with ray-traced
 direct light (ReSTIR DI) and GI, plus a path tracer), an EnTT world, reflection and canonical scene files, an
 API for agents (`ohao/api`), the headless `ohao` CLI and `ohao serve`, the same API as a
-JSON-RPC/MCP server on stdio (`ohao/rpc`). Linux (Omarchy, Arch; GCC 16, Ninja) is the platform in daily use
-since 2026-11-05, on an RTX 4060 laptop; Windows/MSVC still builds ("Build").
+JSON-RPC/MCP server on stdio (`ohao/rpc`). Fedora 45 (KDE, GCC 16, Ninja) on an RTX 4060 laptop is the
+platform in daily use since 2026-11-08 (Omarchy/Arch before, from 2026-11-05); Windows/MSVC builds were not
+tried since 2026-11-05.
 
+- **How work is done:** Musk's algorithm, in order (Frank, 2026-11-08): question the requirement, delete the
+  part or process, simplify, speed up, automate. Nothing is added (a test, a feature, a doc section) without
+  the requirement it serves.
 - **Code map, data flow, recipes:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Driving the engine from an agent:** [docs/agents/ohao-cli.md](docs/agents/ohao-cli.md)
   (the CLI, every method and error code) and [docs/agents/ohao-serve.md](docs/agents/ohao-serve.md)
   (a live session over MCP: connect, orient, edit, play, look, record and replay, logs)
 - **Designs and plans:** `docs/specs/`, `docs/plans/`; **what changed:** `docs/changes/`;
   **where it is going:** [docs/ROADMAP.md](docs/ROADMAP.md)
-- **Monograph** (design units with code citations): `site/`
+- **Monograph** (design units with code citations): `site/`, frozen during the frontier renderer work.
 
 ## Build
 
-Linux: the Ninja Multi-Config generator (it keeps the `build/Release/` layout every harness reads) and two pinned
-slangc, each unpacked from Slang's own release into `~/.local/opt/slang-<version>`, where a fresh configure finds them:
-2026.20 for SPIR-V (`shaders/slangc.version`, `SLANGC`) and 2025.11 for the CPU twins' C++
-(`shaders/slangc_cpp.version`, `SLANGC_CPP`; 2026.20's C++ emitter miscompiles them, "Gotchas"). Arch's
-`shader-slang` package writes C++ the twins cannot compile at all (its prelude carries another glibc's headers).
+Fedora's packages (RPM Fusion's `akmod-nvidia` for the driver):
 
-```console
-$ cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc -DSLANGC_CPP=$HOME/.local/opt/slang-2025.11/bin/slangc   # slow
-$ cmake --build build --config Release -j16   # slow
-$ cmake --build build --config Release --target shaders   # slow
+```
+sudo dnf install gcc-c++ cmake ninja-build vulkan-headers vulkan-loader-devel vulkan-validation-layers spirv-tools \
+  tbb-devel wayland-devel wayland-protocols-devel libxkbcommon-devel libX11-devel libXrandr-devel \
+  libXinerama-devel libXcursor-devel libXi-devel libXext-devel
 ```
 
-Windows: the Visual Studio generator through the real CMake (conda's `cmake` shadows it on PATH there, so
-name the scoop shim, `C:/Users/djmax/scoop/shims/cmake`), at most `-j6` (heavier parallel load crashed that
-laptop), and `-DSLANGC=` naming Slang 2026.20's `slangc.exe` (the Vulkan SDK's 2025.11 serves as `SLANGC_CPP`).
-Binaries are `*.exe` there; the docs name them so, and `check_docs` drops the suffix elsewhere.
+Two pinned slangc, each unpacked from Slang's own release into `~/.local/opt/slang-<version>`: 2026.20 for SPIR-V
+(`shaders/slangc.version`, `SLANGC`) and 2025.11 for the CPU twins' C++ (`shaders/slangc_cpp.version`,
+`SLANGC_CPP`; 2026.20's C++ emitter miscompiles them, "Gotchas"). Python (numpy, Pillow, jsonschema) is a uv
+environment in the repo, `.venv`; name its interpreter at configure, or CTest runs the harnesses with the
+system Python, which has none of them. The Ninja Multi-Config generator keeps the `build/Release/` layout every
+harness reads.
 
-- **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a
-  globbed directory is picked up by the next build, which re-runs the configure step
-  itself. A new directory or target still needs a `CMakeLists.txt` edit.
-- **The `shaders` target is not in `ALL`**, but every target that loads SPIR-V depends on
-  it (the `ohao` CLI, the examples, the rendering tests), so building any of them builds
-  the shaders. `python tools/check.py` builds it first regardless.
-- Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`.
-- **Every shader is Slang** (frontier F6; `slangc` from Slang's own release, pinned in
-  `shaders/slangc.version`, the CPU twins' in `shaders/slangc_cpp.version`; there is no GLSL and no glslc). A `.slang` with one `[shader(...)]`
-  entry point gives `<flattened path>.spv` (`postprocess/tonemap.slang` →
-  `postprocess_tonemap.slang.spv`), with several `<flattened path>.<entry>.spv`
-  (`core_gbuffer.slang.opaque.spv`), without one it is a module (`import shared.layout;`).
-  Constants and structs shared with C++ live in `shaders/shared/layout.json`; regenerate
-  their `.slang`/`.hpp` with `python tools/gen_layout.py` (the check below fails until you
-  do). See ARCHITECTURE.md, "add a render pass".
-
-```console
-$ python tools/gen_layout.py --check
 ```
+cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc \
+  -DSLANGC_CPP=$HOME/.local/opt/slang-2025.11/bin/slangc -DPython3_EXECUTABLE=$PWD/.venv/bin/python
+cmake --build build --config Release -j16
+```
+
+- **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a globbed directory is picked up
+  by the next build. A new directory or target still needs a `CMakeLists.txt` edit.
+- **The `shaders` target is not in `ALL`**, but every target that loads SPIR-V depends on it, so building any of
+  them builds the shaders. Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`.
+- **Every shader is Slang** (no GLSL, no glslc). A `.slang` with one `[shader(...)]` entry point gives
+  `<flattened path>.spv` (`postprocess/tonemap.slang` → `postprocess_tonemap.slang.spv`), with several
+  `<flattened path>.<entry>.spv`, without one it is a module (`import shared.layout;`). Constants and structs
+  shared with C++ live in `shaders/shared/layout.json`; regenerate their `.slang`/`.hpp` with
+  `python tools/gen_layout.py` (`--check` says whether they are current). See ARCHITECTURE.md, "add a render pass".
+- **`GLFW_INCLUDE_NONE`** before GLFW's header (`ohao/runtime/window.cpp`): without it GLFW includes `GL/gl.h`,
+  which Fedora does not ship by default. The engine is Vulkan only.
 
 ## Gates
 
-**One command builds and runs everything:**
+The tests serve five requirements, and nothing else is a gate (Frank, 2026-11-08; the cut from 74 tests to these
+is commit `7e7211cf`). A test is added back only when a real bug got through, never per feature or per spec step.
 
-```console
-$ python tools/check.py   # slow
-$ python tools/check.py --all   # slow
+| Requirement | Gate | Label | Time |
+|---|---|---|---|
+| 1. Never hurt the machine | every test has a time limit; `tools/check.py` fails a run during which the kernel logged an NVIDIA GPU fault (Xid); `check_validation`: the Vulkan validation layer over Cornell, the helmet, the animation rig and the play scene, deferred and path traced | gpu | 14 s |
+| 2. The renderer is right | `check_analytic` (both renderers against `albedo/π × irradiance` under one light; an emissive quad's form factor), `check_env_orientation` (a sky the right way up), `check_material` (the white furnace renders 1, the closed emitting box its closed form) | gpu | 45 s |
+| 3. No visual accident | `render_golden`: 5 scenes (Cornell deferred and path traced, the Damaged Helmet, the play scene, glass) | golden | 6 s |
+| 4. Gameplay replays exactly | `replay_test`: the play scene's fight restored from a midway snapshot, and in a new process, reaches the same `world.hash` at every checkpoint (headless, no GPU) | quick | 0.1 s |
+| 5. It builds | `tools/check.py` builds first, then runs `ohao doctor` | | |
+
+**Temporary tests** (Frank: deleted when their work is done): `manifold_tests` and `check_caustics` (`slow`) with
+caustics step 2; `check_serve`, `e2e_mcp` and `ohao_game_presentation` until the agent-interface and window work
+they guard is settled.
+
+```
+python tools/check.py                    # build, ohao doctor, the default set (quick, gpu): about 2 minutes
+python tools/check.py --all              # adds golden and slow
+python tools/check.py --changed [REF]    # only what the files changed since REF reach (tools/check_changed.py)
 ```
 
-It finds the real CMake (refusing conda's), configures if needed, builds the `shaders`
-target and then everything with at most 6 jobs, runs `ohao doctor` (below; a failing
-environment stops the run there), runs every CTest test with the chosen labels, and
-writes one verdict: `build/check/check.json`, also the last line it prints
-(`{ok, labels, build, doctor, tests: [{name, labels, ok, seconds, passed, failed,
-failures, tail}], counts}`), plus `build/check/junit.xml` and the logs beside them. A
-failing test's entry carries the last 40 lines of its output. Exit 0 = all passed, 1 =
-something failed, 2 = the environment is wrong (the message says how).
+`check.py` finds the real CMake, builds the `shaders` target and then everything (at most 6 jobs), runs
+`ohao doctor` (an error-level failure stops the run), runs CTest with the chosen labels and writes one verdict,
+`build/check/check.json`, also its last printed line: `{ok, labels, build, doctor, tests: [{name, labels, ok,
+seconds, passed, failed, failures, tail}], counts, gpuFaults}`. A failing test carries the last 40 lines of its
+output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = the environment is wrong.
 
-- **While iterating, `python tools/check.py --changed [REF]`** builds and runs only the tests the
-  files changed since REF (default HEAD: the working tree and untracked files) reach, by the rules in
-  `tools/check_changed.py` (by reach, not directory: a saved component's files select every suite that
-  records the schema hash; a renderer or shader file the whole `gpu` label; a path no rule covers the
-  default set). Close a build step with the full run. A new suite or path family gets a rule there
-  (`check_tests` fails on a rule naming no test).
-- **Labels** (one per test, `cmake/ohao_tests.cmake`): `quick` (CPU), `gpu`, `docs` — the
-  default set — and `golden`, `bench`, `slow`, which `--all` adds (`monograph`, the frozen
-  site's checks, only by name). `--labels gpu,docs`
-  picks your own set; `ctest --test-dir build -C Release -L quick` works without the
-  script. GPU tests never run two at once; benchmarks run alone. **Iterate with `--changed`, not the whole `gpu`
-  label** (Frank, 2026-11-08: the full set after every change was most of a session's time). `check_caustics` (about
-  four minutes of heavy path tracing) is `slow`: `--changed` runs it when the path tracer or caustics change, and a
-  caustics step closes with it; its ball cases (step 2b, "Caustics" below) run only by name or with `--ball`.
-- **Registering a new suite:** `ohao_add_test(<name> LABEL <label> [GPU] COMMAND <exe>)`
-  in its `CMakeLists.txt`, and end its `main` with `ohao::test::finish(...)` from
-  `tests/common/harness.hpp` (or its `CHECK`/`RUN` macros), so the summary line is
-  there. `check_tests` fails if a test executable is built but not registered.
-- **The environment:** `ohao doctor` answers whether this machine can build, run and test
-  OHAO, as `{"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}}`: the Vulkan
-  instance, device, ray tracing and validation layer; every shader's SPIR-V present and
-  newer than its source and every file it includes; the assets the checked-in scenes
-  reference; slangc (at its pinned version), cmake (not conda's) and the harnesses'
-  Python modules; and a 64x64
-  deferred frame within 2 s (a wedged GPU after a crash fails here, not in every render
-  test). Exit 1 when an error-level check fails; `--cpu-only` creates no device.
-
-```console
-$ build/Release/ohao doctor --cpu-only > /dev/null
-```
-
-Every suite exits 0 on success and nonzero on any failure; that is the pass criterion.
-Every suite ends with one JSON line, `{"suite", "passed", "failed", "failures"}`. The
-commands below run single suites by hand.
-
-CPU suites (no GPU):
-
-```console
-$ build/Release/runtime_tests.exe > /dev/null
-$ build/Release/log_tests.exe > /dev/null
-$ build/Release/reflect_tests.exe > /dev/null
-$ build/Release/scene_tests.exe > /dev/null
-$ build/Release/api_tests.exe > /dev/null
-$ build/Release/rpc_tests.exe > /dev/null
-$ build/Release/systems_tests.exe > /dev/null
-$ build/Release/physics_backend_tests.exe > /dev/null
-$ build/Release/audio_system_tests.exe > /dev/null
-$ build/Release/audio_schedule_tests.exe > /dev/null
-$ build/Release/env_cdf_test.exe > /dev/null
-$ build/Release/env_sun_test.exe > /dev/null
-$ build/Release/denoise_parse_test.exe > /dev/null
-$ build/Release/sobol_test.exe > /dev/null
-$ build/Release/display_test.exe > /dev/null
-$ build/Release/sky_test.exe > /dev/null
-$ build/Release/level_physics_tests.exe > /dev/null
-$ build/Release/combat_tests.exe > /dev/null
-$ build/Release/anim_tests.exe > /dev/null
-$ build/Release/vfx_tests.exe > /dev/null
-$ build/Release/material_tests.exe > /dev/null   # slow
-$ build/Release/openpbr_tables.exe --check ohao/render/material/openpbr_tables.hpp > /dev/null   # slow
-$ python tests/cli/check_cli.py --cpu-only > /dev/null
-$ python tests/reflect/check_scene_schema.py > /dev/null
-$ python tests/check/check_tests.py > /dev/null
-$ python tests/golden/test_golden_diff.py > /dev/null
-$ python tests/doctor/check_doctor.py > /dev/null
-$ python tests/serve/check_serve.py > /dev/null
-$ python tests/layout/check_layout.py > /dev/null
-$ python tests/level/check_level_assets.py > /dev/null
-$ python tools/audio/grenade_spatial.py --out build/grenade_spatial_docs > /dev/null
-```
-
-| Suite | Covers |
-|---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices (the present mode asked for, else the next one down: immediate, mailbox, fifo), the frame log (`sp9_t19_*`, `sp9_t20_*`: a look movement's latency from its poll to the present of the frame showing it, the stage medians, p95 by linear interpolation, the newest frames only, the ring; frame time percentiles and steps per frame), capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, the click that captures the cursor never reaching the input map; sub-project 9 step 3 (`sp9_t21_*`): combat's particles by event (a muzzle burst at the drawn muzzle along the round, sparks and the surface's dust per hit, nothing when not realtime); the audio player (sub-project 11 step 3, `t29_*`, on a mixer without a device): two steps of one frame start a step apart, the newest a step ahead; a command whose time has passed at once and counted late; paused or lockstep at once plus the horizon, then a new anchor; a step back (a restore) a new anchor; the play scene's bank decoded once, no file opened by 240 steps of fighting |
-| `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
-| `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
-| `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend), the glTF loader (node transforms, per-mesh loading, KHR_materials_clearcoat's and _sheen's four textures each in its slot: `tests/assets/make_layers_textures.py`) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params); `player.info` at the spawn and after a walk, `player.teleport` (onto the Step, at rest, refused params), `physics.contacts` (the resting crates, an entity's pairs, `max`), a restore mid-fall and a restored walk reaching the same `world.hash`; combat (`sp7_t18_*`): `combat.info` before and after the first steps (the round, three combatants in id order, under 1 KB), `combat.events` (a burst's shots, `round_start`, the cursor), `combat.damage` (on an enemy and on its body box, the dead taking none, both enemies dead: won, the player dead: the restart 3 s later back at the round start's `world.hash`), refused params, `E_STATE` without combat; audio (sub-project 11 test 29, `t29_*`): `audio.info` headless (`device: "none"`, the snapshot, zone, buses, the fight's commands after a cursor, under 2 KB at `max` 16), `audio.mix` handing a host its overrides (a bus's db, mute, solo, a forced snapshot, `clear`; unknown names refused before anything changes) and never touching `world.hash` or the schedule |
-| `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
-| `systems_tests` | engine-provided systems (spin, the fly controller) |
-| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
-| `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle; enemies (test 16): spawned at the enemy spawns, idle while the player is behind them, seeing and chasing, attacking after the reaction time (21 steps), bursts of 3 at 4 Hz with 0.8 s between, giving up 3 s after losing the line, woken by a hit, dead ones parked with no character, their Transform upright (the death clip falls), their fire killing the player, two runs and a mid-fight snapshot replaying bit for bit, the play scene's two enemies; the round (test 17): `round_start` once, a restart 180 steps after the player's death equal to the round's start (`world.hash`, poses, health, ammo, a knocked crate), the `restart` key, a dead player neither walking, turning nor firing, a win once both enemies die (waiting for `restart`, which brings both back), no round without `Round`, the same play after a restart, and after a won round's restart, bit for bit, and the play scene's won round restarting to the round start's `world.hash` (its enemies' yaw of exactly 180, rotations bit for bit); presentation (`fx_*`): the muzzle light on for its 3 steps then off, impact marks (64 at most, the oldest reused, never saved or hashed, on an enemy's body box and following it, none on the player, cleared by a restart), the HUD list (health, ammunition, the crosshair opened by bloom, the hit marker for 0.15 s and the vignette for 0.3 s, DEAD with the restart countdown, CLEARED, nothing without a player); the first-person gun (sub-project 9 test 21, `t21_*`): the rest pose (the remap only), the remap (every point within `depthScale` of its distance, projected through the scene's 75° where the original lands through 60°), sway lagging a 10° turn by 0.8° and returning, one bob cycle per 0.75 m walked (none standing or in the air), a kick of 3 cm and 2.5° per round returning, a restart resetting it, `world.hash`, saves and snapshots untouched by it; the won screen without crosshair or hit marker; the enemy's animation (sub-project 10, `t23_*`, `t25_*`): each AI mode and combat event giving its state in the same step (move at the chase speed, combat from the step it attacks, a kick per round, a flinch per round that hurt it, the death clip held at its end, the Transform upright, `body_fall` once), the reload clip's `mag_out`, `mag_in` and `bolt` 36, 78 and 105 steps in, the play scene's enemies skinned and posed before any step with the rifle and muzzle in the right hand, and a fight to the restart leaving both Animators and `world.hash` as at the round's start; the player's arms (sub-project 10 step 3): the arms' `mag_in` within one step of the weapon's `reloaded` at `reloadTime` 1.5 and 2.0, ADS (`WeaponState.aim` stepped over `adsTime`, exactly 1 after 12 steps, none for the dead; the cone linear in `aim`, half at 1; the drawn field of view 55° in live frames only, 75° in lockstep and captures, the arms remapped through it), the play scene's arms skinned under the ViewModel with the muzzle on the `gun` joint and the kick at half |
-| `anim_tests` | animation (sub-project 10, tests 22 and 23, on the generated rig `tests/anim/fixtures/`, `tools/anim/make_test_rig.py`): the glTF reader (skin joints, parents, inverse binds; every sampler kind and channel path to the bit; morph channels dropped with a warning), sampling (LINEAR nlerp, STEP, CUBICSPLINE; loop and clamp; a key exact at its time), the bind pose's identity palette, Assimp's bone order mapped to the skin's joints by name (and the rig's 96 vertices kept: no join across weights), 1-D blends, masked additive layers, graph errors with their JSON pointers; the step: transitions on a parameter, an event and the clip's end (61 steps for 1 s), fades counted in steps, events once per crossing and in id order within a step, a restore mid-fade replaying the same Animator and `world.hash`, the pose never in the hash; a clip's rate from a parameter (`rateFrom`: its anchor event lands the parameter's seconds in, errors with their paths) |
-| `vfx_tests` | effects (sub-project 12, test 31, CPU): `.vfx.json` parse errors at their JSON pointers, the default set (today's muzzle, sparks and dust by surface as data), the closed form against an RK4 integration, the play scene's fight writing an effect per shot and hit, tracers, decals and the grenade's boom, smoke and scorch, a placed `VfxEmitter` by step count, the caps dropping the oldest of a kind, a snapshot's and a restart's records replayed exactly, `world.hash` the same with and without the vfx system |
-| `material_tests` | OpenPBR's base (`shaders/material/openpbr.slang`, OpenPBR step 1, T1) run on the CPU through its C++ build (`tools/material/openpbr_cpu`): the defaults are OpenPBR 1.1.1's; the exact dielectric Fresnel; `specular_weight` 0 over smooth EON reflecting exactly its albedo; a near-mirror metal reflecting its F0 head-on; each lobe reciprocal (the layered whole is not: OpenPBR's albedo scaling is at wo alone); `sample()` drawn with `pdf()` (chi-square on a 32x64 hemisphere grid, Sidak-corrected 1%) and weighted `eval/pdf`; `albedo()` the integral of `eval()` within 0.5%; the white furnace (white dielectrics at IOR 1.5 and 3 over white EON, a white metal) within 1% at roughness 0.01 to 1 and views to 85°; step 2 (`t2_*`): the coat's, fuzz's and anisotropy's defaults, the anisotropic and coat lobes reciprocal, chi-square and `albedo()` over coated, fuzzy, anisotropic and layered materials (1% for a coloured coat's absorption, a dark base and a coat off normal; anisotropic lobes at 18°, 60° and 81°, along and across the tangent: metals 1%, a coat 1.5%, a dielectric and everything layered 2.5%, a dielectric's specular alone 5%: known gaps; `material_tests t2_albedo` runs one test), a white coat (darkening on and off) over a white dielectric and metal and white fuzz within 1% to 85°, a white anisotropic metal within 1% to 60° and 5% at 85° at roughness up to 0.6; step 3 (`t3_*`): transmission's, the thin film's and thin-walled's defaults, sampling over the whole sphere (chi-square, 64 x 64 bins) and `albedo()` for glass (solid from outside and inside, thin-walled, half transmissive, coated), white glass at IOR 1.33, 1.5 and 2.4, roughness 0.01 to 1, from both sides within 1%, the thin film's Airy reflectance (in [0, 1], at no thickness the base's Fresnel, coloured at 300 nm), dispersion's IOR at the d line; area lights (`t5_*`): the fitted LTC's density integrates to 1, stays near the GGX lobe it was fitted to (L1 at most 0.25), and `ltcQuad` is its integral over quads (overhead, toward the reflection, near the plane) against Monte Carlo; step 4 (`t4_*`): subsurface's defaults, van de Hulst's inversion at 0 and 1, the local lobe (chi-square, `albedo()`, a white one within 1%), the walked lobe 5 (what enters plus what reflects white within 1%, pointing inward, no density in `pdf()`) |
-| `openpbr_tables --check` | the checked-in energy tables (`ohao/render/material/openpbr_tables.hpp`) are what this build's module integrates, byte for byte; after changing the module, regenerate them with `build/Release/openpbr_tables ohao/render/material/openpbr_tables.hpp` |
-| `audio_system_tests` | the audio facade (handles, volumes, categories) and sub-project 11's test 26 on a mixer without a device (`t26_*`): `.audio.json` parse errors at their JSON pointers, the slice's bank (Feel's curves, a file for every sound), the default bank's categories, a bus's gain on its subtree only, mute and solo, start times to the frame, a duck and the `dead` snapshot linear in dB (and its low-pass by band), a stop's 96-frame fade, two renders bit for bit, an occluded voice through its bus, the local folder first; test 27's mixer half (`t27_*`): an impulse through each of the slice's reverb presets decaying at its design RT60 within 20%, a bus's send scaling the return's tail (+6 dB for twice the send, none without one), 300 mixers with four senders each torn down cleanly |
-| `audio_schedule_tests` | test 27's schedule half (sub-project 11 step 2, the blockout and the play scene): `ReverbZone` containment (on a face is inside; priority, then the lower id), one `zone` command with its 30-step blend at the step the listener crosses an edge, a level node's `verb` hint (a trigger box with `ReverbZone`, `col mesh` kept, an unknown preset `W_AUDIO_PRESET` and the default), occlusion graded by walls (none; −8 dB, 1.2 kHz; −14 dB, 700 Hz), a held voice re-cast every 6 steps, 16 rays a step (the rest counted, unoccluded), and the play scene's enemy shot rendered in the open and behind the pillar (8.6 dB down, 25.9 dB above 2 kHz); `--listen DIR` writes `step2_zones.wav` and `step2_cover.wav` with their JSON schedules; test 28 (step 3, `t28_*`): the rules moved from the window's players (footstep surfaces and round robin, combat sounds by shooter and surface, handling sounds at the enemy or at the ear, the voice cap's quietest lost, curves and the occlusion ray from the bank), priority and steal (lower priority first, then the quietest, then the oldest; a `stop` before its `play`; `dropped` when nothing is lower), `holdMs` from the bank, ducks (the deepest rule wins, attack and release), the snapshot from the round (`dead`, `won`, back to `default`), the same fight twice the same schedule, a restore mid-fight and a restart writing what a recording wrote (`stop_world`, `resync`), the world replaying the same with the schedule as without, the enemy's footsteps from its clips' `foot_l`/`foot_r` at its feet, `world.hash` unchanged by the schedule; test 30 (`t30_*`, ruling 23): one G throw, one `explode` voice 149 steps after the throw step where the throw's arc meets the ground (within 1 cm), unoccluded in the open, panned right with the listener facing west and left facing east |
-| `env_sun_test` | the environment's sun (`render/rt/env_sun.hpp`): found and painted out with the sky around it (its irradiance, direction and share of the map's power), across the u seam, its dim halo with it and an unconnected bright cloud kept; studio softboxes and a wide bright patch are no sun and leave the map untouched |
-| `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
-| `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
-| `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
-| `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
-| `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes, Slang entry points and imports) and on the real tree; `--gpu` adds the device checks |
-| `check_layout.py` | `shaders/shared/layout.json`'s generated files current, std430 offsets asserted, bad layouts refused, the generated Slang compiling |
-| `check_level_assets.py` | the checked-in levels (`assets/levels/`): every node's `extras` against the hint schema (`tests/level/extras_schema.json`), the blockout's nodes and hints (the contract the level pipeline's later tests assert), its Blender rebuild byte for byte (`skip` without Blender 5.2.2); the player's arms and rifle (`assets/characters/fps_arms/`, `tools/anim/make_fps_arms.py`) rebuilt the same way; the `verb` hint in the schema, the audio fixture's nodes (`tests/level/fixtures/level_audio.gltf`) valid and regenerated byte for byte by `tests/level/make_audio_fixture.py`; the transparency scene's MASK leaf card (`assets/vfx/alpha_card.gltf`) rebuilt the same way by `tools/vfx/make_alpha_card.py` |
-| `grenade_spatial.py` | the test grenade (ruling 23) sampled in space (`tools/audio/`, CTest `grenade_spatial` into `build/grenade_spatial`; by hand it writes `C:/Users/djmax/ohao_refs/listen/sp11_audio`): `audio_bench --grenade-spatial DIR` stands the play scene's player outdoors facing north, the ambience bus muted, and sets the grenade off 4 m and 20 m to its left and right and 4 m in front through the schedule and the window's `AudioPlayer` without a device (`grenade_spatial.wav`, `grenade_spatial_schedule.json`); each 3 s window's L and R RMS, ILD (20 log10 L/R), peak channel, dBFS and a left/right azimuth guess go to `grenade_spatial.csv`/`.json`; passes with LEFT ILD ≥ +6 dB, RIGHT ≤ −6 dB, 20 m at least 6 dB below 4 m on each side, FRONT \|ILD\| ≤ 2 dB, nothing else starting in a window; `--no-run` measures an existing render |
-| `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`; `loadMs` and `buildMs` compare as 0), every tool schema through `jsonschema`, `tools/list` at most 28 KB, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
-
-GPU suites and harnesses (each creates a Vulkan device):
-
-```console
-$ build/Release/engine_tests.exe > /dev/null   # gpu
-$ build/Release/ecs_tests.exe > /dev/null   # gpu
-$ build/Release/renderer_test.exe > /dev/null   # gpu
-$ build/Release/instantiate_gpu_test.exe > /dev/null   # gpu
-$ build/Release/scene_view_gpu_test.exe > /dev/null   # gpu
-$ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
-$ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
-$ build/Release/cull_parity_gpu_test.exe > /dev/null   # gpu
-$ build/Release/light_cluster_gpu_test.exe > /dev/null   # gpu
-$ build/Release/light_emitter_gpu_test.exe > /dev/null   # gpu
-$ build/Release/skinning_gpu_test.exe > /dev/null   # gpu
-$ build/Release/vfx_gpu_test.exe > /dev/null   # gpu
-$ build/Release/exposure_gpu_test.exe > /dev/null   # gpu
-$ python tests/cli/check_cli.py > /dev/null   # gpu
-$ python tests/validation/check_validation.py > /dev/null   # gpu
-$ python tests/renderer/check_fireflies.py > /dev/null   # gpu
-$ python tests/renderer/check_env_orientation.py > /dev/null   # gpu
-$ python tests/renderer/check_analytic.py > /dev/null   # gpu
-$ python tests/renderer/check_direct_light.py > /dev/null   # gpu
-$ python tests/renderer/check_gi_noise.py > /dev/null   # gpu
-$ python tests/renderer/check_material.py > /dev/null   # gpu
-$ python tests/renderer/check_parity.py > /dev/null   # gpu # slow
-$ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
-$ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
-$ python tests/serve/check_live.py > /dev/null   # gpu
-$ python tests/serve/e2e_mcp.py > /dev/null   # gpu
-$ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
-$ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
-$ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
-$ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
-$ build/Release/level_bench.exe --check tests/bench/level_budgets.json > /dev/null   # slow
-$ build/Release/physics_bench.exe --check tests/bench/physics_budgets.json > /dev/null   # slow
-$ build/Release/feel_bench.exe --check tests/bench/feel_budgets.json --seconds 10 > /dev/null   # slow
-$ build/Release/audio_bench.exe --check tests/bench/audio_budgets.json > /dev/null   # slow
-$ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
-```
-
-- `engine_tests`: event bus, command history, assets, headless deferred and path-traced
-  frames, RenderScene, per-pass GPU timing (every pass registered, timed once, in frame
-  order, within the frame; a pass turned off leaves the timings), the capture path (a reset
-  idles nothing and a capture after it is the same from any frame slot; the GPU preview is
-  the CPU box filter's bytes and is all a preview request copies), the render settings
-  (`sp2b_t14_*`: a fresh renderer starts at the defaults and reads back what was set; the
-  SSS, RT GI and RT direct light switches drop their passes; GI resolution and rays
-  reach the trace; CSM cascades and size rebuild the map), the HUD (`sp7_hud_*`: a capture
-  with a HUD list differs from one without only inside the listed rectangles, and an empty
-  list leaves the frame byte for byte). `ecs_tests`: world, hierarchy, transforms and the render extract
-  against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
-  snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
-  post effects included, bit-identical across fresh renderers, processes and repeated
-  captures, and path-traced Cornell (offline and realtime) the same within the BVH floor
-  (below). `cull_parity_gpu_test`: GPU culling on and off render the same image (a built scene
-  with occluded and off-screen boxes, Cornell, the helmet room), two runs build byte-identical
-  lists, occluded and off-screen draws are in no list, face culling changes no pixel of
-  closed meshes (test 6); the meshlet path through task and mesh shaders and through their
-  compute fallback render the same image as each other and as the instance path (the
-  occlusion scene, a one-sided sphere whose back-facing meshlets the cones drop, Cornell, the
-  helmet room), and the fallback's lists are byte-identical run to run (test 7).
-  `light_cluster_gpu_test` (test 8): the froxel lists light every pixel exactly as summing
-  every light does (PNGs byte for byte: Cornell's 12 lights, the helmet room with post, the
-  bench scenes' 1,000 point lights and sun, a wall 1,500 m out under a 3,000 m far plane, an
-  orthographic camera); 1,000 lights packed together overflow and `render.stats` reports
-  `lightsOverflow`; twin runs build identical lists (all with RT direct light off: the loop lights
-  every light; `--keep` leaves the compared PNGs in `build/`).
-  `light_emitter_gpu_test`: a point, a spot and an area light get one emitter mesh each, a
-  sun none; with the lights out of view the image with emitters is the image without them
-  (deferred with RT direct light and GI, deferred with CSM: byte for byte; path traced, whose bounce
-  rays meet emitters and weigh them against light sampling: the same light, the mean within 1%
-  overall and 5% per 32x32 block), with them in view each emitter is bright and every other
-  pixel's light the same past 24 px (the mean within 1%, per 32x32 block within 5%: RT direct light's
-  reuse and its denoiser read neighbours within 30 px, and an emitter's pixels are not a surface to
-  them; the path tracer's bounce rays meet the mesh); a moved light's emitter carries last
-  frame's placement as its prevWorld, and under TAA a moving point light's mesh is as bright
-  as the light held still; the first-person gun (`ViewModel`, sub-project 9): a capture with
-  the gun against one without it differs only inside the gun's footprint (it shadows and
-  lights nothing), where a plain box at the gun's drawn place changes pixels outside it; the
-  player's skinned arms under a ViewModel leave the light past 24 px of their footprint the same (mean
-  within 1%, blocks 5%: RT GI's radiance cache is fed by the frame's pixels, and the arms hide some).
-  `skinning_gpu_test` (sub-project 10, test 24, the rig): the deformed range read back equals a
-  CPU skin of the same palette (positions, normals, 1e-5 relative); two instances of one mesh hold
-  their own poses; after a window frame (a step, one sync, the frame) the copy's previous positions
-  are last frame's skin (the foot, joint 0 only, has no motion); the raised arm changes the deferred
-  frame and the path tracer's in the same place; a moving pose refits its BLAS every frame and
-  rebuilds it after 120 refits; a still pose runs no skin, bounds or refit work; `render.stats`
-  `skinning`. `vfx_gpu_test` (sub-project 12, test 32): the transparent pass's objects back to front from
-  four views, two at one distance in id order, the nearest of three overlapping panes winning where
-  they overlap; a lit puff by a red lamp redder than the same puff 5 m off (per-particle light read
-  back), unlit its own colour; a soft puff crossing the floor stepping no more than 1/8 of its light a
-  pixel (a hard one steps); a cut MASK card letting RT direct light and the path tracer through, a kept
-  one shadowing; a BLEND pane casting no RT shadow or GI; a capture at a step the same after 0, 7 and 200
-  frames; a forward-shaded plane equal to the deferred one within 1 LSB (`--keep` leaves the PNGs in
-  `build/`). `cull_parity_gpu_test` test 8: a rig whose bind box is off screen draws its raised arm,
-  culling on = off, mesh shaders = fallback = instances. `deferred_determinism_gpu_test` covers the
-  rig (deferred exact, path traced within the floor).
-  `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
-  end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
-  previews, a region, another size refused), log.read; a lockstep window capture equals a
-  headless capture of the same world bit for bit (post off and on, and path-traced:
-  `rt_offline` and `rt_realtime`, test 11); a long path-traced capture reports progress and
-  is cancelled with the host serving on; a `--mode rt_offline --spp 24` window presents 24
-  accumulating frames, stops, and restarts after a change; a realtime `--mode rt_realtime`
-  window's capture is its next frame; minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
-  readbacks 0 through teardown; `helmet_game.scene.json` saves byte for byte and its fly
-  camera moves 3 m in 60 injected steps; the window host over `--pipe` (a step, a capture,
-  the client's disconnect ends it cleanly); the play scene's player walks, turns by the mouse
-  and jumps on injected input, and the same walk headless reaches the same place,
-  `world.hash` and picture from its eyes, bit for bit (sp6 test 14); a fight (sp7 test 18):
-  EnemyA shot down (`combat.info` for where, `player.teleport` to face, bursts of `fire`), the
-  player killed by `combat.damage`, the restart 3 s later, the room cleared and won, and the same
-  fight headless reaching the same `world.hash`, `combat.info`, events and HUD picture; a realtime
-  window's `render.stats` reports `latency` and `pacing` after injected mouse movements, a lockstep
-  one neither (sp9 tests 19, 20); the fight's voice schedule from the window equal, command for
-  command, to a headless session's (`OHAO_AUDIO_TRACE=1` through `log.read`, sp11 test 28); a realtime window with `--sound`
-  reporting `render.stats` `audio` (`mixMs`, `voices`, `late`), one without none (test 29). `e2e_mcp.py`: a
-  stdlib-only MCP client runs a whole session against a hidden window (load, edit, snapshot,
-  record, a flight, step with watch, captures, logs, restore, replay to the same hash, a
-  capture bit-identical to the first; the blockout's level and physics; the play scene walked,
-  `player_info`, `player_teleport`, `physics_contacts`, restored and walked again to the same
-  hash and picture; the round fought: `combat_info`, EnemyA shot down, `combat_events`, a look
-  with the HUD, `combat_damage` killing the player, the restart, the room cleared and won;
-  the fight listened to: `audio_info`'s newest commands, a bus muted and one soloed, `clear`,
-  `world_hash` untouched), validation clean through teardown.
-- **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
-  is a record on the logger's `validation` channel, on stderr as
-  `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
-  `... repeated N more times`). `check_validation.py` renders Cornell, the helmet, the
-  skinned animation rig and the play scene a second into the fight, deferred and path traced (offline, realtime, realtime through NRD), under the layers;
-  `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
-  `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
-  commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Fireflies** (`check_fireflies.py`): the play scene from the spawn looking west, 4 frames after
-  a reset (a moving camera's GI history), RT GI on against off: pixels GI made a bright speck (what
-  GI adds over its 5x5 median by more than 12 levels, and the GI-on image over its own 5x5 median
-  by more than 12), at most 150: 14 with the HDRI's sun taken out and GI's bounce shadowed, 524 with
-  the sun left in GI's rays (and the bounce unshadowed);
-  and the log saying the environment's sun was taken out. The speck test is Frank's ruling of
-  2026-10-29: with the sky the right way up, what GI adds alone counted 363, mostly thin features
-  (the rifle, fingers) that the real sky's bounce lights differently from what is behind them.
-- **Render goldens** (`tests/golden/manifest.json`, 42 scenes; one RT direct light's showcase, `sponza_night.scene.json`;
-three OpenPBR step 4's subsurface, `subsurface.scene.json` (skin-like, marble, jade, a diffuse reference; deferred,
-reference, path traced);
-three OpenPBR step 3's glass, `glass.scene.json` (clear, frosted, amber, a thin-walled filmed bubble, an anodised metal;
-deferred, reference, path traced);
-three OpenPBR step 2's materials, `materials_step2.scene.json` (car paint, velvet, brushed metal, lacquered wood;
-deferred, reference, path traced); two the transparency scene,
-  `transparency.scene.json` (blended panes, the MASK leaf card, lit soft smoke, sparks; deferred exact
-  and path traced); 8 examples, 22 through
-  `ohao run`; eight at the deferred frame's `reference` quality; three the skinned animation rig
-  mid-wave, `anim_rig.scene.json` (deferred, reference, path traced); eight of them the Khronos
-  validation pack, `assets/khronos/README.md`; two an area light, `area_light.scene.json`;
-  one the level pipeline's blockout, `blockout_room.scene.json`; two the play scene through
-  the player's head, `blockout_play.scene.json`, one of them with the HUD after 45 steps of the
-  fight, `cli_blockout_play_hud`): `--only NAME`, `--update` after a deliberate change (look at what drifted
-  first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
-  regions where the image changed); a failing scene also gets
-  `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
-  (expected | actual | heat of the worst region), `--heatmaps all` for every scene.
-  `--selftest --json` records the run-to-run floor. They are a hash of an unchanged sampler, not an image-quality gate: anything
-  that perturbs the sample sequence moves every pixel by the noise. Never widen a
-  tolerance to make one pass. The deferred scenes are exact (max_abs 0): any difference
-  there is a change. Path-traced scenes hold to a floor of 1 LSB on a few pixels in a
-  minority of runs (tolerance 1 / 0.0005): the driver builds a mesh's BVH differently run
-  to run, and a ray that hits exactly on a shared triangle edge takes whichever triangle
-  the traversal reaches first.
-- **Benchmarks** (`scene_bench --check`): budgets in `tests/bench/scene_budgets.json`;
-  results in `build/scene_bench.json`. `serve_bench --check`: the protocol's budgets in
-  `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:
-  round trips, transport overhead, apply, step, hash, diff, the logger's per-call costs, the
-  `tools/list` size; on the play scene after 120 steps of fire, `audio.info`'s size at `max` 16,
-  `audio_info_bytes`; then `ohao serve --window 1280x720 --hidden` on Cornell: a step until
-  its frame is presented, a frame's readback, inline and PNG captures, an inline `rt_offline`
-  capture at 16 spp (150 ms, Frank's ruling), the reader thread's CPU over 600 idle realtime steps; `--cpu-only` skips the window), results in
-  `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
-  `tests/bench/render_budgets.json`, each tagged `gatedFrom` the 2b step that delivers it
-  (gated once `currentStep` reaches it, else reported `pending` with its measurement);
-  headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p`, `sponza_night_1080p` (RT direct
-  light's showcase, 37 lamps; no budget yet), `sponza_1080p` (Khronos Sponza by day; no budget yet),
-  `bench10k_1080p`/`bench100k_1080p`, `play_hud_1080p` (the play scene with its HUD: the
-  `hud` pass, 0.05 ms) and `play_vfx_1080p` (the play scene's effects: a grenade thrown and the
-  rifle held down, stepped to the boom and before every frame: `vfx.expand` 0.08, `vfx.sort` 0.04,
-  `transparent` 0.30 ms, sub-project 12's proposals) and
-  `anim16_1080p` (16 skinned rigs in the blockout, the world stepped before every frame so every
-  pose changes: `skin` + `skin.bounds` 0.25 ms, `rt.blas.refit` 0.6 ms, sub-project 10's
-  proposals) and `play_anim_1080p` (the play scene stepped the same way: its two enemies' `skin` +
-  `skin.bounds` 0.05 ms, `rt.blas.refit` 0.1 ms; `play_hud_1080p`'s frame is gated at its pre-SP10
-  median 2.19 ms + 0.2), 5 warm-up and 100 timed frames each, every pass's median
-  and p95 from GPU timestamps, and `meshlet_build_1m` (the meshlet builder on a million
-  triangles, CPU, median of 9), results in `build/render_bench.json` (the per-pass baseline
-  every renderer change is judged by); `--only SCENE`, `--frames N`, `--geometry
-  instances|auto|meshlets` and `--fallback` (the meshlet path without mesh shaders) to compare
-  the geometry paths; `--evaluate RESULTS --check BUDGETS` judges recorded
-  results without a GPU. Besides the CPU loop it times a GPU calibration kernel
-  (`shaders/bench/gpu_calibrate.slang`) before and after, against
-  `build/render_bench_reference.json` (`render_bench --calibrate`). `serve_bench` times a
-  calibration loop before and after its blocks and records every other process that
-  used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written
-  by `serve_bench --calibrate` on a quiet machine) or beside other processes using more
-  than half a core in total is `noisy`, exit 2: it is neither a pass nor a regression,
-  and `tools/check.py` reruns it, at most twice. `scene_bench` records the same, plus a
-  CPU and a memory probe per round, and is also noisy when over a quarter of its rounds
-  are contended (a probe over 1.5x its fastest round); it prints each op's median in
-  clean and in contended rounds. This laptop slows a busy core by itself after about 3 s
-  of sustained load (`scene_bench --machine-test` shows it), more with other bots' work
-  running. `python tools/bench/wait_quiet.py` waits until other processes use under half a
-  core for a minute (exit 1 at `--deadline`); run it before a bench whose verdict you need.
-  `physics_bench --check`: the physics step's budgets in `tests/bench/physics_budgets.json`
-  (the blockout's step while crates fall, its step at rest with zero writes, 1,000 contact
-  begins in one step, a walking player's part of the step, `player_step_ms`, a step while
-  1,000 boxes pile into a pit, `boxes1k_step_ms`; reported without a budget: what a snapshot
-  of that world carries, `boxes1k_snapshot_ms`; and combat's, gated by `combatStep`: the
-  combat system's part of a step in which the player fires a round in the blockout,
-  `combat_shot_ms`, with two enemies attacking, `combat_step_ms`, and a whole step with 16
-  enemies chasing, `enemies16_step_ms`; restoring the play scene's round start, `round_restart_ms`;
-  and feel's, gated by `feelStep`: the window host's occlusion ray for an enemy's sound in the
-  blockout, per ray, `occlusion_ray_us`, 5 µs; and animation's, gated by `animStep`: the
-  `animation` simulate system over 16 rigs, `anim16_step_ms` 0.05 ms, and the `pose` sync system,
-  `pose16_sync_ms` 0.1 ms; the play scene's three animators, its two enemies and the player's arms,
-  `anim_step_ms` 0.01 ms and `pose_sync_ms` 0.02 ms), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
-  `feel_bench --check`: input-to-present latency and frame pacing (sub-project 9) in a *visible*
-  1920x1080 window (a hidden one may never present), the play scene played for a scripted minute
-  per present mode (`--modes`, `--seconds`, `--warmup`) while a mouse movement is fed every 40–60
-  ms; budgets in `tests/bench/feel_budgets.json` (`look_latency_ms` median, gated only on a display
-  of at least `minRefreshHz` with present wait, and `frame_p99_over_median`, each in the present
-  mode it names, both gated since Feel step 2: latency 4.8 ms passes, p99/median 1.99 misses 1.5,
-  `docs/changes/2026-10-27-feel-step2.md`), results in `build/feel_bench.json` and per mode
-  `feel_bench_<mode>.csv` (every frame's time, steps and phases: start→poll is the late input wait,
-  poll→view the steps, view→submit, submit→present; every movement's latency; a slow frame's
-  interval is the previous row's phases) and `feel_bench_<mode>_events.csv` (the round's deaths,
-  restarts, wins and reloads, same clock); `--frames-ahead N` tries a `framesAhead`. Other
-  processes' CPU is recorded per mode (dwm.exe aside): over half a core, a gated budget is `noisy`,
-  exit 2, rerun by `tools/check.py`.
-  `audio_bench --check`: the mixer's budgets in `tests/bench/audio_budgets.json` (sub-project 11):
-  `mix_10ms_ms`, the slice's bank rendered without a device with 32 voices and every bus under
-  `world` filtered and sending, the median of 300 periods of 480 frames (0.5 ms per 10 ms, gated
-  from step 1; since step 2 it includes the reverb on the return), `reverb_10ms_ms` (the Freeverb
-  alone, stereo, on noise, one preset: 0.15 ms, gated from step 2; `reverb_xfade_10ms_ms`, the same
-  mid-crossfade, reported), `bank_load_ms` (gated from step 3); step 3's, gated from step 3:
-  `schedule_step_ms` (the schedule's step over the play scene's scripted fight, 0.02 ms),
-  `schedule16_step_ms` (16 enemies running in and firing in the blockout, their bursts coinciding past
-  the 16 rays a step: 0.1 ms; the run fails if no ray was capped) and `submit_frame_ms` (a window's
-  `AudioPlayer` reading and submitting a frame's commands over the same fight, 0.05 ms); the same
-  noisy-run rules; `--listen DIR` writes one burst with each bus soloed in turn (`step1_buses.wav`,
-  its levels as CSV) and the done demo's fight through the player (`step3_fight.wav`, its schedule
-  as JSON, every bus's driven level as CSV), for listening.
-  A budget is met after five consecutive passes and changes only by Frank's ruling.
-- **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
-  and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
-  `docs/agents/skills/` until they are installed there; see its README).
+- **Every test exits 0 on success** and nonzero on any failure, and ends with one JSON line `{"suite", "passed",
+  "failed", "failures"}`. Register a new one with `ohao_add_python_test`/`ohao_add_test` (`cmake/ohao_tests.cmake`),
+  with a `TIMEOUT` and, if it touches the GPU, `GPU` (GPU tests never run two at once).
+- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail (2026-11-08: a no-op
+  physics restore failed `replay_test`; a 1% brightness change in `displayPixel` failed all 5 goldens).
+- **`ohao doctor`** says whether this machine can build, run and test OHAO: the Vulkan instance, device, ray
+  tracing and validation layer; every shader's SPIR-V present and newer than its sources; the assets the scenes
+  reference; slangc at its pinned version; a 64x64 deferred frame within 2 s (a wedged GPU fails here). `--cpu-only`
+  creates no device.
+- **Never loop a program that opens a window** (Frank, 2026-11-08): one visible run shows it works; repeats are
+  headless (`ohao run`, `ohao serve` without `--window`).
+- **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included, each on the logger's `validation` channel
+  (`W validation: <VUID> | <text>`). `OHAO_VALIDATION=sync` adds synchronization validation (hazards between
+  commands): slower, for chasing a missing barrier. The layer stops at 10 reports per VUID;
+  `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` shows them all.
+- **Goldens** are a hash of an unchanged renderer, not an image-quality gate: any change to the sample sequence
+  moves every pixel by the noise. Deferred scenes are exact; the path tracer holds to the BVH floor (1 level on a
+  few pixels). `--update` only after looking at what drifted (`build/golden_diff/<name>.heat.png` and
+  `.crop.png`); never widen a tolerance to make one pass.
+- **Benchmarks** (`tools/bench/`: `render_bench`, `scene_bench`, `serve_bench`, `physics_bench`, `level_bench`,
+  `audio_bench`, `feel_bench`) are tools run by hand, not gates: `<bench> --check tests/bench/<name>_budgets.json`,
+  results in `build/<bench>.json`. `render_bench --only SCENE` times one scene's passes from GPU timestamps; it is
+  the baseline a renderer change is judged by. A budget changes only by Frank's ruling.
 
 ## Gotchas that have cost this project time
 
@@ -490,8 +172,8 @@ deferred, reference, path traced); two the transparency scene,
 - G-buffer and CSM draws are GPU-culled indirect draws (`GpuCulling`): firstInstance is the
   draw's index in `RenderScene::drawTable()` (`DrawRecord`), not the instance slot; a vertex
   shader reads `draws[gl_InstanceIndex].draw.w` for the slot. A draw the culling never lists
-  is never drawn, so a culling bug hides geometry: `cull_parity_gpu_test` compares culling on
-  and off exactly. A mip chain halves rounding down: a pyramid whose levels assume rounding
+  is never drawn, so a culling bug hides geometry: compare a capture with culling on and off
+  (`render.settings`), which must be the same image exactly. A mip chain halves rounding down: a pyramid whose levels assume rounding
   up reads past them (the Hi-Z is padded to powers of two for that reason).
 - A G-buffer phase has four lists: instance one-sided, instance double-sided, meshlet
   one-sided, meshlet double-sided (`kCullListEarly`/`kCullListLate` + 0..3; a cascade has one,
@@ -507,8 +189,7 @@ deferred, reference, path traced); two the transparency scene,
 - `resetAccumulation()` never waits for the GPU: the next frame's passes start without
   history and clear what they keep in their own command buffer, after the frames in flight
   by queue order. Nothing a frame renders may depend on its frame-in-flight slot (TAA's
-  jitter is indexed by the frames since the reset); `engine_tests`' `sp2b_s10` captures
-  from every slot to hold it.
+  jitter is indexed by the frames since the reset).
 - Render settings (`VulkanRenderer::RenderSettings`, `render.settings`) are read back from
   the subsystems that own them, never cached, and both structs' defaults (the api one in
   `ohao/api/params.hpp` too) must equal what a fresh renderer starts with: a headless host
@@ -654,9 +335,7 @@ deferred, reference, path traced); two the transparency scene,
 - **The referee.** A renderer is judged against the closed form first, then the path tracer:
   `check_analytic.py` renders a white floor under one sun, point or spot light (no other surface,
   so no bounce) in both renderers through `ohao run --hdr` and holds each within 5% of
-  `albedo/π × irradiance`; `check_parity.py` (slow, a report) renders the reference scenes both
-  ways and gives deferred's distance from the path tracer in stops, per scene and on a 4x4 grid,
-  with `build/parity/<scene>.error.png`. Compare renderers in linear radiance (`--hdr`): their PNGs
+  `albedo/π × irradiance`. Compare renderers in linear radiance (`--hdr`): their PNGs
   share one display transform, but deferred's carries post (bloom, TAA) the path tracer's does not.
   The path tracer is ground truth where closed forms hold it: `check_analytic` (one light, no
   bounce) and `check_material.py`: a white furnace (white OpenPBR materials under a uniform sky
@@ -670,8 +349,7 @@ deferred, reference, path traced); two the transparency scene,
   draws come in groups of four, one 4-D point each, seeded by the pixel and the group; a bounce's
   draws sit in fixed groups (light, environment, BSDF and roulette), so a branch never shifts the
   next bounce's dimensions. A new draw goes into a group (`Sampler.group`), never after another
-  bounce's. `sobol_test` runs the module through slangc's C++ (`tools/sampling`) against the CPU
-  generator, bit for bit, and holds its stratification.
+  bounce's.
 - **The display transform** (frontier F2 T1, `shaders/display/display.slang`) is the only way a
   frame becomes pixels: exposure from EV100 (`render.settings`/`render.capture` `ev100`, default
   0.5; radiance `L` shows as `L / (1.2 x 2^EV100)`, Lagarde and de Rousiers 2014), the curve
@@ -679,8 +357,8 @@ deferred, reference, path traced); two the transparency scene,
   function. The deferred post (`postprocess/tonemap.slang`), the path tracer's output,
   `nrd_compose` and DLSS's display pass import it; the post stack owns EV100 and the curve and the
   path tracer reads them each frame (`setDisplay`), so a capture in any mode displays alike. OIDN's
-  CPU frames use the C++ twin `render/display/display.hpp`, which `display_test` holds to the
-  module (its slangc C++ build, `tools/display`) to the 8-bit code. A new path that shows a frame
+  CPU frames use the C++ twin `render/display/display.hpp`, which must match the module (change
+  both together). A new path that shows a frame
   imports the module; never write a curve or `pow(1/2.2)` again.
 - **The physical sky** (frontier F2 T3, `render/sky/atmosphere.*`: Hillaire 2020, Earth's
   atmosphere in RGB, on the CPU) is the environment of a scene without an HDRI: `Environment.sky`
@@ -693,9 +371,6 @@ deferred, reference, path traced); two the transparency scene,
   away is unloaded. A moved sun re-renders it (about 30 ms with the device idle): a day cycle is
   not cheap yet. The map has no sun disc (the directional light is the sun). The referee's
   scenes that need no environment say `"Environment": {"sky": false}` (`check_analytic.py`).
-  `sky_test`: the zenith transmittance of a pure Rayleigh atmosphere against its closed form, a
-  blue noon, a red sunset toward the sun, linearity in the sun, a dark night, the map's
-  orientation.
 - **Auto exposure** (frontier F2 T2, `render/deferred/auto_exposure.*`, `postprocess/exposure.slang`, the
   `exposure` pass before `post.tonemap`): a window's deferred frames are metered
   (`render.settings autoExposure`, on in windows, `LiveConfig::autoExposure`; `exposureCompensation`
@@ -704,8 +379,9 @@ deferred, reference, path traced); two the transparency scene,
   95th percentiles to middle grey 0.18 (`EV100 = mean + log2(1 / (0.18 x 1.2)) - compensation`),
   easing toward it at 3/s brighter, 1/s darker. The EV100 never leaves the GPU (the display pass
   reads it); `render.stats` reports the newest finished frame's as `ev100`. **Captures never meter**
-  (`captureFrame` turns it off; a window restores it), so goldens stay at their EV100.
-  `exposure_gpu_test`: every light doubled meters one EV more within 0.01. A realtime path-traced
+  (`captureFrame` turns it off; a window restores it), so goldens stay at their EV100. The
+  shader's `displayExposure` runs only for metered frames; a capture's exposure comes from the
+  host (`render::displayExposure` in C++). A realtime path-traced
   window is not metered yet (its display runs in the tracer's own passes).
 - **Realtime denoising and display** (frontier F1 T4). A realtime window's denoiser is DLSS Ray
   Reconstruction where the build has the SDK (`python tools/fetch_dlss.py` into the git-ignored
@@ -865,8 +541,8 @@ deferred, reference, path traced); two the transparency scene,
   short one's neighbourhood range**: a few frames of 3x3 rarely hold the bright samples, the range's top
   sits below the mean, and the clamp darkened every wall 10% (the referee's helmet 0.925, spheres 0.906,
   now 0.982 and 0.969). It is clamped up to the 3x3 minimum and down to twice the maximum. Two a-trous
-  steps left the noise as blotches some 20 pixels wide on flat walls; `check_gi_noise.py` holds the
-  helmet room's left wall under 1% blotchiness at frame 60 (the reference 0.5%) and its mean within 3%.
+  steps left the noise as blotches some 20 pixels wide on flat walls (the helmet room's left wall: 1% at
+  frame 60 now, the reference 0.5%).
 - **RT GI carries every bounce** (frontier F5a, `gi_trace.slang`): a GI ray's hit reflects its OpenPBR
   albedo x (its direct light, `directAt` at the hit's geometric normal from the triangle's vertices,
   `hitGeometricNormal`, + what one more cosine ray brings back: the radiance cache's cell where it
@@ -925,7 +601,7 @@ deferred, reference, path traced); two the transparency scene,
   as it is (`postprocess/bloom_input.slang`), the chain is normalised by its level weights
   (`BloomPass::levelWeightSum`) and the display pass shows `(1 - s) frame + s bloom`
   (`PostProcessingPipeline::kBloomStrength`, 0.04): energy moves, none is added, so a frame of
-  one radiance is the same with bloom on and off (`engine_tests`' F2 T4 case). The first
+  one radiance is the same with bloom on and off. The first
   downsample's Karis average keeps a small mesh at radiance ~19,000 from flooding the frame.
   Lighting never reads bloom; tone glare there, never the mesh's radiance.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
@@ -969,8 +645,8 @@ deferred, reference, path traced); two the transparency scene,
   and the frame settled 2% dark. It stays for the outliers RIS itself makes (a dim light's point with
   an occluded light's weight: specks on Cornell's back wall and the helmet's visor without it), and
   drops little now. Pairwise MIS in the temporal reuse made the frame noisier (relative MSE 0.045
-  against 0.039): it stays Z. An occluded final point leaves the kept reservoir (weight 0). `check_direct_light.py` holds
-  the realtime frame to reference quality on Sponza at night (`sponza_night.scene.json`, 37 lamps). Lighting leaves every light but flashes out of its loop when RT direct
+  against 0.039): it stays Z. An occluded final point leaves the kept reservoir (weight 0). Its showcase is Sponza at night
+  (`sponza_night.scene.json`, 37 lamps), judged against reference quality. Lighting leaves every light but flashes out of its loop when RT direct
   light ran (`LightGpu.params.w`: 1 casts shadows, 0 not, -1 a flash); without ray queries, or
   `rtDirect.enabled` off, the loop lights everything and CSM shadows a casting sun. **castShadows
   only matters to that fallback**: RT direct light shadows every light, as the path tracer always
@@ -982,7 +658,7 @@ deferred, reference, path traced); two the transparency scene,
   to 65,536) in a `LightGpu` storage buffer per frame slot, and each 16x9x24 froxel lists up
   to 256 of them. The lists equal summing every light only because a light's attenuation is
   exactly 0 past its range and the loop skips exact zeros: keep both, and keep the lists in
-  light order, or `light_cluster_gpu_test` fails. A froxel past 256 drops lights and
+  light order, or a froxel's lighting stops equalling the sum. A froxel past 256 drops lights and
   `render.stats` reports `lightsOverflow`. The slices run to the camera's far plane; the
   sky is only the cleared depth (1.0), so geometry at any distance keeps its pixel.
 - The validation layer stops at 10 reports per VUID; set
@@ -1246,7 +922,7 @@ deferred, reference, path traced); two the transparency scene,
     gun's near end there and it vanished; 0.55 keeps it at 0.108–0.27 m, inside the 0.3 m capsule.
   - **Effects** are the world's (sub-project 12, "VFX" below): drawn from the step's records in every
     host, windows, captures and `ohao run` alike, so a window's lockstep capture equals a headless one
-    with its effects (`check_live` `t32_window_equals_headless`). There is no `--fx`/`--no-fx`.
+    with its effects. There is no `--fx`/`--no-fx`.
 - **Animation** (sub-project 10, `docs/specs/2026-10-28-animation-design.md`). `ohao/anim` (no ECS,
   no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
   import is not used), binds clips to skeletons by joint name, and parses and validates
@@ -1357,8 +1033,8 @@ deferred, reference, path traced); two the transparency scene,
     clock anchored to the device (late: at once, counted; re-anchored when not realtime, when the
     step goes back, or past a step of drift). A bed is the zone preset's looped sound. Headless
     hosts have no player; the schedule's commands are what they read. `OHAO_AUDIO_TRACE=1` logs every
-    command on the `audio` channel (`schedule: ...`), so `check_live` compares a window's schedule
-    with a headless host's through `log.read`.
+    command on the `audio` channel (`schedule: ...`), so a window's schedule can be compared with a
+    headless host's through `log.read`.
   - Sound shapes, curves and occlusion are the bank's (`shapes`, `occlude`), never code's: the
     slice's gunfire is 1–60 m, rolloff 1; near sounds 0.5–20 m, rolloff 1.5.
   - **Agents** (step 4, `ohao/api/audio.cpp`) hear through `audio.info {since, max}`: the
@@ -1399,7 +1075,7 @@ deferred, reference, path traced); two the transparency scene,
     projection, soft against its depth, writing coverage to an R8 mask TAA lowers its history weight
     under. Blended meshes reuse `core/gbuffer.slang`'s `vertexMain` and are shaded by `vfx/transparent_mesh.slang`,
     the forward copy of the deferred light loop (`includes/lighting/clustered_lights.slang`; a plane
-    forward-shaded equals the deferred one within 1 LSB, `vfx_gpu_test`). The pass needs ray queries
+    forward-shaded equals the deferred one within 1 LSB). The pass needs ray queries
     and the bindless textures; without them nothing transparent draws.
   - **Gotchas:** particle slots are fixed in record order (no compaction; a dead one has size 0), and
     the slots are one buffer shared by the frames in flight (expand waits for the previous frame's
@@ -1420,7 +1096,7 @@ deferred, reference, path traced); two the transparency scene,
   - **A GPU test that loads a level must install what the CLI installs** (`level::installLevels`, then
     `installPhysics`, as `tools/ohao/main.cpp` does). Without it the blockout is never expanded, the
     scene has no instances, `scene.upload` builds no TLAS, and RT direct light and RT GI silently do not run
-    (the frame is the sky, the passes list has no `rt.gi`). `vfx_gpu_test`'s `capture()` does this.
+    (the frame is the sky, the passes list has no `rt.gi`).
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
@@ -1444,8 +1120,8 @@ deferred, reference, path traced); two the transparency scene,
     `m_groupLayout`). It is not always a crash: the manifold gather's groups dispatch also ran writing nothing, or hung
     the GPU, run to run.
   - Physics is deterministic run to run on one compiler, not across: MSVC's and GCC's builds land the blockout's
-    crate one ulp apart, so `world.hash`, `tests/cli/expected` and `tests/serve/expected` are recorded on the Linux
-    build. The helmet's merged model bytes differ too (`scene_tests` pins each platform's hash).
+    crate one ulp apart, so `world.hash` and `tests/serve/expected` are recorded on the Linux build. The helmet's
+    merged model bytes differ too.
   - `openpbr_tables --check` is byte for byte on the platform that wrote the tables; elsewhere every number within
     1e-5 (another math library's last digits: MSVC to GCC, at most 5.4e-6).
   - libstdc++ runs `std::execution::par` on oneTBB, linked where found (`TBB::tbb`).
@@ -1457,15 +1133,15 @@ deferred, reference, path traced); two the transparency scene,
     shader: SPIR-V is made by 2026.20 (since 2026-11-06), whose 75 entry points all pass `spirv-val`.
   - **slangc 2026.20's C++ emitter re-reads a member after a store to it**: `Sampler.next()` (`const float u =
     point[dim & 3u]; ++dim; return u;`) became `dim = dim + 1; return point[dim & 3]` in C++, so every draw was the next
-    coordinate (`sobol_test`); its SPIR-V of the same code loads first, as written. The twins stay on 2025.11
-    (`SLANGC_CPP`) until a release's C++ passes every twin's suite.
+    coordinate; its SPIR-V of the same code loads first, as written. The twins (`tools/caustics`, `tools/material`)
+    stay on 2025.11 (`SLANGC_CPP`) until a release's C++ passes `manifold_tests` and `openpbr_tables --check`.
   - `ohao serve` on stdio interrupts its reader with SIGUSR1 (no `SA_RESTART`), the POSIX `CancelSynchronousIo`.
   - NRI (under NRD) is told of no surface extension (`nrd_denoise.cpp`): given `VK_KHR_surface` it resolves the surface
     functions of every platform it was built for (Xlib and Wayland), a window's instance on Hyprland has Wayland's alone,
     and NRI's default handler raised SIGTRAP: a path-traced capture in a window killed `ohao serve`. NRI's messages go
     through the logger, with no abort.
   - A Wayland client cannot learn it was minimized (GLFW_ICONIFIED is always false there) and Hyprland has no minimize:
-    a window never reaches the 0x0 drawable the host treats as minimized, so `check_live` skips that check off Windows.
+    a window never reaches the 0x0 drawable the host treats as minimized.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
   is the one exception: it imports `tools.monograph`, so it runs from `site/`.
@@ -1475,8 +1151,7 @@ deferred, reference, path traced); two the transparency scene,
   page keeps being served.
 
 The monograph is frozen during the frontier renderer work (Frank, 2026-10-30): its citations
-trail the code, so its checks are in no gate (CTest label `monograph`, run by
-`python tools/check.py --labels monograph`) and `check_docs` does not run these:
+trail the code, so its checks are in no gate; run them by hand:
 
 ```bash
 python site/tools/check_unit.py reflection/api
@@ -1494,18 +1169,19 @@ cd site && python -c "from tools.monograph.build import build; build()"
   `docs/changes/YYYY-MM-DD-<subproject>[-stepN].md`, written for the project wiki. Shape:
   a title; `**Spec:**` (path and sections) and `**Status:**` lines; then numbered
   sections — summary, what was built, bugs found and fixed, spec corrections, results
-  (test counts, benchmark medians/p95, golden max_abs), known gaps, how to run the new
-  tests. Facts and numbers only, from runs, never estimates.
+  (measurements, benchmark medians/p95, golden max_abs), known gaps. Facts and numbers only,
+  from runs, never estimates.
 - **Commits:** local, one or a few per step, subject `type(scope): what` (`feat`, `fix`,
   `perf`, `docs`, `test`), body saying why. Never push, merge, rebase or reset without
   the owner's say-so.
 - **Forward only.** Old code and docs are reference, not something to preserve: delete
   what is dead, and describe the tree as it is, not its history.
 - **Engine code logs through `OHAO_LOG(level, channel, fmt, args...)`** (`core/log.hpp`),
-  never `std::cout`/`std::cerr`/`printf`; `reflect_tests` fails on a print under `ohao/`.
+  never `std::cout`/`std::cerr`/`printf` (stdout is the protocol's in `ohao serve`).
   Per-item and per-frame detail is `Debug` (shown with `OHAO_LOG_LEVEL=debug`).
-- **Performance is a gate.** New hot paths come with a benchmark or a budget; reflection
-  never runs per frame (the ECS system sources may not include `reflect/` or `api/`;
-  `reflect_tests` enforces it).
-- **Tests are named for what they prove** and, where a spec numbers its tests, carry the
-  number (`t21_…`). A golden is updated only after looking at what changed.
+- **Performance is measured, not assumed:** a new hot path is timed with the benchmark tools by hand
+  (`render_bench --only SCENE` for the renderer). Reflection never runs per frame (the ECS system sources
+  do not include `reflect/` or `api/`).
+- **No test per feature or per spec step.** A step proves itself by measurement and the five gates; a new
+  gate needs a requirement it serves or a bug that got through, and a planted bug it catches. A golden is
+  updated only after looking at what changed.

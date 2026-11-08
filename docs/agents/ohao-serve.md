@@ -3,7 +3,7 @@
 For an agent that builds games with OHAO: connect to one running engine, orient, edit,
 play, look, record and replay, read its logs. Every method and its params are in
 [ohao-cli.md](ohao-cli.md) ("Methods", "Edit commands", "Error codes"); this guide is the
-session. `python tests/docs/check_docs.py` runs every `console` command here.
+session.
 
 ## Connect
 
@@ -261,7 +261,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 ```
 
 Step once before damaging anyone: the round's start is the world at the end of its first step,
-and a restart goes back there. A real fight (`tests/serve/check_live.py`'s `fight`) faces each
+and a restart goes back there. A real fight (`tests/replay/replay_test.py`'s `second_half`) faces each
 enemy with `player_teleport` and fires bursts of three (`fire` down for 13 steps) until
 `combat_info` says it is dead; the same fight in a window and headless reaches the same
 `world_hash` and HUD picture.

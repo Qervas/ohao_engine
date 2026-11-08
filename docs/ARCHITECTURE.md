@@ -3,9 +3,8 @@
 A map of the code: the libraries and which way they depend, how one frame flows from
 game state to pixels, and recipes for the changes people make most often. Each recipe
 was followed once, end to end, when it was written (sub-project 3, step 10: the `Spin`
-component, the spin system, `entity.duplicate` and `systems_tests`; sub-project 4, step
+component, the spin system and `entity.duplicate`; sub-project 4, step
 11: an API method, a render pass and its shader, a golden scene).
-`python tests/docs/check_docs.py` runs every `console` command here.
 
 ## Libraries
 
@@ -24,7 +23,7 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
 | `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
-| `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header (`reflect_tests`). |
+| `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header. |
 | `ohao_runtime` | `runtime/` | `ohao_api`, `ohao_core`, `ohao_ecs`, `ohao_renderer`, glfw | `LiveHost`, the window host (window, renderer, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); `applySceneView`; frame statistics |
 | `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (`physics/backend`: the `IPhysicsBackend` over Jolt that the ECS's physics scene builds, steps and joins bodies through) and audio (the mixer, the bank and the reverb; what plays is the ECS's voice schedule, played by a window's `runtime::AudioPlayer`) |
 | `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
@@ -44,7 +43,7 @@ Dependency rules:
   render extract and instantiate are the only bridges, and they write `RenderScene`.
 - **Reflection stays off the frame.** `render/`, `gpu/` and the per-frame ECS system
   sources (`transform_system`, `render_extract`, `instantiate`, `spin_system`) include
-  nothing from `reflect/` or `api/`. `reflect_tests` (t13) enforces it.
+  nothing from `reflect/` or `api/`. No test enforces it since the cut (2026-11-08): keep it by hand.
 - **The API is GPU-free.** Anything that needs a renderer goes through the session's
   `api::Host` (`Session::setHost`): the headless `RenderHost` or the window's `LiveHost`.
 - **The engine prints only through the logger.** `OHAO_LOG(level, channel, fmt, args...)`
@@ -52,7 +51,7 @@ Dependency rules:
   `ecs`, `asset`, `physics`, `audio`, `api`, `rpc`, `runtime`, a `std::format` string.
   Below the threshold a call costs one load and a compare; records go to a 4,096-record
   ring and to stderr as `<L> <channel>: <message>`. Nothing under `ohao/` writes to
-  stdout, `std::cerr` or `printf`; `reflect_tests` (`sp4_t02`) enforces it.
+  stdout, `std::cerr` or `printf` (`ohao serve`'s stdout is the protocol).
   `OHAO_LOG_LEVEL=debug` shows the detail lines.
 
 ## One frame
@@ -308,29 +307,15 @@ Followed for `Spin`. Files, in order:
    in `ohao/ecs/scene_writers.hpp` and define it in `scene_writers.cpp`, fields in
    registration order, each written only when it differs from `omit`
    (`if (!omit || !same(...))`). `makeComponentOps` finds it by overload.
-4. **Tests** in `tests/scene/scene_tests.cpp`:
-   - `complete<T>` in `t01_every_component_member_is_registered` (every member
-     registered or skipped);
-   - the name in `t01_authoring_and_runtime_split`;
-   - random values in `buildRandomWorld`, so the round-trip, snapshot and
-     writer-vs-generic tests (t02, t03, t10, t21) cover it.
-5. **A corpus case:** `tests/scenes/invalid/NN_<name>.scene.json` with the mistakes an
-   agent would make, and `NN_<name>.errors.json` listing the exact `code` and `path` of
-   each (plus `suggestion` where one is expected).
-6. **Goldens**, after reading the diff: `scene_tests --update-golden` (engine catalogue
-   and scene schema), `reflect_tests --update-golden` if a unit was added, then
-   `python tests/cli/check_cli.py --update` (the `schemaHash` in two expected outputs)
-   and check that the hash is the only change.
-7. **Docs:** the component table in `docs/agents/ohao-cli.md`.
+4. **Check it by hand:** `ohao schema -o build/schema` shows the type with its docs and units; a
+   scene that uses it saves, reloads and keeps its `world.hash`. A saved type hashes its name even
+   with no instances, so it moves every `world.hash` in `tests/serve/expected`: read the diff, then
+   `python tests/serve/check_serve.py --update`. `replay_test` holds gameplay replays with it in the hash.
+5. **Docs:** the component table in `docs/agents/ohao-cli.md`.
 
-Changing an existing saved component later: bump `.version(n)` in its registration, add
-an `.upgrade()` from the previous version, and add a file written by the old version to
-`tests/scenes/v1/` with its expected values in `t08_v1_corpus_loads_with_expected_values`.
-
-```console
-$ build/Release/scene_tests.exe > /dev/null
-$ build/Release/reflect_tests.exe > /dev/null
-```
+Changing an existing saved component later: bump `.version(n)` in its registration and add an
+`.upgrade()` from the previous version; load a file the old version wrote (`tests/scenes/v1/`) to
+see it upgrade.
 
 ## Recipe: add a system
 
@@ -342,18 +327,13 @@ Followed for the spin system.
      through `patch`/`replace` so the sync systems see the change. Read time only from
      `dt` (it runs once per fixed step); do nothing when `dt` is 0.
   2. Install it in `World::World()` (`ohao/ecs/world.cpp`) with `addSimulate`.
-  3. Add its files to the t13 list in `tests/reflect/reflect_tests.cpp` (no
-     `reflect/`/`api/` includes).
-  4. Tests in `tests/systems/systems_tests.cpp`: the formula bit for bit, still entities
-     untouched, determinism, and a pass through the API (`world.step`, snapshot/restore).
+  3. Its files include nothing from `reflect/` or `api/`.
+  4. Check it by hand through the API (`world.step`, then the entities' values; still entities
+     untouched); `replay_test` holds its determinism if the play scene runs it.
 - **Host system** (needs a renderer; a sync system, no dt): an `install<Name>(World&, …)`
   that adds it with `addSyncBefore("transform", …)` or `addSyncAfter("transform", …)`, guarded against a
   second install (see `installInstantiate`). It must pick up entities that existed
   before it was installed.
-
-```console
-$ build/Release/systems_tests.exe > /dev/null
-```
 
 ## Recipe: add an API command
 
@@ -371,16 +351,9 @@ Followed for `entity.duplicate`. A command is one op in a `world.apply` batch; a
    - If it creates an entity, set `b.created[b.index]` so `"$k"` and `results[k]` work.
 2. **Register it:** its name in `kOps` and its function in `kCommandFns`, at the same
    index (a `static_assert` checks the counts).
-3. **Tests** in `tests/api/api_tests.cpp`:
-   - a case in `t09_each_command_applies_and_returns_its_inverse` (it applies, has its
-     effect, and its inverse restores the save byte for byte);
-   - a focused test for its errors and edges.
-4. **Docs:** the command table in `docs/agents/ohao-cli.md`; a CLI case in
-   `tests/cli/cases.json` if the CLI exposes something new.
-
-```console
-$ build/Release/api_tests.exe > /dev/null
-```
+3. **Check it by hand:** apply it through `world.apply`, then apply its inverse; the save must be
+   the same bytes as before.
+4. **Docs:** the command table in `docs/agents/ohao-cli.md`.
 
 ## Recipe: add an API method
 
@@ -407,19 +380,12 @@ method, the MCP tool (`.` becomes `_`), the catalogue entry and its JSON Schema,
    shape, one doc line: the MCP description agents read) and the handler in `kDispatch`,
    with `mutates = true` if it changes the world (a window host in lockstep redraws only
    after such calls).
-4. **Tests and goldens:** its behaviour in `tests/api/api_tests.cpp`; the method count in
-   `t09_method_table_dispatch_and_errors`; an example in `EXAMPLES` of
-   `tests/serve/check_serve.py` (its schema through `jsonschema`, the server accepting it);
-   then the goldens, after reading the diff: `python tests/cli/check_cli.py --update` and
-   `python tests/serve/check_serve.py --update` (`schemaHash`, `tools/list`). `rpc_tests`
-   keeps `tools/list` under 28 KB, so keep the doc line to one sentence.
+4. **The serve goldens:** an example in `EXAMPLES` of `tests/serve/check_serve.py` (its schema
+   through `jsonschema`, the server accepting it), then, after reading the diff,
+   `python tests/serve/check_serve.py --update` (`schemaHash`, `tools/list`). Keep the doc line to
+   one sentence: `tools/list` stays under 28 KB.
 5. **Docs:** the method table in `docs/agents/ohao-cli.md`, and `docs/agents/ohao-serve.md`
    if it changes how a session goes.
-
-```console
-$ build/Release/api_tests.exe > /dev/null
-$ build/Release/rpc_tests.exe > /dev/null
-```
 
 ## Recipe: add a render pass (and its shader)
 
@@ -445,8 +411,8 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    uses `SV_VulkanInstanceID`/`SV_VulkanVertexID` (HLSL's `SV_InstanceID` leaves the base out).
    Constants and structs C++ shares with a shader go in `shaders/shared/layout.json`, then
    `python tools/gen_layout.py` writes `shaders/shared/layout.slang` and
-   `ohao/gpu/shared_layout.hpp` (std430, every offset asserted); `check_layout` fails while
-   they are out of date.
+   `ohao/gpu/shared_layout.hpp` (std430, every offset asserted); `python tools/gen_layout.py --check`
+   fails while they are out of date.
 2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
    (set `m_device`/`m_physicalDevice`, then create everything; return false on any
    failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base
@@ -477,27 +443,26 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    Either way the name goes in the **pass registry** (`ohao/render/frame/pass_registry.hpp`,
    `kPasses`, at its place in frame order, lowercase and dotted: `rt.gi.denoise`): the
    timer (`GpuPassTimer`, `render/frame/gpu_pass_timer.hpp`) times only registered names,
-   logs an unknown one once as an error, and `engine_tests`' `sp2b_t01` fails. The pass's
-   time then shows in `render.stats` and `render_bench`; give it a budget in
-   `tests/bench/render_budgets.json` (spec 2b, "How budgets are gated").
+   logs an unknown one once as an error. The pass's time then shows in `render.stats` and
+   `render_bench`; a budget for it goes in `tests/bench/render_budgets.json`, judged by hand.
 6. **Check it:** build (the shader comes with any target that renders); run validation
    with a resize; run the goldens — a pass that changes pixels changes the deferred goldens
-   on purpose, so look at the diff (`build/golden_diff/`), then `--update`; and
-   `deferred_determinism_gpu_test` (deferred frames must stay bit-identical run to run).
+   on purpose, so look at the diff (`build/golden_diff/`), then `--update`. The deferred
+   goldens are exact, so they also hold the frame bit-identical run to run.
    A post effect that agents switch on also needs its name in `PostEffect`
    (`ohao/api/params.{hpp,cpp}`) and `kEffects` (`session.cpp`), and its toggles in
    `runtime/frame_capture.cpp` and `runtime/live_host.cpp`.
 
-```console
-$ python tests/validation/check_validation.py > /dev/null   # gpu
-$ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
+```
+python tests/validation/check_validation.py
+python tests/golden/render_golden.py tests/golden/manifest.json
 ```
 
 ## Recipe: register a pass and give it a budget
 
 Followed for every pass sub-project 2b added (`cull.*`, `hiz.build`, `lights.cluster`,
 `capture.preview`, `pt.present`, …). A pass is not done when it renders: it is done when
-it is measured under its name and gated by a budget.
+it is measured under its name.
 
 1. **The registry entry** in `kPasses` (`ohao/render/frame/pass_registry.hpp`): name, kind
    (`Transfer`, `Raster`, `Compute`, `RayTracing`) and one line saying what it does and
@@ -505,15 +470,14 @@ it is measured under its name and gated by a budget.
    dotted, with a family prefix when it has siblings (`rt.gi`, `rt.gi.denoise`), so a
    budget can cover a family with a pattern (`"cull.*"`).
 2. **Time it**: `timerBegin("name") … timerEnd()` around its commands (`DeferredRenderer`),
-   or its `addPass` name if it is a graph pass. `engine_tests`' `sp2b_t01` fails on a pass
-   recorded out of registry order or timed twice; an unregistered name is logged once as
-   an error and not timed.
+   or its `addPass` name if it is a graph pass. Record passes in registry order and time each
+   once; an unregistered name is logged once as an error and not timed.
 3. **If a setting turns it off** (`render.settings`), the switch belongs in
    `VulkanRenderer::RenderSettings`, `setRenderSettings` and `renderSettings` (read back
    from the subsystem, never cached), its reflected twin in `ohao/api/params.{hpp,cpp}`
    (`RenderSettings`, with limits), and the two conversions in `runtime/frame_capture.cpp`.
    Turn it off by not registering it in the frame's graph, so it costs nothing and leaves
-   the timings; `sp2b_t14_switches_turn_their_passes_off` is the test to extend.
+   the timings; check by hand that a capture with it off lists no time for it.
 4. **The budget** in `tests/bench/render_budgets.json`, one entry per scene it runs in:
    `{"scene": "cornell_720p", "name": "lights.cluster", "passes": ["lights.cluster"],
    "budgetMs": 0.03, "gatedFrom": 13}`. A budget's time is the sum of its passes' medians
@@ -525,13 +489,13 @@ it is measured under its name and gated by a budget.
    the step that measures them (record it in `"moved"`); a frame, capture or total budget
    rises only by Frank's ruling.
 5. **Check it**: the names below must all match registered passes, and `render_bench
-   --check` must pass five consecutive clean runs (a run flagged `noisy` is no verdict;
+   --check` must pass five consecutive clean runs, by hand (a run flagged `noisy` is no verdict;
    `python tools/bench/wait_quiet.py` first).
 
-```console
+```
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
 43 passes registered; budget names matching none: []
-$ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
+$ build/Release/render_bench --check tests/bench/render_budgets.json > /dev/null
 ```
 
 ## Recipe: add a level
@@ -548,9 +512,8 @@ Followed for the blockout (`assets/levels/blockout_room.glb`, sub-project 5).
    `tools/level/` (ours, MIT; `blockout_room.py` runs headless in Blender 5.2.2 and
    rebuilds the file byte for byte); third-party art is staged under the git-ignored
    `assets/local/` and never committed.
-2. **Check the hints:** `tests/level/check_level_assets.py` validates every checked-in
-   level's `extras` against `tests/level/extras_schema.json` (`ohao schema level-extras`);
-   pin the numbers later tests assert in its contract, as the blockout does.
+2. **Check the hints:** `ohao level <file>` (below) reports unknown or bad `extras`; the
+   schema is `ohao schema level-extras -o FILE`.
 3. **Look at it without a scene:** `ohao level <file>` prints `level.info`: node, mesh
    and triangle counts, colliders by shape, bodies by motion, spawns in node order with
    their facing, and the warnings (`W_LEVEL_EXTRAS` for an unknown lower-case key,
@@ -559,13 +522,11 @@ Followed for the blockout (`assets/levels/blockout_room.glb`, sub-project 5).
 4. **Place it:** a scene entity with `Level {asset: {path}, lightScale, collision}`; one
    line places the whole file, and saving writes only that line.
 5. **Check that it collides:** `physics.raycast` down from above each spawn must hit the
-   ground at the spawn's height (the blockout's spawns: within 1 mm,
-   `level_physics_tests`); `physics.info` counts the bodies.
-6. **A golden** of the scene, as below (`cli_blockout_room_deferred`): deferred, exact.
+   ground at the spawn's height (the blockout's spawns: within 1 mm); `physics.info` counts
+   the bodies.
 
-```console
-$ build/Release/ohao level assets/levels/blockout_room.glb > /dev/null
-$ python tests/level/check_level_assets.py > /dev/null
+```
+build/Release/ohao level assets/levels/blockout_room.glb
 ```
 
 ## Recipe: add an animated character
@@ -595,17 +556,15 @@ Followed for the play scene's enemies and the player's arms (sub-project 10, ste
    tip). A first-person rig goes under a `ViewModel` root; author what should show at least
    0.25 m from the eye and within 30° of the eye line.
 5. **Check it:** `animation.info` (the states, clip times and events); force a state with
-   `component.set` on `Animator`; step and read it back. Tests: the states each driver input
-   gives in the same step (`combat_tests` `t23_*`), a restore or restart replaying the same
-   Animators and `world.hash` (`t25_fight_states`), and the skinned frame (`skinning_gpu_test`,
-   `check_validation.py`).
+   `component.set` on `Animator`; step and read it back. `replay_test` holds a restore
+   replaying the same Animators (`world.hash`) if the play scene uses it; `check_validation.py`
+   renders the skinned rig.
 6. **Budgets:** `physics_bench` times the `animation` step and the `pose` sync
    (`anim_step_ms`, `pose_sync_ms` for the play scene), `render_bench` the `skin`,
    `skin.bounds` and `rt.blas.refit` passes (`play_anim_1080p`).
 
-```console
-$ build/Release/ohao run assets/scenes/anim_rig.scene.json --script docs/agents/examples/animation.jsonl > /dev/null
-$ build/Release/anim_tests.exe > /dev/null
+```
+build/Release/ohao run assets/scenes/anim_rig.scene.json --script docs/agents/examples/animation.jsonl
 ```
 
 ## Recipe: add a sound
@@ -628,17 +587,14 @@ renders it, so a sound is tested on the schedule, without a device.
    `combatSoundNames` for the combat log, `animSoundNames` for clip events,
    `footstepSound` for the physics log's footsteps by surface. A clip event of a new name
    needs a line there; a new surface needs only its `footstep_<surface>` sound.
-4. **Test it on the schedule:** step a World with `installAudio` and read `audioSchedule(world)`'s
-   commands (`audio_schedule_tests` `t28_*`: the play, its voice, variant, occlusion and
-   outcome); `audio_system_tests` checks the bank has a file for every sound. In a session,
-   `audio.info` lists the same commands; `audio.mix` solos its bus to listen in a window
+4. **Check it on the schedule:** in a session, `audio.info` lists the step's commands (the play,
+   its voice, variant, occlusion and outcome); `audio.mix` solos its bus to listen in a window
    (`ohao serve --window --sound`).
 5. **Budgets:** `audio_bench` (`schedule_step_ms`, `submit_frame_ms`, `bank_load_ms`);
    `audio_bench --listen DIR` renders the fight to a WAV with its schedule.
 
-```console
-$ build/Release/ohao schema audio-bank -o build/doc_tmp/audio_bank.schema.json > /dev/null
-$ build/Release/audio_schedule_tests.exe > /dev/null
+```
+build/Release/ohao schema audio-bank -o build/audio_bank.schema.json
 ```
 
 ## Recipe: add an effect
@@ -657,14 +613,13 @@ kind of record.
 3. **The binding:** the set's `events` name it: `shot` (the muzzle), `hit` (per surface, with a
    `fallback`), `explode` (the boom, smoke and scorch). A level node takes an emitter with the `vfx`
    hint (`extras.vfx = "smoke_cloud"`); a scene places one with a `VfxEmitter`.
-4. **Test it on the step:** `vfx_tests` (test 31: `t31_records_from_events`, `t31_placed_emitter`)
-   reads the records a fight writes; `vfx.info` lists them in a session; `vfx_gpu_test` reads the frame.
-5. **Budgets:** `render_bench --only play_vfx_1080p --check tests/bench/render_budgets.json`
+4. **Check it on the step:** `vfx.info` lists the records a fight writes in a session; capture a
+   frame to see it.
+5. **Budgets** (by hand): `render_bench --only play_vfx_1080p --check tests/bench/render_budgets.json`
    (`vfx.expand`, `vfx.sort`, `transparent`, `decals`).
 
-```console
-$ build/Release/ohao schema vfx-set -o build/doc_tmp/vfx_set.schema.json > /dev/null
-$ build/Release/vfx_tests.exe > /dev/null
+```
+build/Release/ohao schema vfx-set -o build/vfx_set.schema.json
 ```
 
 ## Recipe: add a golden scene
@@ -685,38 +640,27 @@ Followed for `cli_helmet_game_deferred` (sub-project 4, step 11).
 3. **Generate, then look:** `--only <name> --update` writes the golden; open the PNG and
    check it shows what the note says before keeping it. Then run `--only <name>` twice
    more: an exact scene must pass both.
-4. The scene count in `AGENTS.md` ("Render goldens").
+4. Only if it serves requirement 3 (AGENTS.md, "Gates"): the goldens are a handful, and a new one
+   replaces an old one unless a bug got through that none of them shows.
 
-```console
-$ python tests/golden/render_golden.py tests/golden/manifest.json --only cli_helmet_game_deferred > /dev/null   # gpu
+```
+python tests/golden/render_golden.py tests/golden/manifest.json --only cli_cornell_box_deferred
 ```
 
-## Recipe: add a test suite
+## Recipe: add a gate
 
-Followed for `systems_tests`.
+A gate exists only for one of AGENTS.md's five requirements, or for a real bug that got through.
+Before it lands it is proven: plant a bug in what it covers and watch it fail.
 
-1. `tests/<name>/<name>_tests.cpp`:
-   - `#include "common/harness.hpp"` for `CHECK`/`RUN`;
-   - one `static void` function per test, named for what it proves;
-   - `main` runs them and ends with `return ohao::test::finish("<name>_tests");`, which
-     prints `Results: P/T passed` and the one-line JSON summary
-     `{"suite","passed","failed","failures":[…]}` and returns nonzero on any failure.
-2. `tests/<name>/CMakeLists.txt`:
-   - `add_executable`, then `target_link_libraries` with the narrowest library that
-     covers it, plus `ohao_test_harness`;
-   - `OHAO_SOURCE_DIR` as a compile definition if it reads repo files;
-   - `/FORCE:MULTIPLE /IGNORE:4088` on MSVC;
-   - `ohao_add_test(<name>_tests LABEL quick COMMAND <name>_tests)` (`LABEL gpu GPU` if it
-     creates a device; `LOCKS <name>` for any fixed scratch path it shares with another
-     test);
-   - `add_dependencies(<target> shaders)` if it renders.
-3. The root `CMakeLists.txt`: an `option(BUILD_<NAME>_TESTS … ON)` and
-   `add_subdirectory(tests/<name>)` next to the others.
-4. List it in the gates of `AGENTS.md` and in the `verify` skill. `python tools/check.py`
-   runs it from then on; `check_tests` fails if the executable is built but not
-   registered.
+1. A Python harness under `tests/<area>/` (standard library, numpy or Pillow): it drives `ohao run` or
+   `ohao serve`, prints `ok`/`FAIL` lines and ends with one JSON line `{"suite", "passed", "failed",
+   "failures"}`, exiting nonzero on any failure. A C++ suite uses `tests/common/harness.hpp` or
+   `ohao_gtest_main`.
+2. Register it in `ohao_register_harness_tests` (`cmake/ohao_tests.cmake`): `ohao_add_python_test(<name>
+   LABEL quick|gpu|golden|slow [GPU] TIMEOUT <s> SCRIPT <path>)`, a `TIMEOUT` always, `GPU` if it
+   creates a device, `LOCKS` for a fixed scratch path.
+3. A rule in `tools/check_changed.py` for the files it reaches, and its row in AGENTS.md's gates.
 
-```console
-$ build/Release/systems_tests.exe | tail -n 1
-{"suite":"systems_tests","passed":9,"failed":0,"failures":[]}
+```
+ctest --test-dir build -C Release -R replay_test
 ```

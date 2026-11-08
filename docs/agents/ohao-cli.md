@@ -5,9 +5,9 @@ it does goes through the engine's one API (`ohao/api`, the `Session` method tabl
 what works here works the same over the JSON-RPC/MCP server (`ohao serve`, below): a
 script line is a JSON-RPC request without `jsonrpc`/`id`.
 
-Every command below was run by `python tests/docs/check_docs.py`, and every output shown
-is what it printed. Paths are relative to the repo root; the binary is
-`build/Release/ohao.exe` (Git Bash finds it as `build/Release/ohao`).
+Paths are relative to the repo root; the binary is `build/Release/ohao` (`ohao.exe` on
+Windows). The outputs shown were what the commands printed when written; nothing re-runs them
+since the doc checker was deleted (2026-11-08), so trust the code over a stale example.
 
 ## The contract
 
@@ -177,8 +177,7 @@ how a one-bounce renderer is compared with the path tracer.
 radiance, before exposure, post and tonemapping, as a Portable Float Map (RGB float32): the
 deferred frame's lit image (lighting, sky, transparents; before bloom and TAA) or the path
 tracer's accumulation (before any denoiser). Put through the renderer's tonemap it is the PNG to
-within 1 LSB. It is what renderers are compared by (`tests/renderer/check_parity.py`,
-`check_analytic.py`): a PNG has been through two different tonemappers by then.
+within 1 LSB. It is what renderers are compared by (`tests/renderer/check_analytic.py`): a PNG has been through two different tonemappers by then.
 
 The deferred frame has two qualities. `realtime` (the default) is the budgeted frame: RT
 direct light resamples every light (ReSTIR DI) and traces one shadow ray at half resolution,
