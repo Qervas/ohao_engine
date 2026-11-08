@@ -1,3 +1,4 @@
+#define GLFW_INCLUDE_NONE   // no OpenGL header: the engine is Vulkan only (Fedora ships no GL/gl.h by default)
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include "runtime/window.hpp"
