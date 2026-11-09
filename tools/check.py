@@ -13,7 +13,8 @@ Steps (sub-project 4 spec, "One entry point"):
   2. configure, if the build directory has no CMakeCache.txt;
   3. build the `shaders` target first, then everything (at most 6 jobs: heavier parallel
      load has crashed the reference machine);
-     Then the API's methods against docs/agents/ohao-cli.md's Methods table (a difference fails the build).
+     Then the API's methods against docs/agents/ohao-cli.md's Methods table, and the shader binding headers
+     against the shaders (tools/gen_bindings.py --check): a difference fails the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
@@ -324,10 +325,13 @@ def main(argv=None):
         if not result["build"]["ok"]:
             return finish(result, out)
         problems = check_method_docs(build_dir, args.config, out)
+        gen = subprocess.run([sys.executable, str(ROOT / "tools/gen_bindings.py"), "--check"], capture_output=True, text=True)
+        if gen.returncode != 0:
+            problems += [l for l in gen.stdout.splitlines() if l] or [f"gen_bindings --check failed: {gen.stderr[-400:]}"]
         if problems:
             result["build"]["ok"] = False
             result["build"]["tail"] = "\n".join(problems)
-            print("check: the method docs disagree with the code:\n  " + "\n  ".join(problems), flush=True)
+            print("check: generated or checked facts disagree with their source:\n  " + "\n  ".join(problems), flush=True)
             return finish(result, out)
 
     selected = None
