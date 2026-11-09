@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a and 3b built; 3c-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a and 3b built; 3c-3k planned (3c revised).
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -127,28 +127,172 @@ are not, because the hash now covers more.
 - **The baseline.** The same 39 commands, the same scenes and logs; only the hashes differ.
   `step3_baseline.py` keeps its own copy of the original fight.
 
-## 3c. Typed events and one event log
+## 3c. One event log
 
-- **Typed events.** `ecs::Events<T>` lives in the World: emitted into this step's buffer, swapped at the step's
-  start, and read through an `EventReader<T>` whose cursor is saved state, so each reader sees each event once.
-- **Registration.** An event type is registered by name (`registerEvent<Shot>("slice.shot")`).
-- **One bounded log** of every event, with a sequence number, replaces the per-system logs of combat, physics and
-  animation.
-- **One API method.** `events.read {since, max, names?}` replaces `combat.events` and `physics.events`. The
-  animation log is read the same way.
-- **Hashed.** The step's events are covered by `world.hash`.
+Revised 2026-11-09, from a survey of the tree at `518f93fc`.
 
-*Done when* every combat, physics and animation event goes through `Events<T>`, the three logs are deleted, and the
-baseline's logs read the same through `events.read`. Their sequence numbers may renumber: one log, not three.
+**Where it starts.**
+- **Four logs.** Combat, physics, animation and the audio schedule's commands each keep their own:
+  - their own ring (1,024 events, 1,024, 1,024 and 4,096 commands);
+  - their own cursor rule, numbering from 0 or from 1;
+  - their own `step`, each system's own counter.
+- **Readers bound to one struct.** Every reader is written against one system's struct: four in the step (the two
+  drivers, vfx, the audio schedule), three observers (the view model, the HUD, the audio player), four API methods,
+  three benches and `replay_test`.
+- **One struct for ten kinds.** `CombatEvent` holds ten kinds in one struct. Its `point` is the eye for a shot and
+  the hit for a hit; its `amount` is a cone, a distance, hit points or ammo.
+- **Lost events.** An event emitted between steps never reaches the step's readers. Combat clears its list when
+  its next step starts. So a kill through `combat.damage` plays no death sound, and the enemy's animation driver
+  never sees the death.
+
+**Prior art, and what is taken from it.**
+- **Bevy's `Events<T>`.**
+  - How it works:
+    - events are buffered across two updates;
+    - each reader keeps its own cursor;
+    - in 0.17 they are renamed `Message`, beside observers that run at once.
+  - The cursor per reader is there because Bevy's schedule may run a reader before or after its writer.
+  - Ours is ordered: today by the list, from 3h by the declared reads and writes, checked at install. So a step's
+    events are read in that step, and a reader keeps no state.
+  - Taken: the typed channel, and the reader and writer handles a system holds. Those handles also tell 3h what
+    each system emits and reads, so there is no second list to drift from the code.
+- **Photon Quantum's frame events.**
+  - The view reads them after the frame.
+  - An event is identified by its tick, its type and its content, so an event simulated again after a rollback is
+    the same event.
+  - Taken: here an event's identity is its step, its name, and its place among that step's events of that name. A
+    restore and a replay keep it. Its `seq` is only its place in the history.
+- **Not taken:**
+  - Immediate observers: a callback inside an emitter's loop is reentrant, and the order then depends on who
+    subscribed.
+  - EnTT's dispatcher: it has no history, no order across types and no snapshot.
+
+**The design.**
+- **The World's event log** (`ecs/events.hpp`), beside the input.
+  - A channel is a name and a payload type: `world.events().writer<Shot>("slice.shot", "combat")` and
+    `.reader<Shot>("slice.shot", "vfx")`.
+  - The handles name their system, which 3h reads as its emits and reads.
+  - A name taken with a second payload type throws.
+- **Payloads** are plain reflected structs (`TypeRole::Event`), registered like components, with docs and units.
+  They hold entities by id, since an event outlives what it names.
+- **The World's step.**
+  - The World counts its steps (`World::steps()`, saved and hashed).
+  - Every event is stamped with the step that reads it.
+  - The systems' own counters stay until 3e.
+- **What a step reads.**
+  - A reader takes its channel's events for this step: `read()` returns a span, oldest first.
+  - An event emitted between steps belongs to the next step. Examples: `combat.damage`, and physics ending the
+    contacts of a removed body.
+  - A channel's writers run before its readers. Today's order does this; 3h checks it.
+  - A system that needs an event emitted later in the previous step reads it with an explicit one-step delay. This
+    is added when a system needs it; none does.
+  - Step 4, with jobs: two writers of one channel in one wave each write their own buffer. The buffers merge at the
+    wave's end in the wave's fixed order, so the order stays the serial one.
+- **State, and restores.**
+  - The events a step will read are state. A snapshot taken between steps carries the next step's events. A
+    snapshot taken during a step (the round's start, until 3d) carries none.
+  - `world.hash` covers those events and the World's step.
+  - A restore drops the next step's events and puts the snapshot's back.
+  - A restore during a step (the round's, until 3d) ends that step's events. What the step had emitted was undone
+    with the world, so the systems after it read only what follows.
+  - So the four readers in the step lose their "skip what came before the last restart" rule here.
+- **History.**
+  - Every event also enters one history of the last 8,192 (the four logs held 7,168 together).
+  - It is ordered by `seq`, counted from 1, with no gaps across channels.
+  - It is never rewound, hashed or snapshotted.
+  - Observers read it by cursor: the HUD, the view model and the audio player each keep a `seq`.
+  - Events leave the history only between steps, and never one a step has yet to read.
+- **Cost.**
+  - An emit is two appends; a read is a span.
+  - Nothing allocates per step once the vectors have grown.
+  - No reflection runs in a step: reflection formats an event for the API and hashes the next step's events for
+    `world.hash`, both outside the step.
+
+**What moves onto it.**
+- **Combat**, ten channels:
+  - The channels: `slice.shot`, `slice.hit`, `slice.damage`, `slice.death`, `slice.reload`, `slice.reloaded`,
+    `slice.round_start`, `slice.restart`, `slice.win` and `slice.explode`.
+  - Each has only its own fields, under names that say what they are.
+  - A shot carries where its round stopped, so vfx no longer pairs a shot with the hit that follows it.
+- **Physics:** `physics.contact_begin`, `physics.contact_end`, `physics.trigger_enter`, `physics.trigger_exit`,
+  `physics.footstep`, `physics.land` and `physics.joint_break`. They keep today's sorted order.
+- **Animation:** `anim.clip_event`.
+- **The audio schedule's commands:**
+  - The channels: `audio.play`, `audio.stop`, `audio.bus`, `audio.snapshot`, `audio.zone`, `audio.occlusion` and
+    `audio.stop_world`.
+  - Sounds and buses are named, not indexed.
+  - The audio player reads them by cursor, like any observer.
+  - A voice's tie-break by its play's `seq` stays. A restore keeps the order of seqs (3b), and one sequence for
+    every channel keeps it too.
+- **Vfx records stay vfx's state:** they live and expire, so they are not events.
+  - A record's `sourceSeq` is the log's seq.
+  - Its seed comes from the event's identity, not from the event's place in combat's list.
+- **Deleted:**
+  - `CombatEvent` and combat's log;
+  - the logs of physics, animation and the audio schedule;
+  - every `stepEvents`, `eventsSince`, `nextEventSeq` and `commandsSince`;
+  - `combatEvents()` and `physicsEvents()`;
+  - the cursor loops written against them.
+
+**The API.**
+- **`events.read {since = 0, max = 32, names?}`** returns `{events: [{seq, step, name, ...fields}], next, dropped?}`:
+  - the events with seq > since, oldest first;
+  - `names`: exact names or `prefix.*`. An unknown exact name is `E_NOT_FOUND`, which lists the channels;
+  - `max` 0–64, where 0 returns only `next`, a cursor at the present;
+  - `dropped`: how many events of any name the history no longer holds.
+- **Fields are written from the payload's reflection.**
+  - An entity is written as its id, and as its name while it lives.
+  - A float is rounded to its unit's step: 1 mm, 0.01°, and so on.
+- **Deleted:** `combat.events`, `physics.events`, `animation.info`'s `since`, `max` and `events`, and `audio.info`'s
+  `since`, `max` and `commands`.
+- **The catalogue** (`schema.get`) lists every channel: its name, the system that writes it, the systems that read
+  it, and each field's doc and unit.
+
+**For Frank: one budget.** `serve_bench`'s `audio_info_bytes` (at most 2 KB) measures `audio.info` with 16
+commands; after 3c, `audio.info` has no commands. Proposed: the same bar on `events.read {max: 16}` mid-fight, as
+`events_read_bytes`. A budget changes only by his ruling.
+
+**Proof.**
+- **The baseline.**
+  - Its logs read the same through `events.read`; the tool maps each old event to its new name and fields.
+  - The expected differences:
+    - seqs renumber into one sequence;
+    - every `step` is the World's;
+    - vfx seeds change.
+  - A kill through `combat.damage` now reaches the next step's readers, as a round's kill does. The baseline has
+    none.
+- **`replay_test`** passes, reading the fight through `events.read`.
+- **A temporary check**, deleted after:
+  - The sequence: `combat.damage` between steps, a snapshot, a step, the restore, then the step again.
+  - It passes when both runs reach the same `world.hash`, and the step's readers saw the damage.
+  - Planted: a snapshot without the next step's events. The check must fail.
+- **Measured, not gated:** physics_bench's `eventsMs`, and the play fight's combat, vfx and audio step times, before
+  and after.
+
+*Done when* every combat, physics, animation and audio-schedule event goes through the log, the four logs and their
+cursor loops are deleted, and the proofs hold.
+
+Two commits, each through the hook:
+1. the log, the World's step, and combat, physics and animation with every reader, the API and the docs;
+2. the audio commands.
 
 ## 3d. The round restart as a request
 
-- **A request, carried out later.** Combat asks for a restore (`ecs::requestRestore(world, snapshot)`); it is carried
-  out after the step's last simulate system. The next step starts with a `Restart` event.
-- **One rule deleted.** "Skip what came before the step's last restart" goes from all seven readers.
-- **Physics simplified.** Its restored-player path is cut down to what a restore at a step's boundary needs.
+- **A request, carried out between steps.**
+  - Combat asks for a restore (`ecs::requestRestore(world, snapshot)`). The World carries it out after the step's
+    last simulate system.
+  - The round's start is also taken between steps, at the end of the round's first step. No snapshot or restore
+    then happens inside a step.
+- **The events.**
+  - Any restore emits `world.restore` into the next step's events; the game's `slice.restart` follows it.
+  - The audio schedule's `restored` flag and its restart test become one read of `world.restore`.
+  - The HUD and the view model reset on it.
+- **What goes.**
+  - The restore during a step, and with it 3c's ending of a step's events by a restore.
+  - The observers' "drop what came before a restart" in a frame.
+  - Physics' restored-player path, cut down to what a restore between steps needs.
 
-*Done when* the seven readers have no restart rule.
+*Done when* no snapshot or restore runs inside a step, and no reader has a restart rule.
 
 - **A temporary restart check:** a death, the restart, and the world equal to the round's start.
 - **Measured,** not gated: `physics_bench`'s restart time.
@@ -156,6 +300,8 @@ baseline's logs read the same through `events.read`. Their sequence numbers may 
 
 ## 3e. One clock
 
+- **One step count.** The World's (3c). The counters of combat, physics, animation, the audio schedule and vfx go;
+  each system reads the World's.
 - **Animation in seconds.** Clip time and fades are in seconds: graph files carry seconds, migrated by their version.
 - **Audio in time.** The audio schedule's holds and blends, the bank's attack, release and in/out times, and the
   audio player's horizon are in milliseconds.
@@ -175,14 +321,14 @@ unchanged.
 
 ## 3g. Event names as data
 
-- **A cue projection per event type.** Each registered event type gives, by a compiled function (no reflection per
-  step), its cue: `at`, `to`, `normal`, `source`, `target`, `tag`.
+- **A cue projection per channel.** Each channel's payload type gives its cue: `at`, `to`, `normal`, `source`,
+  `target` and `tag`. A compiled function makes it, with no reflection in the step.
 - **Audio banks** bind by name: `{"on": "slice.shot.player", "play": "fire"}`, `"play": "impact_{tag}"`.
 - **Vfx sets** bind by name: `{"on": "slice.hit", "spawn": "impact_{tag}"}`, and a tracer on a cue's `at` and `to`.
 - **The game emits what differs** (a player's shot or an enemy's, a reload from empty) and the tracer's two ends.
   The engine names no game event.
 - **The mix snapshot** (`dead`, `won`) becomes a request the game makes. Animation events bind the same way
-  (`"on": "anim.mag_out"`).
+  (`{"on": "anim.clip_event", "tag": "mag_out"}`).
 
 *Done when* `audio_schedule`, `vfx` and `vfx_set` name no game event or component. The baseline's audio commands and
 vfx records are unchanged.
@@ -192,7 +338,7 @@ vfx records are unchanged.
 - **Each system declares itself:**
   - its phase;
   - the components it reads and writes;
-  - the events it emits and reads;
+  - the events it emits and reads, taken from the writers and readers it holds (3c);
   - any explicit `after`.
 - **The order is computed.** It comes from the events (an emitter runs before its readers in a step) and the
   explicit `after`s, and it is checked at install: a cycle, or two systems that write the same component, or one
@@ -251,8 +397,8 @@ passes with the slice loaded as a shared library.
 
 - **The second game.** `games/sample` is a minimal game against `ohao/game` headers only: targets that spin up and
   fall when shot. It builds and loads in place of the slice.
-- **The catalogue** that `ohao schema` generates gains the registered events and each module's types and methods:
-  what a game developer's agent reads.
+- **The catalogue** that `ohao schema` generates gains each module's types, methods and channels: what a game
+  developer's agent reads. The engine's channels are listed from 3c.
 - **The game developers' docs.** A short `docs/games/README.md` covers the API, a module's life, and hot reload.
   `AGENTS.md` keeps the engine's side.
 
@@ -266,3 +412,8 @@ spec's step 3 "done when" holds. The baseline tool is then deleted.
 - Section 3's "combat's runtime state is in no snapshot" understates the gap. Physics', animation's and audio's
   counters and the World's input are missing too, and snapshot columns hold raw entity handles. 3b covers all of
   them.
+- **4.3, events (3c).**
+  - Events are not double-buffered. A step reads its own events, and the schedule puts each writer before its
+    readers. A buffer that waits a step is only for a reader that runs before its writer, and none does.
+  - What a snapshot and `world.hash` carry is the next step's events, those emitted between steps, not the step's
+    own.
