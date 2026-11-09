@@ -219,9 +219,11 @@ struct PhysicsRaycastParams {
 };
 struct PhysicsInfoParams {};
 // Sub-project 6, step 1.
-struct PhysicsEventsParams {
-    int64_t since{0};   // the seq of the last event already read (the previous reply's next)
-    int32_t max{32};    // 1..64
+// Step 3c: the World's event log.
+struct EventsReadParams {
+    int64_t since{0};                 // the seq of the last event already read (the previous reply's next)
+    int32_t max{32};                  // 0..64
+    std::vector<std::string> names;   // channels, exact or "prefix.*"; empty: every channel
 };
 // Sub-project 6, step 5.
 inline constexpr float kMaxTeleport = 100'000.0f;   // player.teleport's pos: each axis within ±1e5 m
@@ -245,10 +247,7 @@ struct CombatEventsParams {
     int32_t max{32};    // 1..64
 };
 // Sub-project 11, step 4.
-struct AudioInfoParams {
-    int64_t since{0};   // commands after this seq (the previous reply's next)
-    int32_t max{16};    // commands in one reply, 0..64
-};
+struct AudioInfoParams {};
 struct VfxInfoParams {
     int64_t since{0};   // records after this seq (the previous reply's next)
     int32_t max{16};    // records in one reply, 0..64
@@ -264,8 +263,6 @@ struct AudioMixParams {
 };
 struct AnimationInfoParams {
     std::optional<uint64_t> entity;   // one animator; absent: every animator (the first 16)
-    int64_t since{0};                 // events after this seq (the previous reply's next)
-    int32_t max{16};                  // events in one reply, 0..64
 };
 struct CombatDamageParams {
     std::optional<uint64_t> entity;   // required: the entity hit (its Health, or its nearest ancestor's)

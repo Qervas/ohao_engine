@@ -665,6 +665,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("linear", &BodyMotion::linear).doc("Linear velocity, world (a player's velocity)").unit("m/s")
         .field("angular", &BodyMotion::angular).doc("Angular velocity, world").unit("rad/s")
         .field("asleep", &BodyMotion::asleep).doc("The body sleeps; its velocities are zero");
+    registerEventTypes(r);
 }
 
 } // namespace ohao::ecs

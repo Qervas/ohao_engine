@@ -340,7 +340,7 @@ void PhysicsScene::Impl::endPairsOf(pb::BodyHandle h) {
             continue;
         }
         if (it->second.dormant) --dormant;
-        pending.push_back(endEvent(it->second));
+        emit(endEvent(it->second));
         it = pairs.erase(it);
     }
 }
@@ -348,8 +348,6 @@ void PhysicsScene::Impl::endPairsOf(pb::BodyHandle h) {
 auto PhysicsScene::Impl::endEvent(const Pair& p) const -> PhysicsEvent {
     PhysicsEvent ev;
     ev.kind = p.trigger ? PhysicsEvent::Kind::TriggerExit : PhysicsEvent::Kind::ContactEnd;
-    ev.a = p.a != entt::null && reg.valid(p.a) ? p.a : entt::entity{entt::null};
-    ev.b = p.b != entt::null && reg.valid(p.b) ? p.b : entt::entity{entt::null};
     ev.aId = p.aId;
     ev.bId = p.bId;
     ev.point = p.point;
@@ -824,32 +822,19 @@ void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt); }
 void PhysicsScene::spawnPlayers() { m->spawnPlayers(); }
 void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
 bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }
-std::span<const PhysicsEvent> PhysicsScene::stepEvents() const noexcept { return m->stepEvents; }
-std::vector<PhysicsEvent> PhysicsScene::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
-    return m->since(since, max, dropped);
+void PhysicsScene::setEvents(EventLog& log) {
+    namespace pe = physics_events;
+    m->out.contactBegin = log.writer<ContactEvent>(pe::kContactBegin, "physics");
+    m->out.contactEnd = log.writer<ContactEvent>(pe::kContactEnd, "physics");
+    m->out.triggerEnter = log.writer<TriggerEvent>(pe::kTriggerEnter, "physics");
+    m->out.triggerExit = log.writer<TriggerEvent>(pe::kTriggerExit, "physics");
+    m->out.footstep = log.writer<FootEvent>(pe::kFootstep, "physics");
+    m->out.land = log.writer<FootEvent>(pe::kLand, "physics");
+    m->out.jointBreak = log.writer<JointBreakEvent>(pe::kJointBreak, "physics");
 }
-uint64_t PhysicsScene::nextEventSeq() const noexcept { return m->nextSeq; }
 uint64_t PhysicsScene::steps() const noexcept { return m->steps; }
 int PhysicsScene::lastSubsteps() const noexcept { return m->lastSubsteps; }
 PhysicsScene::StepTiming PhysicsScene::lastStepTiming() const noexcept { return m->timing; }
-
-const char* physicsEventKindName(PhysicsEvent::Kind k) noexcept {
-    switch (k) {
-        case PhysicsEvent::Kind::ContactBegin: return "contact_begin";
-        case PhysicsEvent::Kind::ContactEnd: return "contact_end";
-        case PhysicsEvent::Kind::TriggerEnter: return "trigger_enter";
-        case PhysicsEvent::Kind::TriggerExit: return "trigger_exit";
-        case PhysicsEvent::Kind::JointBreak: return "joint_break";
-        case PhysicsEvent::Kind::Footstep: return "footstep";
-        case PhysicsEvent::Kind::Land: return "land";
-    }
-    return "?";
-}
-
-std::span<const PhysicsEvent> physicsEvents(const World& world) {
-    const PhysicsScene* s = physicsScene(world);
-    return s ? s->stepEvents() : std::span<const PhysicsEvent>{};
-}
 
 physics::backend::IPhysicsBackend& PhysicsScene::backend() { return m->ensureBackend(); }
 
@@ -876,6 +861,7 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
     // Snapshots carry the simulation, so a restore replays exactly (spec "Snapshots and replay").
     PhysicsScene* raw = scene.get();
+    raw->setEvents(world.events());
     addSnapshotHook(reg, SnapshotHook{"physics", [raw] { return raw->saveSimulation(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); },
                                       [raw](StateHash& h) { raw->hashSimulation(h); }});

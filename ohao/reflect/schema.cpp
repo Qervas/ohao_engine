@@ -24,7 +24,8 @@ bool needsUnit(const TypeInfo& t, const FieldInfo& f) {
     return t.serialized && takesUnit(*f.type);
 }
 
-void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const MethodDoc> methods, const uint64_t* hash) {
+void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const MethodDoc> methods,
+                        std::span<const ChannelDoc> events, const uint64_t* hash) {
     w.beginObject();
     w.key("format"); w.string("ohao.schema");
     w.key("version"); w.int64(1);
@@ -58,6 +59,24 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
     }
     w.endArray();
 
+    w.key("events");   // the channels: events.read's names, each with its payload type (role "event")
+    w.beginArray();
+    for (const auto& c : events) {
+        w.beginObject();
+        w.key("name"); w.string(c.name);
+        w.key("type"); w.string(c.type);
+        w.key("writers");
+        w.beginArray();
+        for (const auto& n : c.writers) w.string(n);
+        w.endArray();
+        w.key("readers");
+        w.beginArray();
+        for (const auto& n : c.readers) w.string(n);
+        w.endArray();
+        w.endObject();
+    }
+    w.endArray();
+
     w.key("enums");
     w.beginArray();
     for (const EnumInfo* e : r.enums()) {
@@ -84,7 +103,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
         w.beginObject();
         w.key("name"); w.string(t->name);
         w.key("doc"); w.string(t->doc);
-        w.key("role"); w.string(t->role == TypeRole::Component ? "component" : "struct");
+        w.key("role"); w.string(t->role == TypeRole::Component ? "component" : t->role == TypeRole::Event ? "event" : "struct");
         w.key("serialized"); w.boolean(t->serialized);
         w.key("singleton"); w.boolean(t->singleton);
         w.key("alwaysPresent"); w.boolean(t->alwaysPresent);
@@ -125,6 +144,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
             w.key("hidden"); w.boolean(a.hidden);
             w.key("readOnly"); w.boolean(a.readOnly);
             if (a.omitDefault) { w.key("omitDefault"); w.boolean(true); }
+            if (a.entity) { w.key("entity"); w.boolean(true); }
             if (a.maxLength) { w.key("maxLength"); w.int64(*a.maxLength); }
             w.key("aliases");
             w.beginArray();
@@ -435,16 +455,16 @@ std::vector<std::string> lint(const TypeRegistry& r) {
     return issues;
 }
 
-uint64_t schemaHash(const TypeRegistry& r, std::span<const MethodDoc> methods) {
+uint64_t schemaHash(const TypeRegistry& r, std::span<const MethodDoc> methods, std::span<const ChannelDoc> events) {
     JsonWriter w(1 << 14);
-    writeCatalogueBody(w, r, methods, nullptr);
+    writeCatalogueBody(w, r, methods, events, nullptr);
     return fnv1a64(w.str());
 }
 
 std::string exportCatalogue(const TypeRegistry& r, const CatalogueOptions& options) {
-    const uint64_t hash = schemaHash(r, options.methods);
+    const uint64_t hash = schemaHash(r, options.methods, options.events);
     JsonWriter w(1 << 14, options.layout);
-    writeCatalogueBody(w, r, options.methods, &hash);
+    writeCatalogueBody(w, r, options.methods, options.events, &hash);
     std::string out = w.take();
     if (options.layout == JsonLayout::Pretty) out.push_back('\n');
     return out;

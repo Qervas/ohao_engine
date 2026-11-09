@@ -80,8 +80,8 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     substeps <= 1/60 s, awake dynamic bodies ->
                     Transform (patch) and BodyMotion, the step's contact/trigger events
                     and the players' footsteps and landings (with the
-                    ground's Collider.surface) (physicsEvents(world), the
-                    log physics.events reads)
+                    ground's Collider.surface) into the World's event log
+                    (physics.*)
     combat          first the enemy AI (every Enemy in id order: sight   installed by installCombat
                     ray, Idle/Chase/Attack/Dead, MoveIntent for the next
                     step, WeaponTrigger for this one); then
@@ -106,18 +106,22 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     the step's combat events after its last restart;
                     each layer takes its first holding transition (a
                     parameter, an event, its clip's end), advances its
-                    integer steps and fade, and fires the clip events it
-                    crossed (a log of 1,024: animation.info)
+                    integer steps and fade, and emits the clip events it
+                    crossed (anim.clip_event)
     audio_schedule  last: the step's physics, combat and animation        installed by installAudio
-                    events -> voice commands (play with a voice, variant, (after installAnimation)
+                    events -> audio.* events (play with a voice, variant, (after installAnimation)
                     occlusion and outcome; stop for a stolen voice; bus
                     ducks; the round's snapshot; the listener's zone and
                     bed; occlusion re-casts; stop_world on a restart or
                     restore), by the bank's priorities, caps and holdMs;
-                    its state rides the World's snapshot; never hashed
+                    its state rides the World's snapshot and world.hash
+    then the step's events become history (ecs/events.hpp): each system reads its channels'
+    events for the step (EventReader::read); one emitted between steps (an API call, a body
+    removed in a sync) is the next step's, carried by a snapshot and hashed until it runs;
+    events.read reads the history, the last 8,192, by seq
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost):
-  runtime::AudioPlayer  (LiveConfig::sound, ohao_game without --mute) the schedule's commands
+  runtime::AudioPlayer  (LiveConfig::sound, ohao_game without --mute) the audio.* events
                       since its cursor -> the AudioSystem, one step after their step on a
                       clock anchored to the device (late: at once, counted); the bank's files
                       decoded when the bank loads (assets/local/audio, then assets/audio);
@@ -317,7 +321,10 @@ Followed for the spin system.
      through `patch`/`replace` so the sync systems see the change. Read time only from
      `dt` (it runs once per fixed step); do nothing when `dt` is 0.
   2. Install it in `World::World()` (`ohao/ecs/world.cpp`) with `addSimulate`.
-  3. Its files include nothing from `reflect/` or `api/`.
+  3. Its files include nothing from `reflect/` or `api/`. What it tells other systems or agents is an event:
+     a payload struct registered in `ecs/event_types.cpp` (`.event()`, entities by id with `.entity()`), a
+     writer taken at install (`world.events().writer<T>("<system>.<what>", "<system>")`), and readers taking
+     theirs the same way; never a log of its own.
   4. Check it by hand through the API (`world.step`, then the entities' values; still entities
      untouched); `replay_test` holds its determinism if the play scene runs it.
 - **Host system** (needs a renderer; a sync system, no dt): an `install<Name>(World&, …)`
@@ -542,7 +549,8 @@ Followed for the play scene's enemies and the player's arms (sub-project 10, ste
    `Transform` in the joint's frame (the rifle in `Index1.R`, the muzzle at the barrel's
    tip). A first-person rig goes under a `ViewModel` root; author what should show at least
    0.25 m from the eye and within 30° of the eye line.
-5. **Check it:** `animation.info` (the states, clip times and events); force a state with
+5. **Check it:** `animation.info` (the states and clip times) and `events.read {names: ["anim.clip_event"]}`;
+   force a state with
    `component.set` on `Animator`; step and read it back. `replay_test` holds a restore
    replaying the same Animators (`world.hash`) if the play scene uses it; `check_validation.py`
    renders the skinned rig.
@@ -571,11 +579,11 @@ renders it, so a sound is tested on the schedule, without a device.
    `send` (to the reverb return) and `occlude`. Every error names its JSON pointer; `ohao
    schema audio-bank [-o FILE]` writes the schema. Files are decoded when the bank loads, never on a play.
 3. **The event:** the schedule (`ecs/audio_schedule.cpp`) names the sound for a step's event:
-   `combatSoundNames` for the combat log, `animSoundNames` for clip events,
-   `footstepSound` for the physics log's footsteps by surface. A clip event of a new name
+   `combatSoundNames` for the combat log, `animSoundNames` for `anim.clip_event`,
+   `footstepSound` for `physics.footstep` and `physics.land` by surface. A clip event of a new name
    needs a line there; a new surface needs only its `footstep_<surface>` sound.
-4. **Check it on the schedule:** in a session, `audio.info` lists the step's commands (the play,
-   its voice, variant, occlusion and outcome); `audio.mix` solos its bus to listen in a window
+4. **Check it on the schedule:** in a session, `events.read {names: ["audio.*"]}` lists the step's
+   commands (the play, its voice, variant, occlusion and outcome); `audio.mix` solos its bus to listen in a window
    (`ohao serve --window --sound`).
 5. **Budgets:** `audio_bench` (`schedule_step_ms`, `submit_frame_ms`, `bank_load_ms`);
    `audio_bench --listen DIR` renders the fight to a WAV with its schedule.

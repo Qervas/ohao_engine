@@ -298,13 +298,13 @@ void PhysicsScene::Impl::spawnPlayers() {
 auto PhysicsScene::Impl::playerEvent(PhysicsEvent::Kind kind, entt::entity e, const pb::CharacterState& at, float speed) const -> PhysicsEvent {
     PhysicsEvent ev;
     ev.kind = kind;
-    ev.a = e;
     ev.aId = idOf(e);
+    entt::entity ground = entt::null;
     if (const auto it = entityOf.find(at.groundBody); at.groundBody != pb::INVALID_BODY && it != entityOf.end()) {
-        ev.b = it->second;
-        ev.bId = idOf(ev.b);
+        ground = it->second;
+        ev.bId = idOf(ground);
     }
-    const auto* c = ev.b != entt::null && reg.valid(ev.b) ? reg.try_get<Collider>(ev.b) : nullptr;
+    const auto* c = ground != entt::null && reg.valid(ground) ? reg.try_get<Collider>(ground) : nullptr;
     ev.surface = c && !c->surface.empty() ? c->surface : std::string("default");
     ev.point = at.position;
     ev.normal = at.groundNormal;
@@ -454,9 +454,8 @@ void PhysicsScene::Impl::step(const InputMap& input, float dt) {
     lastSubsteps = 0;
     timing = {};
     std::vector<PhysicsEvent> fresh;
-    if (bodies.empty() && touched.empty() && pending.empty() && players.empty() && playersTouched.empty() &&
-        reg.view<PhysicsMoved>().empty()) {
-        stepEvents.clear();   // a world without colliders or players: no work at all
+    if (bodies.empty() && touched.empty() && players.empty() && playersTouched.empty() &&
+        reg.view<PhysicsMoved>().empty()) {   // a world without colliders or players: no work at all
         posedExternally.clear();
         return;
     }
@@ -596,16 +595,6 @@ void PhysicsScene::Impl::setDrawn(entt::entity x, const glm::mat4& world, const 
     reg.emplace_or_replace<RenderPose>(x, RenderPose{world, prev});
     reg.emplace_or_replace<RenderDirty>(x);
     drawn.insert(x);
-}
-
-auto PhysicsScene::Impl::since(uint64_t after, std::size_t max, uint64_t& dropped) const -> std::vector<PhysicsEvent> {
-    const uint64_t last = nextSeq - 1;
-    const uint64_t oldest = last > PhysicsScene::kEventLog ? last - PhysicsScene::kEventLog + 1 : 1;
-    const uint64_t first = std::max(after + 1, oldest);
-    dropped = first > after + 1 ? first - (after + 1) : 0;
-    std::vector<PhysicsEvent> out;
-    for (uint64_t s = first; s <= last && out.size() < max; ++s) out.push_back(log[(s - 1) % PhysicsScene::kEventLog]);
-    return out;
 }
 
 } // namespace ohao::ecs

@@ -6,8 +6,8 @@
 //   - the `animation` simulate system (after the systems installed before it: physics, combat):
 //     for each Animator in id order, its driver (if its graph names one) writes AnimParams from
 //     saved state; then each layer in order takes the first transition that holds, advances one
-//     step, and fires its clip events into the animation event log (1,024, read by cursor, as
-//     combat's is). Nothing in the step reads a pose.
+//     step, and emits its clip events (`anim.clip_event`, the World's log: ecs/events.hpp). Nothing in
+//     the step reads a pose.
 //   - the `pose` sync system (before render_extract, after view_model / interpolate): samples
 //     every Animator at (steps - 1 + alpha) into AnimPose (local, model and the skinning palette,
 //     the previous drawn frame's kept for motion vectors) and writes each JointAttach child's
@@ -21,7 +21,6 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <unordered_map>
 #include <memory>
@@ -55,21 +54,21 @@ struct AnimPose {
     uint64_t frame{0};                      // pose syncs run so far for this entity
 };
 
-struct AnimEvent {
-    uint64_t step{0};     // the animation step it fired in (AnimationSystem::steps, 1-based)
-    uint64_t seq{0};      // log order
-    uint64_t entity{0};   // the animated entity's id
-    uint8_t layer{0};
-    std::string clip, name;
+// A clip event a layer's clip fired in the step (`anim.clip_event`): mag_out, foot_l, body_fall, ...
+inline constexpr const char* kClipEventChannel = "anim.clip_event";
+struct ClipEvent {
+    uint64_t entity{0};     // the animated entity's id
+    uint32_t layer{0};      // the graph layer
+    std::string clip;       // the clip that fired it
+    std::string name;       // the event's name in the clip
 };
 
 using AnimDriver = std::function<void(const World&, entt::entity, AnimParams&)>;
 
 class AnimationSystem {
 public:
-    static constexpr std::size_t kLogCapacity = 1024;
-
     explicit AnimationSystem(AssetResolver& assets);
+    void setEvents(EventLog& log);   // the channel it emits into (installAnimation: the World's)
 
     // The graph a path names (cached); nullptr with the error logged once per path.
     [[nodiscard]] std::shared_ptr<const anim::BoundGraph> graph(const std::string& path);
@@ -80,9 +79,6 @@ public:
     void step(World& world);      // the simulate system
     void pose(World& world);      // the sync system
 
-    [[nodiscard]] std::span<const AnimEvent> stepEvents() const noexcept { return m_stepEvents; }
-    [[nodiscard]] std::vector<AnimEvent> eventsSince(uint64_t seq, std::size_t max, uint64_t& dropped) const;
-    [[nodiscard]] uint64_t nextEventSeq() const noexcept { return m_nextSeq; }
     [[nodiscard]] uint64_t steps() const noexcept { return m_steps; }
     void setSteps(uint64_t steps) noexcept { m_steps = steps; }   // the `animation` snapshot hook's restore
     [[nodiscard]] double lastStepMs() const noexcept { return m_lastStepMs; }
@@ -100,9 +96,7 @@ private:
     anim::AnimCache m_cache;
     std::vector<std::pair<std::string, AnimDriver>> m_drivers;
     std::vector<std::string> m_failed;   // graph paths whose error was logged
-    std::vector<AnimEvent> m_stepEvents;
-    std::deque<AnimEvent> m_log;         // the newest kLogCapacity
-    uint64_t m_nextSeq{0};
+    EventWriter<ClipEvent> m_clipEvents;
     uint64_t m_steps{0};
     double m_lastStepMs{0.0}, m_lastPoseMs{0.0};
     anim::PoseScratch m_scratch;

@@ -171,10 +171,8 @@ void PhysicsScene::Impl::publishBrokenJoints(std::vector<PhysicsEvent>& fresh) {
         writingJoint = false;
         PhysicsEvent ev;
         ev.kind = PhysicsEvent::Kind::JointBreak;
-        ev.a = e;
         ev.aId = idOf(e);
         const JointRecord& r = joints.at(e);
-        ev.b = r.b;
         ev.bId = r.b == entt::null ? 0 : idOf(r.b);
         if (const auto* wt = reg.try_get<WorldTransform>(e))
             ev.point = glm::vec3(wt->world * glm::vec4(reg.get<Joint>(e).anchor, 1.0f));

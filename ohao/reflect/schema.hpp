@@ -30,8 +30,17 @@ struct MethodDoc {
 // schemas are this.
 void writeParamsSchema(JsonWriter& w, const TypeInfo& params);
 
+// One event channel of a world (ecs/events.hpp): its name, its payload type's name, the systems that write and
+// read it.
+struct ChannelDoc {
+    std::string name;
+    std::string type;
+    std::vector<std::string> writers, readers;
+};
+
 struct CatalogueOptions {
     std::span<const MethodDoc> methods{};
+    std::span<const ChannelDoc> events{};
     JsonLayout layout{JsonLayout::Pretty};   // Pretty ends with '\n'; Compact has no newline
 };
 
@@ -40,7 +49,8 @@ struct CatalogueOptions {
 // order. Canonical and deterministic. `schemaHash` (16 hex digits) is FNV-1a 64 of the
 // catalogue's compact form without the schemaHash member.
 [[nodiscard]] std::string exportCatalogue(const TypeRegistry& r, const CatalogueOptions& options = {});
-[[nodiscard]] uint64_t schemaHash(const TypeRegistry& r, std::span<const MethodDoc> methods = {});
+[[nodiscard]] uint64_t schemaHash(const TypeRegistry& r, std::span<const MethodDoc> methods = {},
+                                  std::span<const ChannelDoc> events = {});
 
 // JSON Schema (draft 2020-12) for scene documents (*.scene.json) built from the serialized types:
 // any validator can check a scene's shape, enums, limits and id syntax. Cross-entity

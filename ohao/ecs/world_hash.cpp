@@ -4,6 +4,7 @@
 #include "ecs/snapshot_hook.hpp"
 #include "reflect/hash.hpp"
 
+#include <stdexcept>
 #include <vector>
 
 namespace ohao::ecs {
@@ -54,6 +55,14 @@ uint64_t hashWorld(const World& world, const reflect::TypeRegistry& types, Snaps
     HookHash hooks(h, world);
     hashSystems(reg, hooks);
     world.input().hashState(h);
+    // The World's step and the events the next step reads (step 3c), by channel name and payload; never a seq.
+    h.u64(world.steps());
+    world.events().visitWindow([&](const EventChannelBase& c, std::size_t i) {
+        const reflect::TypeInfo* t = types.find(c.type());
+        if (!t) throw std::logic_error("world.hash: event channel '" + c.name() + "' has an unregistered payload type");
+        h.string(c.name());
+        reflect::hashStruct(c.payload(i), h, *t);
+    });
     return h.finish();
 }
 

@@ -1,9 +1,9 @@
 #pragma once
 // The audio schedule (sub-project 11; docs/specs/2026-10-28-audio-design.md, "The step: the
-// schedule"): what the world sounds like, decided in the step from the step's state, as commands in a
-// log that any host reads (a window's player plays them, runtime/audio_player.hpp; agents and tests
-// compare them). The `audio_schedule` simulate system is the step's last (installAudio, called after
-// installAnimation).
+// schedule"): what the world sounds like, decided in the step from the step's state, as the `audio.*`
+// events of the World's log (ecs/events.hpp) that any host reads (a window's player plays them,
+// runtime/audio_player.hpp; agents compare them through events.read). The `audio_schedule` simulate system
+// is the step's last (installAudio, called after installAnimation).
 //
 // Each step, in this order:
 //   1. A round restart in the step (or any restore since the last step) writes `stop_world`; a restore
@@ -29,8 +29,9 @@
 //      unoccluded, both counted, so the cap changes parameters, never which commands exist.
 // The director's state (voices, round robin, ducks, zone, snapshot, its step count) rides in the
 // World's snapshot hooks: a restore or a round restart resumes the same schedule, and world.hash covers it. It is
-// never saved to a file. The log is history, not snapshotted: a restore writes new seqs. Plain data only: no
+// never saved to a file. Its events are history: a restore writes new ones. Plain data only: no
 // miniaudio, no reflection; the bank comes from ohao_audio_bank.
+#include "ecs/events.hpp"
 #include "ecs/snapshot_hook.hpp"
 
 #include <entt/entt.hpp>
@@ -55,8 +56,7 @@ namespace ohao::ecs {
 class World;
 class AssetResolver;
 struct CombatEvent;
-struct AnimEvent;
-struct PhysicsEvent;
+struct ClipEvent;
 
 constexpr uint32_t kRaysPerStep = 16;         // occlusion rays a step
 constexpr uint32_t kRecastSteps = 6;          // a holding voice is re-cast this often
@@ -81,32 +81,69 @@ struct Occlusion {
     double lowPassHz{0.0};
 };
 
-struct AudioCommand {
-    enum class Op : uint8_t { Play, Stop, Bus, Snapshot, Zone, Occlusion, StopWorld };
-    enum class Outcome : uint8_t { Played, Stole, Dropped };
-    Op op{Op::Play};
-    uint64_t seq{0};          // position in the log
-    uint64_t step{0};         // the schedule's step it was written in (1 = the first; a restore puts it back)
-    // Play: the bank sound and variant (the device takes it modulo its files), its bus and priority;
-    // at the ear (not spatial) or at `pos` on the sound's shape; gain: the bank's volume times the
-    // event's scale; send: the sound's; occl: its walls at the start; outcome; victim: the voice it
-    // took (the last, when it took more). source: whose sound (an entity id; 0: none).
-    uint16_t sound{0};
-    uint32_t variant{0};
-    uint8_t bus{0}, priority{0};
-    bool spatial{false};
-    glm::vec3 pos{0.0f};
-    float gain{1.0f}, send{0.0f};
-    Outcome outcome{Outcome::Played};
-    uint32_t voice{0};        // Play, Stop, Occlusion: the voice
-    uint32_t victim{0};
-    uint64_t source{0};
-    float db{0.0f};           // Bus: the duck's level (0: none)
-    std::string zone, bed;    // Zone: the preset ("" with no reverb at all) and its bed sound (may be empty)
-    std::string snapshot;     // Snapshot: its name
-    uint32_t blendSteps{0};   // Zone, Snapshot, Bus, Occlusion, StopWorld: the ramp in steps
-    Occlusion occl;           // Play, Occlusion
-    bool resync{false};       // written to bring the device back to the state a restore put back
+// What the schedule decided, as events of the World's log (ecs/events.hpp): a host's player plays them
+// (runtime/audio_player.hpp), agents read them (events.read). Sounds and buses by the bank's names.
+namespace audio_events {
+inline constexpr const char* kPlay = "audio.play";              // AudioPlay
+inline constexpr const char* kStop = "audio.stop";              // AudioStop
+inline constexpr const char* kBus = "audio.bus";                // AudioBus
+inline constexpr const char* kSnapshot = "audio.snapshot";      // AudioSnapshot
+inline constexpr const char* kZone = "audio.zone";              // AudioZone
+inline constexpr const char* kOcclusion = "audio.occlusion";    // AudioOcclusion
+inline constexpr const char* kStopWorld = "audio.stop_world";   // AudioStopWorld
+} // namespace audio_events
+
+enum class AudioOutcome : uint8_t { Played, Stole, Dropped };
+
+// A voice starts (or, dropped, does not). Its bus, priority and send are its sound's, in the bank.
+struct AudioPlay {
+    std::string sound;            // the bank's sound
+    uint32_t variant{0};          // the device takes it modulo its files
+    uint32_t voice{0};
+    std::optional<glm::vec3> pos; // where, on the sound's shape; none: at the ear
+    float gain{1.0f};             // the bank's volume times the event's scale
+    uint32_t walls{0};            // its occlusion at the start: walls (2: 2 or more), dB, low-pass (0: none)
+    float occlusionDb{0.0f};
+    float lowPassHz{0.0f};
+    AudioOutcome outcome{AudioOutcome::Played};
+    uint32_t victim{0};           // stole: the voice it took (the last, when it took more)
+};
+// A voice stops: a steal's 2 ms fade.
+struct AudioStop {
+    uint32_t voice{0};
+};
+// A bus's duck: its level from the deepest duck holding it.
+struct AudioBus {
+    std::string bus;
+    float db{0.0f};               // 0: none
+    uint32_t blendSteps{0};
+    bool resync{false};           // resent to bring the device to the state a restore put back
+};
+// The mix snapshot.
+struct AudioSnapshot {
+    std::string snapshot;
+    uint32_t blendSteps{0};
+    bool resync{false};
+};
+// The listener's reverb zone.
+struct AudioZone {
+    std::string zone;             // the preset ("" with no reverb at all)
+    std::string bed;              // its bed sound (may be empty)
+    uint32_t blendSteps{0};
+    bool resync{false};
+};
+// A held voice's occlusion, re-cast.
+struct AudioOcclusion {
+    uint32_t voice{0};
+    uint32_t walls{0};
+    float occlusionDb{0.0f};
+    float lowPassHz{0.0f};
+    uint32_t blendSteps{0};
+};
+// The world's voices fade (a round restart, a restore).
+struct AudioStopWorld {
+    uint32_t blendSteps{0};
+    bool resync{false};           // a restore's, not a restart's
 };
 
 struct AudioScheduleStats {
@@ -122,10 +159,10 @@ struct AudioWarning {
     std::string message;
 };
 
-// A voice the schedule holds now (tests, audio.info later).
+// A voice the schedule holds now (audio.info).
 struct ScheduledVoice {
     uint32_t id{0};
-    uint64_t seq{0};          // its play command's
+    uint64_t seq{0};          // its play event's
     uint16_t sound{0};
     uint8_t bus{0}, priority{0};
     float audible{0.0f};      // its gain at the listener when it started (distance and occlusion)
@@ -148,11 +185,6 @@ struct SoundRequest {
 // The preset of the zone holding `listener` ("" in none). A zone fitted to its mesh is known only to
 // an installed schedule; without one, only zones with a size count.
 [[nodiscard]] std::string listenerZone(const World& world, glm::vec3 listener);
-[[nodiscard]] const char* audioCommandOpName(AudioCommand::Op op) noexcept;
-[[nodiscard]] const char* audioOutcomeName(AudioCommand::Outcome o) noexcept;
-// One command as a line, every field but seq (sound and bus by name from `bank`): what tests and the
-// `audio` log channel (Debug) compare between hosts.
-[[nodiscard]] std::string describeAudioCommand(const AudioCommand& c, const AudioBank& bank);
 
 // ---- the rules (Feel's runtime players', sub-projects 6, 7, 9, 10; moved here unchanged) -----------
 // The sounds a combat event names: the player's round "fire", anyone else's "enemy_fire"; a hit
@@ -164,7 +196,7 @@ struct SoundRequest {
 [[nodiscard]] bool combatSoundAtEar(std::string_view name) noexcept;
 // An animation event's: mag_out, mag_in, bolt and body_fall play their own name; foot_l and foot_r a
 // footstep ("footstep"; the surface is the character's ground's); nothing else.
-[[nodiscard]] std::vector<std::string> animSoundNames(const AnimEvent& e);
+[[nodiscard]] std::vector<std::string> animSoundNames(const ClipEvent& e);
 // Whose an animated entity's sounds are: the player's when it is the player or below it (the arms).
 [[nodiscard]] uint64_t animSoundOwner(const World& world, uint64_t entityId, uint64_t playerId);
 // A footstep's or landing's gain by its speed: a walk (4 m/s) 0.65, a sprint (6.5) 0.9; a landing by
@@ -187,33 +219,11 @@ public:
     // One step (the `audio_schedule` simulate system).
     void step();
 
-    // Starts a sound now through the rules' path (placement, occlusion, caps, ducks); returns the
-    // command written (outcome Dropped included), or nothing for a sound the bank lacks.
-    std::optional<AudioCommand> play(const SoundRequest& request);
-
-    struct Voice {
-        uint32_t id{0};
-        Occlusion occl;       // at its start
-        bool capped{false};   // over the step's ray cap: counted as unoccluded
-    };
-    // A tracked voice without a play command (step 2's hook, its tests): its ray and its re-casts.
-    Voice trackVoice(glm::vec3 source, uint32_t holdMs, bool occlude);
-
-    // Logs every command written, at Info on the `audio` channel ("schedule: " + describeAudioCommand):
-    // hosts turn it on for OHAO_AUDIO_TRACE=1, so check_live compares a window's schedule with a
-    // headless host's through log.read.
-    void setTrace(bool on) noexcept;
-
     // The bank to use instead of the AudioMix's (tests, benches); an AudioMix change reads its file again.
     void setBank(const AudioBank& bank);
     [[nodiscard]] const AudioBank& bank() const noexcept;
     [[nodiscard]] uint64_t bankVersion() const noexcept;   // changes when the bank does
 
-    [[nodiscard]] std::span<const AudioCommand> stepCommands() const noexcept;
-    // Commands with seq >= since, oldest first, at most max; `dropped`: how many the log of 4,096 no
-    // longer holds.
-    [[nodiscard]] std::vector<AudioCommand> commandsSince(uint64_t since, std::size_t max, uint64_t& dropped) const;
-    [[nodiscard]] uint64_t nextSeq() const noexcept;
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] const std::string& zone() const noexcept;       // the listener's zone's preset now
     [[nodiscard]] const std::string& snapshot() const noexcept;   // the snapshot now
@@ -241,7 +251,5 @@ private:
 AudioSchedule& installAudio(World& world, AssetResolver& assets);
 [[nodiscard]] AudioSchedule* audioSchedule(World& world);
 [[nodiscard]] const AudioSchedule* audioSchedule(const World& world);
-// The latest step's commands (empty without the schedule).
-[[nodiscard]] std::span<const AudioCommand> audioCommands(const World& world);
 
 } // namespace ohao::ecs

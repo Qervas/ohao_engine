@@ -94,6 +94,8 @@ template <class T>
 void registerSceneTypes(reflect::TypeRegistry& r);
 // The Key enum (core/input.hpp's table), for any registry whose types name keys.
 void registerKeyEnum(reflect::TypeRegistry& r);
+// The engine's event payloads (ecs/event_types.cpp; registerSceneTypes calls it).
+void registerEventTypes(reflect::TypeRegistry& r);
 
 // Writes entity references as the target's EntityId; dead or id-less targets as null.
 class WorldEntityIds final : public reflect::EntityIdMapper {

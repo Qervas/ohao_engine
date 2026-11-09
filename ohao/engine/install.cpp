@@ -17,7 +17,7 @@ void installEngine(ecs::World& world, const EngineConfig& config) {
     ecs::installPhysics(world, config.assets);
     ecs::installCombat(world);
     ecs::installAnimation(world, config.assets);
-    ecs::installAudio(world, config.assets).setTrace(config.audioTrace);
+    ecs::installAudio(world, config.assets);
     ecs::installVfx(world, config.assets);
 }
 

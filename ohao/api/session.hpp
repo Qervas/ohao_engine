@@ -34,6 +34,8 @@ inline constexpr int kProtocolVersion = 1;
 // Every method Session::call answers; exported in the catalogue (ohao_schema.json). Each
 // one's params are a struct of paramsRegistry() (api/params.hpp).
 [[nodiscard]] std::span<const reflect::MethodDoc> methods();
+// A world's event channels, for the catalogue (its `events`), in the log's order.
+[[nodiscard]] std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const reflect::TypeRegistry& types);
 
 // The exit class of an error code, shared by the CLI's exit status and the JSON-RPC error
 // code of a domain error: 1 a validation, usage or input error; 2 an asset or instantiate

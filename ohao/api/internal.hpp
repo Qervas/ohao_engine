@@ -40,6 +40,7 @@ struct Session::Impl {
     Timeline ownTime;
     Timeline* time{&ownTime};
     uint64_t schemaHash{0};
+    std::vector<reflect::ChannelDoc> channels;   // the world's event channels, at the session's start
     std::string catalogue;            // built on the first schema.get
     ecs::JsonParser paramsParser;     // the request's params
     ecs::JsonParser rollbackParser;   // the undo batch built when a batch fails
@@ -118,8 +119,6 @@ bool methodPhysicsRaycast(Session::Impl& s, const JsonDocument& doc, const JsonN
                           JsonWriter& out);
 bool methodPhysicsInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
-bool methodPhysicsEvents(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                         JsonWriter& out);
 bool methodPhysicsContacts(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                            JsonWriter& out);
 bool methodPlayerInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
@@ -136,6 +135,9 @@ bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNod
 // Animation (sub-project 10, step 1; animation.cpp).
 bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                          JsonWriter& out);
+// The World's event log (step 3c; events.cpp).
+bool methodEventsRead(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                      JsonWriter& out);
 // Effects (sub-project 12; vfx.cpp).
 bool methodVfxInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 // Audio (sub-project 11, step 4; audio.cpp).

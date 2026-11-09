@@ -291,7 +291,7 @@ struct Context {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
-        engine::installEngine(*world, {*assets, engineTypes(), runtime::audioTraceRequested()});
+        engine::installEngine(*world, {*assets, engineTypes()});
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);
@@ -362,7 +362,12 @@ int cmdSchema(const Args& a) {
     const fs::path dir = opt(a, "-o", ".");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});
+    // The engine's event channels: those a world with the engine installed has.
+    ecs::FileAssetResolver resolver{"."};
+    ecs::World world;
+    engine::installEngine(world, {resolver, engineTypes()});
+    const std::vector<reflect::ChannelDoc> channels = api::channelDocs(world, engineTypes());
+    const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), channels, reflect::JsonLayout::Pretty});
     const auto schema = reflect::exportSceneJsonSchema(engineTypes());
     const std::string files[] = {(dir / "ohao_schema.json").generic_string(), (dir / "scene.schema.json").generic_string()};
     for (int i = 0; i < 2; ++i) {
@@ -381,7 +386,7 @@ int cmdSchema(const Args& a) {
     w.beginArray();
     for (const auto& f : files) w.string(f);
     w.endArray();
-    w.key("schemaHash"); w.hex64(reflect::schemaHash(engineTypes(), api::methods()));
+    w.key("schemaHash"); w.hex64(reflect::schemaHash(engineTypes(), api::methods(), channels));
     w.endObject();
     w.endObject();
     emit(w.take());

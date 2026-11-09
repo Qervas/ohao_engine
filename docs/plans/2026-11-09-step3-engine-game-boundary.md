@@ -245,7 +245,7 @@ Revised 2026-11-09, from a survey of the tree at `518f93fc`.
   - the cursor loops written against them.
 
 **The API.**
-- **`events.read {since = 0, max = 32, names?}`** returns `{events: [{seq, step, name, ...fields}], next, dropped?}`:
+- **`events.read {since = 0, max = 32, names?}`** returns `{events: [{seq, step, event, ...fields}], next, dropped?}`:
   - the events with seq > since, oldest first;
   - `names`: exact names or `prefix.*`. An unknown exact name is `E_NOT_FOUND`, which lists the channels;
   - `max` 0–64, where 0 returns only `next`, a cursor at the present;
@@ -315,6 +315,36 @@ Two commits, each through the hook:
    - `combat.events` deleted.
    - Done when no engine system names a game event or component (`audio_schedule`, `vfx`, `vfx_set`), and the
      baseline's audio commands and vfx records are unchanged apart from the seeds.
+
+*As built, commit 1 (2026-11-09):*
+- **The log** is `ecs/events.hpp`: `EventChannel<T>` (one vector of `{meta, value}`, contiguous, its front
+  compacted as the history drops it), `EventWriter`/`EventReader` handles naming their system, and `EventLog`
+  (the channels, one deque of channel indices by seq, the window's first seq). `World::simulate` brackets the
+  systems with `beginStep`/`endStep`; `World::steps()` is the log's step.
+- **Payloads** are reflected in `ecs/event_types.cpp` (`TypeRole::Event`, `.entity()` on an id field, the new
+  `dB` unit). The type key moved to `core/type_key.hpp`, so a channel names its payload type without `reflect/`.
+- **Physics** keeps its drain, collapse and sort; publishing emits into seven channels. A removed body's ends
+  are emitted when the sync removes it, not held for the next step, so between steps they are the next step's
+  events and a snapshot carries them.
+- **The audio schedule's commands** are seven payload types, sounds and buses by name. A play carries only
+  what the bank does not say: `pos` is absent at the ear, its bus, priority and send are its sound's. The
+  player resolves the names; the API needs no bank. Deleted with the log: `AudioCommand`, the trace
+  (`OHAO_AUDIO_TRACE`, for the deleted `check_live`), and `AudioSchedule::play`/`trackVoice` (no callers since
+  2026-11-08).
+- **The API's channel key is `event`**, not `name`: a payload may have a field `name` (`anim.clip_event`).
+- **The catalogue** gains `events` (each channel's name, payload type, writers and readers), in the session's
+  and in `ohao schema`'s (a world with the engine installed); `schemaHash` covers it.
+- **The baseline.** Through `events.read`, the physics events and audio commands read the same as the
+  recording made before step 3 (by meaning: seqs left out, floats within the old rounding). Combat, vfx, the
+  scenes and the player are equal; only the hashes differ (the World's step is hashed).
+- **The next step's events are state** (a temporary check, deleted): CrateB destroyed between steps ends its
+  contact into step 31's events; a snapshot, a step, the restore: the same `world.hash`, then the same after a
+  step, and the history holds the end twice. Planted, a snapshot without them: the restore's hash differs.
+- **Cost**, measured before and after on this machine (median, ms): 1,000 contact begins in a step 0.1186 and
+  0.1197 (p95 0.1256 and 0.1214), the blockout step 0.0084 and 0.0085, combat 0.0021 and 0.0021, the audio
+  schedule 0.0005 and 0.0005, the audio player's frame 0.0007 and 0.0007.
+- **Sizes**, the play scene mid-fight: `events.read` of its last 16 events is 1,832 bytes; `audio.info` is 465.
+  `serve_bench` (Windows only) measures both; `events_read_bytes` is reported, not gated, until Frank rules.
 
 ## 3d. The round restart as a request
 

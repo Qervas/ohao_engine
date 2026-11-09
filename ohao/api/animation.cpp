@@ -1,5 +1,5 @@
 // animation.info (sub-project 10, step 1; docs/specs/2026-10-28-animation-design.md, "The agent-facing
-// surface"): every Animator's layers, and the clip events since a cursor.
+// surface"): every Animator's layers. Its clip events are events.read's anim.clip_event (step 3c).
 //
 // The session reaches animation through what installAnimation left on the World
 // (ecs::animationSystem); a World without it answers E_STATE. Reading changes nothing, so it does not
@@ -124,26 +124,6 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
     out.endArray();
     if (animators.size() > kMaxAnimators) { out.key("more"); out.uint64(animators.size() - kMaxAnimators); }
 
-    // The clip events after the cursor, as combat.events: numbered from 1.
-    const auto since = static_cast<uint64_t>(p.since);
-    uint64_t dropped = 0;
-    const std::vector<ecs::AnimEvent> events = anim->eventsSince(since, static_cast<std::size_t>(p.max), dropped);
-    out.key("events");
-    out.beginArray();
-    for (const ecs::AnimEvent& ev : events) {
-        if (p.entity && ev.entity != *p.entity) continue;
-        out.beginObject();
-        out.key("seq"); out.uint64(ev.seq + 1);
-        out.key("step"); out.uint64(ev.step);
-        out.key("entity"); out.string(hex16(ev.entity));
-        out.key("layer"); out.uint64(ev.layer);
-        out.key("clip"); out.string(ev.clip);
-        out.key("name"); out.string(utf8Prefix(ev.name, 32));
-        out.endObject();
-    }
-    out.endArray();
-    out.key("next"); out.uint64(events.empty() ? std::min(since, anim->nextEventSeq()) : events.back().seq + 1);
-    if (dropped) { out.key("dropped"); out.uint64(dropped); }
     out.endObject();
     return true;
 }

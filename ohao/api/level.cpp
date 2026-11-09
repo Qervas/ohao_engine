@@ -29,7 +29,7 @@ namespace {
 constexpr std::size_t kMaxSpawns = 8;     // level.info lists the first spawns (query --has SpawnPoint for all)
 constexpr std::size_t kMaxWarnings = 4;   // and the first warnings, then "moreWarnings"
 constexpr std::size_t kMaxName = 40;      // physics.raycast's name, in bytes (a whole UTF-8 sequence)
-constexpr std::size_t kMaxEventName = 24; // physics.events' an and bn, in bytes
+constexpr std::size_t kMaxEventName = 24; // physics.contacts' an and bn, in bytes
 
 // Positions to 0.1 mm, directions to 1e-4: short numbers, and no -0 (tested by magnitude: under
 // /fp:fast `r == 0 ? 0 : r` folds to r and keeps the sign).
@@ -340,48 +340,6 @@ bool methodPhysicsInfo(Session::Impl& s, const JsonDocument&, const JsonNode& pa
         out.endArray();
         if (warnings.size() > kMaxWarnings * 2) { out.key("moreWarnings"); out.uint64(warnings.size() - kMaxWarnings * 2); }
     }
-    out.endObject();
-    return true;
-}
-
-// physics.events (sub-project 6, step 1; docs/specs/2026-10-26-player-physics-design.md,
-// "Events"): the log after a cursor. Reading changes nothing, so it does not sync.
-bool methodPhysicsEvents(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
-                         JsonWriter& out) {
-    PhysicsEventsParams p;
-    if (!decodeParams(s, params, ctx, p)) return false;
-    ecs::PhysicsScene* physics = needPhysics(s, params, ctx);
-    if (!physics) return false;
-    uint64_t dropped = 0;
-    const auto since = static_cast<uint64_t>(p.since);
-    const std::vector<ecs::PhysicsEvent> events = physics->eventsSince(since, static_cast<std::size_t>(p.max), dropped);
-    const auto& reg = s.world.registry();
-    const auto nameOf = [&](entt::entity e) {
-        const auto* n = e != entt::null && reg.valid(e) ? reg.try_get<ecs::Name>(e) : nullptr;
-        return n ? utf8Prefix(n->value, kMaxEventName) : std::string();
-    };
-    out.beginObject();
-    out.key("events");
-    out.beginArray();
-    for (const ecs::PhysicsEvent& e : events) {
-        out.beginObject();
-        out.key("seq"); out.uint64(e.seq);
-        out.key("step"); out.uint64(e.step);
-        out.key("kind"); out.string(ecs::physicsEventKindName(e.kind));
-        out.key("a"); out.string(hex16(e.aId));
-        out.key("b"); out.string(hex16(e.bId));
-        out.key("an"); out.string(nameOf(e.a));
-        out.key("bn"); out.string(nameOf(e.b));
-        out.key("point"); writeVec3(out, e.point, 1e3f);
-        out.key("normal"); writeVec3(out, e.normal, 1e3f);
-        out.key("speed"); out.float32(std::round(e.speed * 100.0f) / 100.0f);
-        if (!e.surface.empty()) { out.key("surface"); out.string(utf8Prefix(e.surface, 32)); }
-        out.endObject();
-    }
-    out.endArray();
-    // The cursor for the next call: the last event returned, else where the caller is (never past the log).
-    out.key("next"); out.uint64(events.empty() ? std::min(since, physics->nextEventSeq() - 1) : events.back().seq);
-    if (dropped) { out.key("dropped"); out.uint64(dropped); }
     out.endObject();
     return true;
 }

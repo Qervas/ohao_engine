@@ -78,6 +78,8 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     s.columns.resize(used);
     s.frame = frame;
     s.input = world.input();
+    s.steps = world.steps();
+    s.events = world.events().saveWindow();
     s.systems = saveSystems(reg);
 }
 
@@ -181,7 +183,9 @@ RestoreStats restoreComponents(World& world, const Snapshot& s);
 RestoreStats restoreSnapshot(World& world, const Snapshot& s, RestoreInput input) {
     const RestoreStats stats = restoreComponents(world, s);
     if (input == RestoreInput::Yes) world.input() = s.input;
+    world.setSteps(s.steps);
     restoreSystems(world.registry(), s.systems);
+    world.events().restoreWindow(s.events);
     return stats;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "core/input.hpp"
 #include "ecs/components.hpp"
+#include "ecs/events.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <entt/entt.hpp>
@@ -86,8 +87,14 @@ public:
     // installs it and whenever; a name not listed, or one already installed, throws std::logic_error.
     void addSimulate(std::string name, SimulateSystem fn);
     void addSync(std::string name, SyncSystem fn);
-    // One fixed step: every simulate system, in order.
+    // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp).
     void simulate(float dt);
+    // The steps simulated (saved and hashed): the step running, or the last one between steps.
+    [[nodiscard]] uint64_t steps() const noexcept { return m_events.step(); }
+    void setSteps(uint64_t steps) noexcept { m_events.setStep(steps); }   // a restore
+    // The world's events (ecs/events.hpp): channels, the step's events, the history.
+    [[nodiscard]] EventLog& events() noexcept { return m_events; }
+    [[nodiscard]] const EventLog& events() const noexcept { return m_events; }
     // Every sync system, in order.
     void sync();
     // One sync system by name (false when there is none): a session expands levels right
@@ -151,6 +158,7 @@ private:
     std::vector<std::pair<std::string, SimulateSystem>> m_simulate;
     std::vector<std::pair<std::string, SyncSystem>> m_sync;
     InputMap m_input;
+    EventLog m_events;
     bool m_bindingsDirty{false};
     float m_renderAlpha{1.0f};
     glm::vec2 m_pendingLook{0.0f};

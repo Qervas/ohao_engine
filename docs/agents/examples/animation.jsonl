@@ -1,5 +1,6 @@
 {"method":"world.step","params":{"frames":30}}
-{"method":"animation.info","params":{"since":0,"max":4}}
+{"method":"animation.info","params":{}}
+{"method":"events.read","params":{"names":["anim.clip_event"],"max":4}}
 {"method":"world.apply","params":{"commands":[{"op":"component.set","id":"a17a000000000004","type":"Animator","value":{"graph":{"path":"tests/anim/fixtures/rig.animgraph.json"},"layers":[{"state":"raise","steps":1},{"state":"still","steps":1}]}}]}}
 {"method":"world.step","params":{"frames":30}}
 {"method":"animation.info","params":{"entity":"a17a000000000004"}}

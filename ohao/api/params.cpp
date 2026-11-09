@@ -265,10 +265,13 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("dir", &PhysicsRaycastParams::dir).doc("Direction [x, y, z], any nonzero length").unitless().required()
         .field("max", &PhysicsRaycastParams::max).doc("Farthest hit, in (0, 100000]").unit("m");
     r.type<PhysicsInfoParams>("PhysicsInfoParams").doc("physics.info params");
-    r.type<PhysicsEventsParams>("PhysicsEventsParams").doc("physics.events params")
-        .field("since", &PhysicsEventsParams::since)
-            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &PhysicsEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
+    r.type<EventsReadParams>("EventsReadParams").doc("events.read params")
+        .field("since", &EventsReadParams::since)
+            .doc("Events after this seq: 0 for all the history holds, else the previous reply's next").unitless().min(0)
+        .field("max", &EventsReadParams::max).doc("Events in one reply (0: none, and next is the present)").unitless()
+            .min(0).max(64)
+        .field("names", &EventsReadParams::names)
+            .doc("Channels to read, exact (physics.footstep) or a prefix (physics.*); absent: every channel").maxItems(32);
     r.type<PhysicsContactsParams>("PhysicsContactsParams").doc("physics.contacts params")
         .field("entity", &PhysicsContactsParams::entity).doc("Only the pairs this entity (16 hex digits) is in")
         .field("max", &PhysicsContactsParams::max).doc("Pairs in one reply").unitless().min(1).max(64);
@@ -288,14 +291,8 @@ void registerParams(reflect::TypeRegistry& r) {
             .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
         .field("max", &CombatEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
     r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
-        .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator")
-        .field("since", &AnimationInfoParams::since)
-            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &AnimationInfoParams::max).doc("Events in one reply (0: none)").unitless().min(0).max(64);
-    r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params")
-        .field("since", &AudioInfoParams::since)
-            .doc("Commands after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &AudioInfoParams::max).doc("Commands in one reply (0: none)").unitless().min(0).max(64);
+        .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator");
+    r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params");
     r.type<VfxInfoParams>("VfxInfoParams").doc("vfx.info params")
         .field("since", &VfxInfoParams::since).doc("Records after this seq (the previous next)").unitless().min(0)
         .field("max", &VfxInfoParams::max).doc("Records in one reply").unitless().min(0).max(64);

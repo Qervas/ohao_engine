@@ -20,10 +20,12 @@
 //     each step writes it for every dynamic body awake in the step, once more as it falls
 //     asleep, and for each player whose velocity changed) goes into the bodies after their
 //     teleports, and into the players.
-//   - Events: contact begin/end per body pair (sub-shape contacts collapsed) and trigger
-//     enter/exit (a Collider with trigger is a sensor), drained from the backend's queue on
-//     the simulating thread after the step, sorted, and published as the step's span and in
-//     a sequenced log of the last kEventLog. Removing a body ends its pairs at once.
+//   - Events (ecs/events.hpp, the World's log): contact begin/end per body pair (sub-shape contacts
+//     collapsed) and trigger enter/exit (a Collider with trigger is a sensor), drained from the backend's
+//     queue on the simulating thread after the step, sorted (begins and enters, ends and exits, a player's
+//     footsteps and landings, joint breaks; then by the ids) and emitted, with the players' footsteps and
+//     landings and the joints' breaks. Removing a body ends its pairs at once: emitted then, so a removal
+//     between steps is the next step's.
 //   - Shapes are fitted to the entity's mesh in its own frame and baked with its world scale
 //     (fitCollider); a body's position and rotation are its entity's world transform without
 //     the scale. A mirrored mesh has its winding flipped, so it still faces out.
@@ -92,27 +94,47 @@ struct PhysicsWarning {
     std::string message;
 };
 
-// Something physics decided in one step (spec "Events"), or a player's footstep or landing
-// (spec "Footsteps").
-struct PhysicsEvent {
-    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit, Footstep, Land, JointBreak };
-    Kind kind{Kind::ContactBegin};
-    // Contacts: a has the lower entity id. Triggers: a is the trigger, b the body. Footsteps and
-    // landings: a is the player, b the ground's entity (null when it has none). The entities
-    // may be gone by the time the event is read; the ids are kept. A joint's break: a is the
-    // Joint's entity, b the other body's entity (null: the world), point its anchor.
-    entt::entity a{entt::null}, b{entt::null};
-    uint64_t aId{0}, bId{0};
-    glm::vec3 point{0.0f};    // world; an end repeats its begin's; a footstep's or landing's: the feet
-    glm::vec3 normal{0.0f};   // world, from a toward b; a footstep's or landing's: the ground's
-    // The relative normal speed at a begin or enter, m/s; 0 for an end or exit. A footstep: the
-    // player's horizontal speed; a landing: its downward speed on touching the ground.
-    float speed{0.0f};
-    std::string surface;      // footsteps and landings: the ground's Collider.surface ("default" if none)
-    uint64_t step{0};         // the scene's step it was published in (1 is the first); a body removed between steps ends its pairs in the next
-    uint64_t seq{0};          // its place in the log, from 1
+// Physics' events (spec "Events" and "Footsteps"), each a channel of the World's log. Entities are held by
+// EntityId: they may be gone by the time an event is read.
+namespace physics_events {
+inline constexpr const char* kContactBegin = "physics.contact_begin";   // ContactEvent
+inline constexpr const char* kContactEnd = "physics.contact_end";       // ContactEvent
+inline constexpr const char* kTriggerEnter = "physics.trigger_enter";   // TriggerEvent
+inline constexpr const char* kTriggerExit = "physics.trigger_exit";     // TriggerEvent
+inline constexpr const char* kFootstep = "physics.footstep";            // FootEvent
+inline constexpr const char* kLand = "physics.land";                    // FootEvent
+inline constexpr const char* kJointBreak = "physics.joint_break";       // JointBreakEvent
+} // namespace physics_events
+
+// A body pair began or ended touching.
+struct ContactEvent {
+    uint64_t a{0}, b{0};        // a has the lower id
+    glm::vec3 point{0.0f};      // world; an end repeats its begin's
+    glm::vec3 normal{0.0f};     // world, from a toward b
+    float speed{0.0f};          // the relative normal speed at a begin (m/s); 0 at an end
 };
-[[nodiscard]] const char* physicsEventKindName(PhysicsEvent::Kind k) noexcept;   // contact_begin, ...
+// A body entered or left a trigger (a Collider with trigger).
+struct TriggerEvent {
+    uint64_t trigger{0}, body{0};
+    glm::vec3 point{0.0f}, normal{0.0f};   // as a contact's; the normal from the trigger toward the body
+    float speed{0.0f};                     // at an enter (m/s); 0 at an exit
+};
+// A player's footstep (every 0.75 m walked, 0.95 m sprinted, on the ground) or landing (touching the ground
+// after a fall of more than 0.3 m).
+struct FootEvent {
+    uint64_t player{0};
+    uint64_t ground{0};          // the ground's entity (0: none)
+    glm::vec3 point{0.0f};       // the feet
+    glm::vec3 normal{0.0f};      // the ground's
+    float speed{0.0f};           // a footstep: the horizontal speed; a landing: the downward speed (m/s)
+    std::string surface;         // the ground's Collider.surface ("default" if none)
+};
+// A joint broke.
+struct JointBreakEvent {
+    uint64_t joint{0};           // the Joint's entity
+    uint64_t other{0};           // the other body's entity (0: the world)
+    glm::vec3 point{0.0f};       // its anchor, world
+};
 
 // A body pair in contact now, or a body inside a trigger (physics.contacts; spec "Events"): from
 // its begin to its end, sleeping included.
@@ -169,13 +191,12 @@ public:
     PhysicsScene(const PhysicsScene&) = delete;
     PhysicsScene& operator=(const PhysicsScene&) = delete;
 
-    static constexpr std::size_t kEventLog = 1024;   // events kept for eventsSince
     static constexpr int kMaxSubsteps = 8;
 
     // Builds, moves and removes bodies from the dirty state; no work when nothing changed.
     void sync(entt::registry& reg);
     // One fixed step of dt (the `physics` simulate system): propagate transforms, sync, step in
-    // ceil(dt * 60) substeps (at most kMaxSubsteps), write back, publish events. A world with
+    // ceil(dt * 60) substeps (at most kMaxSubsteps), write back, emit events. A world with
     // no collider does nothing (not even the propagation).
     void step(World& world, float dt);
     // Characters for PlayerControllers added or changed (the `player_spawn` sync system, before
@@ -191,13 +212,8 @@ public:
     // Whether the last interpolate saw an input-driven, living player (a window measures its look
     // latency by the lead's rule then, and keeps one frame ahead).
     [[nodiscard]] bool leadsLook() const noexcept;
-    // The latest step's events, sorted (removals since the step before it first).
-    [[nodiscard]] std::span<const PhysicsEvent> stepEvents() const noexcept;
-    // Up to max logged events with seq > since, oldest first; dropped is how many of those the
-    // log no longer holds.
-    [[nodiscard]] std::vector<PhysicsEvent> eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const;
-    // The seq the next event will get (events so far + 1).
-    [[nodiscard]] uint64_t nextEventSeq() const noexcept;
+    // The channels physics emits into (installPhysics: the World's); without them it emits nothing.
+    void setEvents(EventLog& log);
     [[nodiscard]] uint64_t steps() const noexcept;
     // Jolt updates the last step ran (its substeps).
     [[nodiscard]] int lastSubsteps() const noexcept;
@@ -206,7 +222,7 @@ public:
         double totalMs{0.0};    // the whole step
         double playerMs{0.0};   // the players (their characters' moves)
         double joltMs{0.0};     // the substeps
-        double eventsMs{0.0};   // draining, collapsing, sorting and logging the events
+        double eventsMs{0.0};   // draining, collapsing, sorting and emitting the events
         double writeMs{0.0};    // the write-back
         uint32_t writes{0};     // Transforms written
     };
@@ -261,8 +277,5 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets);
 // The World's physics scene, or null without installPhysics.
 [[nodiscard]] PhysicsScene* physicsScene(World& world);
 [[nodiscard]] const PhysicsScene* physicsScene(const World& world);
-// The latest physics step's events (empty without installPhysics): what a simulate system
-// added after installPhysics reads in the same step.
-[[nodiscard]] std::span<const PhysicsEvent> physicsEvents(const World& world);
 
 } // namespace ohao::ecs

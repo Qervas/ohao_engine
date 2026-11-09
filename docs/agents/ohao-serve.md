@@ -121,9 +121,9 @@ Without a scene, `ohao level <file>` prints a file's `level_info` (the CLI guide
 substeps), writes awake dynamic bodies back to their `Transform`s and records what happened:
 `contact_begin`/`contact_end` per body pair and `trigger_enter`/`trigger_exit` for a
 `Collider` with `trigger` (hint `"trig": 1`). Move a dynamic body with `world_apply` and it
-starts from rest there; read what followed with `physics_events {since?, max?}` (pass the
-reply's `next` as `since` to read on; `step` is the physics scene's own step count). Sleeping
-bodies keep their contacts and cost nothing.
+starts from rest there; read what followed with `events_read {names: ["physics.*"]}` (pass the
+reply's `next` as `since` to read on; `step` is the world's step that read it). Sleeping bodies keep their
+contacts and cost nothing.
 
 Lift the blockout's crates (CrateA 1 m, CrateB 2 m), step 90 frames, read the landings and
 where they came to rest:
@@ -133,7 +133,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --script doc
 {"method":"scene.load","result":{"entities":5}}
 {"method":"world.apply","result":{"applied":2,"results":[null,null],"inverse":[{"op":"field.set","id":"506f14503a54ecba","path":"/Transform/position","value":[1.3,0.8,-1.7]},{"op":"field.set","id":"5cfbb21776b390b8","path":"/Transform/position","value":[1.3,0.3,-1.7]}]}}
 {"method":"world.step","result":{"frame":90}}
-{"method":"physics.events","result":{"events":[{"seq":1,"step":28,"kind":"contact_begin","a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
+{"method":"events.read","result":{"events":[{"seq":2,"step":28,"event":"physics.contact_begin","a":"5cfbb21776b390b8","aName":"CrateA","b":"fb31dd4d0994b3f6","bName":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":3,"step":39,"event":"physics.contact_begin","a":"506f14503a54ecba","aName":"CrateB","b":"5cfbb21776b390b8","bName":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":3}}
 {"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.7899956,-1.700009]}}],"count":2}}
 ```
 
@@ -156,9 +156,9 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,0,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
 ```
 
-The walk's footsteps are in `physics_events` as kind `footstep` (one every 0.75 m walked, 0.95 m
+The walk's footsteps are `events_read`'s `physics.footstep` (one every 0.75 m walked, 0.95 m
 sprinting) with the ground's `surface` (the blockout: `concrete` floor, `metal` step, platform
-and ramp, `wood` crates), and a fall of more than 0.3 m ends in a `land`. Only `ohao_game`
+and ramp, `wood` crates), and a fall of more than 0.3 m ends in a `physics.land`. Only `ohao_game`
 sounds them; a server's window stays silent.
 
 `player_info {entity?}` says where the player is without a query: its feet (`pos`), facing and
@@ -230,7 +230,7 @@ the throw as an `explode` event and sound at its place, a source to listen to (a
 - `combat_events {since, max}`: shots (eye, `dir`, `coneDeg`), hits (what, where, `surface`),
   damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`,
   `explode` (`point`);
-  read on with the reply's `next`, as `physics_events`.
+  read on with the reply's `next`, as `events_read`.
 - `combat_damage {entity, amount, source?}`: takes hit points as a round would, from the
   entity's `Health` or its nearest ancestor's (an enemy's body or head entity is fine); a dead
   enemy plays its death clip from the next step, its `Transform` upright where it stood. 0 to
@@ -286,12 +286,14 @@ Every sound is decided in the step by the voice schedule, from the step's physic
 animation events; a window's player only renders it, a step later. So an agent hears through the
 schedule, in any host:
 
-- `audio_info {since, max}`: the round's snapshot (`default`, `dead`, `won`), the listener's
-  reverb `zone`, every bus in the bank's order (its level in dB when a duck or snapshot moved it,
-  its cap, the voices held), voice and occlusion-ray counts, and the commands after `since`:
-  `play` (the sound, its voice, `pos` unless at the ear, `occl` behind walls, `outcome` when it
-  stole a voice or was dropped), `stop`, `bus` (a duck), `snapshot`, `zone`, `occlusion`,
-  `stop_world` (a restart or restore). Read on with `next`. Headless it says `device: "none"`.
+- `audio_info {}`: the round's snapshot (`default`, `dead`, `won`), the listener's reverb `zone`,
+  every bus in the bank's order (its level in dB when a duck or snapshot moved it, its cap, the
+  voices held), voice and occlusion-ray counts. Headless it says `device: "none"`.
+- `events_read {names: ["audio.*"]}`: the schedule's commands, as events of the world's log:
+  `audio.play` (the sound, its voice, `pos` unless at the ear, `walls`/`occlusionDb` behind walls,
+  `outcome` when it stole a voice or was dropped), `audio.stop`, `audio.bus` (a duck),
+  `audio.snapshot`, `audio.zone`, `audio.occlusion`, `audio.stop_world` (a restart or restore). Read
+  on with `next`.
 - `audio_mix {bus, db | mute | solo}`, `{snapshot}`, `{clear: true}`: listening overrides,
   applied in a window's device only. They never reach the world, the schedule, `world_hash` or a
   snapshot, so they are safe mid-test. A window opens a sound device with `ohao serve --window
@@ -307,13 +309,14 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"world.step","result":{"frame":1}}
 {"method":"input.inject","result":{"queued":2,"firstStep":1,"lastStep":2}}
 {"method":"world.step","result":{"frame":3}}
-{"method":"audio.info","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0},"commands":[{"seq":3,"step":2,"op":"play","sound":"fire","voice":1},{"seq":4,"step":2,"op":"play","sound":"impact_default","voice":2,"pos":[1.52,1.61,-3]},{"seq":5,"step":2,"op":"bus","bus":"foley","db":-3,"blend":1},{"seq":6,"step":2,"op":"bus","bus":"ambience","db":-6,"blend":1}],"next":6}}
+{"method":"audio.info","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0}}}
+{"method":"events.read","result":{"events":[{"seq":3,"step":1,"event":"audio.zone","zone":"room","bed":"bed_room","blendSteps":30},{"seq":4,"step":1,"event":"audio.snapshot","snapshot":"default","blendSteps":0},{"seq":5,"step":2,"event":"audio.play","sound":"fire","voice":1,"gain":0.85},{"seq":6,"step":2,"event":"audio.play","sound":"impact_default","voice":2,"pos":[1.518,1.614,-3],"gain":0.55},{"seq":7,"step":2,"event":"audio.bus","bus":"foley","db":-3,"blendSteps":1},{"seq":8,"step":2,"event":"audio.bus","bus":"ambience","db":-6,"blendSteps":1}],"next":8}}
 {"method":"audio.mix","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1,"mix":{"mute":true}},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0}}}
 ```
 
-The player's round plays at the ear (no `pos`); its impact on the north wall, 5 m off, at its
-place; the shot ducks foley by 3 dB and ambience by 6 (the bank's `ducks`). Commands 1 and 2,
-before `since`, were the room's zone with its bed and the default snapshot.
+The room's zone with its bed and the default snapshot come first, at step 1. The player's round plays at the ear
+(no `pos`); its impact on the north wall, 5 m off, at its place; the shot ducks foley by 3 dB and ambience by 6
+(the bank's `ducks`).
 
 ## Record and replay
 
@@ -444,11 +447,11 @@ A session against a hidden window goes: initialize → load `helmet_game` → su
 61-step flight → step with `watch` → capture inline and to a file → log read → stop
 recording → restore → replay (every checkpoint matches) → capture again, bit-identical
 to the first → load the blockout level → `level_info` → a ray down at the player spawn →
-`physics_info` → lift and drop the crates → `physics_events` → load the play scene →
+`physics_info` → lift and drop the crates → `events_read` → load the play scene →
 `player_info` → look → snapshot → walk, turn by the mouse and jump → `player_info` and the
 footsteps → look → `player_teleport` → `physics_contacts` → restore → the same walk, to the
 same hash and the same picture → load the play scene again → `combat_info` → shoot EnemyA
-down → `audio_info`'s newest commands, a bus muted and one soloed, `clear` (`world_hash`
+down → `events_read`'s newest `audio.*`, a bus muted and one soloed, `clear` (`world_hash`
 unchanged) → `combat_events` → look with the HUD → `combat_damage` kills the player → the
 restart → clear the room → won.
 

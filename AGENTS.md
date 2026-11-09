@@ -145,8 +145,9 @@ What every change must respect. The build checks some of these; the rest are her
 - **Systems are installed by `engine::installEngine` and `engine::installRendering`** (`ohao/engine/install.hpp`) in
   every host, and run in the order of `ecs/system_order.hpp`, whoever installs them; a new system adds its name
   there (an unlisted name throws). A system with state a later step reads registers `ecs::addSnapshotHook` under a
-  `kSnapshotOrder` name, with save, restore and hash: the snapshot and `world.hash` cover it. A log's seq is history,
-  never state.
+  `kSnapshotOrder` name, with save, restore and hash: the snapshot and `world.hash` cover it. What a system tells
+  others is an event in the World's log (`ecs/events.hpp`): a channel it writes, read by the systems after it in the
+  step, never a log of its own; an event's `seq` is history, never state.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
   `addSync` (derived state, no dt). Before a `render()` call `world.sync()`, never
   `update()`: rendering must not step the simulation.

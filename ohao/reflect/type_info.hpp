@@ -69,6 +69,9 @@ struct FieldAttrs {
     // other field is written (a variant alternative's value): a field added later keeps
     // older files' bytes and worlds' hashes. The catalogue lists it only when set.
     bool omitDefault{false};
+    // A UInt64 holding an entity's EntityId (an event's: it outlives the entity it names). The API writes it as
+    // the id and, while the entity lives, its name.
+    bool entity{false};
     // An array field (or free JSON given as an array): at most this many elements, checked
     // before any element is read (E_RANGE) and given as the schema's maxItems.
     std::optional<uint32_t> maxItems;
@@ -125,6 +128,7 @@ struct SkippedField {
 enum class TypeRole : uint8_t {
     Component,   // stored on entities; a top-level block in scene files
     Struct,      // nested value inside components
+    Event,       // an event's payload (ecs/events.hpp): never stored on entities or in files
 };
 
 struct TypeInfo {

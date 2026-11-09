@@ -13,6 +13,7 @@
 // when no field has been added yet. Mistakes (unregistered nested types, limits on a
 // string, a default outside its limits, duplicate names) are recorded in errors() rather
 // than thrown; lint() reports them together with missing docs and units.
+#include "core/type_key.hpp"
 #include "reflect/codec.hpp"
 #include "reflect/type_info.hpp"
 
@@ -27,12 +28,8 @@
 
 namespace ohao::reflect {
 
-using TypeKey = const void*;
-template <class T>
-TypeKey typeKey() noexcept {
-    static const char key = 0;
-    return &key;
-}
+using ohao::TypeKey;
+using ohao::typeKey;
 
 // Units the catalogue may name. "linear-rgb" is a color in linear light.
 [[nodiscard]] std::span<const std::string_view> knownUnits() noexcept;
@@ -46,6 +43,7 @@ public:
 
     TypeBuilder& doc(std::string_view text);
     TypeBuilder& component();    // a top-level component block in scene files
+    TypeBuilder& event();        // an event's payload (ecs/events.hpp): runtime, never in files
     TypeBuilder& runtime();      // listed in the catalogue, never serialized
     TypeBuilder& singleton();    // at most one per world
     TypeBuilder& alwaysPresent() { m_t.alwaysPresent = true; return *this; }   // on every entity
@@ -71,6 +69,7 @@ public:
     TypeBuilder& readOnly();
     TypeBuilder& required();   // must be given (method params)
     TypeBuilder& omitDefault();   // written only when not the default, even inside a variant
+    TypeBuilder& entity();        // a uint64_t holding an EntityId
     TypeBuilder& maxItems(uint32_t n);   // an array (vector, optional vector or JSON): at most n elements
     TypeBuilder& maxLength(uint32_t n);  // a string: at most n characters (code points)
     TypeBuilder& alias(std::string_view oldName);
@@ -112,6 +111,7 @@ public:
     [[nodiscard]] const EnumInfo* findEnum(std::string_view name) const;
     template <class T>
     [[nodiscard]] const TypeInfo* find() const { return lookup(m_typeByKey, typeKey<T>()); }
+    [[nodiscard]] const TypeInfo* find(TypeKey key) const { return lookup(m_typeByKey, key); }
     template <class E>
     [[nodiscard]] const EnumInfo* findEnum() const { return lookup(m_enumByKey, typeKey<E>()); }
 
@@ -242,6 +242,11 @@ TypeBuilder<T>& TypeBuilder<T>::doc(std::string_view text) {
 }
 
 template <class T> TypeBuilder<T>& TypeBuilder<T>::component() { m_t.role = TypeRole::Component; return *this; }
+template <class T> TypeBuilder<T>& TypeBuilder<T>::event() {
+    m_t.role = TypeRole::Event;
+    m_t.serialized = false;
+    return *this;
+}
 
 template <class T>
 TypeBuilder<T>& TypeBuilder<T>::upgrade(uint32_t from, Upgrade fn) {
@@ -397,6 +402,14 @@ template <class T> TypeBuilder<T>& TypeBuilder<T>::hidden() { if (auto* f = last
 template <class T> TypeBuilder<T>& TypeBuilder<T>::readOnly() { if (auto* f = last("readOnly")) f->attrs.readOnly = true; return *this; }
 template <class T> TypeBuilder<T>& TypeBuilder<T>::required() { if (auto* f = last("required")) f->attrs.required = true; return *this; }
 template <class T> TypeBuilder<T>& TypeBuilder<T>::omitDefault() { if (auto* f = last("omitDefault")) f->attrs.omitDefault = true; return *this; }
+template <class T>
+TypeBuilder<T>& TypeBuilder<T>::entity() {
+    if (auto* f = last("entity")) {
+        if (f->type->kind != Kind::UInt64) m_r.error("field " + m_t.name + "." + f->name + ": entity() on a field that is not a uint64_t");
+        f->attrs.entity = true;
+    }
+    return *this;
+}
 
 template <class T>
 TypeBuilder<T>& TypeBuilder<T>::maxItems(uint32_t n) {

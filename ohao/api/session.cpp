@@ -122,7 +122,7 @@ bool schemaGet(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
     SchemaGetParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
     if (s.catalogue.empty())
-        s.catalogue = reflect::exportCatalogue(s.types, {methods(), reflect::JsonLayout::Compact});
+        s.catalogue = reflect::exportCatalogue(s.types, {methods(), s.channels, reflect::JsonLayout::Compact});
     out.raw(s.catalogue);
     return true;
 }
@@ -898,6 +898,10 @@ const std::vector<Method>& methodTable() {
         {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
            "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
            "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."}, renderStats},
+        {{"events.read", p.find<EventsReadParams>(), "{events: [{seq, step, event, ...fields}], next, dropped?}",
+           "The world's events after since (pass the last read's next), oldest first, every channel or the named ones "
+           "(physics.*, anim.clip_event, audio.*): each its channel's fields (schema.get's events). dropped: events "
+           "the history (the last 8,192) no longer holds."}, methodEventsRead},
         {{"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
            "Engine log records after since (pass the last read's next), filtered by level and channel."}, logRead},
         {{"level.info", p.find<LevelInfoParams>(),
@@ -912,10 +916,6 @@ const std::vector<Method>& methodTable() {
         {{"physics.info", p.find<PhysicsInfoParams>(),
            "{bodies, shapes, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}]}",
            "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."}, methodPhysicsInfo},
-        {{"physics.events", p.find<PhysicsEventsParams>(),
-           "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}",
-           "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface, "
-           "oldest first; pass next as since to read on."}, methodPhysicsEvents},
         {{"physics.contacts", p.find<PhysicsContactsParams>(),
            "{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}",
            "Body pairs touching now (resting included) and bodies in triggers, by id; since: the step they began."}, methodPhysicsContacts},
@@ -938,16 +938,15 @@ const std::vector<Method>& methodTable() {
            "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
            "events; a dead enemy lies down at the next step."}, methodCombatDamage, true},
         {{"animation.info", p.find<AnimationInfoParams>(),
-           "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?, events: "
-           "[{seq, step, entity, layer, clip, name}], next, dropped?}",
-           "Each Animator's layers (state, clip time in s, the fade) and the clip events after since. Force a state "
-           "with component.set on Animator."}, methodAnimationInfo},
+           "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?}",
+           "Each Animator's layers (state, clip time in s, the fade); its clip events are events.read's "
+           "anim.clip_event. Force a state with component.set on Animator."}, methodAnimationInfo},
         {{"audio.info", p.find<AudioInfoParams>(),
            "{device, sampleRate?, horizonMs, snapshot: {name, blend}, zone, listener?, buses: [{name, db, cap?, voices?, "
-           "mix?}], voices: {playing, dropped, stolen, device?}, rays: {cast, capped}, late?, mixMs?, commands: [{seq, "
-           "step, op, ...}], next, dropped?}",
-           "The voice schedule's commands after since and the bus mix; a window adds the device's half."}, methodAudioInfo},
-        {{"audio.mix", p.find<AudioMixParams>(), "as audio.info, without commands",
+           "mix?}], voices: {playing, dropped, stolen, device?}, rays: {cast, capped}, late?, mixMs?}",
+           "The voice schedule and the bus mix; its commands are events.read's audio.*. A window adds the device's "
+           "half."}, methodAudioInfo},
+        {{"audio.mix", p.find<AudioMixParams>(), "as audio.info",
            "Listening overrides in the device only (never the world, schedule or snapshots): a bus's db, mute, solo; "
            "a forced snapshot; clear."}, methodAudioMix},
         {{"vfx.info", p.find<VfxInfoParams>(),
@@ -1182,7 +1181,17 @@ Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t) : world(w), t
     tName = t.find<ecs::Name>();
     tTransform = t.find<ecs::Transform>();
     tParent = t.find<ecs::Parent>();
-    schemaHash = reflect::schemaHash(t, methods());
+    channels = channelDocs(w, t);
+    schemaHash = reflect::schemaHash(t, methods(), channels);
+}
+
+std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const reflect::TypeRegistry& types) {
+    std::vector<reflect::ChannelDoc> out;
+    for (const auto& c : world.events().channels()) {
+        const TypeInfo* t = types.find(c->type());
+        out.push_back({c->name(), t ? t->name : std::string(), c->writers(), c->readers()});
+    }
+    return out;
 }
 
 Session::Session(ecs::World& world, const reflect::TypeRegistry& types)

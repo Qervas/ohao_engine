@@ -18,7 +18,6 @@ namespace ohao::engine {
 struct EngineConfig {
     ecs::AssetResolver& assets;
     const reflect::TypeRegistry& types;
-    bool audioTrace{false};   // the audio schedule logs every command (OHAO_AUDIO_TRACE=1)
 };
 
 // Levels, physics, combat, animation, the audio schedule, vfx: the simulation and its snapshot hooks.

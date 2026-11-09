@@ -7,12 +7,13 @@
 namespace ohao::reflect {
 
 namespace {
-constexpr std::array<std::string_view, 23> kUnits = {
+constexpr std::array<std::string_view, 24> kUnits = {
     "m", "m/s", "m/s2", "rad", "rad/s", "deg", "deg/s", "s", "kg", "N", "px",
     "N s", "N m s",   // impulse, angular impulse (a joint's breaking thresholds)
     "linear-rgb", "srgb", "lux", "cd", "lm", "nits", "ratio", "Hz",
     "EV",   // exposure value at ISO 100 (a camera's EV100)
     "um",   // micrometres (OpenPBR's thin_film_thickness)
+    "dB",   // decibels (an audio command's level)
 };
 } // namespace
 

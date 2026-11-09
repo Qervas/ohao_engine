@@ -241,8 +241,10 @@ int main(int argc, char** argv) {
             reg.emplace<ecs::Collider>(s, ecs::Collider{ecs::ColliderShape::Sphere, {0.1f, 0.0f, 0.0f}});
             reg.emplace<ecs::RigidBody>(s, ecs::RigidBody{ecs::Motion::Dynamic, 1.0f});
         }
+        const uint64_t before = w.events().nextSeq() - 1;
         w.simulate(kDt);
-        begins = physics.stepEvents().size();
+        const auto* began = w.events().find<ecs::ContactEvent>(ecs::physics_events::kContactBegin);
+        begins = began ? began->since(before).size() : 0;
         if (r > 0) events.push_back(physics.lastStepTiming().eventsMs);
     }
     if (begins != 1000) failures.push_back("1,000 spheres on a floor began " + std::to_string(begins) + " contacts (want 1,000)");

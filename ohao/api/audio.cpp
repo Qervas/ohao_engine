@@ -63,64 +63,8 @@ std::string busNames(const AudioBank& bank) {
     return names;
 }
 
-// One command, compact: what an agent needs to follow the schedule, names from the bank. Fields at
-// their defaults are left out (variant 0, the bank's volume, no occlusion, played; a play's bus and
-// priority are its sound's, in the bank).
-void writeCommand(const ecs::AudioCommand& c, const AudioBank& bank, JsonWriter& out) {
-    using Op = ecs::AudioCommand::Op;
-    out.beginObject();
-    out.key("seq"); out.uint64(c.seq + 1);   // from 1, as the other logs
-    out.key("step"); out.uint64(c.step);
-    out.key("op"); out.string(ecs::audioCommandOpName(c.op));
-    const auto busName = [&](uint8_t b) { return b < bank.buses.size() ? bank.buses[b].name : std::string(); };
-    switch (c.op) {
-        case Op::Play:
-            out.key("sound"); out.string(c.sound < bank.sounds.size() ? bank.sounds[c.sound].name : std::string());
-            if (c.variant) { out.key("variant"); out.uint64(c.variant); }
-            out.key("voice"); out.uint64(c.voice);
-            if (c.sound >= bank.sounds.size() || r2(c.gain) != r2(bank.sounds[c.sound].volume)) {
-                out.key("gain"); out.float32(r2(c.gain));   // scaled by its event (a footstep's speed)
-            }
-            if (c.spatial) { out.key("pos"); writeVec3(out, c.pos); }
-            if (c.occl.walls) { out.key("occl"); out.float32(r2(c.occl.db)); }
-            if (c.outcome != ecs::AudioCommand::Outcome::Played) {
-                out.key("outcome"); out.string(ecs::audioOutcomeName(c.outcome));
-                if (c.victim) { out.key("victim"); out.uint64(c.victim); }
-            }
-            break;
-        case Op::Stop:
-            out.key("voice"); out.uint64(c.voice);
-            break;
-        case Op::Bus:
-            out.key("bus"); out.string(busName(c.bus));
-            out.key("db"); out.float32(r2(c.db));
-            out.key("blend"); out.uint64(c.blendSteps);
-            break;
-        case Op::Snapshot:
-            out.key("snapshot"); out.string(c.snapshot);
-            out.key("blend"); out.uint64(c.blendSteps);
-            break;
-        case Op::Zone:
-            out.key("zone"); out.string(c.zone);
-            if (!c.bed.empty()) { out.key("bed"); out.string(c.bed); }
-            out.key("blend"); out.uint64(c.blendSteps);
-            break;
-        case Op::Occlusion:
-            out.key("voice"); out.uint64(c.voice);
-            out.key("occl"); out.float32(r2(c.occl.db));
-            out.key("blend"); out.uint64(c.blendSteps);
-            break;
-        case Op::StopWorld:
-            out.key("blend"); out.uint64(c.blendSteps);
-            break;
-    }
-    if (c.resync) { out.key("resync"); out.boolean(true); }
-    out.endObject();
-}
-
-// audio.info's result; `commands` false leaves the schedule's log out (audio.mix's reply).
-void writeInfo(Session::Impl& s, const ecs::AudioSchedule& schedule, bool commands, uint64_t since, std::size_t max,
-               JsonWriter& out) {
+// audio.info's result (audio.mix's too). The schedule's commands are events.read's audio.* (step 3c).
+void writeInfo(Session::Impl& s, const ecs::AudioSchedule& schedule, JsonWriter& out) {
     const AudioBank& bank = schedule.bank();
     const std::optional<AudioDeviceState> device = s.render ? s.render->audioDevice() : std::nullopt;
     const ecs::AudioScheduleStats st = schedule.stats();
@@ -184,17 +128,6 @@ void writeInfo(Session::Impl& s, const ecs::AudioSchedule& schedule, bool comman
         out.key("late"); out.uint64(device->late);
         if (device->mixMs) { out.key("mixMs"); out.float32(static_cast<float>(std::round(*device->mixMs * 1000.0) / 1000.0)); }
     }
-    if (commands) {
-        uint64_t dropped = 0;
-        const std::vector<ecs::AudioCommand> cmds = max ? schedule.commandsSince(since, max, dropped) : std::vector<ecs::AudioCommand>{};
-        out.key("commands");
-        out.beginArray();
-        for (const ecs::AudioCommand& c : cmds) writeCommand(c, bank, out);
-        out.endArray();
-        // The cursor for the next call: the last command returned, else where the caller is (never past the log).
-        out.key("next"); out.uint64(cmds.empty() ? std::min(since, schedule.nextSeq()) : cmds.back().seq + 1);
-        if (dropped) { out.key("dropped"); out.uint64(dropped); }
-    }
     out.endObject();
 }
 
@@ -205,8 +138,7 @@ bool methodAudioInfo(Session::Impl& s, const JsonDocument&, const JsonNode& para
     if (!decodeParams(s, params, ctx, p)) return false;
     const ecs::AudioSchedule* schedule = needSchedule(s, params, ctx);
     if (!schedule) return false;
-    // The reply numbers commands from 1 (the log's seq + 1), so "after since" is the log's seq >= since.
-    writeInfo(s, *schedule, true, static_cast<uint64_t>(p.since), static_cast<std::size_t>(p.max), out);
+    writeInfo(s, *schedule, out);
     return true;
 }
 
@@ -256,7 +188,7 @@ bool methodAudioMix(Session::Impl& s, const JsonDocument&, const JsonNode& param
     if (p.snapshot) mix.snapshot = *p.snapshot;
     s.audioMix = std::move(mix);
     if (s.render) s.render->setAudioMix(s.audioMix);
-    writeInfo(s, *schedule, false, 0, 0, out);
+    writeInfo(s, *schedule, out);
     return true;
 }
 

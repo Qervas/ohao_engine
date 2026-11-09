@@ -10,7 +10,8 @@
 //     components do not hold (velocities, sleep), so a restore mid-motion replays exactly
 //     (world.hash and world.diff leave it out: they are about the saved state);
 //   - the id generator, the next creation sequence and the caller's frame counter;
-//   - what the World's snapshot hooks keep (ecs/snapshot_hook.hpp: physics, the audio schedule, vfx).
+//   - what the World's snapshot hooks keep (ecs/snapshot_hook.hpp: physics, the audio schedule, vfx);
+//   - the World's step and the events the next step reads (ecs/events.hpp; none for a snapshot taken during a step).
 // Derived runtime components (Children, WorldTransform, render and GPU state) are not
 // captured; their owners rebuild them from the restored components, driven by the same
 // signals as any edit.
@@ -54,6 +55,8 @@ struct Snapshot {
     uint64_t nextSeq{0};
     uint64_t frame{0};
     InputMap input;                        // the World's input: held keys and axes carry across a step
+    uint64_t steps{0};                     // the World's step
+    std::shared_ptr<const void> events;    // the next step's events (EventLog::saveWindow), or null
     std::shared_ptr<const void> systems;   // the snapshot hooks' states (SystemStates), or null (not counted in bytes())
 
     [[nodiscard]] std::size_t rows() const noexcept { return ids.size(); }
@@ -74,7 +77,7 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
 // replay), or not (a round's restart: the player's keys are where their hands are now).
 enum class RestoreInput : uint8_t { Yes, No };
 // `snapshot` must come from a world with the same registrations. Never fails. The components
-// first, then the input, then the snapshot hooks' states.
+// first, then the input, the World's step, the snapshot hooks' states, and the next step's events.
 RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot, RestoreInput input = RestoreInput::Yes);
 
 // Puts the World's RoundHook (ecs/round_hook.hpp) in its context: a round's start is a snapshot of

@@ -16,7 +16,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <deque>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -26,7 +25,6 @@ namespace ohao::ecs {
 
 namespace {
 
-constexpr std::size_t kLogCapacity = 4096;
 constexpr float kFaceSlack = 1e-5f;   // a listener exactly on a zone's face is inside it
 
 // The graded occlusion's steps (OPEN ruling 12): 0, 1, 2 or more walls.
@@ -173,64 +171,6 @@ std::string listenerZone(const World& world, glm::vec3 listener) {
         [](entt::entity, const ReverbZone&) { return true; });
 }
 
-const char* audioCommandOpName(AudioCommand::Op op) noexcept {
-    switch (op) {
-        case AudioCommand::Op::Play: return "play";
-        case AudioCommand::Op::Stop: return "stop";
-        case AudioCommand::Op::Bus: return "bus";
-        case AudioCommand::Op::Snapshot: return "snapshot";
-        case AudioCommand::Op::Zone: return "zone";
-        case AudioCommand::Op::Occlusion: return "occlusion";
-        case AudioCommand::Op::StopWorld: return "stop_world";
-    }
-    return "?";
-}
-
-const char* audioOutcomeName(AudioCommand::Outcome o) noexcept {
-    switch (o) {
-        case AudioCommand::Outcome::Played: return "played";
-        case AudioCommand::Outcome::Stole: return "stole";
-        case AudioCommand::Outcome::Dropped: return "dropped";
-    }
-    return "?";
-}
-
-std::string describeAudioCommand(const AudioCommand& c, const AudioBank& bank) {
-    const auto busName = [&](uint8_t b) { return b < bank.buses.size() ? bank.buses[b].name : std::to_string(b); };
-    char text[512];
-    const auto step = static_cast<unsigned long long>(c.step);
-    switch (c.op) {
-        case AudioCommand::Op::Play: {
-            const std::string sound = c.sound < bank.sounds.size() ? bank.sounds[c.sound].name : std::to_string(c.sound);
-            char where[96];
-            if (c.spatial) std::snprintf(where, sizeof where, "at (%.4f, %.4f, %.4f)", c.pos.x, c.pos.y, c.pos.z);
-            else std::snprintf(where, sizeof where, "at the ear");
-            std::snprintf(text, sizeof text, "play step %llu %s v%u bus %s prio %u %s gain %.4f send %.3f walls %u %s voice %u victim %u source %016llx",
-                          step, sound.c_str(), c.variant, busName(c.bus).c_str(), c.priority, where, c.gain, c.send, c.occl.walls,
-                          audioOutcomeName(c.outcome), c.voice, c.victim, static_cast<unsigned long long>(c.source));
-            break;
-        }
-        case AudioCommand::Op::Stop: std::snprintf(text, sizeof text, "stop step %llu voice %u", step, c.voice); break;
-        case AudioCommand::Op::Bus:
-            std::snprintf(text, sizeof text, "bus step %llu %s %.2f dB over %u", step, busName(c.bus).c_str(), c.db, c.blendSteps);
-            break;
-        case AudioCommand::Op::Snapshot:
-            std::snprintf(text, sizeof text, "snapshot step %llu %s over %u", step, c.snapshot.c_str(), c.blendSteps);
-            break;
-        case AudioCommand::Op::Zone:
-            std::snprintf(text, sizeof text, "zone step %llu %s bed '%s' over %u", step, c.zone.c_str(), c.bed.c_str(), c.blendSteps);
-            break;
-        case AudioCommand::Op::Occlusion:
-            std::snprintf(text, sizeof text, "occlusion step %llu voice %u walls %u %.1f dB %.0f Hz over %u", step, c.voice, c.occl.walls,
-                          c.occl.db, c.occl.lowPassHz, c.blendSteps);
-            break;
-        case AudioCommand::Op::StopWorld: std::snprintf(text, sizeof text, "stop_world step %llu over %u", step, c.blendSteps); break;
-    }
-    std::string out = text;
-    if (c.resync) out += " resync";
-    return out;
-}
-
 // ---- the rules -----------------------------------------------------------------------------------
 
 std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerId) {
@@ -253,7 +193,7 @@ bool combatSoundAtEar(std::string_view name) noexcept {
     return name == "fire" || name == "reload" || name == "empty";
 }
 
-std::vector<std::string> animSoundNames(const AnimEvent& e) {
+std::vector<std::string> animSoundNames(const ClipEvent& e) {
     if (e.name == "mag_out" || e.name == "mag_in" || e.name == "bolt" || e.name == "body_fall") return {e.name};
     if (e.name == "foot_l" || e.name == "foot_r") return {"footstep"};
     return {};
@@ -322,7 +262,6 @@ struct AudioSchedule::Impl {
         uint32_t hold{0};
         glm::vec3 source{0.0f};
         bool occlude{false};
-        bool tracked{false};   // trackVoice's: no play command, outside the caps
         Occlusion occl;
     };
     struct State {
@@ -342,7 +281,6 @@ struct AudioSchedule::Impl {
         std::vector<float> busDuck;
     } heard;
     bool restored{false};
-    bool trace{false};
     uint32_t lastSnapshotBlend{0};   // the last snapshot command's blend (audio.info; never snapshotted)
 
     std::optional<AudioListener> ears;   // the step's listener (refreshed by each step and each play)
@@ -350,14 +288,37 @@ struct AudioSchedule::Impl {
     double lastStepMs{0.0};
     AudioScheduleStats stats;
 
-    std::deque<AudioCommand> log;
-    std::vector<AudioCommand> stepCommands;
-    uint64_t nextSeq{0};
+    // What it emits and reads (the World's log): engine events by type.
+    struct Out {
+        EventWriter<AudioPlay> play;
+        EventWriter<AudioStop> stop;
+        EventWriter<AudioBus> bus;
+        EventWriter<AudioSnapshot> snapshot;
+        EventWriter<AudioZone> zone;
+        EventWriter<AudioOcclusion> occlusion;
+        EventWriter<AudioStopWorld> stopWorld;
+    } out;
+    EventReader<FootEvent> footsteps, landings;
+    EventReader<ClipEvent> clips;
 
     std::vector<AudioWarning> warnings;
     std::set<std::pair<entt::entity, std::string>> warned;
 
-    Impl(World& w, AssetResolver& a) : world(w), assets(a), bank(defaultBank()) { shapeState(); }
+    Impl(World& w, AssetResolver& a) : world(w), assets(a), bank(defaultBank()) {
+        shapeState();
+        namespace ae = audio_events;
+        EventLog& log = w.events();
+        out.play = log.writer<AudioPlay>(ae::kPlay, "audio_schedule");
+        out.stop = log.writer<AudioStop>(ae::kStop, "audio_schedule");
+        out.bus = log.writer<AudioBus>(ae::kBus, "audio_schedule");
+        out.snapshot = log.writer<AudioSnapshot>(ae::kSnapshot, "audio_schedule");
+        out.zone = log.writer<AudioZone>(ae::kZone, "audio_schedule");
+        out.occlusion = log.writer<AudioOcclusion>(ae::kOcclusion, "audio_schedule");
+        out.stopWorld = log.writer<AudioStopWorld>(ae::kStopWorld, "audio_schedule");
+        footsteps = log.reader<FootEvent>(physics_events::kFootstep, "audio_schedule");
+        landings = log.reader<FootEvent>(physics_events::kLand, "audio_schedule");
+        clips = log.reader<ClipEvent>(kClipEventChannel, "audio_schedule");
+    }
 
     void warn(entt::entity e, std::string code, std::string message) {
         if (!warned.emplace(e, code).second) return;
@@ -365,14 +326,10 @@ struct AudioSchedule::Impl {
         warnings.push_back({std::move(code), e, std::move(message)});
     }
 
-    void push(AudioCommand c) {
-        c.seq = nextSeq++;
-        c.step = s.steps;
-        if (c.op == AudioCommand::Op::Snapshot) lastSnapshotBlend = c.blendSteps;
-        if (trace) OHAO_LOG(Info, audio, "schedule: {}", describeAudioCommand(c, bank));
-        stepCommands.push_back(c);
-        log.push_back(std::move(c));
-        if (log.size() > kLogCapacity) log.pop_front();
+    [[nodiscard]] std::string busName(std::size_t b) const { return b < bank.buses.size() ? bank.buses[b].name : std::string(); }
+    void emitSnapshot(AudioSnapshot c) {
+        lastSnapshotBlend = c.blendSteps;
+        out.snapshot.emit(std::move(c));
     }
 
     // The per-bus and per-duck vectors sized to the bank (kept values where they fit).
@@ -520,7 +477,7 @@ struct AudioSchedule::Impl {
             if (cap == 0) return false;
             uint32_t n = 0;
             for (std::size_t i = 0; i < s.voices.size(); ++i)
-                if (!gone[i] && !s.voices[i].tracked && (scope < 0 || below(s.voices[i].bus, scope))) ++n;
+                if (!gone[i] && (scope < 0 || below(s.voices[i].bus, scope))) ++n;
             return n >= cap;
         };
         std::vector<int> scopes;
@@ -531,7 +488,7 @@ struct AudioSchedule::Impl {
                 std::size_t pick = s.voices.size();
                 for (std::size_t i = 0; i < s.voices.size(); ++i) {
                     const Voice& v = s.voices[i];
-                    if (gone[i] || v.tracked || (scope >= 0 && !below(v.bus, scope))) continue;
+                    if (gone[i] || (scope >= 0 && !below(v.bus, scope))) continue;
                     const bool candidate = v.priority < priority || (v.priority == priority && v.audible < audible);
                     if (!candidate) continue;
                     if (pick == s.voices.size()) {
@@ -550,74 +507,70 @@ struct AudioSchedule::Impl {
         return true;
     }
 
-    std::optional<AudioCommand> playRequest(const SoundRequest& req) {
+    void playRequest(const SoundRequest& req) {
         const int si = bank.sound(req.sound);
-        if (si < 0) return std::nullopt;
+        if (si < 0) return;
         const SoundDesc& desc = bank.sounds[static_cast<std::size_t>(si)];
         const int bus = std::max(0, bank.bus(desc.bus));
         const ShapeDesc* shape = desc.shape == "ear" ? nullptr : bank.shape(desc.shape);
         const bool ear = req.ear || shape == nullptr;
         const bool own = ears && ears->playerId != 0 && req.owner == ears->playerId;
 
-        AudioCommand c;
-        c.op = AudioCommand::Op::Play;
-        c.sound = static_cast<uint16_t>(si);
-        c.bus = static_cast<uint8_t>(bus);
-        c.priority = desc.priority;
-        c.spatial = !ear;
-        c.pos = ear ? (ears ? ears->position : glm::vec3(0.0f)) : req.at;
+        const auto sound = static_cast<uint16_t>(si);
+        AudioPlay c;
+        c.sound = desc.name;
+        if (!ear) c.pos = req.at;
         c.gain = desc.volume * req.scale;
-        c.send = desc.send;
-        c.source = req.owner;
-        c.variant = req.variant ? *req.variant : s.robin[c.sound]++;
+        c.variant = req.variant ? *req.variant : s.robin[sound]++;
 
         const bool occlude = desc.occlude && !own && !ear;
+        Occlusion occl;
         if (occlude && ears)
-            if (const auto o = cast(*ears, req.at)) c.occl = *o;
+            if (const auto o = cast(*ears, req.at)) occl = *o;
+        c.walls = occl.walls;
+        c.occlusionDb = occl.db;
+        c.lowPassHz = static_cast<float>(occl.lowPassHz);
         const float distance = ears && !ear ? glm::length(req.at - ears->position) : 0.0f;
-        const float audible = c.gain * (shape && !ear ? distanceGain(distance, *shape) : 1.0f) * dbToGain(c.occl.db);
+        const float audible = c.gain * (shape && !ear ? distanceGain(distance, *shape) : 1.0f) * dbToGain(occl.db);
 
         c.voice = ++s.nextVoice;
         std::vector<std::size_t> taken;
         if (!victims(bus, desc.priority, audible, taken)) {
-            c.outcome = AudioCommand::Outcome::Dropped;
+            c.outcome = AudioOutcome::Dropped;
             ++stats.dropped;
-            push(c);
-            return c;
+            out.play.emit(std::move(c));
+            return;
         }
         // The victims stop first (a 2 ms fade in the device), then the new voice starts.
         std::sort(taken.begin(), taken.end());
         for (const std::size_t i : taken) {
-            AudioCommand stop;
-            stop.op = AudioCommand::Op::Stop;
-            stop.voice = s.voices[i].id;
-            push(stop);
+            out.stop.emit(AudioStop{s.voices[i].id});
             c.victim = s.voices[i].id;
         }
         for (auto it = taken.rbegin(); it != taken.rend(); ++it) s.voices.erase(s.voices.begin() + static_cast<std::ptrdiff_t>(*it));
-        c.outcome = taken.empty() ? AudioCommand::Outcome::Played : AudioCommand::Outcome::Stole;
+        c.outcome = taken.empty() ? AudioOutcome::Played : AudioOutcome::Stole;
         ++(taken.empty() ? stats.played : stats.stole);
-        push(c);
+        const uint32_t voice = c.voice;
+        const uint64_t seq = out.play.emit(std::move(c));
 
         Voice v;
-        v.id = c.voice;
-        v.seq = log.back().seq;
-        v.sound = c.sound;
-        v.bus = c.bus;
-        v.priority = c.priority;
+        v.id = voice;
+        v.seq = seq;
+        v.sound = sound;
+        v.bus = static_cast<uint8_t>(bus);
+        v.priority = desc.priority;
         v.audible = audible;
         v.start = s.steps;
         v.hold = holdSteps(desc.holdMs);
         v.end = v.start + v.hold;
         v.source = req.at;
         v.occlude = occlude;
-        v.occl = c.occl;
+        v.occl = occl;
         s.voices.push_back(v);
         // Ducks this sound triggers hold while it holds its voice.
         for (std::size_t i = 0; i < bank.ducks.size(); ++i)
             if (bank.ducks[i].on == desc.name) s.duckUntil[i] = std::max(s.duckUntil[i], s.steps + v.hold);
         stats.voices = static_cast<uint32_t>(s.voices.size());
-        return c;
     }
 
     // Each bus's duck: the deepest rule holding it; a change writes `bus` (its attack going down, the
@@ -632,15 +585,11 @@ struct AudioSchedule::Impl {
                 if (d.db < target) target = d.db, attack = d.attackSteps, release = d.releaseSteps;
             }
             if (target == s.busDuck[b]) continue;
-            AudioCommand c;
-            c.op = AudioCommand::Op::Bus;
-            c.bus = static_cast<uint8_t>(b);
-            c.db = target;
-            c.blendSteps = target < s.busDuck[b] ? attack : s.busRelease[b];
+            const uint32_t blend = target < s.busDuck[b] ? attack : s.busRelease[b];
             s.busDuck[b] = target;
             s.busRelease[b] = release;
             heard.busDuck[b] = target;
-            push(c);
+            out.bus.emit(AudioBus{busName(b), target, blend, false});
         }
     }
 
@@ -689,40 +638,24 @@ struct AudioSchedule::Impl {
     // the device takes a zone or snapshot it is already in as nothing.
     void resync() {
         if (const std::string zone = zoneTarget(); !zone.empty() && zone != heard.zone && !heard.zone.empty()) {
-            AudioCommand c;
-            c.op = AudioCommand::Op::Zone;
-            c.zone = zone;
-            if (const ReverbDesc* p = bank.preset(zone)) c.bed = p->bed;
-            c.blendSteps = kZoneBlendSteps;
-            c.resync = true;
+            const ReverbDesc* p = bank.preset(zone);
             heard.zone = zone;
-            push(c);
+            out.zone.emit(AudioZone{zone, p ? p->bed : std::string(), kZoneBlendSteps, true});
         }
         if (const std::string snap = snapshotTarget(); snap != heard.snapshot && !heard.snapshot.empty()) {
-            AudioCommand c;
-            c.op = AudioCommand::Op::Snapshot;
-            c.snapshot = snap;
-            c.blendSteps = snapshotBlend(snap, heard.snapshot);
-            c.resync = true;
+            const uint32_t blend = snapshotBlend(snap, heard.snapshot);
             heard.snapshot = snap;
-            push(c);
+            emitSnapshot(AudioSnapshot{snap, blend, true});
         }
         for (std::size_t b = 0; b < s.busDuck.size() && b < heard.busDuck.size(); ++b) {
             if (s.busDuck[b] == heard.busDuck[b]) continue;
-            AudioCommand c;
-            c.op = AudioCommand::Op::Bus;
-            c.bus = static_cast<uint8_t>(b);
-            c.db = s.busDuck[b];
-            c.blendSteps = kOcclusionBlendSteps;
-            c.resync = true;
             heard.busDuck[b] = s.busDuck[b];
-            push(c);
+            out.bus.emit(AudioBus{busName(b), s.busDuck[b], kOcclusionBlendSteps, true});
         }
     }
 
     void step() {
         ++s.steps;
-        stepCommands.clear();
         raysThisStep = 0;
         refreshBank();
         ears = listenerAtStep(world);
@@ -736,13 +669,7 @@ struct AudioSchedule::Impl {
             if (combatEvents[i].kind == CombatEvent::Kind::Restart) afterRestart = i + 1, restart = true;
 
         // 1. The restart, or any restore: the device's world voices fade; the restored mix is resent.
-        if (restart || restored) {
-            AudioCommand c;
-            c.op = AudioCommand::Op::StopWorld;
-            c.blendSteps = kStopWorldSteps;
-            c.resync = !restart;
-            push(c);
-        }
+        if (restart || restored) out.stopWorld.emit(AudioStopWorld{kStopWorldSteps, !restart});
         if (restored) {
             resync();
             restored = false;
@@ -753,52 +680,46 @@ struct AudioSchedule::Impl {
         if (const std::string preset = zoneTarget(); ears && preset != s.zone) {
             s.zone = preset;
             heard.zone = preset;
-            AudioCommand c;
-            c.op = AudioCommand::Op::Zone;
-            c.zone = preset;
-            if (const ReverbDesc* p = bank.preset(preset)) c.bed = p->bed;
-            c.blendSteps = kZoneBlendSteps;
-            push(std::move(c));
+            const ReverbDesc* p = bank.preset(preset);
+            out.zone.emit(AudioZone{preset, p ? p->bed : std::string(), kZoneBlendSteps, false});
         }
 
         // 3. The snapshot from the round.
         if (const std::string want = snapshotTarget(); want != s.snapshot) {
-            AudioCommand c;
-            c.op = AudioCommand::Op::Snapshot;
-            c.snapshot = want;
-            c.blendSteps = snapshotBlend(want, s.snapshot);
+            const uint32_t blend = snapshotBlend(want, s.snapshot);
             s.snapshot = want;
             heard.snapshot = want;
-            push(std::move(c));
+            emitSnapshot(AudioSnapshot{want, blend, false});
         }
 
         // 4. Voices that have ended let go; then the step's sounds.
         std::erase_if(s.voices, [&](const Voice& v) { return s.steps >= v.end; });
         const uint64_t playerId = ears ? ears->playerId : 0;
         const auto& reg = world.registry();
-        if (!restart)   // physics stepped the timeline the restart undid
-            if (const PhysicsScene* physics = physicsScene(world))
-                for (const PhysicsEvent& e : physics->stepEvents()) {
-                    const bool land = e.kind == PhysicsEvent::Kind::Land;
-                    if (e.kind != PhysicsEvent::Kind::Footstep && !land) continue;
-                    if (!land) {
-                        const entt::entity who = world.findById(e.aId);
-                        if (who != entt::null && footFromClips(who)) continue;   // its clip's feet play its steps
-                    }
-                    const std::string sound = footstepSound(bank, e.surface);
-                    if (!sound.empty()) (void)playRequest({sound, e.aId, e.point, false, footstepScale(land, e.speed)});
+        // Footsteps and landings in the order physics emitted them (a restart in the step ended what came before).
+        {
+            const auto steps = footsteps.read(), lands = landings.read();
+            for (std::size_t i = 0, j = 0; i < steps.size() || j < lands.size();) {
+                const bool land = j < lands.size() && (i == steps.size() || lands[j].meta.seq < steps[i].meta.seq);
+                const FootEvent& e = land ? lands[j++].value : steps[i++].value;
+                if (!land) {
+                    const entt::entity who = world.findById(e.player);
+                    if (who != entt::null && footFromClips(who)) continue;   // its clip's feet play its steps
                 }
+                const std::string sound = footstepSound(bank, e.surface);
+                if (!sound.empty()) playRequest({sound, e.player, e.point, false, footstepScale(land, e.speed)});
+            }
+        }
         for (std::size_t i = afterRestart; i < combatEvents.size(); ++i) {
             const CombatEvent& e = combatEvents[i];
             // A grenade is a world source, not the thrower's own sound: occluded like an enemy's.
             const uint64_t owner = e.kind == CombatEvent::Kind::Explode ? 0 : e.sourceId;
             for (std::string name : combatSoundNames(e, playerId)) {
                 if (name.rfind("impact_", 0) == 0 && bank.sound(name) < 0) name = "impact_default";
-                (void)playRequest({name, owner, e.point, combatSoundAtEar(name)});
+                playRequest({name, owner, e.point, combatSoundAtEar(name)});
             }
         }
-        if (const AnimationSystem* anim = animationSystem(world))
-            for (const AnimEvent& e : anim->stepEvents())
+        for (const auto& [meta, e] : clips.read())
                 for (const std::string& name : animSoundNames(e)) {
                     const entt::entity who = world.findById(e.entity);
                     if (who == entt::null) continue;
@@ -811,11 +732,11 @@ struct AudioSchedule::Impl {
                         const glm::vec3 v = info ? info->velocity : glm::vec3(0.0f);
                         const std::string sound = footstepSound(bank, info ? info->surface : std::string());
                         if (!sound.empty())
-                            (void)playRequest({sound, owner, at, false, footstepScale(false, std::sqrt(v.x * v.x + v.z * v.z))});
+                            playRequest({sound, owner, at, false, footstepScale(false, std::sqrt(v.x * v.x + v.z * v.z))});
                         continue;
                     }
                     at.y += name == "body_fall" ? 0.2f : 1.1f;   // the floor, or the hands at the chest
-                    (void)playRequest({name, owner, at, playerId != 0 && owner == playerId});
+                    playRequest({name, owner, at, playerId != 0 && owner == playerId});
                 }
 
         // 5. Ducks.
@@ -828,34 +749,10 @@ struct AudioSchedule::Impl {
                 const auto now = cast(*ears, v.source);
                 if (!now || now->walls == v.occl.walls) continue;   // capped: the last answer stands
                 v.occl = *now;
-                AudioCommand c;
-                c.op = AudioCommand::Op::Occlusion;
-                c.voice = v.id;
-                c.occl = v.occl;
-                c.blendSteps = kOcclusionBlendSteps;
-                push(std::move(c));
+                out.occlusion.emit(AudioOcclusion{v.id, v.occl.walls, v.occl.db, static_cast<float>(v.occl.lowPassHz),
+                                                  kOcclusionBlendSteps});
             }
         stats.voices = static_cast<uint32_t>(s.voices.size());
-    }
-
-    Voice track(glm::vec3 source, uint32_t holdMs, bool occlude, AudioSchedule::Voice& out) {
-        Voice v;
-        v.id = ++s.nextVoice;
-        v.source = source;
-        v.start = s.steps;
-        v.hold = holdSteps(holdMs);
-        v.end = v.start + v.hold;
-        v.occlude = occlude;
-        v.tracked = true;
-        out = AudioSchedule::Voice{v.id, {}, false};
-        if (occlude)
-            if (const auto at = listenerAtStep(world)) {
-                if (const auto o = cast(*at, source)) v.occl = out.occl = *o;
-                else out.capped = true;
-            }
-        s.voices.push_back(v);
-        stats.voices = static_cast<uint32_t>(s.voices.size());
-        return v;
     }
 };
 
@@ -870,22 +767,6 @@ void AudioSchedule::step() {
 
 double AudioSchedule::lastStepMs() const noexcept { return m->lastStepMs; }
 
-std::optional<AudioCommand> AudioSchedule::play(const SoundRequest& request) {
-    m->refreshBank();
-    m->ears = listenerAtStep(m->world);
-    auto c = m->playRequest(request);
-    m->updateDucks();
-    return c;
-}
-
-AudioSchedule::Voice AudioSchedule::trackVoice(glm::vec3 source, uint32_t holdMs, bool occlude) {
-    Voice out;
-    (void)m->track(source, holdMs, occlude, out);
-    return out;
-}
-
-void AudioSchedule::setTrace(bool on) noexcept { m->trace = on; }
-
 void AudioSchedule::setBank(const AudioBank& bank) {
     m->bankSet = true;
     m->bank = bank;
@@ -893,8 +774,6 @@ void AudioSchedule::setBank(const AudioBank& bank) {
 }
 const AudioBank& AudioSchedule::bank() const noexcept { return m->bank; }
 uint64_t AudioSchedule::bankVersion() const noexcept { return m->bankVersion; }
-std::span<const AudioCommand> AudioSchedule::stepCommands() const noexcept { return m->stepCommands; }
-uint64_t AudioSchedule::nextSeq() const noexcept { return m->nextSeq; }
 uint64_t AudioSchedule::steps() const noexcept { return m->s.steps; }
 const std::string& AudioSchedule::zone() const noexcept { return m->s.zone; }
 const std::string& AudioSchedule::snapshot() const noexcept { return m->s.snapshot; }
@@ -909,7 +788,7 @@ std::string AudioSchedule::zoneAt(glm::vec3 p) const { return m->zoneAt(p); }
 std::vector<ScheduledVoice> AudioSchedule::voices() const {
     std::vector<ScheduledVoice> out;
     for (const auto& v : m->s.voices)
-        if (!v.tracked) out.push_back({v.id, v.seq, v.sound, v.bus, v.priority, v.audible, v.start, v.end});
+        out.push_back({v.id, v.seq, v.sound, v.bus, v.priority, v.audible, v.start, v.end});
     return out;
 }
 
@@ -938,7 +817,6 @@ void AudioSchedule::hashState(StateHash& h) const {
         h.u32(v.hold);
         h.vec3(v.source);
         h.boolean(v.occlude);
-        h.boolean(v.tracked);
         h.u32(v.occl.walls);
         h.f32(v.occl.db);
         h.f32(static_cast<float>(v.occl.lowPassHz));
@@ -958,18 +836,6 @@ void AudioSchedule::hashState(StateHash& h) const {
     h.string(s.zone);
     h.string(s.snapshot);
     h.u64(s.steps);
-}
-
-std::vector<AudioCommand> AudioSchedule::commandsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
-    std::vector<AudioCommand> out;
-    const uint64_t oldest = m->log.empty() ? m->nextSeq : m->log.front().seq;
-    dropped = since < oldest ? oldest - since : 0;
-    for (const AudioCommand& c : m->log) {
-        if (c.seq < since) continue;
-        if (out.size() >= max) break;
-        out.push_back(c);
-    }
-    return out;
 }
 
 AudioSchedule& installAudio(World& world, AssetResolver& assets) {
@@ -996,11 +862,6 @@ AudioSchedule* audioSchedule(World& world) {
 const AudioSchedule* audioSchedule(const World& world) {
     const auto* installed = world.registry().ctx().find<AudioInstalled>();
     return installed ? installed->system : nullptr;
-}
-
-std::span<const AudioCommand> audioCommands(const World& world) {
-    const AudioSchedule* s = audioSchedule(world);
-    return s ? s->stepCommands() : std::span<const AudioCommand>{};
 }
 
 } // namespace ohao::ecs

@@ -1,8 +1,9 @@
 #pragma once
 // The audio player (sub-project 11 step 3; docs/specs/2026-10-28-audio-design.md, "The frame: the
 // player"): a window host's bridge from the voice schedule (ecs/audio_schedule.hpp, decided in the
-// step) to the device. Once a frame, after the frame's steps, it reads the schedule since its cursor
-// and drives AudioSystem. Headless hosts have none: the schedule is what tests and agents read.
+// step) to the device. Once a frame, after the frame's steps, it reads the schedule's `audio.*` events
+// since its cursor (the World's log) and drives AudioSystem. Headless hosts have none: the events are what
+// agents read (events.read).
 //
 // The clock: the player anchors a schedule step s0 to an engine frame f0 and plays step s's commands at
 // f0 + (s - s0) x rate / 60 + one step (the horizon, OPEN ruling 7), so two steps run in one frame
@@ -37,10 +38,6 @@ class World;
 
 namespace ohao::runtime {
 
-// OHAO_AUDIO_TRACE=1: hosts turn on the schedule's trace (every command on the `audio` log channel),
-// so check_live compares a window's schedule with a headless host's through log.read.
-[[nodiscard]] bool audioTraceRequested();
-
 // audio.mix's session overrides (sub-project 11 step 4): per bus a level (replacing the game's), mute and
 // solo; a snapshot forced in place of the schedule's. Device only: the schedule never sees them. A bus
 // the bank lacks is ignored.
@@ -69,14 +66,13 @@ public:
     [[nodiscard]] bool ready() const noexcept { return m_audio != nullptr && m_audio->isInitialized(); }
 
     // Once a frame, after the frame's steps: the schedule's bank (when it changed), the listener from
-    // the frame's camera, then the schedule's commands since the cursor. `realtime`: the timeline runs
-    // in real time (false: paused or lockstep). The first call starts at the log's end.
-    void update(ecs::World& world, bool realtime);
+    // the frame's camera, then the schedule's `audio.*` events since the cursor (the World's log).
+    // `realtime`: the timeline runs in real time (false: paused or lockstep). The first call starts at the
+    // log's end.
+    void update(const ecs::World& world, bool realtime);
 
     // The bank to play (decoded into the device now; every playing sound stops).
     void useBank(const AudioBank& bank);
-    // Plays commands written up to the schedule's step `scheduleStep` (update's core; tests drive it).
-    void submit(std::span<const ecs::AudioCommand> commands, uint64_t scheduleStep, bool realtime);
 
     [[nodiscard]] uint64_t late() const noexcept { return m_late; }        // commands started after their time
     [[nodiscard]] uint64_t played() const noexcept { return m_played; }    // voices started
@@ -101,12 +97,15 @@ public:
 private:
     void anchor(uint64_t step);
     [[nodiscard]] uint64_t startFrameOf(uint64_t step);
-    void play(const ecs::AudioCommand& c);
+    void clock(uint64_t step, bool realtime);   // the anchor, at the World's step
+    void play(const ecs::AudioPlay& c, uint64_t step);
+    void snapshot(const ecs::AudioSnapshot& c);
+    void stopWorld(uint32_t blendFrames);
     void applyBuses(uint32_t rampFrames);
     void applyOverrides(uint32_t rampFrames);   // the overrides into per-bus vectors, levels, mutes, solos
     [[nodiscard]] float levelDb(std::size_t bus) const noexcept;
     [[nodiscard]] double levelHz(std::size_t bus) const noexcept;
-    void zone(const ecs::AudioCommand& c);
+    void zone(const ecs::AudioZone& c);
 
     AudioSystem* m_audio{nullptr};
     std::filesystem::path m_root;

@@ -26,6 +26,16 @@ namespace ohao::ecs {
 
 namespace pb = physics::backend;
 
+// An event as the step finds it, before it is sorted and emitted into physics_scene.hpp's channels.
+struct PhysicsEvent {
+    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit, Footstep, Land, JointBreak };
+    Kind kind{Kind::ContactBegin};
+    uint64_t aId{0}, bId{0};   // contacts: a the lower id; triggers: a the trigger; footsteps: a the player
+    glm::vec3 point{0.0f}, normal{0.0f};
+    float speed{0.0f};
+    std::string surface;
+};
+
 // Helpers the Impl's files share (each its own internal copy).
 namespace {
 
@@ -142,12 +152,15 @@ struct PhysicsScene::Impl {
     bool removing{false};
     // Events (spec "Events").
     ankerl::unordered_dense::map<uint64_t, Pair> pairs;
-    std::vector<PhysicsEvent> pending;      // ends from bodies removed since the last step
-    std::vector<PhysicsEvent> stepEvents;   // the latest step's, published
-    std::vector<PhysicsEvent> log;          // a ring of kEventLog, by seq
     std::size_t dormant{0};                 // pairs kept through their bodies' sleep
-    uint64_t nextSeq{1};
     uint64_t steps{0};
+    struct Writers {
+        EventWriter<ContactEvent> contactBegin, contactEnd;
+        EventWriter<TriggerEvent> triggerEnter, triggerExit;
+        EventWriter<FootEvent> footstep, land;
+        EventWriter<JointBreakEvent> jointBreak;
+    } out;
+    void emit(const PhysicsEvent& ev);
     int lastSubsteps{0};
     bool warnedLongStep{false};
     PhysicsScene::StepTiming timing;
@@ -366,7 +379,7 @@ struct PhysicsScene::Impl {
     // into BodyMotion (asleep at rest, once, as it falls asleep).
     void writeBack();
 
-    void publish(std::vector<PhysicsEvent>& fresh);
+    void publish(std::vector<PhysicsEvent>& fresh);   // sorted, then emitted
 
     // ---- the player (spec "The player") -----------------------------------------------------------
 
@@ -442,8 +455,6 @@ struct PhysicsScene::Impl {
 
     // A drawn pose for x this frame; its previous one is what the last frame drew of it.
     void setDrawn(entt::entity x, const glm::mat4& world, const ankerl::unordered_dense::set<entt::entity>& was);
-
-    [[nodiscard]] std::vector<PhysicsEvent> since(uint64_t after, std::size_t max, uint64_t& dropped) const;
 };
 
 } // namespace ohao::ecs

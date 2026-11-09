@@ -70,6 +70,32 @@ using namespace ohao;
 
 namespace {
 
+// One audio event of the World's log as a line (the recordings' "command"): its channel and what it says.
+std::string describeAudio(const ecs::EventChannelBase& c, std::size_t i) {
+    char text[256];
+    const uint64_t step = c.meta(i).step;
+    const auto* p = dynamic_cast<const ecs::EventChannel<ecs::AudioPlay>*>(&c);
+    if (p) {
+        const ecs::AudioPlay& e = p->at(i).value;
+        const glm::vec3 at = e.pos.value_or(glm::vec3(0.0f));
+        std::snprintf(text, sizeof text, "play step %llu %s variant %u voice %u gain %.3f %s (%.2f %.2f %.2f) walls %u %s",
+                      static_cast<unsigned long long>(step), e.sound.c_str(), e.variant, e.voice, e.gain,
+                      e.pos ? "at" : "ear", at.x, at.y, at.z, e.walls,
+                      e.outcome == ecs::AudioOutcome::Played ? "played" : e.outcome == ecs::AudioOutcome::Stole ? "stole" : "dropped");
+        return text;
+    }
+    std::snprintf(text, sizeof text, "%s step %llu", c.name().c_str(), static_cast<unsigned long long>(step));
+    return text;
+}
+
+// The audio events the World's log gained after `cursor` (which moves on): f(channel, i).
+template <class F>
+void audioEventsSince(const ecs::World& w, uint64_t& cursor, F&& f) {
+    cursor = w.events().visit(cursor, SIZE_MAX, [&](const ecs::EventChannelBase& c, std::size_t i) {
+        if (c.name().starts_with("audio.")) f(c, i);
+    });
+}
+
 constexpr uint32_t kVoices = 32;
 constexpr uint32_t kPeriod = 480;   // 10 ms at 48 kHz
 
@@ -274,6 +300,7 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     runtime::AudioPlayer player2;
     player2.initialize(OHAO_SOURCE_DIR, device);
     std::vector<float> period(std::size_t(800) * 2);
+    uint64_t cursor = w.events().nextSeq() - 1;
     for (int i = 0; i < steps; ++i) {
         w.stepInput(fightScript(i));
         w.update(kDt);
@@ -284,8 +311,9 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
         (void)device.render(period, 800);
         if (!rec) continue;
         rec->wav.insert(rec->wav.end(), period.begin(), period.end());
-        for (const ecs::AudioCommand& c : ecs::audioCommands(w))
-            rec->commands.push_back({{"runStep", i + 1}, {"step", audio.steps()}, {"command", ecs::describeAudioCommand(c, audio.bank())}});
+        audioEventsSince(w, cursor, [&](const ecs::EventChannelBase& c, std::size_t k) {
+            rec->commands.push_back({{"runStep", i + 1}, {"step", audio.steps()}, {"command", describeAudio(c, k)}});
+        });
         const AudioBank& bank = audio.bank();
         if (rec->busCsv.empty()) {
             rec->busCsv = "step,seconds,out_rms_db";
@@ -443,6 +471,7 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     std::vector<float> wav, period(std::size_t(800) * 2);
     nlohmann::json commands = nlohmann::json::array(), windows = nlohmann::json::array();
     int step = 0;
+    uint64_t cursor = w.events().nextSeq() - 1;
     const auto run = [&](int n, const std::vector<InputEvent>& first = {}) {
         for (int i = 0; i < n; ++i, ++step) {
             w.stepInput(i == 0 ? first : std::vector<InputEvent>{});
@@ -450,32 +479,32 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
             out.update(w, true);
             (void)device.render(period, 800);
             wav.insert(wav.end(), period.begin(), period.end());
-            for (const ecs::AudioCommand& c : ecs::audioCommands(w)) {
-                // The schedule reads the scene's bank at its first step: names, not indices, from here.
-                const bool play = c.op == ecs::AudioCommand::Op::Play && c.sound < audio.bank().sounds.size();
-                const std::string sound = play ? audio.bank().sounds[c.sound].name : std::string();
-                nlohmann::json j{{"runStep", step + 1}, {"op", int(c.op)}, {"command", ecs::describeAudioCommand(c, audio.bank())}};
-                if (play) j["sound"] = sound;
+            audioEventsSince(w, cursor, [&](const ecs::EventChannelBase& ch, std::size_t k) {
+                const auto* plays = dynamic_cast<const ecs::EventChannel<ecs::AudioPlay>*>(&ch);
+                const ecs::AudioPlay* c = plays ? &plays->at(k).value : nullptr;
+                nlohmann::json j{{"runStep", step + 1}, {"event", ch.name()}, {"command", describeAudio(ch, k)}};
+                if (c) j["sound"] = c->sound;
                 commands.push_back(std::move(j));
-                if (sound == "explode" && !windows.empty() && !windows.back().contains("pos")) {
+                if (c && c->sound == "explode" && !windows.empty() && !windows.back().contains("pos")) {
                     nlohmann::json& b = windows.back();
                     b["runStep"] = step + 1;
-                    b["pos"] = {c.pos.x, c.pos.y, c.pos.z};
-                    b["walls"] = c.occl.walls;
+                    const glm::vec3 at = c->pos.value_or(glm::vec3(0.0f));
+                    b["pos"] = {at.x, at.y, at.z};
+                    b["walls"] = c->walls;
                     b["startFrame"] = std::size_t(step) * 800;   // the start of the step that wrote it
                     b["frames"] = std::size_t(kWindowSteps) * 800;
                     if (const auto view = ecs::resolveSceneView(w).camera) {
                         const float p = glm::radians(view->pitchDeg), y = glm::radians(view->yawDeg);
                         const glm::vec3 f(std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p));
                         const glm::vec3 right = glm::normalize(glm::cross(f, glm::vec3(0, 1, 0)));
-                        const glm::vec3 to = c.pos - view->position;
+                        const glm::vec3 to = at - view->position;
                         b["ears"] = {view->position.x, view->position.y, view->position.z};
                         b["forward"] = {f.x, f.y, f.z};
                         b["distance"] = glm::length(to);
                         b["azimuthDeg"] = glm::degrees(std::atan2(glm::dot(to, right), glm::dot(to, f)));
                     }
                 }
-            }
+            });
         }
     };
     physics.teleportPlayer(player, kListen, 0.0f);
