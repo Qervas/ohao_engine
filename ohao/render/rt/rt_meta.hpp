@@ -1,7 +1,7 @@
 #pragma once
 
 // The path tracer's denoise policy (what each denoiser asks of the trace, from the settings in
-// rt_settings.hpp) and the RT techniques' concepts.
+// rt_settings.hpp).
 
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/render_technique.hpp"
@@ -56,23 +56,5 @@ namespace ohao {
     }
     return s;
 }
-
-// ─── Technique concepts (document virtual surfaces for static helpers) ──────
-
-template<typename T>
-concept GITechniqueLike = requires(T t, VkCommandBuffer cmd, const GIInput& in,
-                                   VkDevice dev, VkPhysicalDevice phys,
-                                   uint32_t w, uint32_t h) {
-    { t.getName() } -> std::convertible_to<const char*>;
-    { t.needsRT() } -> std::convertible_to<bool>;
-    { t.init(dev, phys, w, h) } -> std::convertible_to<bool>;
-    { t.resize(w, h) } -> std::same_as<void>;
-    { t.render(cmd, in) } -> std::same_as<void>;
-    { t.getOutput() } -> std::convertible_to<GIOutput>;
-    { t.destroy() } -> std::same_as<void>;
-};
-
-template<GITechniqueLike T>
-inline constexpr bool kIsGITechnique = true;
 
 } // namespace ohao

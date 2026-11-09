@@ -1,7 +1,7 @@
 #pragma once
-// The type registry: what every reflected type is, field by field, with its editor and
+// The type registry: what every reflected type is, field by field, with its UI hints and
 // validation attributes. Populated once by explicit registration functions; read by
-// load/save, validation, commands, the schema export and (later) the editor. Never
+// load/save, validation, commands and the schema export. Never
 // touched by per-frame code.
 //
 //   r.enumeration<LightType>("LightType").doc("Light shape")

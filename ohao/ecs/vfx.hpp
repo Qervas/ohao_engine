@@ -1,6 +1,6 @@
 #pragma once
 // Effects from the step (sub-project 12, docs/specs/2026-10-28-vfx-design.md, "The step: spawn
-// records"): the `vfx` simulate system, after combat, impact_marks and the animation step, before
+// records"): the `vfx` simulate system, after combat and the animation step, before
 // audio_schedule. Each step it:
 //   1. loads the world's set (its VfxSet's .vfx.json, else the default set);
 //   2. reads the combat log after the step's last `restart`: a shot spawns its muzzle effect at the

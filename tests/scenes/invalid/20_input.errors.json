@@ -1,8 +1,0 @@
-[
-  { "code": "E_ENUM", "path": "/entities/0/InputActions/actions/0/key", "suggestion": "Space" },
-  { "code": "E_TYPE", "path": "/entities/0/InputActions/actions/1/key" },
-  { "code": "E_UNKNOWN_FIELD", "path": "/entities/0/InputActions/axes/0/negativ", "suggestion": "negative" },
-  { "code": "E_SINGLETON", "path": "/entities/1/InputActions" },
-  { "code": "E_RANGE", "path": "/entities/2/FlyController/moveSpeed" },
-  { "code": "E_UNKNOWN_FIELD", "path": "/entities/2/FlyController/moveSped", "suggestion": "moveSpeed" }
-]

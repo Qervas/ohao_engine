@@ -177,7 +177,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
         vkCmdEndRenderPass(cmd);
     }
-    // Shadow map layout transition is handled by the RenderGraph barrier system.
+    // The shadow map's layout transition is the render graph's (its barriers between passes).
 }
 
 bool CSMPass::configure(uint32_t cascades, uint32_t size) {

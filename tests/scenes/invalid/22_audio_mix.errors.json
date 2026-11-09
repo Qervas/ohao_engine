@@ -1,5 +1,0 @@
-[
-  { "code": "E_UNKNOWN_FIELD", "path": "/entities/0/AudioMix/assett", "suggestion": "asset" },
-  { "code": "E_SINGLETON", "path": "/entities/1/AudioMix" },
-  { "code": "E_TYPE", "path": "/entities/1/AudioMix/asset" }
-]

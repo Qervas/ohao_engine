@@ -1,8 +1,0 @@
-{
-  "format": "ohao.scene",
-  "version": 1,
-  "components": { "Light": 2 },
-  "entities": [
-    { "id": "00000000000000a1", "Light": { "intensity": 3 } }
-  ]
-}

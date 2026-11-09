@@ -1,9 +1,0 @@
-[
-  { "code": "E_UNKNOWN_FIELD", "path": "/entities/0/Health/curent", "suggestion": "current" },
-  { "code": "E_RANGE", "path": "/entities/1/Health/max" },
-  { "code": "E_RANGE", "path": "/entities/2/Weapon/fireRate" },
-  { "code": "E_RANGE", "path": "/entities/2/Weapon/magazine" },
-  { "code": "E_RANGE", "path": "/entities/3/Weapon/spreadDeg" },
-  { "code": "E_TYPE", "path": "/entities/4/WeaponState/ammo" },
-  { "code": "E_TYPE", "path": "/entities/5/WeaponTrigger/pull" }
-]

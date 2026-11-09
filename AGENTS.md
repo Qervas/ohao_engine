@@ -860,14 +860,7 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
   - Presentation (step 4). The muzzle flash is a `Light` with a saved `Muzzle {intensity,
     time}` below the weapon's entity: the combat step sets it to `intensity` for `time` after a
     round (`WeaponState.flash` counts the steps) and back to 0; a light at intensity 0 has no
-    emitter mesh (`render::lightEmitter`). Impact marks (`ecs/impact_marks.hpp`) are 64 runtime
-    quads made from `hit` events by the `impact_marks` simulate system after `combat` (installed
-    by `installCombat`), attached to what was hit by its pose at that step (on a character, to
-    the body box the round crossed; none on the player), so a renderer created late (a headless
-    host's first capture) draws the marks a window drew; the `impact_marks` sync system after
-    `render_extract` (`installImpactMarks`, where a RenderScene exists) only draws them, as
-    RenderScene instances, never in the registry, so never saved or hashed; a restart clears
-    them. The HUD (`ecs/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
+    emitter mesh (`render::lightEmitter`). A hit's mark is the vfx set's decal ("VFX"). The HUD (`ecs/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
     `render/hud/`) is laid out from combat state and the log, read from its oldest event. A window always draws the HUD; `render.capture` and `ohao run --render` only with
     `hud: true`/`--hud`, and only on deferred frames; no crosshair or hit marker while dead or
     once the round is won. Its sounds (`assets/audio/weapons/`, ours:
@@ -966,8 +959,7 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
   - Additive clips are authored as rest × delta (the layer adds rest⁻¹ × clip): a pack clip used
     additively is re-referenced to its own first frame by the tool, never added raw.
   - `JointAttach` poses the attached entity's whole subtree (the rifle's muzzle light follows the
-    hand). An enemy's body and head entities have no mesh: rounds hit its capsule (ruling 18), so
-    impact marks, which need a `BoxPrim`, are not made on skinned enemies.
+    hand). An enemy's body and head entities have no mesh: rounds hit its capsule (ruling 18).
   - A skinned palette holds the bones that weight vertices (Assimp's list: the enemy's 41 of 43
     joints), not every joint.
   - **The player's arms** (step 3): the play scene's `Gun` is the `ViewModel` root at the eye; its

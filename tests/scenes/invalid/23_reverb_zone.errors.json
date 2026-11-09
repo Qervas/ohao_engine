@@ -1,5 +1,0 @@
-[
-  { "code": "E_UNKNOWN_FIELD", "path": "/entities/0/ReverbZone/prority", "suggestion": "priority" },
-  { "code": "E_TYPE", "path": "/entities/1/ReverbZone/priority" },
-  { "code": "E_RANGE", "path": "/entities/1/ReverbZone/size" }
-]

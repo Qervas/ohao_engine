@@ -30,13 +30,10 @@
 
 namespace ohao {
 
-class RTGITechnique : public IGITechnique {
+class RTGITechnique {
 public:
     RTGITechnique() = default;
-    ~RTGITechnique() override;
-
-    const char* getName() const override { return "RT GI"; }
-    bool needsRT() const override { return true; }
+    ~RTGITechnique();
 
     // The trace's sets 1 and 2 (rt/alpha_test.slang): rtc::AlphaTables' layout and the bindless
     // textures'. Before init (its pipeline needs them; without them init fails: no RT GI).
@@ -45,17 +42,17 @@ public:
         m_texturesLayout = textures;
     }
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              uint32_t width, uint32_t height) override;
-    void resize(uint32_t width, uint32_t height) override;
+              uint32_t width, uint32_t height);
+    void resize(uint32_t width, uint32_t height);
     // The trace (rt.gi).
-    void render(VkCommandBuffer cmd, const GIInput& input) override;
+    void render(VkCommandBuffer cmd, const GIInput& input);
     // The realtime denoiser (rt.gi.denoise), after render() in the same frame; nothing in
     // reference quality or when render() did not trace.
     void denoise(VkCommandBuffer cmd);
     [[nodiscard]] bool denoises() const noexcept { return m_rendered && m_quality == RenderQuality::Realtime; }
     // The full-resolution indirect light lighting reads, valid once this frame's render()
     // (and denoise()) ran.
-    GIOutput getOutput() const override;
+    GIOutput getOutput() const;
     // True when the last render() traced rays. False means it bailed (no TLAS, no pipeline)
     // and nothing was written this frame: don't sample the output.
     [[nodiscard]] bool rendered() const { return m_rendered; }
@@ -76,7 +73,7 @@ public:
     // frames.
     void setRealtime(bool fullResolution, uint32_t rays);
     [[nodiscard]] bool fullResolution() const noexcept { return m_shift == 0u; }
-    void destroy() override;
+    void destroy();
 
 private:
     using Image = rtc::Image;
@@ -161,7 +158,5 @@ private:
     static constexpr uint32_t kAtrousSteps = 4;
     std::array<std::array<std::array<VkDescriptorSet, kAtrousSteps>, 2>, MAX_FRAMES_IN_FLIGHT> m_atrousSets{};
 };
-
-static_assert(GITechniqueLike<RTGITechnique>);
 
 } // namespace ohao

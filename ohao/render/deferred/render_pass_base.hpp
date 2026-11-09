@@ -70,10 +70,6 @@ public:
     // Get pass name for debugging
     [[nodiscard]] virtual const char* getName() const = 0;
 
-    // Hot-reload: load a new SPV and recreate the pipeline.
-    // Returns true if the pass supports hot-reload and succeeded.
-    [[nodiscard]] virtual bool reloadShader(std::string_view spvPath) { (void)spvPath; return false; }
-
     // Set shader base path for all passes (call before initializing any pass)
     static void setShaderBasePath(std::string_view path) { s_shaderBasePath = std::string(path); }
     [[nodiscard]] static const std::string& getShaderBasePath() { return s_shaderBasePath; }
@@ -124,13 +120,6 @@ protected:
                                              VkDescriptorSetLayout descriptorLayout,
                                              uint32_t pushConstantSize,
                                              VkPipeline& outPipeline, VkPipelineLayout& outLayout);
-
-    // Hot-reload helper: destroy old pipeline/layout, load SPV from absolute path,
-    // recreate pipeline with existing descriptor layout. Returns true on success.
-    [[nodiscard]] bool reloadComputeShader(std::string_view absoluteSpvPath,
-                                           VkDescriptorSetLayout descriptorLayout,
-                                           uint32_t pushConstantSize,
-                                           VkPipeline& pipeline, VkPipelineLayout& pipelineLayout);
 
     // Safe Vulkan handle cleanup (null-check + destroy + reset)
     void safeDestroy(VkPipeline& handle);

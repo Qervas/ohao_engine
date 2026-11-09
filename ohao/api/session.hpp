@@ -1,8 +1,7 @@
 #pragma once
 // The one API for humans and agents. Every authoring operation is a method with a JSON
-// params object and a JSON result; the CLI, the JSON-RPC/MCP server (ohao_rpc), the
-// C ABI and the editor all dispatch through Session::call, so each operation has exactly
-// one implementation.
+// params object and a JSON result; the CLI and the JSON-RPC/MCP server (ohao_rpc) dispatch
+// through Session::call, so each operation has exactly one implementation.
 #include "api/params.hpp"
 #include "api/paths.hpp"
 #include "core/input.hpp"

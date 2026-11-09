@@ -100,11 +100,6 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     dead -> win, then waits for `restart`; within each
                     weapon, a round lights its Muzzle light for
                     Muzzle.time (WeaponState.flash), then intensity 0
-    impact_marks    the step's hits -> the World's mark pool (64, the   installed by installCombat
-                    oldest reused), each measured against the step's
-                    pose of what it hit, so every host, its renderer
-                    made early or late, holds the same marks; a restart
-                    clears them; never in the registry
     animation       every Animator in id order: its graph's driver        installed by installAnimation
                     (enemy, arms) writes AnimParams from saved state and  (after installCombat)
                     the step's combat events after its last restart;
@@ -169,9 +164,6 @@ World::sync()
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
                   setViewerPosition)
-  impact_marks    the mark pool -> up to 64 quads (RenderScene         installed by a host with
-                  instances, never in the registry), each following    a renderer
-                  the entity it hit                                    (installImpactMarks)
 host: applySceneView (the first active Camera, at its RenderPose if  runtime/scene_view_apply.hpp
       any; Environment -> renderer camera, HDRI)
 VulkanRenderer::render()
