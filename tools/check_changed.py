@@ -19,6 +19,7 @@ RULES: list[tuple[str, list[str]]] = [
     ("tools/bench/*", []), (".githooks/*", []), (".claude/*", []),
     # The renderer: every GPU gate.
     ("ohao/render/*", ["label:gpu", "render_golden"]), ("ohao/gpu/*", ["label:gpu", "render_golden"]),
+    ("ohao/world_render/*", ["label:gpu", "render_golden"]),
     ("shaders/*", ["label:gpu", "render_golden"]),
     ("tests/renderer/*", ["label:gpu"]), ("tests/validation/*", ["check_validation"]),
     ("tests/golden/*", ["render_golden"]),
