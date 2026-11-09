@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" role="img" aria-label="Today the game lives inside the engine library and programs copy the install order; in the target, games are modules on a public game API above engine services and a platform layer, with dependencies pointing down only.">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e5534b"/></marker>
+  </defs>
+  <rect width="960" height="600" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif">
+    <text x="40" y="44" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">TODAY</text>
+    <text x="510" y="44" font-size="13" font-weight="700" letter-spacing="2" fill="#4cc9e0">TARGET</text>
+    <line x1="480" y1="30" x2="480" y2="570" stroke="#2a313c"/>
+
+    <!-- TODAY -->
+    <rect x="40" y="62" width="400" height="52" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="56" y="84" font-size="13" fill="#e7eaee">Programs: ohao CLI · ohao serve · ohao_game · benches</text>
+    <text x="56" y="103" font-size="12" fill="#e5534b">install order written out by hand in each, different orders</text>
+
+    <rect x="40" y="124" width="400" height="44" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="56" y="151" font-size="13" fill="#e7eaee">api + rpc: 39 methods, 8 of them for one game</text>
+
+    <rect x="40" y="178" width="400" height="104" rx="6" fill="#1b2029" stroke="#e5534b"/>
+    <text x="56" y="201" font-size="13" font-weight="600" fill="#e7eaee">ecs: World, engine systems, and the game</text>
+    <text x="56" y="222" font-size="12" fill="#97a0ad">combat · grenade · rounds · enemy AI · HUD · arms</text>
+    <text x="56" y="240" font-size="12" fill="#97a0ad">9 game components in the engine registry</text>
+    <text x="56" y="258" font-size="12" fill="#97a0ad">order = which names exist at install time</text>
+    <text x="56" y="274" font-size="12" fill="#e5534b">single thread · snapshot misses combat state</text>
+
+    <rect x="40" y="306" width="400" height="104" rx="6" fill="#1b2029" stroke="#e5534b"/>
+    <text x="56" y="329" font-size="13" font-weight="600" fill="#e7eaee">render: VulkanRenderer (~98 methods)</text>
+    <text x="56" y="350" font-size="12" fill="#97a0ad">"render graph" is a pass list: 118 barriers by hand</text>
+    <text x="56" y="368" font-size="12" fill="#97a0ad">68 raw allocations · 1 queue · 65 wait-idles</text>
+    <text x="56" y="386" font-size="12" fill="#97a0ad">~600 binding numbers typed in twice</text>
+    <text x="56" y="402" font-size="12" fill="#e5534b">submit results ignored · no device-lost path</text>
+
+    <rect x="40" y="420" width="400" height="44" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="56" y="447" font-size="13" fill="#e7eaee">physics · audio · anim · vfx · asset (raw glTF at runtime)</text>
+
+    <rect x="40" y="474" width="400" height="44" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="56" y="501" font-size="13" fill="#e7eaee">core · gpu/vulkan</text>
+
+    <path d="M430,282 C 456,290 456,298 430,306" fill="none" stroke="#e5534b" stroke-width="1.5" marker-end="url(#a1)"/>
+    <text x="40" y="548" font-size="12" fill="#97a0ad">ecs links the whole renderer publicly: a headless replay test pulls in Vulkan.</text>
+
+    <!-- TARGET -->
+    <rect x="510" y="62" width="196" height="58" rx="6" fill="#241d12" stroke="#f0a33a"/>
+    <text x="526" y="86" font-size="13" font-weight="600" fill="#f7c27a">games/slice</text>
+    <text x="526" y="106" font-size="12" fill="#c9a77a">C++ module, hot-reloaded</text>
+    <rect x="724" y="62" width="196" height="58" rx="6" fill="#241d12" stroke="#f0a33a" stroke-dasharray="5 4"/>
+    <text x="740" y="86" font-size="13" font-weight="600" fill="#f7c27a">games/your-next</text>
+    <text x="740" y="106" font-size="12" fill="#c9a77a">same API, written with AI</text>
+
+    <rect x="510" y="130" width="410" height="40" rx="6" fill="#1b2029" stroke="#f0a33a"/>
+    <text x="526" y="155" font-size="13" fill="#e7eaee">Game API: GameModule · types · systems · methods · events</text>
+
+    <rect x="510" y="180" width="410" height="40" rx="6" fill="#1b2029" stroke="#9b8cf0"/>
+    <text x="526" y="205" font-size="13" fill="#e7eaee">Agent interface: api · MCP · CLI (schema and docs generated)</text>
+
+    <rect x="510" y="230" width="410" height="178" rx="8" fill="#161b22" stroke="#3a4352"/>
+    <text x="526" y="252" font-size="11" font-weight="700" letter-spacing="1.5" fill="#97a0ad">ENGINE SERVICES</text>
+    <g font-size="12" fill="#e7eaee">
+      <rect x="526" y="264" width="122" height="60" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="538" y="288">World +</text><text x="538" y="306">scheduler</text>
+      <rect x="656" y="264" width="122" height="60" rx="5" fill="#13232a" stroke="#4cc9e0"/>
+      <text x="668" y="288">Render:</text><text x="668" y="306">frame graph</text>
+      <rect x="786" y="264" width="118" height="60" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="798" y="288">Physics</text><text x="798" y="306">(Jolt)</text>
+      <rect x="526" y="332" width="122" height="60" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="538" y="356">Animation</text><text x="538" y="374">Audio · VFX</text>
+      <rect x="656" y="332" width="122" height="60" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="668" y="356">Assets:</text><text x="668" y="374">cook + stream</text>
+      <rect x="786" y="332" width="118" height="60" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="798" y="356">Reflection:</text><text x="798" y="374">one source</text>
+    </g>
+
+    <rect x="510" y="418" width="410" height="100" rx="8" fill="#161b22" stroke="#3a4352"/>
+    <text x="526" y="440" font-size="11" font-weight="700" letter-spacing="1.5" fill="#97a0ad">PLATFORM</text>
+    <g font-size="12" fill="#e7eaee">
+      <rect x="526" y="450" width="122" height="56" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="538" y="473">core: jobs, log,</text><text x="538" y="491">memory, time</text>
+      <rect x="656" y="450" width="122" height="56" rx="5" fill="#13232a" stroke="#4cc9e0"/>
+      <text x="668" y="473">gpu: queues, VMA,</text><text x="668" y="491">pipelines, faults</text>
+      <rect x="786" y="450" width="118" height="56" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="798" y="473">os: window,</text><text x="798" y="491">input, files</text>
+    </g>
+    <text x="510" y="548" font-size="12" fill="#4fbf7f">Dependencies point down only; the engine never includes a game.</text>
+    <text x="510" y="566" font-size="12" fill="#97a0ad">Allowed edges are data, checked when CMake configures.</text>
+  </g>
+</svg>

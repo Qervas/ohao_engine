@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 330" role="img" aria-label="Source files are cooked once into GPU-ready formats cached by content hash and named by GUIDs in an asset database; at runtime an asset manager streams them on jobs through the transfer queue under a memory budget; a file watcher recooks and swaps changed assets.">
+  <defs>
+    <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4cc9e0"/></marker>
+    <marker id="a7g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4fbf7f"/></marker>
+  </defs>
+  <rect width="960" height="330" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif" font-size="12.5" fill="#e7eaee">
+    <text x="40" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">OFFLINE (TOOLS/COOK)</text>
+    <text x="560" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">RUNTIME</text>
+
+    <rect x="40" y="60" width="150" height="150" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="54" y="84" font-weight="600">Source</text>
+    <text x="54" y="108" fill="#97a0ad">.glb .fbx</text><text x="54" y="128" fill="#97a0ad">.png .hdr</text><text x="54" y="148" fill="#97a0ad">.wav</text><text x="54" y="168" fill="#97a0ad">scene, level</text><text x="54" y="196" fill="#97a0ad" font-size="11">+ a .meta GUID each</text>
+    <line x1="190" y1="135" x2="216" y2="135" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a7)"/>
+
+    <rect x="224" y="60" width="140" height="150" rx="6" fill="#13232a" stroke="#4cc9e0"/>
+    <text x="238" y="84" font-weight="600">Cooker</text>
+    <text x="238" y="108" fill="#97a0ad">one glTF reader</text><text x="238" y="128" fill="#97a0ad">cached by</text><text x="238" y="148" fill="#97a0ad">content hash</text><text x="238" y="168" fill="#97a0ad">dependency</text><text x="238" y="188" fill="#97a0ad">tracking</text>
+    <line x1="364" y1="135" x2="390" y2="135" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a7)"/>
+
+    <rect x="398" y="60" width="140" height="150" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="412" y="84" font-weight="600">Cooked store</text>
+    <text x="412" y="108" fill="#97a0ad">mesh streams</text><text x="412" y="128" fill="#97a0ad">+ meshlets</text><text x="412" y="148" fill="#97a0ad">BC7 · BC5 · BC6H</text><text x="412" y="168" fill="#97a0ad">clips, audio</text><text x="412" y="188" fill="#97a0ad">asset DB</text>
+    <line x1="538" y1="135" x2="564" y2="135" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a7)"/>
+
+    <rect x="572" y="60" width="160" height="150" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="586" y="84" font-weight="600">Asset manager</text>
+    <text x="586" y="108" fill="#97a0ad">handles by GUID</text><text x="586" y="128" fill="#97a0ad">reference counts</text><text x="586" y="148" fill="#97a0ad">release path</text><text x="586" y="168" fill="#97a0ad">memory budget</text>
+    <line x1="732" y1="135" x2="758" y2="135" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a7)"/>
+
+    <rect x="766" y="60" width="154" height="150" rx="6" fill="#13232a" stroke="#4cc9e0"/>
+    <text x="780" y="84" font-weight="600">Streamer</text>
+    <text x="780" y="108" fill="#97a0ad">loads on jobs</text><text x="780" y="128" fill="#97a0ad">transfer queue</text><text x="780" y="148" fill="#97a0ad">by distance and</text><text x="780" y="168" fill="#97a0ad">priority → GPU</text>
+
+    <path d="M300,214 L300,262 L830,262 L830,214" fill="none" stroke="#4fbf7f" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a7g)"/>
+    <text x="320" y="254" font-size="12" fill="#4fbf7f">hot reload: a file watcher recooks the changed source and swaps it by GUID</text>
+    <text x="40" y="300" font-size="12.5" fill="#97a0ad">Today: raw files parsed on the main thread (a level of N meshes parses its glTF ~2N times), uncompressed RGBA8,</text>
+    <text x="40" y="318" font-size="12.5" fill="#97a0ad">a wait-idle per texture, nothing ever released, assets named by path strings.</text>
+  </g>
+</svg>

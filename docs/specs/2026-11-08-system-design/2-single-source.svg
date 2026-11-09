@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" role="img" aria-label="Each fact is defined once: shaders generate their C++ bindings through Slang reflection, one component registration generates save, load, schema, hash and docs, and one method row generates dispatch, CLI, MCP tools and docs.">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4cc9e0"/></marker>
+  </defs>
+  <rect width="960" height="360" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif">
+    <text x="40" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">DEFINED ONCE</text>
+    <text x="420" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">GENERATED OR CHECKED AT BUILD</text>
+
+    <rect x="40" y="62" width="300" height="70" rx="6" fill="#13232a" stroke="#4cc9e0"/>
+    <text x="56" y="88" font-size="13" font-weight="600" fill="#e7eaee">A Slang shader</text>
+    <text x="56" y="108" font-size="12" font-family="IBM Plex Mono, ui-monospace, monospace" fill="#97a0ad">[[vk::binding(..)]] in one file</text>
+    <text x="56" y="124" font-size="12" fill="#97a0ad">today: ~300 C++ literals copy them</text>
+    <line x1="340" y1="97" x2="412" y2="97" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a2)"/>
+    <text x="350" y="88" font-size="11" fill="#4cc9e0">reflection</text>
+    <rect x="420" y="62" width="500" height="70" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="436" y="88" font-size="13" fill="#e7eaee">bindings header: named set/binding slots, push-constant struct,</text>
+    <text x="436" y="108" font-size="13" fill="#e7eaee">flag constants, descriptor layouts</text>
+    <text x="436" y="124" font-size="12" fill="#97a0ad">C++ uses the generated names: no binding number is typed twice</text>
+
+    <rect x="40" y="148" width="300" height="70" rx="6" fill="#241d12" stroke="#f0a33a"/>
+    <text x="56" y="174" font-size="13" font-weight="600" fill="#e7eaee">A component struct</text>
+    <text x="56" y="194" font-size="12" fill="#97a0ad">plus its one registration</text>
+    <text x="56" y="210" font-size="12" fill="#97a0ad">today: 36 hand writers copy it</text>
+    <line x1="340" y1="183" x2="412" y2="183" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a2)"/>
+    <rect x="420" y="148" width="500" height="70" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="436" y="174" font-size="13" fill="#e7eaee">scene save and load · JSON Schema · world.hash · snapshot</text>
+    <text x="436" y="194" font-size="13" fill="#e7eaee">diff · component docs table · MCP input schemas</text>
+    <text x="436" y="210" font-size="12" fill="#97a0ad">the API's params already work this way: keep that pattern</text>
+
+    <rect x="40" y="234" width="300" height="70" rx="6" fill="#1d1a2b" stroke="#9b8cf0"/>
+    <text x="56" y="260" font-size="13" font-weight="600" fill="#e7eaee">A method row</text>
+    <text x="56" y="280" font-size="12" fill="#97a0ad">name · params · result · doc · mutates</text>
+    <text x="56" y="296" font-size="12" fill="#97a0ad">today: two tables, unchecked</text>
+    <line x1="340" y1="269" x2="412" y2="269" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a2)"/>
+    <rect x="420" y="234" width="500" height="70" rx="6" fill="#1b2029" stroke="#3a4352"/>
+    <text x="436" y="260" font-size="13" fill="#e7eaee">dispatch · CLI subcommands · MCP tools/list · method docs</text>
+    <text x="436" y="280" font-size="13" fill="#e7eaee">RenderSettings: one reflected struct, api and renderer alike</text>
+    <text x="436" y="296" font-size="12" fill="#97a0ad">defaults defined once instead of in three places</text>
+
+    <text x="40" y="336" font-size="13" fill="#4fbf7f">If two places must agree, one is generated from the other, or the build fails.</text>
+  </g>
+</svg>

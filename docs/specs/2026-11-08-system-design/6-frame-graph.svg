@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" role="img" aria-label="Every pass declares what it reads and writes; the graph compiler culls, orders, places barriers, aliases transient memory, assigns queues and inserts breadcrumbs; on a device loss the breadcrumbs name the last pass that finished.">
+  <defs>
+    <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4cc9e0"/></marker>
+  </defs>
+  <rect width="960" height="380" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif">
+    <text x="40" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">DECLARE</text>
+    <text x="350" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">COMPILE (EACH FRAME)</text>
+    <text x="660" y="42" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">EXECUTE</text>
+
+    <g font-family="IBM Plex Mono, ui-monospace, monospace" font-size="11.5" fill="#e7eaee">
+      <rect x="40" y="58" width="270" height="44" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="52" y="77">gbuffer</text><text x="52" y="94" fill="#97a0ad">writes gbuf[0..8], depth</text>
+      <rect x="40" y="110" width="270" height="44" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="52" y="129">rt.gi</text><text x="52" y="146" fill="#97a0ad">reads gbuf, tlas · writes gi</text>
+      <rect x="40" y="162" width="270" height="44" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="52" y="181">lighting</text><text x="52" y="198" fill="#97a0ad">reads gbuf, gi · writes hdr</text>
+      <rect x="40" y="214" width="270" height="44" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="52" y="233">pt.trace (path tracer too)</text><text x="52" y="250" fill="#97a0ad">reads tlas, env · writes radiance</text>
+      <rect x="40" y="266" width="270" height="44" rx="5" fill="#1b2029" stroke="#3a4352"/>
+      <text x="52" y="285">readback, present</text><text x="52" y="302" fill="#97a0ad">ordinary passes, no special code</text>
+    </g>
+    <line x1="312" y1="184" x2="342" y2="184" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a6)"/>
+
+    <rect x="350" y="58" width="280" height="252" rx="8" fill="#13232a" stroke="#4cc9e0"/>
+    <g font-size="12.5" fill="#e7eaee">
+      <text x="368" y="88">cull passes nobody reads</text>
+      <text x="368" y="118">order by dependencies</text>
+      <text x="368" y="148">place barriers (sync2, per mip and layer)</text>
+      <text x="368" y="178">alias transient memory (VMA)</text>
+      <text x="368" y="208">assign queues: graphics, async compute</text>
+      <text x="368" y="238">insert a breadcrumb after each pass</text>
+      <text x="368" y="268" fill="#97a0ad">time each pass (as today)</text>
+      <text x="368" y="294" fill="#97a0ad">dynamic rendering: no VkRenderPass objects</text>
+    </g>
+    <line x1="632" y1="184" x2="652" y2="184" stroke="#4cc9e0" stroke-width="1.5" marker-end="url(#a6)"/>
+
+    <g font-size="12" fill="#e7eaee">
+      <rect x="660" y="58" width="260" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="674" y="83">graphics queue: command buffers</text>
+      <rect x="660" y="106" width="260" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="674" y="131">async compute, joined by semaphores</text>
+      <rect x="660" y="154" width="260" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="674" y="179">every VkResult checked</text>
+      <rect x="660" y="202" width="260" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="674" y="227">fence waits time out (2 s)</text>
+      <rect x="660" y="250" width="260" height="60" rx="5" fill="#2a1717" stroke="#e5534b"/>
+      <text x="674" y="273">device lost: stop, report</text>
+      <text x="674" y="293" fill="#f0a9a4">"last finished pass: lighting"</text>
+    </g>
+    <text x="40" y="348" font-size="13" fill="#4fbf7f">Today: 118 hand-placed barriers, the path tracer outside the graph, 70% of the graph's code unreachable.</text>
+  </g>
+</svg>

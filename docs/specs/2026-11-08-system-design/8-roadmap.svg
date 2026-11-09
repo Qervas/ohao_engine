@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" role="img" aria-label="Five steps in order: fault containment, delete and unify, the engine and game boundary, the frame, assets; each ends with the engine running and every gate green.">
+  <defs>
+    <marker id="a8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#97a0ad"/></marker>
+  </defs>
+  <rect width="960" height="300" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif" fill="#e7eaee">
+    <g font-size="12">
+      <rect x="40" y="40" width="160" height="210" rx="8" fill="#2a1717" stroke="#e5534b"/>
+      <text x="56" y="66" font-size="11" font-weight="700" letter-spacing="1.5" fill="#f0a9a4">STEP 1 · SMALL</text>
+      <text x="56" y="90" font-size="15" font-weight="600">Fault</text><text x="56" y="110" font-size="15" font-weight="600">containment</text>
+      <text x="56" y="140" fill="#c9cdd3">checked results,</text><text x="56" y="158" fill="#c9cdd3">timeouts,</text><text x="56" y="176" fill="#c9cdd3">breadcrumbs</text>
+      <text x="56" y="210" fill="#97a0ad">a GPU fault names</text><text x="56" y="228" fill="#97a0ad">its pass</text>
+
+      <rect x="224" y="40" width="160" height="210" rx="8" fill="#1b2029" stroke="#4fbf7f"/>
+      <text x="240" y="66" font-size="11" font-weight="700" letter-spacing="1.5" fill="#8fd9ae">STEP 2 · MEDIUM</text>
+      <text x="240" y="90" font-size="15" font-weight="600">Delete and</text><text x="240" y="110" font-size="15" font-weight="600">unify</text>
+      <text x="240" y="140" fill="#c9cdd3">dead code out,</text><text x="240" y="158" fill="#c9cdd3">one source per fact,</text><text x="240" y="176" fill="#c9cdd3">CI on both OSes</text>
+      <text x="240" y="210" fill="#97a0ad">AGENTS.md under</text><text x="240" y="228" fill="#97a0ad">300 lines</text>
+
+      <rect x="408" y="40" width="160" height="210" rx="8" fill="#241d12" stroke="#f0a33a"/>
+      <text x="424" y="66" font-size="11" font-weight="700" letter-spacing="1.5" fill="#f7c27a">STEP 3 · LARGE</text>
+      <text x="424" y="90" font-size="15" font-weight="600">Engine / game</text><text x="424" y="110" font-size="15" font-weight="600">boundary</text>
+      <text x="424" y="140" fill="#c9cdd3">game module,</text><text x="424" y="158" fill="#c9cdd3">scheduler, complete</text><text x="424" y="176" fill="#c9cdd3">state, hot reload</text>
+      <text x="424" y="210" fill="#97a0ad">no game code in</text><text x="424" y="228" fill="#97a0ad">the engine</text>
+
+      <rect x="592" y="40" width="160" height="210" rx="8" fill="#13232a" stroke="#4cc9e0"/>
+      <text x="608" y="66" font-size="11" font-weight="700" letter-spacing="1.5" fill="#9fe3f0">STEP 4 · LARGE</text>
+      <text x="608" y="90" font-size="15" font-weight="600">The frame</text>
+      <text x="608" y="140" fill="#c9cdd3">real frame graph,</text><text x="608" y="158" fill="#c9cdd3">jobs, render thread,</text><text x="608" y="176" fill="#c9cdd3">transfer queue</text>
+      <text x="608" y="210" fill="#97a0ad">uses every core</text><text x="608" y="228" fill="#97a0ad">and queue</text>
+
+      <rect x="776" y="40" width="144" height="210" rx="8" fill="#1d1a2b" stroke="#9b8cf0"/>
+      <text x="792" y="66" font-size="11" font-weight="700" letter-spacing="1.5" fill="#c4b9f7">STEP 5 · LARGE</text>
+      <text x="792" y="90" font-size="15" font-weight="600">Assets</text>
+      <text x="792" y="140" fill="#c9cdd3">cooker, GUIDs,</text><text x="792" y="158" fill="#c9cdd3">compressed,</text><text x="792" y="176" fill="#c9cdd3">streamed</text>
+      <text x="792" y="210" fill="#97a0ad">big levels load</text><text x="792" y="228" fill="#97a0ad">without stalls</text>
+    </g>
+    <g stroke="#97a0ad" stroke-width="1.5">
+      <line x1="202" y1="145" x2="220" y2="145" marker-end="url(#a8)"/>
+      <line x1="386" y1="145" x2="404" y2="145" marker-end="url(#a8)"/>
+      <line x1="570" y1="145" x2="588" y2="145" marker-end="url(#a8)"/>
+      <line x1="754" y1="145" x2="772" y2="145" marker-end="url(#a8)"/>
+    </g>
+    <text x="40" y="280" font-size="12.5" fill="#97a0ad">Each step ends with the engine running and every gate green. Later: multiplayer, then a scripting language.</text>
+  </g>
+</svg>

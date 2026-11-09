@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="A game is a C++ module that registers its types, systems, methods and events with the engine host; hot reload snapshots the world, swaps the module and restores the world in seconds.">
+  <defs>
+    <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f0a33a"/></marker>
+    <marker id="a4g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4fbf7f"/></marker>
+  </defs>
+  <rect width="960" height="420" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif">
+    <rect x="40" y="40" width="470" height="220" rx="8" fill="#161b22" stroke="#3a4352"/>
+    <text x="56" y="66" font-size="13" font-weight="600" fill="#e7eaee">Engine host (ohao_game, ohao serve)</text>
+    <text x="56" y="84" font-size="12" fill="#97a0ad">owns the World, renderer, assets; knows no game</text>
+    <g font-size="12.5" fill="#e7eaee">
+      <rect x="56" y="100" width="210" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="70" y="125">type registry</text>
+      <rect x="284" y="100" width="210" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="298" y="125">system schedule</text>
+      <rect x="56" y="152" width="210" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="70" y="177">method table (MCP, CLI)</text>
+      <rect x="284" y="152" width="210" height="40" rx="5" fill="#1b2029" stroke="#3a4352"/><text x="298" y="177">event kinds → sounds, effects</text>
+    </g>
+    <text x="56" y="222" font-size="12" fill="#97a0ad">audio and vfx files name events as data:</text>
+    <text x="56" y="240" font-size="12" font-family="IBM Plex Mono, ui-monospace, monospace" fill="#97a0ad">"on": "slice.shot" → "rifle_fire"</text>
+
+    <rect x="610" y="40" width="310" height="220" rx="8" fill="#241d12" stroke="#f0a33a"/>
+    <text x="626" y="66" font-size="13" font-weight="600" fill="#f7c27a">games/slice  (.so / .dll)</text>
+    <g font-family="IBM Plex Mono, ui-monospace, monospace" font-size="12" fill="#e7eaee">
+      <text x="626" y="98">struct Slice : GameModule {</text>
+      <text x="626" y="120">  registerTypes(Types&amp;)</text>
+      <text x="626" y="140">  registerSystems(Schedule&amp;)</text>
+      <text x="626" y="160">  registerMethods(Methods&amp;)</text>
+      <text x="626" y="180">  registerEvents(Events&amp;)</text>
+      <text x="626" y="202">};</text>
+    </g>
+    <text x="626" y="232" font-size="12" fill="#c9a77a">combat · grenade · rounds · enemy AI</text>
+    <text x="626" y="250" font-size="12" fill="#c9a77a">HUD · arms · 9 components · combat.*</text>
+    <line x1="606" y1="150" x2="516" y2="150" stroke="#f0a33a" stroke-width="1.5" marker-end="url(#a4)"/>
+    <text x="528" y="140" font-size="11" fill="#f0a33a">registers</text>
+
+    <text x="40" y="300" font-size="13" font-weight="700" letter-spacing="2" fill="#97a0ad">HOT RELOAD · TARGET UNDER 5 S FOR A SMALL CHANGE</text>
+    <g font-size="12.5" fill="#e7eaee">
+      <rect x="40" y="316" width="118" height="44" rx="22" fill="#1b2029" stroke="#3a4352"/><text x="64" y="343">AI edits</text>
+      <rect x="182" y="316" width="128" height="44" rx="22" fill="#1b2029" stroke="#3a4352"/><text x="200" y="343">build module</text>
+      <rect x="334" y="316" width="140" height="44" rx="22" fill="#1b2029" stroke="#4fbf7f"/><text x="352" y="343">snapshot world</text>
+      <rect x="498" y="316" width="128" height="44" rx="22" fill="#1b2029" stroke="#3a4352"/><text x="516" y="343">swap module</text>
+      <rect x="650" y="316" width="128" height="44" rx="22" fill="#1b2029" stroke="#4fbf7f"/><text x="668" y="343">restore world</text>
+      <rect x="802" y="316" width="118" height="44" rx="22" fill="#1b2029" stroke="#3a4352"/><text x="824" y="343">keep playing</text>
+      <line x1="158" y1="338" x2="178" y2="338" stroke="#4fbf7f" marker-end="url(#a4g)"/>
+      <line x1="310" y1="338" x2="330" y2="338" stroke="#4fbf7f" marker-end="url(#a4g)"/>
+      <line x1="474" y1="338" x2="494" y2="338" stroke="#4fbf7f" marker-end="url(#a4g)"/>
+      <line x1="626" y1="338" x2="646" y2="338" stroke="#4fbf7f" marker-end="url(#a4g)"/>
+      <line x1="778" y1="338" x2="798" y2="338" stroke="#4fbf7f" marker-end="url(#a4g)"/>
+    </g>
+    <text x="40" y="392" font-size="12" fill="#97a0ad">Possible because all game state lives in reflected components and registered system state: nothing hides in the module.</text>
+  </g>
+</svg>

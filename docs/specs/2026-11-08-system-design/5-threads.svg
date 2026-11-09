@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" role="img" aria-label="The game thread simulates frame N+1 while the render thread records frame N from an immutable frame packet and the GPU executes frame N-1; job workers run systems and physics in parallel; a transfer queue streams uploads.">
+  <defs>
+    <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f0a33a"/></marker>
+  </defs>
+  <rect width="960" height="400" rx="14" fill="#12151b"/>
+  <g font-family="IBM Plex Sans, Segoe UI, system-ui, sans-serif" font-size="12">
+    <g fill="#97a0ad">
+      <text x="40" y="44" font-size="11" font-weight="700" letter-spacing="1.5">TIME →</text>
+      <text x="40" y="84">Game thread</text>
+      <text x="40" y="134">Job workers</text>
+      <text x="40" y="194">Render thread</text>
+      <text x="40" y="244">GPU graphics</text>
+      <text x="40" y="294">GPU async compute</text>
+      <text x="40" y="344">GPU transfer</text>
+    </g>
+    <g stroke="#2a313c">
+      <line x1="190" y1="30" x2="190" y2="370"/><line x1="430" y1="30" x2="430" y2="370"/><line x1="670" y1="30" x2="670" y2="370"/><line x1="910" y1="30" x2="910" y2="370"/>
+    </g>
+    <g fill="#e7eaee">
+      <rect x="196" y="64" width="228" height="32" rx="5" fill="#241d12" stroke="#f0a33a"/><text x="208" y="85">simulate + extract N+1</text>
+      <rect x="436" y="64" width="228" height="32" rx="5" fill="#241d12" stroke="#f0a33a"/><text x="448" y="85">simulate + extract N+2</text>
+      <rect x="676" y="64" width="228" height="32" rx="5" fill="#241d12" stroke="#f0a33a"/><text x="688" y="85">simulate + extract N+3</text>
+
+      <rect x="196" y="114" width="70" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="204" y="134">systems</text>
+      <rect x="272" y="114" width="80" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="280" y="134">physics</text>
+      <rect x="358" y="114" width="66" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="366" y="134">extract</text>
+      <rect x="436" y="114" width="70" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="444" y="134">systems</text>
+      <rect x="512" y="114" width="80" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="520" y="134">physics</text>
+      <rect x="598" y="114" width="66" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="606" y="134">extract</text>
+      <rect x="676" y="114" width="70" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="684" y="134">systems</text>
+      <rect x="752" y="114" width="80" height="30" rx="4" fill="#1b2029" stroke="#3a4352"/><text x="760" y="134">physics</text>
+
+      <rect x="196" y="174" width="228" height="32" rx="5" fill="#13232a" stroke="#4cc9e0"/><text x="208" y="195">record frame N</text>
+      <rect x="436" y="174" width="228" height="32" rx="5" fill="#13232a" stroke="#4cc9e0"/><text x="448" y="195">record frame N+1</text>
+      <rect x="676" y="174" width="228" height="32" rx="5" fill="#13232a" stroke="#4cc9e0"/><text x="688" y="195">record frame N+2</text>
+
+      <rect x="196" y="224" width="228" height="32" rx="5" fill="#13232a" stroke="#4cc9e0"/><text x="208" y="245">execute frame N-1</text>
+      <rect x="436" y="224" width="228" height="32" rx="5" fill="#13232a" stroke="#4cc9e0"/><text x="448" y="245">execute frame N</text>
+      <rect x="676" y="224" width="228" height="32" rx="5" fill="#13232a" stroke="#4cc9e0"/><text x="688" y="245">execute frame N+1</text>
+
+      <rect x="250" y="274" width="140" height="32" rx="5" fill="#1b2029" stroke="#4cc9e0" stroke-dasharray="4 3"/><text x="262" y="295">GI, denoise N-1</text>
+      <rect x="490" y="274" width="140" height="32" rx="5" fill="#1b2029" stroke="#4cc9e0" stroke-dasharray="4 3"/><text x="502" y="295">GI, denoise N</text>
+
+      <rect x="196" y="324" width="708" height="32" rx="5" fill="#1b2029" stroke="#3a4352" stroke-dasharray="4 3"/><text x="208" y="345">streamed meshes and textures, never blocking a frame</text>
+    </g>
+    <path d="M424,96 C 432,140 432,150 440,174" fill="none" stroke="#f0a33a" stroke-width="1.5" marker-end="url(#a5)"/>
+    <text x="250" y="166" font-size="11" fill="#f0a33a">frame packet N+1 (read-only)</text>
+  </g>
+</svg>
