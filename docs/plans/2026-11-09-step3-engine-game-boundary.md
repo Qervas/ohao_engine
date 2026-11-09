@@ -168,6 +168,14 @@ Revised 2026-11-09, from a survey of the tree at `518f93fc`.
   - EnTT's dispatcher: it has no history, no order across types and no snapshot.
 
 **The design.**
+- **The boundary** (Frank, 2026-11-09: "combat is only for games with combat; games without it won't use it"):
+  - Engine events (physics, animation, the audio commands, and `world.*` from 3d) are read by type, by any system.
+  - A game's events reach the engine only as a **cue**: `at`, `to`, `normal`, `source`, `target`, `tag` and `n`,
+    projected by a function the game registers with the channel (compiled, no reflection in the step).
+  - The engine reacts to a cue through a binding in its data, by channel name: `{"on": "slice.shot", "play":
+    "fire"}` in the audio bank, `{"on": "slice.hit", "spawn": "impact_{tag}"}` in the vfx set.
+  - An engine system never includes a game's event type, and names no game channel in its code.
+  - A world without a game installs no game system: `installEngine` installs only the engine.
 - **The World's event log** (`ecs/events.hpp`), beside the input.
   - A channel is a name and a payload type: `world.events().writer<Shot>("slice.shot", "combat")` and
     `.reader<Shot>("slice.shot", "vfx")`.
@@ -209,11 +217,13 @@ Revised 2026-11-09, from a survey of the tree at `518f93fc`.
     `world.hash`, both outside the step.
 
 **What moves onto it.**
-- **Combat**, ten channels:
+- **Combat**, the slice's ten channels, each with its cue:
   - The channels: `slice.shot`, `slice.hit`, `slice.damage`, `slice.death`, `slice.reload`, `slice.reloaded`,
     `slice.round_start`, `slice.restart`, `slice.win` and `slice.explode`.
   - Each has only its own fields, under names that say what they are.
-  - A shot carries where its round stopped, so vfx no longer pairs a shot with the hit that follows it.
+  - A shot carries where its round stopped (its cue's `to`), so vfx no longer pairs a shot with the hit that
+    follows it.
+  - Its drivers (arms, enemy) are the game's, so they read these channels by type.
 - **Physics:** `physics.contact_begin`, `physics.contact_end`, `physics.trigger_enter`, `physics.trigger_exit`,
   `physics.footstep`, `physics.land` and `physics.joint_break`. They keep today's sorted order.
 - **Animation:** `anim.clip_event`.
@@ -252,7 +262,26 @@ Revised 2026-11-09, from a survey of the tree at `518f93fc`.
 commands; after 3c, `audio.info` has no commands. Proposed: the same bar on `events.read {max: 16}` mid-fight, as
 `events_read_bytes`. A budget changes only by his ruling.
 
+**Combat leaves the engine's code paths** (the old 3g, here so the readers are written once):
+- **The audio schedule** plays game channels from bank bindings. The rules that are code today become data:
+  - fire or enemy_fire, by `"by": "player"`: the cue's source is the listener's player;
+  - impact by surface: `"play": "impact_{tag}"`, falling back to `impact_default`;
+  - empty and reload: `slice.reload` tags a reload from empty;
+  - death and explode.
+- **The round's mix** (`dead`, `won`): the game requests it; the schedule no longer reads `Round` or `Health`.
+- **Vfx** spawns from set bindings:
+  - the set's `shot`, `hit` and `explode` sections become `on` bindings, its version migrating the files;
+  - a tracer runs from a cue's `at` to its `to`;
+  - its cadence (`every`) counts on the cue's `n`, the shooter's shot count, in place of reading `WeaponState`.
+- **Engine readers stay typed.** Physics footsteps and animation clip events stay typed reads in the audio
+  schedule (engine reading engine).
+- **The install.** `installEngine` drops `installCombat`, and animation no longer registers the drivers.
+  `installSlice` installs combat, the view model and the two drivers (still in `ohao_ecs` until 3i moves it). Every
+  host that plays the slice calls it.
+
 **Proof.**
+- **No game, no combat.** A session that never calls `installSlice` loads Cornell and the play scene, steps, and
+  hashes. Its catalogue lists no `slice.*` channel.
 - **The baseline.**
   - Its logs read the same through `events.read`; the tool maps each old event to its new name and fields.
   - The expected differences:
@@ -269,12 +298,23 @@ commands; after 3c, `audio.info` has no commands. Proposed: the same bar on `eve
 - **Measured, not gated:** physics_bench's `eventsMs`, and the play fight's combat, vfx and audio step times, before
   and after.
 
-*Done when* every combat, physics, animation and audio-schedule event goes through the log, the four logs and their
-cursor loops are deleted, and the proofs hold.
+*Done when* every event goes through the log, the four logs and their cursor loops are deleted, no engine system
+names a game event or component, a world without the slice runs, and the proofs hold.
 
 Two commits, each through the hook:
-1. the log, the World's step, and combat, physics and animation with every reader, the API and the docs;
-2. the audio commands.
+1. **The engine's events.**
+   - The log, the World's step, and the channels of physics, animation and the audio commands, with their readers
+     and observers.
+   - `events.read` for them, replacing `physics.events` and the event and command halves of `animation.info` and
+     `audio.info`.
+   - Combat keeps its own log for this one commit.
+2. **The game's events.**
+   - Combat's channels and cues.
+   - The audio bank's and vfx set's bindings, and the round's mix as a request.
+   - `installSlice`.
+   - `combat.events` deleted.
+   - Done when no engine system names a game event or component (`audio_schedule`, `vfx`, `vfx_set`), and the
+     baseline's audio commands and vfx records are unchanged apart from the seeds.
 
 ## 3d. The round restart as a request
 
@@ -321,17 +361,9 @@ unchanged.
 
 ## 3g. Event names as data
 
-- **A cue projection per channel.** Each channel's payload type gives its cue: `at`, `to`, `normal`, `source`,
-  `target` and `tag`. A compiled function makes it, with no reflection in the step.
-- **Audio banks** bind by name: `{"on": "slice.shot.player", "play": "fire"}`, `"play": "impact_{tag}"`.
-- **Vfx sets** bind by name: `{"on": "slice.hit", "spawn": "impact_{tag}"}`, and a tracer on a cue's `at` and `to`.
-- **The game emits what differs** (a player's shot or an enemy's, a reload from empty) and the tracer's two ends.
-  The engine names no game event.
-- **The mix snapshot** (`dead`, `won`) becomes a request the game makes. Animation events bind the same way
-  (`{"on": "anim.clip_event", "tag": "mag_out"}`).
-
-*Done when* `audio_schedule`, `vfx` and `vfx_set` name no game event or component. The baseline's audio commands and
-vfx records are unchanged.
+Merged into 3c's second commit (2026-11-09). There it is written once with the event readers it changes, rather than
+those readers being written against combat's types first. Left for 3i: the mix request and the cue as engine
+services in `ohao/game`.
 
 ## 3h. The declared scheduler, serial
 
@@ -359,7 +391,7 @@ order runs the baseline unchanged; where it differs from today's list, the plan 
   - combat, the grenade, rounds and the enemy AI;
   - the drivers, now registered through the API;
   - the HUD, the view model, the 9 components and the 5 methods.
-- **Linked statically** in this part, through one registration call per host.
+- **Linked statically** in this part. Each host's `installSlice` call (3c) becomes the module's registration.
 - **The leaks, replaced:**
   - The player controller's `Health` check becomes a `PlayerController` control flag that the game sets.
   - The ViewModel render flag becomes an engine `FirstPerson` component.
