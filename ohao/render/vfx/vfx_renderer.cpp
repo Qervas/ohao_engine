@@ -1,4 +1,5 @@
 #include "render/vfx/vfx_renderer.hpp"
+#include "render/scene/vertex_input.hpp"
 #include "render/shader_bindings/vfx_expand.hpp"
 #include "render/shader_bindings/vfx_sort.hpp"
 #include "render/shader_bindings/vfx_particle.hpp"
@@ -422,8 +423,8 @@ bool VfxRenderer::createPipelines() {
     // Blended meshes: core/gbuffer.slang's vertex input, straight alpha by coverage; [0] one-sided
     // (back faces culled, as the G-buffer culls them), [1] double-sided.
     if (ok) {
-        const auto bindingDescs = Vertex::getBindingDescriptions();
-        const auto attributeDescs = Vertex::getAttributeDescriptions();
+        const auto bindingDescs = render::vertexBindings();
+        const auto attributeDescs = render::vertexAttributes();
         VkPipelineVertexInputStateCreateInfo vi{};
         vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vi.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());

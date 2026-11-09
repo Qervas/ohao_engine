@@ -1,4 +1,5 @@
 #pragma once
+// The renderer's handles a world component can hold (MeshRenderer) without the world linking the renderer.
 #include <cstdint>
 
 namespace ohao::render {

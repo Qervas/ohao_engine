@@ -1,7 +1,7 @@
 #pragma once
 #include "core/input.hpp"          // Key
 #include "reflect/asset_ref.hpp"   // a plain struct; no reflection machinery
-#include "render/scene/handles.hpp"
+#include "core/render_handles.hpp"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -55,6 +55,10 @@ struct MeshRenderer {
     bool visible{true};
 };
 
+// The RenderScene instance slot of a renderable entity. Owned by the render extract (world_render/render_extract.hpp):
+// it emplaces and removes it; nothing else should write it.
+struct RenderSlot { uint32_t slot; };
+
 enum class LightType : uint8_t { Point, Directional, Spot, AreaRect };
 
 // Position and direction come from WorldTransform: direction is the entity's -Z.
@@ -89,7 +93,7 @@ struct TransformDirty {};
 struct RenderDirty {};
 struct MovedLastFrame {};
 
-// ---- meshes from data (instantiate, ecs/instantiate.hpp) ------------------------------------
+// ---- meshes from data (instantiate, world_render/instantiate.hpp) ------------------------------------
 
 using AssetRef = reflect::AssetRef;   // {path (project-relative, '/'), guid (empty until the asset DB)}
 

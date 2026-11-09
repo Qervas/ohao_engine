@@ -7,9 +7,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#define STB_IMAGE_STATIC
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include "stb_image.h"   // implemented once, external/stb_image.cpp
 
 #include "core/log.hpp"
 

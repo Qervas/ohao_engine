@@ -8,75 +8,10 @@
 #include <unordered_map>
 #include <vector>
 #include "stb_image.h"
-#include <vulkan/vulkan_core.h>
 #include "asset/model.hpp"
 #include "core/log.hpp"
 
 namespace ohao {
-
-std::vector<VkVertexInputBindingDescription>
-Vertex::getBindingDescriptions(){
-    std::vector<VkVertexInputBindingDescription> bindingDescription(1);
-    bindingDescription[0].binding = 0;
-    bindingDescription[0].stride = sizeof(Vertex);
-    bindingDescription[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    return bindingDescription;
-}
-
-std::vector<VkVertexInputAttributeDescription>
-Vertex::getAttributeDescriptions(){
-    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(8);
-
-    // position
-    attributeDescriptions[0].binding = 0;
-    attributeDescriptions[0].location = 0;
-    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[0].offset = offsetof(Vertex, position);
-
-    // Color
-    attributeDescriptions[1].binding = 0;
-    attributeDescriptions[1].location = 1;
-    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-    // Normal
-    attributeDescriptions[2].binding = 0;
-    attributeDescriptions[2].location = 2;
-    attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[2].offset = offsetof(Vertex, normal);
-
-    // TexCoord (UV set 0)
-    attributeDescriptions[3].binding = 0;
-    attributeDescriptions[3].location = 3;
-    attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescriptions[3].offset = offsetof(Vertex, texCoord);
-
-    // TexCoord1 (UV set 1)
-    attributeDescriptions[4].binding = 0;
-    attributeDescriptions[4].location = 4;
-    attributeDescriptions[4].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescriptions[4].offset = offsetof(Vertex, texCoord1);
-
-    // Tangent (vec4: xyz = direction, w = handedness)
-    attributeDescriptions[5].binding = 0;
-    attributeDescriptions[5].location = 5;
-    attributeDescriptions[5].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attributeDescriptions[5].offset = offsetof(Vertex, tangent);
-
-    // Bone indices (ivec4)
-    attributeDescriptions[6].binding = 0;
-    attributeDescriptions[6].location = 6;
-    attributeDescriptions[6].format = VK_FORMAT_R32G32B32A32_SINT;
-    attributeDescriptions[6].offset = offsetof(Vertex, boneIndices);
-
-    // Bone weights (vec4)
-    attributeDescriptions[7].binding = 0;
-    attributeDescriptions[7].location = 7;
-    attributeDescriptions[7].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attributeDescriptions[7].offset = offsetof(Vertex, boneWeights);
-
-    return attributeDescriptions;
-}
 
 bool Model::loadFromOBJ(std::string_view filename) {
     try{

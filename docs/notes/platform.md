@@ -11,7 +11,7 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
   CLI expectations) are pinned to LF in `.gitattributes`; add a pattern there for any new
   byte-compared directory, or a fresh clone checks out CRLF and the comparison fails.
 - `/FORCE:MULTIPLE` (MSVC) and `--allow-multiple-definition` (GNU ld, set for every target in the root
-  `CMakeLists.txt`) hide duplicate symbols: stb, and a second VMA inside `NRI_VK`.
+  `CMakeLists.txt`) hide duplicate symbols: a second VMA inside `NRI_VK` (stb_image is implemented once, `external/stb_image.cpp`).
   Which copy wins depends on link order, so `gpu_allocator.cpp` uses NRI's VMA
   configuration; never change one without the other. A new target that crashes right
   after "resizing to WxH" has picked a mismatched VMA.

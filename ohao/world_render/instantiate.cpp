@@ -1,11 +1,12 @@
-#include "ecs/instantiate.hpp"
+#include "world_render/instantiate.hpp"
+
+#include "ecs/primitive_model.hpp"
 
 #include "core/log.hpp"
 
 #include "render/scene/model_upload.hpp"
 #include "render/scene/render_scene.hpp"
 #include "asset/model.hpp"
-#include "asset/primitive_mesh_generator.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -56,26 +57,6 @@ std::string debugName(const MeshSource& ms) {
                                              "CylinderPrim", "ConePrim", "QuadPrim", "BoxPrim"};
     if (const auto* m = std::get_if<ModelAsset>(&ms.source)) return m->mesh.empty() ? m->asset.path : m->asset.path + ":" + m->mesh;
     return kNames[ms.source.index()];
-}
-
-std::shared_ptr<const Model> generate(const MeshSource& ms) {
-    auto m = std::make_shared<Model>();
-    std::visit(Overloaded{
-                   [](const ModelAsset&) {},
-                   [&](const SpherePrim& p) { PrimitiveMeshGenerator::generateSphere(*m, p.radius, p.sectors, p.stacks); },
-                   [&](const CubePrim& p) { PrimitiveMeshGenerator::generateCube(*m, p.size); },
-                   [&](const PlatformPrim& p) {
-                       PrimitiveMeshGenerator::generatePlatform(*m, p.width, p.height, p.depth);
-                   },
-                   [&](const CylinderPrim& p) {
-                       PrimitiveMeshGenerator::generateCylinder(*m, p.radius, p.height, p.segments);
-                   },
-                   [&](const ConePrim& p) { PrimitiveMeshGenerator::generateCone(*m, p.radius, p.height, p.segments); },
-                   [&](const QuadPrim& p) { PrimitiveMeshGenerator::generateQuad(*m, p.a, p.b, p.c, p.d, p.normal, p.color); },
-                   [&](const BoxPrim& p) { PrimitiveMeshGenerator::generateBox(*m, p.lo, p.hi, p.color); },
-               },
-               ms.source);
-    return m;
 }
 
 render::MaterialDesc describe(const Material& o) {
@@ -213,7 +194,7 @@ private:
                 if (!loaded) return fail(e, loaded.error().code, loaded.error().message);
                 model = std::move(loaded.value());
             } else {
-                model = generate(ms);
+                model = primitiveModel(ms);
             }
             if (model->vertices.empty() || model->indices.size() < 3)
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' has no triangles");
@@ -328,11 +309,6 @@ void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backen
 void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
                         AssetResolver& assets) {
     installInstantiate(world, std::make_shared<RenderSceneBackend>(scene, textures), assets);
-}
-
-std::shared_ptr<const Model> primitiveModel(const MeshSource& source) {
-    if (std::holds_alternative<ModelAsset>(source.source)) return nullptr;
-    return generate(source);
 }
 
 std::vector<entt::entity> instantiateErrors(const World& world) {

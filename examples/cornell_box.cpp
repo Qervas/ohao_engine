@@ -9,8 +9,8 @@
 
 #include "render/renderer/vulkan_renderer.hpp"
 #include "ecs/asset_resolver.hpp"
-#include "ecs/instantiate.hpp"
-#include "ecs/render_extract.hpp"
+#include "world_render/instantiate.hpp"
+#include "world_render/render_extract.hpp"
 #include "ecs/scene_view.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"

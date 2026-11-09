@@ -1,5 +1,5 @@
 #pragma once
-#include "render/scene/handles.hpp"
+#include "core/render_handles.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "asset/model.hpp"   // Vertex

@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** planned, 2026-11-09.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a built; 3b-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -77,6 +77,22 @@ recording is redone after that part.
 
 *Done when* `ohao_ecs` links neither `ohao_renderer` nor `ohao_gpu_vulkan`, the layer check holds it, and the hooks
 and the baseline are unchanged.
+
+*As built (2026-11-09):*
+- **The library.** `ohao/world_render/` holds instantiate, `render_extract`, `vfx_draw`, framing, `combat_hud`
+  and `model_spawn`: the renderer half of `spawn`. `spawnLight` stays in the world.
+- **Kept in the world:** `primitiveModel`, which physics fits colliders to (`ecs/primitive_model.*`), and
+  `RenderSlot`, now in `components.hpp`.
+- **The handles** are `core/render_handles.hpp`.
+- **The layers.** The renderer moved to level 4, beside the world; the exception is gone. A planted
+  `render/scene/render_scene.hpp` include in `ecs/spin_system.cpp` fails configure, naming the file.
+- **Vulkan through `ohao_asset`** was the `Vertex` input descriptions, which now live in
+  `render/scene/vertex_input.*`. `ohao_asset` links no Vulkan.
+- **What the cut exposed.** The asset loaders called `stb_image` without defining it: `model_fbx.cpp` defined a
+  private copy, and the shared one came from `ohao_gpu_vulkan` through the old link. There is now one
+  definition, `external/stb_image.cpp` (`ohao_stb_image`), that both libraries link.
+- **Proof.** `level_bench` (the world, the API, levels, physics) now links no renderer, no GPU library and no
+  Vulkan. The gates pass, the goldens are exact, and the baseline is the same.
 
 ## 3b. Complete state
 

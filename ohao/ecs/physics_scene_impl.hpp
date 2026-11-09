@@ -6,7 +6,7 @@
 #include "ecs/physics_scene.hpp"
 
 #include "core/log.hpp"
-#include "ecs/instantiate.hpp"
+#include "ecs/primitive_model.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
 #include "asset/model.hpp"

@@ -1,9 +1,9 @@
 #include "runtime/frame_capture.hpp"
 
 #include "core/log.hpp"
-#include "ecs/combat_hud.hpp"
+#include "world_render/combat_hud.hpp"
 #include "ecs/components.hpp"
-#include "ecs/instantiate.hpp"
+#include "world_render/instantiate.hpp"
 #include "ecs/scene_view.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"

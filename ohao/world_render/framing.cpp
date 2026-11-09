@@ -1,4 +1,4 @@
-#include "ecs/framing.hpp"
+#include "world_render/framing.hpp"
 #include "ecs/spawn.hpp"
 #include "render/camera/scene_framer.hpp"
 

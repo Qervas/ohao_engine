@@ -1,6 +1,5 @@
 #include "ecs/scene_types.hpp"
 #include "ecs/components.hpp"
-#include "ecs/render_extract.hpp"
 
 namespace ohao::ecs {
 

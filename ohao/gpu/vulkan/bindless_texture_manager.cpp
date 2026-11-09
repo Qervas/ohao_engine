@@ -8,9 +8,7 @@
 #include <string_view>
 #include <span>
 
-// Include stb_image for texture loading
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include <stb_image.h>   // implemented once, external/stb_image.cpp
 
 namespace ohao {
 

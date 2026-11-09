@@ -1,9 +1,9 @@
 #include "ohao/render_host.hpp"
 #include "engine/install.hpp"
 
-#include "ecs/instantiate.hpp"
-#include "ecs/render_extract.hpp"
-#include "ecs/vfx_draw.hpp"
+#include "world_render/instantiate.hpp"
+#include "world_render/render_extract.hpp"
+#include "world_render/vfx_draw.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"

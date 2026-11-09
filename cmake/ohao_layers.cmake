@@ -8,17 +8,16 @@ set(OHAO_LAYERS
     ohao_core=0
     ohao_gpu_vulkan=1 ohao_reflect=1 ohao_level=1 ohao_anim=1 ohao_audio_bank=1 ohao_vfx=1 ohao_physics=1
     ohao_asset=2 ohao_audio=2
-    ohao_renderer=3
+    ohao_renderer=4
     ohao_ecs=4
-    ohao_level_world=5
+    ohao_level_world=5 ohao_world_render=5
     ohao_engine=6
     ohao_api=7
     ohao_rpc=8 ohao_runtime=8)
 
-# "from->to": allowed although it points sideways or up. Each has its end.
-set(OHAO_LAYER_EXCEPTIONS
-    # The world links the renderer (render handles live in components): step 3 moves them into a render-side map.
-    "ohao_ecs->ohao_renderer")
+# "from->to": allowed although it points sideways or up. Each has its end. None today: the world and the renderer
+# share a level so neither reaches the other (step 3a); ohao_world_render joins them.
+set(OHAO_LAYER_EXCEPTIONS)
 
 function(_ohao_level target out)
     set(level "")

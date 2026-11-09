@@ -1,4 +1,5 @@
 #include "csm_pass.hpp"
+#include "render/scene/vertex_input.hpp"
 #include "render/shader_bindings/shadow_shadow_csm.hpp"
 #include "gpu_culling.hpp"
 #include "gpu/shared_layout.hpp"
@@ -408,8 +409,8 @@ bool CSMPass::createPipeline() {
     shaderStages[0].pName = "main";
 
     // Vertex input - full vertex stride: the scene's vertex arena is shared
-    auto csmBindingDescs = Vertex::getBindingDescriptions();
-    auto csmAttributeDescs = Vertex::getAttributeDescriptions();
+    auto csmBindingDescs = render::vertexBindings();
+    auto csmAttributeDescs = render::vertexAttributes();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

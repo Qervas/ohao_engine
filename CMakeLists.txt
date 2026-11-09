@@ -13,7 +13,7 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 if(NOT MSVC)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    # The GNU counterpart of the /FORCE:MULTIPLE the MSVC targets link with (AGENTS.md: stb, and a second VMA inside
+    # The GNU counterpart of the /FORCE:MULTIPLE the MSVC targets link with (docs/notes/platform.md: a second VMA inside
     # NRI_VK): the first definition by link order wins in both. gpu_allocator.cpp keeps NRI's VMA configuration so
     # either copy serves.
     add_link_options(LINKER:--allow-multiple-definition)
@@ -95,6 +95,9 @@ FetchContent_Declare(
   GIT_SUBMODULES ""
 )
 FetchContent_MakeAvailable(stb)
+# The one stb_image implementation (external/stb_image.cpp): the asset loaders and the texture manager both decode images.
+add_library(ohao_stb_image STATIC ${CMAKE_SOURCE_DIR}/external/stb_image.cpp)
+target_include_directories(ohao_stb_image PUBLIC ${stb_SOURCE_DIR})
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/models)

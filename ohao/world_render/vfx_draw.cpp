@@ -1,4 +1,4 @@
-#include "ecs/vfx_draw.hpp"
+#include "world_render/vfx_draw.hpp"
 
 #include "ecs/asset_resolver.hpp"
 #include "ecs/combat.hpp"

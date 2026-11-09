@@ -7,10 +7,6 @@ namespace ohao::render { class RenderScene; }
 
 namespace ohao::ecs {
 
-// The RenderScene instance slot of a renderable entity. Owned by the extract system:
-// it emplaces and removes it; nothing else should write it.
-struct RenderSlot { uint32_t slot; };
-
 // Adds the "render_extract" system right after "transform" (after "interpolate" when the physics
 // scene is installed first). An entity with a RenderPose is drawn there, not at its
 // WorldTransform. Each update it

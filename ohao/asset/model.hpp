@@ -10,7 +10,6 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <vulkan/vulkan_core.h>
 
 namespace ohao{
 
@@ -24,11 +23,7 @@ struct Vertex{
     glm::vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};       // xyz = tangent direction, w = handedness (+1/-1)
     glm::ivec4 boneIndices{0, 0, 0, 0};  // Up to 4 bone influences per vertex
     glm::vec4 boneWeights{1.0f, 0.0f, 0.0f, 0.0f};   // Corresponding weights (sum to 1.0)
-
-    [[nodiscard]] static std::vector<VkVertexInputBindingDescription> getBindingDescriptions();
-    [[nodiscard]] static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions();
-
-};
+};   // a raster pipeline reads it through render/scene/vertex_input.hpp
 static_assert(GpuPod<Vertex>, "Vertex must be GPU-uploadable POD");
 static_assert(offsetof(Vertex, position) == 0, "Vertex.position must be at offset 0");
 static_assert(offsetof(Vertex, color) == sizeof(glm::vec3), "Vertex.color offset");

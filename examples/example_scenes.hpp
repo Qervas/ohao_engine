@@ -7,7 +7,7 @@
 // Creation order is draw order and light order, so the builders keep the order the
 // examples always used (camera and environment first: they draw and light nothing).
 #include "ecs/components.hpp"
-#include "ecs/framing.hpp"
+#include "world_render/framing.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/spawn.hpp"

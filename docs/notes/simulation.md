@@ -198,7 +198,7 @@ step 2h, 2026-11-09), unchanged.
   - Presentation (step 4). The muzzle flash is a `Light` with a saved `Muzzle {intensity,
     time}` below the weapon's entity: the combat step sets it to `intensity` for `time` after a
     round (`WeaponState.flash` counts the steps) and back to 0; a light at intensity 0 has no
-    emitter mesh (`render::lightEmitter`). A hit's mark is the vfx set's decal ("VFX"). The HUD (`ecs/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
+    emitter mesh (`render::lightEmitter`). A hit's mark is the vfx set's decal ("VFX"). The HUD (`world_render/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
     `render/hud/`) is laid out from combat state and the log, read from its oldest event. A window always draws the HUD; `render.capture` and `ohao run --render` only with
     `hud: true`/`--hud`, and only on deferred frames; no crosshair or hit marker while dead or
     once the round is won. Its sounds (`assets/audio/weapons/`, ours:
@@ -396,7 +396,7 @@ step 2h, 2026-11-09), unchanged.
   front of the schedule's) and a restart puts back the round start's. Particles are a closed form
   of (record, index, age) (`vfx/particle_math.hpp`), never integrated. Agents read them through
   `vfx.info {since, max}`.
-  - **The frame** (step 2, `render/vfx/vfx_renderer.*`): the `vfx_draw` sync system (`ecs/vfx_draw.*`,
+  - **The frame** (step 2, `render/vfx/vfx_renderer.*`): the `vfx_draw` sync system (`world_render/vfx_draw.*`,
     after `render_extract`; the CLI's render host and `LiveHost` install it) hands the RenderScene the
     live effect records with their age, `(steps - spawnStep - 1 + alpha) * dt` (`RenderScene::setVfx`,
     `render/scene/vfx_frame.hpp`). `vfx.expand` (after the sky) evaluates every particle slot in

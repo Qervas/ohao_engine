@@ -38,7 +38,7 @@
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/vfx_draw.hpp"
+#include "world_render/vfx_draw.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"

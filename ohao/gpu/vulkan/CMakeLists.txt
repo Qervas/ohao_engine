@@ -16,6 +16,7 @@ target_compile_features(ohao_gpu_vulkan PUBLIC cxx_std_20)
 
 target_link_libraries(ohao_gpu_vulkan PUBLIC
     ohao_core
+    ohao_stb_image
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}

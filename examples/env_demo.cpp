@@ -7,8 +7,9 @@
 #include "stb_image_write.h"
 
 #include "render/renderer/vulkan_renderer.hpp"
-#include "ecs/render_extract.hpp"
+#include "world_render/render_extract.hpp"
 #include "ecs/spawn.hpp"
+#include "world_render/model_spawn.hpp"
 #include "asset/model.hpp"
 #include "asset/model_loader.hpp"
 #include "render/camera/camera.hpp"

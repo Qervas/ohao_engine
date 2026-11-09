@@ -1,4 +1,5 @@
 #include "gbuffer_pass.hpp"
+#include "render/scene/vertex_input.hpp"
 #include "render/shader_bindings/core_gbuffer.hpp"
 #include "render/shader_bindings/cull_meshlets.hpp"
 #include "gpu_culling.hpp"
@@ -652,9 +653,9 @@ bool GBufferPass::createPipeline() {
     shaderStages[1].module = fragShader;
     shaderStages[1].pName = "opaque";
 
-    // Vertex input - matching model.hpp Vertex struct (uses Vertex::getAttributeDescriptions())
-    auto bindingDescs = Vertex::getBindingDescriptions();
-    auto attributeDescs = Vertex::getAttributeDescriptions();
+    // Vertex input - matching model.hpp Vertex struct (uses render::vertexAttributes())
+    auto bindingDescs = render::vertexBindings();
+    auto attributeDescs = render::vertexAttributes();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

@@ -1,4 +1,4 @@
-#include "ecs/combat_hud.hpp"
+#include "world_render/combat_hud.hpp"
 
 #include "ecs/components.hpp"
 #include "ecs/scene_view.hpp"
