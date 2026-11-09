@@ -612,13 +612,14 @@ build/Release/ohao schema vfx-set -o build/vfx_set.schema.json
 
 Followed for `cli_helmet_game_deferred` (sub-project 4, step 11).
 
-1. **The scene** is a checked-in `.scene.json` (`assets/scenes/`); a golden renders it
-   through `ohao run`, so everything about the render is on the command line: `--mode`,
-   `--frames` (deferred: from a reset, the last kept; with TAA give enough frames to
-   converge), `--post`, `--ev100`, `--tonemap`, `--quality` (deferred: `realtime` or `reference`),
-   `--spp`/`--denoise` for the path tracer.
-2. **The entry** in `tests/golden/manifest.json`: `name`, `command` (`{out}` is the
-   image the harness compares), `golden` (`tests/golden/<name>.png`), the tolerance and a
+1. **The scene** is a checked-in `.scene.json` (`assets/scenes/`); the harness loads every
+   scene into one `ohao serve` and renders it with `render.capture`, so everything about the
+   render is in its parameters: `mode`, `frames` (deferred: from a reset, the last kept; with
+   TAA give enough frames to converge), `post`, `ev100`, `tonemap`, `quality` (deferred:
+   `realtime` or `reference`), `spp`/`denoise` for the path tracer, and `width`/`height`
+   640x360, the size it is compared at.
+2. **The entry** in `tests/golden/manifest.json`: `name`, `scene`, `capture` (those
+   parameters), `golden` (`tests/golden/<name>.png`), the tolerance and a
    `_note` saying what the image is and why its tolerance is what it is. **Deferred
    scenes are exact** (`max_abs_diff` 0, `max_diff_frac` 0): deferred rendering is
    deterministic. Path-traced ones get the noise floor `--selftest --json` measures, never

@@ -2,14 +2,21 @@
   "_comment": [
     "The render goldens (Frank, 2026-11-08: a handful, requirement 3, no visual accident). Run from the repo root:",
     "  python tests/golden/render_golden.py tests/golden/manifest.json",
+    "Each scene is loaded into one `ohao serve` and rendered with render.capture's parameters (`capture`), at the",
+    "size it is compared at (640x360: renders there are byte-identical run to run, the path tracer's too).",
     "A golden is a hash of an unchanged renderer, not an image-quality gate: any change to the sample sequence moves every",
-    "pixel by the noise. Deferred scenes are exact; the path tracer holds to the BVH floor. Update (--update) only after",
-    "looking at what drifted, and never widen a tolerance to make one pass."
+    "pixel by the noise. Update (--update) only after looking at what drifted, and never widen a tolerance to make one pass."
   ],
   "scenes": [
     {
       "name": "cli_cornell_box_deferred",
-      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred --frames 10",
+      "scene": "assets/scenes/cornell_box.scene.json",
+      "capture": {
+        "mode": "deferred",
+        "frames": 10,
+        "width": 640,
+        "height": 360
+      },
       "golden": "tests/golden/cornell_box_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -17,7 +24,14 @@
     },
     {
       "name": "cli_cornell_box",
-      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode rt_offline --spp 16 --denoise none",
+      "scene": "assets/scenes/cornell_box.scene.json",
+      "capture": {
+        "mode": "rt_offline",
+        "spp": 16,
+        "denoise": "none",
+        "width": 640,
+        "height": 360
+      },
       "golden": "tests/golden/cornell_box.png",
       "max_abs_diff": 1,
       "max_diff_frac": 0.0005,
@@ -25,7 +39,18 @@
     },
     {
       "name": "cli_damaged_helmet_deferred",
-      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
+      "scene": "assets/scenes/damaged_helmet.scene.json",
+      "capture": {
+        "mode": "deferred",
+        "frames": 30,
+        "post": [
+          "taa",
+          "bloom"
+        ],
+        "ev100": 0.0,
+        "width": 640,
+        "height": 360
+      },
       "golden": "tests/golden/damaged_helmet_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -33,7 +58,18 @@
     },
     {
       "name": "cli_blockout_play_deferred",
-      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
+      "scene": "assets/scenes/blockout_play.scene.json",
+      "capture": {
+        "mode": "deferred",
+        "frames": 30,
+        "post": [
+          "taa",
+          "bloom"
+        ],
+        "ev100": 0.0,
+        "width": 640,
+        "height": 360
+      },
       "golden": "tests/golden/blockout_play_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
@@ -41,7 +77,18 @@
     },
     {
       "name": "cli_glass_deferred",
-      "command": "./build/ohao run assets/scenes/glass.scene.json --render {out} --mode deferred --frames 30 --post taa,bloom --ev100 0",
+      "scene": "assets/scenes/glass.scene.json",
+      "capture": {
+        "mode": "deferred",
+        "frames": 30,
+        "post": [
+          "taa",
+          "bloom"
+        ],
+        "ev100": 0.0,
+        "width": 640,
+        "height": 360
+      },
       "golden": "tests/golden/glass_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,

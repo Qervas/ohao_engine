@@ -10,7 +10,7 @@ against closed forms, a handful of goldens, gameplay replays exactly, it builds.
 
 ```
 python tools/check.py --changed      # while iterating: only what the change reaches (seconds)
-python tools/check.py                # to close a step: build, ohao doctor, every gate (about 15 s of tests)
+python tools/check.py                # to close a step: build, ohao doctor, every gate (about 10 s in all)
 ```
 
 Exit 0 = pass, 1 = a test failed or the kernel logged a GPU fault during the run (`gpuFaults` in
