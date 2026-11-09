@@ -258,9 +258,9 @@ Revised 2026-11-09, from a survey of the tree at `518f93fc`.
 - **The catalogue** (`schema.get`) lists every channel: its name, the system that writes it, the systems that read
   it, and each field's doc and unit.
 
-**For Frank: one budget.** `serve_bench`'s `audio_info_bytes` (at most 2 KB) measures `audio.info` with 16
-commands; after 3c, `audio.info` has no commands. Proposed: the same bar on `events.read {max: 16}` mid-fight, as
-`events_read_bytes`. A budget changes only by his ruling.
+**The budget.** `serve_bench`'s `audio_info_bytes` (at most 2 KB) measured `audio.info` with 16 commands; after 3c
+it measures `audio.info` alone. `events.read {max: 16}` mid-fight is held to the same bar, as `events_read_bytes`
+(Frank's ruling, 2026-11-09).
 
 **Combat leaves the engine's code paths** (the old 3g, here so the readers are written once):
 - **The audio schedule** plays game channels from bank bindings. The rules that are code today become data:
@@ -344,7 +344,7 @@ Two commits, each through the hook:
   0.1197 (p95 0.1256 and 0.1214), the blockout step 0.0084 and 0.0085, combat 0.0021 and 0.0021, the audio
   schedule 0.0005 and 0.0005, the audio player's frame 0.0007 and 0.0007.
 - **Sizes**, the play scene mid-fight: `events.read` of its last 16 events is 1,832 bytes; `audio.info` is 465.
-  `serve_bench` (Windows only) measures both; `events_read_bytes` is reported, not gated, until Frank rules.
+  `serve_bench` (Windows only) measures both; `events_read_bytes` is gated at 2 KB (Frank's ruling, 2026-11-09).
 
 *As built, commit 2 (2026-11-09):*
 - **Cues.** `ecs::Cue` (`at`, `to`, `dir`, `normal`, `source`, `target`, `tag`, `n`) is what a channel's

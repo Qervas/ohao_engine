@@ -17,10 +17,10 @@
 //   log_ring_80              OHAO_LOG into the ring, an 80-character message      <= 300 ns
 //   tools_list_bytes         the tools/list result                                <= 28 KB
 //   audio_info_bytes         audio.info, the play scene mid-fight                 <= 2 KB
+//   events_read_bytes        events.read, max 16, the same fight                  <= 2 KB
 //   vfx_info_bytes           vfx.info, max 16, the play scene mid-fight           <= 2 KB
 // Recorded, not gated: process start to the initialize reply, scene.load of bench10k over
-// stdio, the initialize and instructions sizes, and events_read_bytes (events.read, max 16, the same fight;
-// step 3c, its bar is Frank's ruling).
+// stdio, the initialize and instructions sizes.
 //
 // Method (spec "Measurement rules"): 5 warm-up and 50 timed rounds; in each round every
 // operation runs one block (several calls; the sample is the per-call mean), in a fixed

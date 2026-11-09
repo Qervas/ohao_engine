@@ -19,6 +19,51 @@ tried since 2026-11-05.
 - **Designs and plans:** `docs/specs/`, `docs/plans/`; **what changed:** `docs/changes/`;
   **where it is going:** [docs/ROADMAP.md](docs/ROADMAP.md)
 - **Monograph** (design units with code citations): `site/`, frozen during the frontier renderer work.
+- **Deciding:** the standard below. In autopilot an agent decides by it, without asking.
+
+## Deciding
+
+Frank, 2026-11-09: "when i need you to build in autopilot mode, then you have to eval the plan and make decision
+by yourself". An agent decides every question inside the lines below by this standard. It records the decision
+and its reason where the work is planned or recorded, and reports it; it does not wait.
+
+1. **First principles.**
+   - Start from what must be true (the requirement, its owner and its reason; the physics or arithmetic of the
+     problem), not from the code as it stands or from convention.
+   - A requirement nobody owns is questioned first.
+2. **Musk's algorithm, in order:** question the requirement, delete, simplify, speed up, automate. Never speed up
+   or automate what should not exist.
+3. **The global optimum, not the greedy step.**
+   - Judge a choice by the end state of the whole plan.
+   - A change a later part would rewrite is the wrong change: reorder or merge the parts so that each piece is
+     written once, in its final shape.
+   - Example: 3c took in 3g rather than have vfx and audio read combat's types first.
+4. **The state of the art, refuted.**
+   - Find the best known way (shipped engines, papers).
+   - Say what is taken from it and what is not, and why.
+   - Then try to refute the choice before making it.
+5. **Measured, not assumed.**
+   - Cost, behaviour and cause are measured on this machine, before and after.
+   - Noise is the spread of repeated runs, found before a difference is called.
+   - A cause is shown by bisecting or by an A/B, never guessed.
+6. **Proven.**
+   - A refactor holds a recorded behaviour baseline. A deliberate change is named, with its reason.
+   - A new guarantee is proven by planting the bug it prevents and watching the check fail.
+   - Every commit goes through the gates.
+7. **Seconds.** Whatever slows the edit loop is a bug to fix, not a cost to bear.
+8. **Doors.**
+   - A choice that is cheap to undo (code, docs, local commits) is made now.
+   - One that is costly to undo gets the refutation in full first, and is made only if it passes.
+
+**The lines Frank keeps** (asked, never decided alone):
+- **The machine:** anything that risks it. GPU work without a bound, the GSP firmware, GPU-AV, thermal limits.
+  Temperatures are reported.
+- **Git:** pushing, merging, rebasing or resetting.
+- **Outside the repo:** downloads, `sudo`, new external dependencies, and writing outside the repo.
+- **Licensed assets:** committing them (`assets/local/`, `external/DLSS`).
+- **Budgets:** loosening one. Adding or tightening a budget, with its measurement, is decided alone.
+- **When the standard does not settle a choice and it cannot be undone cheaply:** stop and ask ("don't do
+  anything you're not sure of").
 
 ## Build
 
