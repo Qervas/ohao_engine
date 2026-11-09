@@ -81,12 +81,13 @@ Frank's, 2026-11-08. They decide what "good design" means here; nothing below is
 
 **4. The engine and the game are tangled, on one thread.**
 - The game is compiled into `ohao_ecs`: combat, the test grenade, rounds, enemy AI, the arms and enemy animation
-  drivers, the HUD, 9 game components in the engine registry, 8 game methods (`combat.*`, `player.*`). The audio
+  drivers, the HUD, 9 game components in the engine registry, 5 game methods (`combat.*`, `player.*`; this said 8, step 3's plan counted). The audio
   schedule and the vfx format have combat events built in.
 - Systems run in insertion order; installers probe which names exist; a missing anchor appends silently.
 - The simulation writes the live `RenderScene` the renderer reads; no job system (Jolt runs with 0 workers); one
   `InputMap` and one player per World.
-- Combat's runtime state (grenades in flight, the round timer) is in no snapshot; a round restart is a whole-world
+- Combat's runtime state (grenades in flight, the round timer) is in no snapshot, nor the World's input or the
+  systems' step counters, and snapshot columns hold raw entity handles (step 3's plan); a round restart is a whole-world
   restore inside the combat system; animation assumes 1/60 s whatever `dt` is.
 - `ohao_ecs` links the renderer publicly: the headless replay test pulls in Vulkan.
 
