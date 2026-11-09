@@ -443,13 +443,13 @@ void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vec
     playerMotion.clear();
 }
 
-void PhysicsScene::Impl::step(const InputMap& input, float dt) {
+void PhysicsScene::Impl::step(const InputMap& input, float dt, uint64_t worldStep) {
     using Clock = std::chrono::steady_clock;
     const auto ms = [](Clock::time_point a, Clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
     const auto t0 = Clock::now();
-    ++steps;
+    steps = worldStep;   // the World's (step 3e): a pair's `since`, physics.info's steps
     lastSubsteps = 0;
     timing = {};
     std::vector<PhysicsEvent> fresh;
@@ -473,7 +473,7 @@ void PhysicsScene::Impl::step(const InputMap& input, float dt) {
     auto t1 = Clock::now(), t2 = t1, t3 = t1;
     timing.playerMs = ms(tp, t1);
     if (backend && dt > 0.0f) {
-        constexpr float kMaxDt = 1.0f / 60.0f;
+        constexpr float kMaxDt = 1.0f / 60.0f;   // Jolt's largest substep: a solver limit, not the clock
         int n = static_cast<int>(std::ceil(dt / kMaxDt - 1e-4f));
         if (n > PhysicsScene::kMaxSubsteps) {
             if (!warnedLongStep)

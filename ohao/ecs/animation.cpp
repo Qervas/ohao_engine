@@ -112,7 +112,6 @@ void AnimationSystem::setEvents(EventLog& log) { m_clipEvents = log.writer<ClipE
 void AnimationSystem::step(World& world) {
     const auto t0 = std::chrono::steady_clock::now();
     auto& reg = world.registry();
-    ++m_steps;
     m_order.clear();
     for (const entt::entity e : reg.view<Animator>()) m_order.emplace_back(world.idOf(e), e);
     std::sort(m_order.begin(), m_order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -138,7 +137,7 @@ void AnimationSystem::step(World& world) {
             const int layer = static_cast<int>(li);
             anim::LayerState s = toState(*g, layer, a.layers[li]);
             fired.clear();
-            anim::stepLayer(*g, layer, s, params, fired);
+            anim::stepLayer(*g, layer, s, params, world.stepDt(), fired);
             fromState(*g, layer, s, a.layers[li]);
             if (m_clipEvents)
                 for (const anim::FiredEvent& f : fired)
@@ -169,7 +168,7 @@ void AnimationSystem::poseEntity(World& world, entt::entity e, bool placed) {
     anim::Params params;
     toParams(*g, reg.try_get<AnimParams>(e), params);
     const float alpha = std::clamp(world.renderAlpha(), 0.0f, 1.0f);
-    anim::evaluatePose(*g, layers, params, alpha, m_local, m_scratch);
+    anim::evaluatePose(*g, layers, params, alpha, world.stepDt(), m_local, m_scratch);
 
     AnimPose& pose = reg.get_or_emplace<AnimPose>(e);
     if (pose.graph != g) {
@@ -322,13 +321,6 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     // The pose: after the drawn poses of what the step moved (interpolate, the gun), before the
     // render extract reads them (ecs::kSyncOrder).
     world.addSync("pose", [system](World& w) { system->pose(w); });
-    // The step count. The graphs' state is the Animator's, a component.
-    AnimationSystem* raw = system.get();
-    addSnapshotHook(reg, SnapshotHook{"animation", [raw] { return std::make_shared<const uint64_t>(raw->steps()); },
-                                      [raw](const std::shared_ptr<const void>& s) {
-                                          if (s) raw->setSteps(*static_cast<const uint64_t*>(s.get()));
-                                      },
-                                      [raw](StateHash& h) { h.u64(raw->steps()); }});
     return *system;
 }
 

@@ -86,7 +86,7 @@ public:
     [[nodiscard]] const std::string& setPath() const;
     // Changes whenever the set in use does (a VfxSet read, setSet).
     [[nodiscard]] uint64_t setVersion() const noexcept;
-    // The last step's dt (1/60 s before any step): a record's age is (steps - spawnStep - 1 + alpha) of them.
+    // The World's dt: a record's age is (steps - spawnStep - 1 + alpha) of them.
     [[nodiscard]] float stepDt() const noexcept;
     // The set to use instead of the VfxSet's (tests, benches); a VfxSet change reads its file again.
     void setSet(vfx::VfxSet set);

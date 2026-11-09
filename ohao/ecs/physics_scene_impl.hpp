@@ -153,7 +153,7 @@ struct PhysicsScene::Impl {
     // Events (spec "Events").
     ankerl::unordered_dense::map<uint64_t, Pair> pairs;
     std::size_t dormant{0};                 // pairs kept through their bodies' sleep
-    uint64_t steps{0};
+    uint64_t steps{0};   // the World's step this scene last stepped in
     struct Writers {
         EventWriter<ContactEvent> contactBegin, contactEnd;
         EventWriter<TriggerEvent> triggerEnter, triggerExit;
@@ -436,7 +436,7 @@ struct PhysicsScene::Impl {
     // footsteps and landing go into `out`.
     void updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out);
 
-    void step(const InputMap& input, float dt);
+    void step(const InputMap& input, float dt, uint64_t worldStep);
 
     // RenderPose for what the last step moved, between its last two step poses at alpha, and for
     // their subtrees (a descendant that moves by itself has its own entry). Alpha 1 (or outside

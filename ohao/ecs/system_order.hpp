@@ -33,7 +33,7 @@ inline constexpr std::array<std::string_view, 10> kSyncOrder = {
 };
 
 // The systems whose state a snapshot carries, restored in this order (SnapshotHooks).
-inline constexpr std::array<std::string_view, 5> kSnapshotOrder = {"physics", "combat", "animation", "audio_schedule",
+inline constexpr std::array<std::string_view, 4> kSnapshotOrder = {"physics", "combat", "audio_schedule",
                                                                    "vfx"};
 
 } // namespace ohao::ecs

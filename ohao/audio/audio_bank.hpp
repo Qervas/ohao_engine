@@ -53,8 +53,8 @@ struct DuckDesc {
     std::string on;     // the sound that triggers it
     std::string bus;
     float db{0.0f};     // <= 0
-    uint32_t attackSteps{1};
-    uint32_t releaseSteps{15};
+    uint32_t attackMs{17};      // a ramp's time; the schedule turns it into steps of the World's dt
+    uint32_t releaseMs{250};
 };
 
 // What a game's event plays (the bank's `events`; step 3c). A binding names a channel of the World's event log
@@ -78,8 +78,8 @@ struct SnapshotBus {
 struct SnapshotDesc {
     std::string name;
     std::vector<std::pair<std::string, SnapshotBus>> buses;
-    uint32_t inSteps{0};
-    uint32_t outSteps{0};
+    uint32_t inMs{0};           // the blend into it, and back out to the default
+    uint32_t outMs{0};
 };
 
 // A reverb's character (the Freeverb node's room size, damping and wet level, 0..1) and the

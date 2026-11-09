@@ -181,6 +181,7 @@ def build():
 
 
 GRAPH = {
+    "version": 2,   # fades in seconds
     "skeleton": {"file": "tests/anim/fixtures/rig.glb", "skin": "RigSkin"},
     "clips": {
         "wave": {"file": "tests/anim/fixtures/rig.glb", "animation": "wave", "loop": True,
@@ -201,11 +202,11 @@ GRAPH = {
                                                                   {"clip": "step", "at": 1.0}]}},
             },
             "transitions": [
-                {"from": "wave", "to": "raise", "when": {"param": "raised", "op": "==", "value": 1}, "fade": 6},
+                {"from": "wave", "to": "raise", "when": {"param": "raised", "op": "==", "value": 1}, "fade": 0.1},
                 {"from": "raise", "to": "held", "when": {"clipEnd": True}, "fade": 0},
-                {"from": "held", "to": "wave", "when": {"param": "raised", "op": "==", "value": 0}, "fade": 12},
-                {"from": "wave", "to": "moves", "when": {"param": "speed", "op": ">", "value": 0.5}, "fade": 6},
-                {"from": "moves", "to": "wave", "when": {"param": "speed", "op": "<=", "value": 0.5}, "fade": 6},
+                {"from": "held", "to": "wave", "when": {"param": "raised", "op": "==", "value": 0}, "fade": 0.2},
+                {"from": "wave", "to": "moves", "when": {"param": "speed", "op": ">", "value": 0.5}, "fade": 0.1},
+                {"from": "moves", "to": "wave", "when": {"param": "speed", "op": "<=", "value": 0.5}, "fade": 0.1},
             ],
         },
         {

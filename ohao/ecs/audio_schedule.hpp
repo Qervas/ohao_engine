@@ -9,11 +9,11 @@
 //   1. Any restore since the last step (a round's restart too) writes `stop_world` and brings the device
 //      back to the restored mix (`resync` commands).
 //   2. The listener's zone: the highest-priority ReverbZone holding the listener at the step (ties: the
-//      lowest id), else the bank's defaultZone; a change writes `zone` (the preset, its bed, a 30-step
+//      lowest id), else the bank's defaultZone; a change writes `zone` (the preset, its bed, a 500 ms
 //      blend). A zone whose preset the bank lacks is W_AUDIO_PRESET and counts as the default.
 //   3. The snapshot the game asks for (requestMixSnapshot; the slice: `dead` while the player is dead,
 //      `won` once the room is cleared), else `default`; a change writes `snapshot` with the blend of the
-//      one entered (`inSteps`), or of the one left (`outSteps`) on the way back to `default`.
+//      one entered (`inMs`), or of the one left (`outMs`) on the way back to `default`.
 //   4. The sounds the step's events name: physics footsteps and landings by surface, a game's events by
 //      the bank's `events` (their cues, in the order they happened), animation clip events by
 //      animSoundNames, round robin per sound; each placed at the ear or at its point on its curve, then
@@ -23,7 +23,7 @@
 //      player and for characters whose graph has none.
 //   5. Ducks: a `fire` (or any duck's sound) holds its buses down while it holds its voice, the
 //      deepest duck on a bus winning; a change of a bus's target writes `bus`.
-//   6. Graded occlusion re-casts: a voice holding past 6 steps is re-cast every 6 steps; a change of
+//   6. Graded occlusion re-casts: a voice holding past 100 ms is re-cast every 100 ms; a change of
 //      its walls writes `occlusion` (none; 1 wall -8 dB and 1.2 kHz; 2 or more -14 dB and 700 Hz). At
 //      most 16 rays a step: past the cap a re-cast keeps its last answer and a new voice counts as
 //      unoccluded, both counted, so the cap changes parameters, never which commands exist.
@@ -58,10 +58,10 @@ class AssetResolver;
 struct ClipEvent;
 
 constexpr uint32_t kRaysPerStep = 16;         // occlusion rays a step
-constexpr uint32_t kRecastSteps = 6;          // a holding voice is re-cast this often
-constexpr uint32_t kZoneBlendSteps = 30;      // a zone change's crossfade
-constexpr uint32_t kOcclusionBlendSteps = 3;  // a re-cast's ramp in the device
-constexpr uint32_t kStopWorldSteps = 3;       // a restart's fade of the world's voices
+constexpr uint32_t kRecastMs = 100;           // a holding voice is re-cast this often (in steps of the World's dt)
+constexpr uint32_t kZoneBlendMs = 500;        // a zone change's crossfade
+constexpr uint32_t kOcclusionBlendMs = 50;    // a re-cast's ramp in the device
+constexpr uint32_t kStopWorldMs = 50;         // a restore's fade of the world's voices
 constexpr uint32_t kStealFadeFrames = 96;     // 2 ms at 48 kHz: a stolen voice's fade
 
 // Who hears at the step: the input-driven player's head at the step's pose (its body skipped by the
@@ -115,20 +115,20 @@ struct AudioStop {
 struct AudioBus {
     std::string bus;
     float db{0.0f};               // 0: none
-    uint32_t blendSteps{0};
+    uint32_t blendMs{0};
     bool resync{false};           // resent to bring the device to the state a restore put back
 };
 // The mix snapshot.
 struct AudioSnapshot {
     std::string snapshot;
-    uint32_t blendSteps{0};
+    uint32_t blendMs{0};
     bool resync{false};
 };
 // The listener's reverb zone.
 struct AudioZone {
     std::string zone;             // the preset ("" with no reverb at all)
     std::string bed;              // its bed sound (may be empty)
-    uint32_t blendSteps{0};
+    uint32_t blendMs{0};
     bool resync{false};
 };
 // A held voice's occlusion, re-cast.
@@ -137,11 +137,11 @@ struct AudioOcclusion {
     uint32_t walls{0};
     float occlusionDb{0.0f};
     float lowPassHz{0.0f};
-    uint32_t blendSteps{0};
+    uint32_t blendMs{0};
 };
 // The world's voices fade: a restore (a round's restart too) put back another moment.
 struct AudioStopWorld {
-    uint32_t blendSteps{0};
+    uint32_t blendMs{0};
 };
 
 // The mix snapshot a game asks for (requestMixSnapshot; "default" until one asks).
@@ -230,7 +230,7 @@ public:
     [[nodiscard]] const std::string& snapshot() const noexcept;   // the snapshot now
     [[nodiscard]] AudioScheduleStats stats() const noexcept;
     [[nodiscard]] float busDuckDb(std::size_t bus) const noexcept;   // a bus's duck level now (dB; 0: none)
-    [[nodiscard]] uint32_t snapshotBlendSteps() const noexcept;      // the last snapshot command's blend
+    [[nodiscard]] uint32_t snapshotBlendMs() const noexcept;         // the last snapshot command's blend
     [[nodiscard]] double lastStepMs() const noexcept;             // the last step's time in this system
     [[nodiscard]] std::vector<ScheduledVoice> voices() const;     // in id order
     [[nodiscard]] const std::vector<AudioWarning>& warnings() const noexcept;

@@ -134,11 +134,9 @@ struct VfxSystem::Impl {
     struct State {
         std::vector<VfxRecord> records;   // live, in seq order
         uint64_t nextSeq{1};
-        uint64_t steps{0};
         std::array<uint64_t, VfxRecord::kKinds> dropped{};
         uint64_t written{0};
         std::map<uint64_t, EmitterState> emitters;   // by entity id
-        float dt{1.0f / 60.0f};   // the last step's (records' ages are counted in it)
     };
 
     World& world;
@@ -228,7 +226,7 @@ struct VfxSystem::Impl {
             --live;
         }
         r.seq = st.nextSeq++;
-        r.spawnStep = st.steps;
+        r.spawnStep = world.steps();
         ++st.written;
         st.records.push_back(r);
     }
@@ -277,7 +275,7 @@ struct VfxSystem::Impl {
     // Seeds: a function of the event's identity (its step, its channel, its place among the step's events of the
     // channel), so the same fight, a restore and a restarted round draw the same particles.
     uint32_t seedFor(uint32_t channel, uint32_t place, uint32_t part) const {
-        return vfx::vfxHash(static_cast<uint32_t>(st.steps), place * 8u + part, 0xEF7u ^ channel);
+        return vfx::vfxHash(static_cast<uint32_t>(world.steps()), place * 8u + part, 0xEF7u ^ channel);
     }
 
     static uint32_t nameHash(std::string_view s) {   // FNV-1a
@@ -405,12 +403,12 @@ struct VfxSystem::Impl {
             };
             if (!es.active) {   // it became active this step
                 es.active = true;
-                es.since = st.steps;
+                es.since = world.steps();
                 es.emitted = 0;
                 if (em.rate <= 0.0f) spawn();
             }
             if (em.rate > 0.0f) {
-                const double s = static_cast<double>(st.steps - es.since + 1);
+                const double s = static_cast<double>(world.steps() - es.since + 1);
                 const auto due = static_cast<uint64_t>(std::floor(s * static_cast<double>(em.rate) * static_cast<double>(dt) + 1e-6));
                 while (es.emitted < due) spawn();
             }
@@ -421,15 +419,13 @@ struct VfxSystem::Impl {
 
     void expire(float dt) {
         std::erase_if(st.records, [&](const VfxRecord& r) {
-            return r.life > 0.0f && static_cast<float>(st.steps - r.spawnStep) * dt > r.life;
+            return r.life > 0.0f && static_cast<float>(world.steps() - r.spawnStep) * dt > r.life;
         });
     }
 
     void step(float dt) {
         const auto t0 = std::chrono::steady_clock::now();
         refreshSet();
-        st.dt = dt;
-        ++st.steps;
         // A game's events, in the order they happened, as the set binds them.
         bindEvents();
         const entt::entity player = inputPlayer();
@@ -458,7 +454,7 @@ VfxStats VfxSystem::stats() const noexcept {
     for (const VfxRecord& r : m->st.records) ++s.live[kindIndex(r.kind)];
     s.dropped = m->st.dropped;
     s.written = m->st.written;
-    s.steps = m->st.steps;
+    s.steps = m->world.steps();
     return s;
 }
 
@@ -477,7 +473,7 @@ std::vector<VfxRecord> VfxSystem::recordsSince(uint64_t since, std::size_t max, 
 const vfx::VfxSet& VfxSystem::set() const { return m->set; }
 const std::string& VfxSystem::setPath() const { return m->setPath; }
 uint64_t VfxSystem::setVersion() const noexcept { return m->setVersion; }
-float VfxSystem::stepDt() const noexcept { return m->st.dt; }
+float VfxSystem::stepDt() const noexcept { return m->world.stepDt(); }
 
 void VfxSystem::addRecordForTest(VfxRecord record) { m->add(record); }
 
@@ -490,7 +486,7 @@ void VfxSystem::setSet(vfx::VfxSet set) {
 }
 
 const std::vector<VfxWarning>& VfxSystem::warnings() const noexcept { return m->warnings; }
-uint64_t VfxSystem::steps() const noexcept { return m->st.steps; }
+uint64_t VfxSystem::steps() const noexcept { return m->world.steps(); }
 double VfxSystem::lastStepMs() const noexcept { return m->lastMs; }
 
 std::shared_ptr<const void> VfxSystem::saveState() const { return std::make_shared<Impl::State>(m->st); }
@@ -517,7 +513,6 @@ void VfxSystem::hashState(StateHash& h) const {
         h.f32(r.life);
     }
     h.u64(s.nextSeq);
-    h.u64(s.steps);
     for (const uint64_t d : s.dropped) h.u64(d);
     h.u64(s.written);
     h.u64(s.emitters.size());
@@ -527,7 +522,6 @@ void VfxSystem::hashState(StateHash& h) const {
         h.u64(em.since);
         h.u64(em.emitted);
     }
-    h.f32(s.dt);
 }
 
 VfxSystem& installVfx(World& world, AssetResolver& assets) {

@@ -103,6 +103,10 @@ public:
     void defer(std::function<void(World&)> op);
     // The steps simulated (saved and hashed): the step running, or the last one between steps.
     [[nodiscard]] uint64_t steps() const noexcept { return m_events.step(); }
+    // The World's clock (step 3e): the fixed dt of the step running, else of the last one (1/60 s before any). A
+    // system reads time from it, never from a constant; durations in data (seconds, milliseconds) become steps of
+    // it. The host's configuration, so never saved or hashed.
+    [[nodiscard]] float stepDt() const noexcept { return m_stepDt; }
     void setSteps(uint64_t steps) noexcept { m_events.setStep(steps); }   // a restore
     // The world's events (ecs/events.hpp): channels, the step's events, the history.
     [[nodiscard]] EventLog& events() noexcept { return m_events; }
@@ -172,6 +176,7 @@ private:
     InputMap m_input;
     EventLog m_events;
     std::vector<std::function<void(World&)>> m_deferred;
+    float m_stepDt{1.0f / 60.0f};
     bool m_bindingsDirty{false};
     float m_renderAlpha{1.0f};
     glm::vec2 m_pendingLook{0.0f};

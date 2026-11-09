@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3d built (3g merged into 3c); 3e-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3e built (3g merged into 3c); 3f-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -470,6 +470,51 @@ Two commits, each through the hook:
 
 *Done when* the baseline is unchanged at 1/60 s, and the same fight stepped at 1/120 s gives the same animation
 and audio timings, measured.
+
+*As built (2026-11-09), deciding by AGENTS.md's "Deciding":*
+- **The decision: integer steps in state, time in data.**
+  - State keeps counting whole steps: an Animator's steps and fade, a voice's start and end. A duration in
+    data (a graph's fade, a bank's hold, a duck, a blend) is seconds or milliseconds, turned into steps of the
+    World's dt where it is used.
+  - This is how deterministic fixed-step simulations keep time: tick-counted timers, as Photon Quantum's.
+    State stays exact and hashed alike, and seconds are the same at any rate.
+  - Refused: float seconds in saved state. They would have moved the Animator's format, and their sums can end
+    a fade a step off at 60 Hz, which would break the baseline.
+- **The World's clock.** `World::stepDt()` is the step's dt (the last one between steps; 1/60 s before any). It
+  is the host's configuration, never saved or hashed.
+  - The counters of combat, physics, animation, the audio schedule and vfx are deleted, and so is vfx's and
+    combat's copy of the dt. Every one reads `World::steps()` and `World::stepDt()`.
+  - The `animation` snapshot hook held only its counter, so it is deleted: `kSnapshotOrder` has four entries.
+  - Physics keeps a copy of the World's step (a pair's `since`), handed to it by its step, outside the
+    snapshot.
+- **Animation.** `kStepSeconds` is deleted; `stepLayer`, `stateTime`, `clipEnded` and `evaluatePose` take the
+  dt.
+  - A graph file is `"version": 2` with fades in seconds. `fadeSteps` rounds a fade to the nearest step, at
+    least one.
+  - A file without the version is refused, not read: its fades are steps, and read as seconds they would be
+    60 times longer.
+  - The three graphs moved (step n became n/60 s, 4 decimals), and `tools/anim/make_test_rig.py` writes the
+    rig's. `rig.glb` is byte-identical.
+- **Audio.** The bank's `attackSteps`/`releaseSteps` and `inSteps`/`outSteps` became `attackMs`/`releaseMs` and
+  `inMs`/`outMs`. `slice.audio.json` moved (1 step to 17 ms, 15 to 250, 18 to 300, 30 to 500, 60 to 1000).
+  - The schedule's constants are time: a 500 ms zone blend, a 50 ms re-cast ramp and restore fade, and a
+    re-cast every 100 ms.
+  - Holds round up to whole steps and periods to the nearest, both in double with 1e-6 of slack, so 60 Hz keeps
+    its step counts exactly.
+  - The commands carry `blendMs` (a new `ms` unit); `audio.info`'s snapshot gives `blendMs`.
+  - The player turns milliseconds into frames, and steps into `rate × dt` frames.
+- **Physics' 1/60 s** is Jolt's largest substep, a solver limit, now labelled as one.
+- **The baseline at 1/60 s:** every log reads the same as before step 3 (the comparison turns `blendMs` back
+  into steps); only the hashes differ.
+- **At 1/120 s** (a temporary check, deleted after): the player's reload has the same events at 60 Hz and
+  120 Hz, each within one 60 Hz step.
+  - `reload` plays at 0 s at both rates.
+  - `mag_out` (the clip event and its sound): 0.5833 s at 60 Hz, 0.5917 s at 120 Hz.
+  - `mag_in`: 1.4833 s and 1.4917 s.
+  - `reloaded`: 1.5 s at both.
+  - At each rate the clip events land one step before the weapon's reload ends.
+  - A whole fight is not comparable across rates: physics integrates differently, and the enemies' decisions
+    follow.
 
 ## 3f. Input per player
 

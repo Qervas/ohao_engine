@@ -50,13 +50,13 @@
     {"on": "slice.reload", "by": "player", "play": "reload", "at": "ear"}
   ],
   "ducks": [
-    {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
-    {"on": "fire", "bus": "foley", "db": -3, "attackSteps": 1, "releaseSteps": 15}
+    {"on": "fire", "bus": "ambience", "db": -6, "attackMs": 17, "releaseMs": 250},
+    {"on": "fire", "bus": "foley", "db": -3, "attackMs": 17, "releaseMs": 250}
   ],
   "snapshots": {
     "default": {},
-    "dead": {"buses": {"world": {"db": -9, "lowPassHz": 900}, "ambience": {"db": -12}}, "inSteps": 18, "outSteps": 30},
-    "won":  {"buses": {"world": {"db": -4}}, "inSteps": 60, "outSteps": 30}
+    "dead": {"buses": {"world": {"db": -9, "lowPassHz": 900}, "ambience": {"db": -12}}, "inMs": 300, "outMs": 500},
+    "won":  {"buses": {"world": {"db": -4}}, "inMs": 1000, "outMs": 500}
   },
   "reverb": {
     "outdoor":  {"room": 0.30, "damp": 0.60, "wet": 0.05, "bed": "bed_outdoor"},

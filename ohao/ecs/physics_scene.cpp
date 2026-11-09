@@ -564,7 +564,6 @@ struct PhysicsScene::Impl::SavedSimulation {
     std::vector<SavedPlayer> players;
     std::vector<std::pair<uint64_t, Pair>> pairs;               // the contact bookkeeping, entities by id
     std::size_t dormant{0};
-    uint64_t steps{0};                                          // the step count (the log's seq is the log's: step 3c)
 };
 
 std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
@@ -576,14 +575,12 @@ std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
     for (const auto& [e, p] : players) s->players.push_back(SavedPlayer{idOf(e), idOf(p.head), idOf(p.ground), p});
     s->pairs.assign(pairs.begin(), pairs.end());   // in the map's order: a restore inserts them back in it
     s->dormant = dormant;
-    s->steps = steps;
     return s;
 }
 
 void PhysicsScene::Impl::restoreSimulation(const std::shared_ptr<const void>& state) {
     savedPending = std::static_pointer_cast<const SavedSimulation>(state);
     restoredSinceSpawn = true;
-    if (savedPending) steps = savedPending->steps;   // at once: the bodies wait for the next sync
 }
 
 void PhysicsScene::Impl::hashSimulation(StateHash& h) const {
@@ -645,7 +642,6 @@ void PhysicsScene::Impl::hashSimulation(StateHash& h) const {
         h.u64(pair.since);
     }
     h.u64(s->dormant);
-    h.u64(s->steps);
 }
 
 // The saved simulation back in place, when its bodies and players are this world's (the same
@@ -818,7 +814,7 @@ bool PhysicsScene::teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<f
     return m->teleport(e, pos, yawDeg);
 }
 
-void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt); }
+void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt, world.steps()); }
 void PhysicsScene::spawnPlayers() { m->spawnPlayers(); }
 void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
 bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }

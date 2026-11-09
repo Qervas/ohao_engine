@@ -154,6 +154,11 @@ def combat_of(point):
     return out
 
 
+def steps60(e):
+    """An audio event's blend in steps of 1/60 s: blendSteps before step 3e, blendMs since."""
+    return e["blendSteps"] if "blendSteps" in e else round(e["blendMs"] * 60 / 1000)
+
+
 def audio_of(point):
     """(step, op, fields) per audio command, from either log; a play's gain only where the old log wrote it."""
     out = []
@@ -188,15 +193,15 @@ def audio_of(point):
         elif op == "stop":
             f = (e["voice"],)
         elif op == "bus":
-            f = (e["bus"], e["db"], e["blendSteps"])
+            f = (e["bus"], e["db"], steps60(e))
         elif op == "snapshot":
-            f = (e["snapshot"], e["blendSteps"])
+            f = (e["snapshot"], steps60(e))
         elif op == "zone":
-            f = (e["zone"], e.get("bed", ""), e["blendSteps"])
+            f = (e["zone"], e.get("bed", ""), steps60(e))
         elif op == "occlusion":
-            f = (e["voice"], e["occlusionDb"], e["blendSteps"])
+            f = (e["voice"], e["occlusionDb"], steps60(e))
         else:
-            f = (e["blendSteps"],)
+            f = (steps60(e),)
         out.append((e["step"], op, f, bool(e.get("resync"))))
     return out
 

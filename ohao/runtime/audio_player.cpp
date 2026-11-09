@@ -17,9 +17,17 @@ void AudioPlayer::initialize(const std::filesystem::path& root, AudioSystem& aud
     m_audio = &audio;
 }
 
+uint32_t AudioPlayer::rate() const noexcept {
+    return m_audio && m_audio->isInitialized() ? m_audio->sampleRate() : 48000;
+}
+
+// One step of the World's clock in device frames (step 3e: the World's dt, not 1/60).
 uint32_t AudioPlayer::stepFrames() const noexcept {
-    const uint32_t rate = m_audio && m_audio->isInitialized() ? m_audio->sampleRate() : 48000;
-    return rate / 60;
+    return static_cast<uint32_t>(std::lround(static_cast<double>(rate()) * m_stepDt));
+}
+
+uint32_t AudioPlayer::msFrames(uint32_t ms) const noexcept {
+    return static_cast<uint32_t>(static_cast<uint64_t>(ms) * rate() / 1000u);
 }
 
 uint32_t AudioPlayer::horizonFrames() const noexcept { return stepFrames(); }   // one step (OPEN ruling 7)
@@ -169,7 +177,7 @@ void AudioPlayer::play(const ecs::AudioPlay& c, uint64_t step) {
 }
 
 void AudioPlayer::zone(const ecs::AudioZone& c) {
-    const uint32_t blend = c.blendSteps * stepFrames();
+    const uint32_t blend = msFrames(c.blendMs);
     if (c.zone != m_zoneName) {
         m_zoneName = c.zone;
         if (const ReverbDesc* preset = m_bank.preset(c.zone)) m_audio->setReverb(*preset, blend);
@@ -218,7 +226,7 @@ void AudioPlayer::snapshot(const ecs::AudioSnapshot& c) {
                 m_snapshotHz[static_cast<std::size_t>(b)] = level.lowPassHz;
             }
     }
-    applyBuses(c.blendSteps * stepFrames());
+    applyBuses(msFrames(c.blendMs));
 }
 
 void AudioPlayer::stopWorld(uint32_t blend) {
@@ -254,6 +262,7 @@ void AudioPlayer::update(const ecs::World& world, bool realtime) {
         m_audio->setListenerPosition(view->position, forward, glm::vec3(0.0f, 1.0f, 0.0f));
     }
     // The schedule's events since the cursor, in the order it wrote them.
+    m_stepDt = world.stepDt();
     const ecs::EventLog& log = world.events();
     if (!std::exchange(m_started, true)) m_cursor = log.nextSeq() - 1;   // nothing from before
     namespace ae = ecs::audio_events;
@@ -279,7 +288,7 @@ void AudioPlayer::update(const ecs::World& world, bool realtime) {
             if (const int bus = m_bank.bus(b.bus); bus >= 0 && static_cast<std::size_t>(bus) < m_duckDb.size()) {
                 const auto at = static_cast<uint8_t>(bus);
                 m_duckDb[at] = b.db;
-                m_audio->setBus(at, levelDb(at), levelHz(at), b.blendSteps * stepFrames());
+                m_audio->setBus(at, levelDb(at), levelHz(at), msFrames(b.blendMs));
             }
         } else if (&c == snapshots) {
             snapshot(snapshots->at(i).value);
@@ -288,9 +297,9 @@ void AudioPlayer::update(const ecs::World& world, bool realtime) {
         } else if (&c == occlusions) {
             const ecs::AudioOcclusion& o = occlusions->at(i).value;
             if (const auto it = m_voices.find(o.voice); it != m_voices.end())
-                m_audio->setVoiceOcclusion(it->second, o.occlusionDb, o.lowPassHz, o.blendSteps * stepFrames());
+                m_audio->setVoiceOcclusion(it->second, o.occlusionDb, o.lowPassHz, msFrames(o.blendMs));
         } else if (&c == stopWorlds) {
-            stopWorld(stopWorlds->at(i).value.blendSteps * stepFrames());
+            stopWorld(msFrames(stopWorlds->at(i).value.blendMs));
         }
     });
     m_audio->update();   // finished sounds free their voices

@@ -128,7 +128,7 @@ public:
 
     // One fixed step (the `combat` simulate system).
     void step(float dt);
-    // The `combat` snapshot hook: grenades in flight, the round (its phase, timer and start), the step count and dt.
+    // The `combat` snapshot hook: grenades in flight, the round (its phase, timer and start).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
     void hashState(StateHash& h) const;
@@ -137,9 +137,9 @@ public:
     // A damage event, and a death event when it reaches 0 (between steps: the next step's).
     float damage(entt::entity target, float amount, entt::entity source, glm::vec3 point);
 
-    [[nodiscard]] uint64_t steps() const noexcept;
+    [[nodiscard]] uint64_t steps() const noexcept;         // the World's
     [[nodiscard]] double lastStepMs() const noexcept;   // the last step's time in this system
-    [[nodiscard]] float stepSeconds() const noexcept;   // the last step's dt (s); 1/60 before any step
+    [[nodiscard]] float stepSeconds() const noexcept;   // the World's dt (s)
     [[nodiscard]] RoundInfo round() const noexcept;
     // The test grenades in flight (runtime: snapshotted and hashed, never saved to a file), in throw order: where the last step left each
     // and where this one did (the presentation draws between the two, sub-project 12).

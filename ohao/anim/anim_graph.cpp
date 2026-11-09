@@ -111,7 +111,14 @@ Result<AnimGraph, std::vector<GraphError>> parseAnimGraph(std::string_view json)
     if (root.get_object().get(doc) != simdjson::SUCCESS) return R::err({{"", "the graph is not an object"}});
     Parser p;
     AnimGraph g;
-    p.keys(doc, {"skeleton", "driver", "clips", "params", "layers"}, "");
+    p.keys(doc, {"version", "skeleton", "driver", "clips", "params", "layers"}, "");
+    // Version 2 (step 3e): fades in seconds. A file without it (version 1, fades in steps of 1/60 s) is refused, so
+    // an old fade is never read as seconds.
+    if (element e; doc["version"].get(e) != simdjson::SUCCESS) {
+        p.fail("/version", "missing: 2 (fades in seconds; version 1's were steps of 1/60 s: divide them by 60)");
+    } else if (int64_t v; e.get_int64().get(v) != simdjson::SUCCESS || v != 2) {
+        p.fail("/version", "not 2 (fades in seconds; version 1's were steps of 1/60 s: divide them by 60)");
+    }
 
     object skeleton;
     if (doc["skeleton"].get_object().get(skeleton) != simdjson::SUCCESS) p.fail("/skeleton", "missing: {file, skin}");
@@ -272,9 +279,9 @@ Result<AnimGraph, std::vector<GraphError>> parseAnimGraph(std::string_view json)
                     if (to["to"].get(e) != simdjson::SUCCESS) p.fail(tp + "/to", "missing");
                     else p.str(e, t.to, tp + "/to");
                     if (to["fade"].get(e) == simdjson::SUCCESS) {
-                        int64_t f;
-                        if (e.get_int64().get(f) != simdjson::SUCCESS || f < 0 || f > 600) p.fail(tp + "/fade", "not 0..600 steps");
-                        else t.fade = static_cast<uint16_t>(f);
+                        double f;
+                        if (e.get_double().get(f) != simdjson::SUCCESS || f < 0.0 || f > 10.0) p.fail(tp + "/fade", "not 0..10 s");
+                        else t.fade = static_cast<float>(f);
                     }
                     object when;
                     if (to["when"].get_object().get(when) != simdjson::SUCCESS) p.fail(tp + "/when", "missing");
@@ -469,28 +476,34 @@ std::vector<LayerState> initialLayers(const BoundGraph& graph) {
     return out;
 }
 
-float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps, const Params& params) {
+float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps, float dt, const Params& params) {
     const BoundClip* c = clipOf(graph, clip);
     // rateFrom: the anchor lands `len` seconds in, as a fraction of len so that steps * dt == len
     // reaches the anchor exactly.
     if (c && c->rateParam >= 0)
         if (const float len = params.get(c->rateParam); len > 0.0f)
-            return state.startAt + c->rateAnchor * state.rate * (steps * kStepSeconds / len);
+            return state.startAt + c->rateAnchor * state.rate * (steps * dt / len);
     const float rate = state.rate * (c ? c->rate : 1.0f);
-    return state.startAt + steps * kStepSeconds * rate;
+    return state.startAt + steps * dt * rate;
 }
 
-bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state, const Params& params) {
+bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state, const Params& params, float dt) {
     const BoundLayer& l = graph.layers[static_cast<std::size_t>(layer)];
     if (state.state < 0 || state.state >= static_cast<int>(l.states.size())) return false;
     const BoundState& s = l.states[static_cast<std::size_t>(state.state)];
     const int clip = timingClip(s);
     const BoundClip* c = clipOf(graph, clip);
     if (!c || c->loop) return false;
-    return stateTime(graph, s, clip, static_cast<float>(state.steps), params) >= c->clip.duration;
+    return stateTime(graph, s, clip, static_cast<float>(state.steps), dt, params) >= c->clip.duration;
 }
 
-void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Params& params, std::vector<FiredEvent>& fired) {
+uint16_t fadeSteps(float seconds, float dt) {
+    if (!(seconds > 0.0f) || !(dt > 0.0f)) return 0;
+    return static_cast<uint16_t>(std::clamp(std::lround(seconds / dt), 1L, 65535L));
+}
+
+void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Params& params, float dt,
+               std::vector<FiredEvent>& fired) {
     const BoundLayer& l = graph.layers[static_cast<std::size_t>(layer)];
     // 1. A fade that completed on the previous step ends.
     if (state.fade > 0 && state.faded >= state.fade) {
@@ -505,13 +518,13 @@ void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Para
         switch (t.kind) {
         case Condition::Kind::Param: holds = compare(params.get(t.param), t.op, t.value); break;
         case Condition::Kind::Event: holds = params.fired(t.event); break;
-        case Condition::Kind::ClipEnd: holds = clipEnded(graph, layer, state, params); break;
+        case Condition::Kind::ClipEnd: holds = clipEnded(graph, layer, state, params, dt); break;
         }
         if (!holds) continue;
-        if (t.fade > 0) {
+        if (const uint16_t fade = fadeSteps(t.fade, dt); fade > 0) {
             state.from = state.state;
             state.fromSteps = state.steps;
-            state.fade = t.fade;
+            state.fade = fade;
             state.faded = 0;
         } else {
             state.from = -1;
@@ -532,8 +545,8 @@ void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Para
     const int clip = heaviestClip(s, params);
     const BoundClip* c = clipOf(graph, clip);
     if (!c || c->clip.events.empty()) return;
-    const float prev = stateTime(graph, s, clip, static_cast<float>(state.steps - 1), params);
-    const float cur = stateTime(graph, s, clip, static_cast<float>(state.steps), params);
+    const float prev = stateTime(graph, s, clip, static_cast<float>(state.steps - 1), dt, params);
+    const float cur = stateTime(graph, s, clip, static_cast<float>(state.steps), dt, params);
     if (!(cur > prev)) return;
     const float d = c->clip.duration;
     std::vector<std::pair<float, const std::string*>> hits;
@@ -554,12 +567,13 @@ void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Para
 
 namespace {
 
-// A state's local pose at `steps` (fractional) steps, over the rest pose.
-void sampleState(const BoundGraph& g, const BoundState& s, const Params& params, float steps, LocalPose& out, LocalPose& tmp) {
+// A state's local pose at `steps` (fractional) steps of dt, over the rest pose.
+void sampleState(const BoundGraph& g, const BoundState& s, const Params& params, float steps, float dt, LocalPose& out,
+                 LocalPose& tmp) {
     const auto one = [&](int clip, LocalPose& into) {
         const BoundClip* c = clipOf(g, clip);
         if (!c) return;
-        const float t = clipTime(c->clip.duration, stateTime(g, s, clip, steps, params), c->loop);
+        const float t = clipTime(c->clip.duration, stateTime(g, s, clip, steps, dt, params), c->loop);
         sampleClip(c->clip, t, into);
     };
     restPose(g.skeleton, out);
@@ -581,7 +595,7 @@ void sampleState(const BoundGraph& g, const BoundState& s, const Params& params,
 } // namespace
 
 void evaluatePose(const BoundGraph& graph, std::span<const LayerState> layers, const Params& params, float alpha,
-                  LocalPose& out, PoseScratch& scratch) {
+                  float dt, LocalPose& out, PoseScratch& scratch) {
     restPose(graph.skeleton, scratch.rest);
     out = scratch.rest;
     for (std::size_t li = 0; li < graph.layers.size() && li < layers.size(); ++li) {
@@ -589,10 +603,10 @@ void evaluatePose(const BoundGraph& graph, std::span<const LayerState> layers, c
         const LayerState& st = layers[li];
         if (st.state < 0 || st.state >= static_cast<int>(l.states.size())) continue;
         const float steps = std::max(0.0f, static_cast<float>(st.steps) - 1.0f + alpha);
-        sampleState(graph, l.states[static_cast<std::size_t>(st.state)], params, steps, scratch.layer, scratch.blendTmp);
+        sampleState(graph, l.states[static_cast<std::size_t>(st.state)], params, steps, dt, scratch.layer, scratch.blendTmp);
         if (st.from >= 0 && st.from < static_cast<int>(l.states.size()) && st.fade > 0) {
             const float fromSteps = std::max(0.0f, static_cast<float>(st.fromSteps) - 1.0f + alpha);
-            sampleState(graph, l.states[static_cast<std::size_t>(st.from)], params, fromSteps, scratch.partner, scratch.blendTmp);
+            sampleState(graph, l.states[static_cast<std::size_t>(st.from)], params, fromSteps, dt, scratch.partner, scratch.blendTmp);
             const float w = std::clamp((static_cast<float>(st.faded) - 1.0f + alpha) / static_cast<float>(st.fade), 0.0f, 1.0f);
             blendPose(scratch.partner, scratch.layer, w, {});
             std::swap(scratch.layer, scratch.partner);

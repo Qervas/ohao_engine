@@ -23,7 +23,6 @@ namespace ohao::api {
 
 namespace {
 
-constexpr float kStepMs = 1000.0f / 60.0f;   // the schedule's step: the player's horizon (OPEN ruling 7)
 
 // To 1/100, without -0 (as combat.cpp).
 float r2(float v) { return std::fabs(v) < 0.005f ? 0.0f : std::round(v * 100.0f) / 100.0f; }
@@ -75,11 +74,12 @@ void writeInfo(Session::Impl& s, const ecs::AudioSchedule& schedule, JsonWriter&
     out.beginObject();
     out.key("device"); out.string(device ? "default" : "none");
     if (device) { out.key("sampleRate"); out.uint64(device->sampleRate); }
-    out.key("horizonMs"); out.float32(r2(device ? static_cast<float>(device->horizonMs) : kStepMs));
+    // The player's horizon is one step of the World's clock (OPEN ruling 7).
+    out.key("horizonMs"); out.float32(r2(device ? static_cast<float>(device->horizonMs) : s.world.stepDt() * 1000.0f));
     out.key("snapshot");
     out.beginObject();
     out.key("name"); out.string(schedule.snapshot().empty() ? "default" : schedule.snapshot());
-    out.key("blend"); out.uint64(schedule.snapshotBlendSteps());
+    out.key("blendMs"); out.uint64(schedule.snapshotBlendMs());
     if (!s.audioMix.snapshot.empty()) { out.key("forced"); out.string(s.audioMix.snapshot); }
     out.endObject();
     out.key("zone"); out.string(schedule.zone().empty() ? bank.defaultZone : schedule.zone());

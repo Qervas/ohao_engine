@@ -40,7 +40,7 @@ std::string nameOf(const Session::Impl& s, entt::entity e) {
 // One layer: its state, the clip that times it and the time into that clip (the newest step's,
 // wrapped or clamped as the pose samples it), and the fade.
 void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState& a, const anim::Params& params,
-                JsonWriter& out) {
+                float dt, JsonWriter& out) {
     const anim::BoundLayer& l = g.layers[static_cast<std::size_t>(index)];
     out.beginObject();
     out.key("state"); out.string(a.state.empty() ? l.stateNames[static_cast<std::size_t>(l.initial)] : a.state);
@@ -50,7 +50,7 @@ void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState&
         const int clip = st.clip >= 0 ? st.clip : (st.points.empty() ? -1 : st.points.front().first);
         if (clip >= 0) {
             const anim::BoundClip& c = g.clips[static_cast<std::size_t>(clip)];
-            const float t = anim::stateTime(g, st, clip, static_cast<float>(a.steps), params);
+            const float t = anim::stateTime(g, st, clip, static_cast<float>(a.steps), dt, params);
             out.key("clip"); out.string(c.name);
             out.key("t"); out.float32(r3(anim::clipTime(c.clip.duration, t, c.loop)));
         }
@@ -92,7 +92,7 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
     }
 
     out.beginObject();
-    out.key("steps"); out.uint64(anim->steps());
+    out.key("steps"); out.uint64(s.world.steps());
     out.key("animators");
     out.beginArray();
     for (std::size_t i = 0; i < animators.size() && i < kMaxAnimators; ++i) {
@@ -115,7 +115,7 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
             for (std::size_t li = 0; li < g->layers.size(); ++li) {
                 // Before its first step an animator has no layers: each at its initial state.
                 const ecs::AnimLayerState st = li < a.layers.size() ? a.layers[li] : ecs::AnimLayerState{};
-                writeLayer(*g, static_cast<int>(li), st, values, out);
+                writeLayer(*g, static_cast<int>(li), st, values, s.world.stepDt(), out);
             }
         }
         out.endArray();

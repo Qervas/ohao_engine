@@ -7,11 +7,11 @@
 // named joints and every descendant; empty: all), a blend mode (replace or additive over the
 // rest pose), a weight, an initial state, states (a clip, or a 1-D blend of clips by a
 // parameter) and transitions (to a state, when a parameter compares, an event fired this step,
-// or the current clip ended; with a fade in steps).
+// or the current clip ended; with a fade in seconds, a whole number of steps of the World's dt).
 //
 // The step (stepLayer) is integers only: the state, its steps, the state faded from, its steps,
 // the fade's length and progress. A pose (evaluatePose) is a function of that state, the
-// parameters and alpha, sampled at (steps - 1 + alpha) steps of kStepSeconds: alpha 1 is the
+// parameters and alpha, sampled at (steps - 1 + alpha) steps of the World's dt: alpha 1 is the
 // newest step's pose, alpha 0 the one before.
 #include "anim/skeleton.hpp"
 #include "core/result.hpp"
@@ -25,8 +25,6 @@
 
 namespace ohao::anim {
 
-// Clip time advances by one fixed simulation step a step (the simulation is 60 Hz by ruling).
-inline constexpr float kStepSeconds = 1.0f / 60.0f;
 
 enum class ParamType : uint8_t { Float, Bool };
 enum class LayerBlend : uint8_t { Replace, Additive };
@@ -66,7 +64,7 @@ struct Condition {
 struct Transition {
     std::string from, to;
     Condition when;
-    uint16_t fade = 0;   // steps
+    float fade = 0.0f;   // s (each step's fade length in steps: fadeSteps)
 };
 
 struct GraphLayer {
@@ -109,7 +107,7 @@ struct BoundTransition {
     std::string event;
     CompareOp op = CompareOp::Eq;
     float value = 0.0f;
-    uint16_t fade = 0;
+    float fade = 0.0f;   // s
 };
 struct BoundLayer {
     std::string name;
@@ -179,15 +177,18 @@ struct FiredEvent {
 //   3. steps (and fromSteps, faded while fading) advance by one;
 //   4. the current state's clip events whose time falls in (previous time, new time] fire, wraps
 //      of a looping clip included, in time order (a blend state fires its heaviest clip's).
-void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Params& params,
+void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Params& params, float dt,
                std::vector<FiredEvent>& fired);
+// A fade of `seconds` in steps of dt: at least one step when it is above 0 (the integer a step saves).
+[[nodiscard]] uint16_t fadeSteps(float seconds, float dt);
 
 // The seconds into a state's clip at `steps` (fractional) steps since entry, before wrapping
 // (`params` for a clip whose rate comes from a parameter).
-[[nodiscard]] float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps, const Params& params);
+[[nodiscard]] float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps, float dt,
+                              const Params& params);
 
 // Whether a non-looping state's clip has reached its end at `steps` steps.
-[[nodiscard]] bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state, const Params& params);
+[[nodiscard]] bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state, const Params& params, float dt);
 
 struct PoseScratch {
     LocalPose rest, layer, partner, blendTmp;
@@ -197,6 +198,6 @@ struct PoseScratch {
 // The local pose of every layer's state at (steps - 1 + alpha) steps (0 when steps is 0), its
 // fade partner blended in by (faded - 1 + alpha) / fade, the layers combined in order.
 void evaluatePose(const BoundGraph& graph, std::span<const LayerState> layers, const Params& params, float alpha,
-                  LocalPose& out, PoseScratch& scratch);
+                  float dt, LocalPose& out, PoseScratch& scratch);
 
 } // namespace ohao::anim

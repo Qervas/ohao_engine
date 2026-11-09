@@ -79,8 +79,6 @@ public:
     void step(World& world);      // the simulate system
     void pose(World& world);      // the sync system
 
-    [[nodiscard]] uint64_t steps() const noexcept { return m_steps; }
-    void setSteps(uint64_t steps) noexcept { m_steps = steps; }   // the `animation` snapshot hook's restore
     [[nodiscard]] double lastStepMs() const noexcept { return m_lastStepMs; }
     [[nodiscard]] double lastPoseMs() const noexcept { return m_lastPoseMs; }
 
@@ -97,7 +95,6 @@ private:
     std::vector<std::pair<std::string, AnimDriver>> m_drivers;
     std::vector<std::string> m_failed;   // graph paths whose error was logged
     EventWriter<ClipEvent> m_clipEvents;
-    uint64_t m_steps{0};
     double m_lastStepMs{0.0}, m_lastPoseMs{0.0};
     anim::PoseScratch m_scratch;
     anim::LocalPose m_local;

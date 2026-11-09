@@ -165,7 +165,7 @@ struct PhysicsInfo {
         uint32_t box{0}, sphere{0}, capsule{0}, convex{0}, mesh{0}, compound{0};
     } shapes;
     double buildMs{0.0};    // total time spent building bodies
-    uint64_t steps{0};      // physics steps run
+    uint64_t steps{0};      // the World's step it last stepped in
     uint32_t awake{0};      // dynamic bodies awake
     uint32_t triggers{0};   // sensor bodies
     uint32_t contacts{0};   // body pairs in contact now (triggers' overlaps included)

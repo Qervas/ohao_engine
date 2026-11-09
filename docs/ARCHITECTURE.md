@@ -541,9 +541,9 @@ Followed for the play scene's enemies and the player's arms (sub-project 10, ste
    `clips` (`file`, `animation`, `loop`, `rate` or `rateFrom {param, at}`, `events [{t,
    name}]`), `params` (`float` or `bool`), and `layers` (`replace` or `additive`, a joint
    `mask`, `states`: a clip or a `blend1d` over a parameter, and `transitions` on a
-   parameter, an event or `clipEnd`, with a `fade` in steps). Every error names its JSON
-   pointer; a one-shot state with no way out is one.
-3. **The driver** (`ecs/<name>_anim.cpp`, registered in `installAnimation`): writes the
+   parameter, an event or `clipEnd`, with a `fade` in seconds; the file is `"version": 2`). Every error names its
+   JSON pointer; a one-shot state with no way out is one.
+3. **The driver** (`ecs/<name>_anim.cpp`, the game's, registered by its install: the slice's in `installSlice`): writes the
    graph's parameters and events from **saved** state only, and reads the step's combat
    events after its last `restart` (`driveEnemyAnim`, `driveArmsAnim`). A parameter no
    driver writes reads 0.

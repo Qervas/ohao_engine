@@ -122,18 +122,18 @@ void registerEventTypes(reflect::TypeRegistry& r) {
         .doc("audio.bus: a bus's duck, the deepest duck holding it")
         .field("bus", &AudioBus::bus).doc("The bus")
         .field("db", &AudioBus::db).doc("Its level; 0: none").unit("dB")
-        .field("blendSteps", &AudioBus::blendSteps).doc("The ramp, in steps").unitless()
+        .field("blendMs", &AudioBus::blendMs).doc("The ramp").unit("ms")
         .field("resync", &AudioBus::resync).doc("Resent to bring the device to what a restore put back").omitDefault();
     r.type<AudioSnapshot>("AudioSnapshot").event()
         .doc("audio.snapshot: the mix snapshot (default, dead, won)")
         .field("snapshot", &AudioSnapshot::snapshot).doc("The snapshot")
-        .field("blendSteps", &AudioSnapshot::blendSteps).doc("The blend, in steps").unitless()
+        .field("blendMs", &AudioSnapshot::blendMs).doc("The blend").unit("ms")
         .field("resync", &AudioSnapshot::resync).doc("Resent after a restore").omitDefault();
     r.type<AudioZone>("AudioZone").event()
         .doc("audio.zone: the listener's reverb zone")
         .field("zone", &AudioZone::zone).doc("The preset; empty: no reverb at all")
         .field("bed", &AudioZone::bed).doc("Its bed sound").omitDefault()
-        .field("blendSteps", &AudioZone::blendSteps).doc("The crossfade, in steps").unitless()
+        .field("blendMs", &AudioZone::blendMs).doc("The crossfade").unit("ms")
         .field("resync", &AudioZone::resync).doc("Resent after a restore").omitDefault();
     r.type<AudioOcclusion>("AudioOcclusion").event()
         .doc("audio.occlusion: a held voice re-cast through different walls")
@@ -141,10 +141,10 @@ void registerEventTypes(reflect::TypeRegistry& r) {
         .field("walls", &AudioOcclusion::walls).doc("Walls now (2: 2 or more)").unitless()
         .field("occlusionDb", &AudioOcclusion::occlusionDb).doc("Their cut").unit("dB")
         .field("lowPassHz", &AudioOcclusion::lowPassHz).doc("Their low-pass; 0: none").unit("Hz")
-        .field("blendSteps", &AudioOcclusion::blendSteps).doc("The ramp, in steps").unitless();
+        .field("blendMs", &AudioOcclusion::blendMs).doc("The ramp").unit("ms");
     r.type<AudioStopWorld>("AudioStopWorld").event()
         .doc("audio.stop_world: the voices on the world's buses fade: a restore (a round's restart too) put back another moment")
-        .field("blendSteps", &AudioStopWorld::blendSteps).doc("The fade, in steps").unitless();
+        .field("blendMs", &AudioStopWorld::blendMs).doc("The fade").unit("ms");
 }
 
 } // namespace ohao::ecs

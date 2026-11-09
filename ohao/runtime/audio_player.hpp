@@ -5,8 +5,8 @@
 // since its cursor (the World's log) and drives AudioSystem. Headless hosts have none: the events are what
 // agents read (events.read).
 //
-// The clock: the player anchors a schedule step s0 to an engine frame f0 and plays step s's commands at
-// f0 + (s - s0) x rate / 60 + one step (the horizon, OPEN ruling 7), so two steps run in one frame
+// The clock: the player anchors a World step s0 to an engine frame f0 and plays step s's commands at
+// f0 + (s - s0) x rate x dt + one step (the horizon, OPEN ruling 7; dt the World's), so two steps run in one frame
 // sound a step apart. A command whose time has passed starts at once and counts as late. The anchor is
 // taken again when the timeline is not running in real time (paused or lockstep: each command at once
 // plus the horizon), when the schedule's step goes back (a restore, a round restart), and when the
@@ -92,9 +92,11 @@ public:
     [[nodiscard]] std::vector<DeviceBus> deviceBuses() const;
     [[nodiscard]] const AudioBank* bank() const noexcept { return m_hasBank ? &m_bank : nullptr; }
     [[nodiscard]] uint32_t horizonFrames() const noexcept;
-    [[nodiscard]] uint32_t stepFrames() const noexcept;
+    [[nodiscard]] uint32_t stepFrames() const noexcept;   // one step of the World's dt
+    [[nodiscard]] uint32_t msFrames(uint32_t ms) const noexcept;
 
 private:
+    [[nodiscard]] uint32_t rate() const noexcept;
     void anchor(uint64_t step);
     [[nodiscard]] uint64_t startFrameOf(uint64_t step);
     void clock(uint64_t step, bool realtime);   // the anchor, at the World's step
@@ -118,6 +120,7 @@ private:
     bool m_anchored{false};
     uint64_t m_s0{0}, m_f0{0};
     uint64_t m_lastStep{0};
+    float m_stepDt{1.0f / 60.0f};   // the World's, at the last update
 
     std::map<uint32_t, SoundHandle> m_voices;       // schedule voice -> device handle
     std::map<uint32_t, uint8_t> m_voiceBus;         // schedule voice -> its bus

@@ -52,7 +52,14 @@ glm::mat4 worldOf(const entt::registry& reg, entt::entity e) {
     return glm::mat4(1.0f);
 }
 
-uint32_t holdSteps(uint32_t holdMs) { return (holdMs * 60u + 999u) / 1000u; }
+// Durations in data (ms) as steps of the World's dt: a hold rounds up (it lasts at least its time), a ramp or a period
+// to the nearest step (at least one). In double, with 1e-6 of slack, so a whole number of steps stays one.
+uint32_t holdSteps(uint32_t holdMs, float dt) {
+    return static_cast<uint32_t>(std::ceil(holdMs / (1000.0 * dt) - 1e-6));
+}
+uint32_t periodSteps(uint32_t ms, float dt) {
+    return std::max<uint32_t>(1, static_cast<uint32_t>(std::lround(ms / (1000.0 * dt))));
+}
 
 // A zone's box in its entity's frame.
 struct LocalBox {
@@ -251,7 +258,6 @@ struct AudioSchedule::Impl {
         std::vector<float> busDuck;           // per bus: the duck level decided
         std::vector<uint32_t> busRelease;     // per bus: the release of the duck that set it
         std::string zone, snapshot;
-        uint64_t steps{0};
     } s;
 
     // What the device was last told (never snapshotted): after a restore, what differs is resent.
@@ -311,7 +317,7 @@ struct AudioSchedule::Impl {
 
     [[nodiscard]] std::string busName(std::size_t b) const { return b < bank.buses.size() ? bank.buses[b].name : std::string(); }
     void emitSnapshot(AudioSnapshot c) {
-        lastSnapshotBlend = c.blendSteps;
+        lastSnapshotBlend = c.blendMs;
         out.snapshot.emit(std::move(c));
     }
 
@@ -543,8 +549,8 @@ struct AudioSchedule::Impl {
         v.bus = static_cast<uint8_t>(bus);
         v.priority = desc.priority;
         v.audible = audible;
-        v.start = s.steps;
-        v.hold = holdSteps(desc.holdMs);
+        v.start = world.steps();
+        v.hold = holdSteps(desc.holdMs, world.stepDt());
         v.end = v.start + v.hold;
         v.source = req.at;
         v.occlude = occlude;
@@ -552,7 +558,7 @@ struct AudioSchedule::Impl {
         s.voices.push_back(v);
         // Ducks this sound triggers hold while it holds its voice.
         for (std::size_t i = 0; i < bank.ducks.size(); ++i)
-            if (bank.ducks[i].on == desc.name) s.duckUntil[i] = std::max(s.duckUntil[i], s.steps + v.hold);
+            if (bank.ducks[i].on == desc.name) s.duckUntil[i] = std::max(s.duckUntil[i], world.steps() + v.hold);
         stats.voices = static_cast<uint32_t>(s.voices.size());
     }
 
@@ -564,8 +570,8 @@ struct AudioSchedule::Impl {
             uint32_t attack = 0, release = 0;
             for (std::size_t i = 0; i < bank.ducks.size(); ++i) {
                 const DuckDesc& d = bank.ducks[i];
-                if (bank.bus(d.bus) != static_cast<int>(b) || s.duckUntil[i] <= s.steps) continue;
-                if (d.db < target) target = d.db, attack = d.attackSteps, release = d.releaseSteps;
+                if (bank.bus(d.bus) != static_cast<int>(b) || s.duckUntil[i] <= world.steps()) continue;
+                if (d.db < target) target = d.db, attack = d.attackMs, release = d.releaseMs;
             }
             if (target == s.busDuck[b]) continue;
             const uint32_t blend = target < s.busDuck[b] ? attack : s.busRelease[b];
@@ -607,10 +613,10 @@ struct AudioSchedule::Impl {
     uint32_t snapshotBlend(const std::string& to, const std::string& from) const {
         if (to != "default") {
             const SnapshotDesc* d = snapshotDesc(to);
-            return d ? d->inSteps : 0;
+            return d ? d->inMs : 0;
         }
         const SnapshotDesc* left = from.empty() ? nullptr : snapshotDesc(from);
-        return left ? left->outSteps : 0;
+        return left ? left->outMs : 0;
     }
 
     // After a restore (a round restart's too): the device is brought from what it heard to where this
@@ -620,7 +626,7 @@ struct AudioSchedule::Impl {
         if (const std::string zone = zoneTarget(); !zone.empty() && zone != heard.zone && !heard.zone.empty()) {
             const ReverbDesc* p = bank.preset(zone);
             heard.zone = zone;
-            out.zone.emit(AudioZone{zone, p ? p->bed : std::string(), kZoneBlendSteps, true});
+            out.zone.emit(AudioZone{zone, p ? p->bed : std::string(), kZoneBlendMs, true});
         }
         if (const std::string snap = snapshotTarget(); snap != heard.snapshot && !heard.snapshot.empty()) {
             const uint32_t blend = snapshotBlend(snap, heard.snapshot);
@@ -630,7 +636,7 @@ struct AudioSchedule::Impl {
         for (std::size_t b = 0; b < s.busDuck.size() && b < heard.busDuck.size(); ++b) {
             if (s.busDuck[b] == heard.busDuck[b]) continue;
             heard.busDuck[b] = s.busDuck[b];
-            out.bus.emit(AudioBus{busName(b), s.busDuck[b], kOcclusionBlendSteps, true});
+            out.bus.emit(AudioBus{busName(b), s.busDuck[b], kOcclusionBlendMs, true});
         }
     }
 
@@ -672,7 +678,6 @@ struct AudioSchedule::Impl {
     }
 
     void step() {
-        ++s.steps;
         raysThisStep = 0;
         refreshBank();
         ears = listenerAtStep(world);
@@ -680,7 +685,7 @@ struct AudioSchedule::Impl {
         // 1. Any restore since the last step (a round's restart too): the device's world voices fade; the
         // restored mix is resent.
         if (restored) {
-            out.stopWorld.emit(AudioStopWorld{kStopWorldSteps});
+            out.stopWorld.emit(AudioStopWorld{kStopWorldMs});
             resync();
             restored = false;
         }
@@ -691,7 +696,7 @@ struct AudioSchedule::Impl {
             s.zone = preset;
             heard.zone = preset;
             const ReverbDesc* p = bank.preset(preset);
-            out.zone.emit(AudioZone{preset, p ? p->bed : std::string(), kZoneBlendSteps, false});
+            out.zone.emit(AudioZone{preset, p ? p->bed : std::string(), kZoneBlendMs, false});
         }
 
         // 3. The snapshot from the round.
@@ -703,7 +708,7 @@ struct AudioSchedule::Impl {
         }
 
         // 4. Voices that have ended let go; then the step's sounds.
-        std::erase_if(s.voices, [&](const Voice& v) { return s.steps >= v.end; });
+        std::erase_if(s.voices, [&](const Voice& v) { return world.steps() >= v.end; });
         const uint64_t playerId = ears ? ears->playerId : 0;
         const auto& reg = world.registry();
         // Footsteps and landings in the order physics emitted them (a restart in the step ended what came before).
@@ -744,15 +749,16 @@ struct AudioSchedule::Impl {
         // 5. Ducks.
         updateDucks();
 
-        // 6. Held voices re-cast every 6 steps.
+        // 6. Held voices re-cast every kRecastMs.
+        const uint32_t recast = periodSteps(kRecastMs, world.stepDt());
         if (ears)
             for (Voice& v : s.voices) {
-                if (!v.occlude || v.hold <= kRecastSteps || s.steps <= v.start || (s.steps - v.start) % kRecastSteps != 0) continue;
+                if (!v.occlude || v.hold <= recast || world.steps() <= v.start || (world.steps() - v.start) % recast != 0) continue;
                 const auto now = cast(*ears, v.source);
                 if (!now || now->walls == v.occl.walls) continue;   // capped: the last answer stands
                 v.occl = *now;
                 out.occlusion.emit(AudioOcclusion{v.id, v.occl.walls, v.occl.db, static_cast<float>(v.occl.lowPassHz),
-                                                  kOcclusionBlendSteps});
+                                                  kOcclusionBlendMs});
             }
         stats.voices = static_cast<uint32_t>(s.voices.size());
     }
@@ -776,14 +782,14 @@ void AudioSchedule::setBank(const AudioBank& bank) {
 }
 const AudioBank& AudioSchedule::bank() const noexcept { return m->bank; }
 uint64_t AudioSchedule::bankVersion() const noexcept { return m->bankVersion; }
-uint64_t AudioSchedule::steps() const noexcept { return m->s.steps; }
+uint64_t AudioSchedule::steps() const noexcept { return m->world.steps(); }
 const std::string& AudioSchedule::zone() const noexcept { return m->s.zone; }
 const std::string& AudioSchedule::snapshot() const noexcept { return m->s.snapshot; }
 AudioScheduleStats AudioSchedule::stats() const noexcept { return m->stats; }
 float AudioSchedule::busDuckDb(std::size_t bus) const noexcept {
     return bus < m->s.busDuck.size() ? m->s.busDuck[bus] : 0.0f;
 }
-uint32_t AudioSchedule::snapshotBlendSteps() const noexcept { return m->lastSnapshotBlend; }
+uint32_t AudioSchedule::snapshotBlendMs() const noexcept { return m->lastSnapshotBlend; }
 const std::vector<AudioWarning>& AudioSchedule::warnings() const noexcept { return m->warnings; }
 std::string AudioSchedule::zoneAt(glm::vec3 p) const { return m->zoneAt(p); }
 
@@ -837,7 +843,6 @@ void AudioSchedule::hashState(StateHash& h) const {
     for (const uint32_t r : s.busRelease) h.u32(r);
     h.string(s.zone);
     h.string(s.snapshot);
-    h.u64(s.steps);
 }
 
 AudioSchedule& installAudio(World& world, AssetResolver& assets) {

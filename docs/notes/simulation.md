@@ -280,7 +280,10 @@ step 2h, 2026-11-09), unchanged.
     integers only: each layer's state, its steps, the state faded from and
     its steps, the fade's length and progress. Never keep a clip time or a pose in a saved
     component; force a state with `component.set` on `Animator` (`animation.info` reads it back). A pose is a function of them and alpha, sampled at
-    `(steps - 1 + alpha)` steps of 1/60 s; the pose (`AnimPose`) is runtime, never saved or hashed.
+    `(steps - 1 + alpha)` steps of the World's dt (`World::stepDt`, step 3e); the pose (`AnimPose`) is runtime, never
+    saved or hashed. A graph file is `"version": 2`: its fades are seconds, each a whole number of steps of the dt
+    (`fadeSteps`), so the same graph fades as long at 60 Hz and at 120 Hz (a version-1 file, fades in steps, is
+    refused).
     Clip events fire in the step, in id order, as `anim.clip_event`.
   - **A skinned instance is its own mesh.** The render extract gives an entity with `SkinnedMesh`
     a mesh from `RenderScene::registerSkinnedInstance(base)`: its own vertex range (the base's
@@ -354,8 +357,11 @@ step 2h, 2026-11-09), unchanged.
     unknown preset is `W_AUDIO_PRESET` and counts as the bank's `defaultZone`.
   - **The schedule** (`ecs/audio_schedule.hpp`, `installAudio(world, assets)`, which the CLI context
     and `LiveHost` call after `installAnimation`) is the step's last simulate system. From step 2 it
-    writes `zone` commands (the listener's zone changed: preset, bed, a 30-step blend) and
-    `occlusion` commands (a held voice's wall count changed on a re-cast every 6 steps). Occlusion
+    writes `zone` commands (the listener's zone changed: preset, bed, a 500 ms blend) and
+    `occlusion` commands (a held voice's wall count changed on a re-cast every 100 ms). Every duration is
+    time, not steps (step 3e): the bank's `holdMs`, a duck's `attackMs`/`releaseMs`, a snapshot's
+    `inMs`/`outMs`, the commands' `blendMs`; the schedule counts them in steps of the World's dt (a hold
+    rounds up, a ramp or period to the nearest), and the player in frames. Occlusion
     is graded by walls: none; −8 dB, 1.2 kHz; −14 dB, 700 Hz for two or more. At most 16 rays a
     step: past them a new voice counts as unoccluded, a re-cast keeps its answer, both counted. The
     listener is the input-driven player's head, else the first active camera.
