@@ -139,6 +139,7 @@ struct VfxSystem::Impl {
         std::array<uint64_t, VfxRecord::kKinds> dropped{};
         uint64_t written{0};
         std::map<uint64_t, EmitterState> emitters;   // by entity id
+        float dt{1.0f / 60.0f};   // the last step's (records' ages are counted in it)
     };
 
     World& world;
@@ -149,7 +150,6 @@ struct VfxSystem::Impl {
     std::string namedPath;   // what the world's VfxSet names (read once per path)
     std::string setPath;     // where the set in use came from ("" for the default)
     uint64_t setVersion{1};  // changes whenever the set does (the renderer copies it then)
-    float dt{1.0f / 60.0f};  // the last step's (records' ages are counted in it)
     State st;
     std::vector<VfxWarning> warnings;
     std::set<std::pair<std::string, std::string>> warned;   // (code, what): once each
@@ -441,7 +441,7 @@ struct VfxSystem::Impl {
     void step(float dt) {
         const auto t0 = std::chrono::steady_clock::now();
         refreshSet();
-        this->dt = dt;
+        st.dt = dt;
         ++st.steps;
         const auto events = combatEvents(world);
         std::size_t after = 0;   // the step's events after its last restart
@@ -495,7 +495,7 @@ std::vector<VfxRecord> VfxSystem::recordsSince(uint64_t since, std::size_t max, 
 const vfx::VfxSet& VfxSystem::set() const { return m->set; }
 const std::string& VfxSystem::setPath() const { return m->setPath; }
 uint64_t VfxSystem::setVersion() const noexcept { return m->setVersion; }
-float VfxSystem::stepDt() const noexcept { return m->dt; }
+float VfxSystem::stepDt() const noexcept { return m->st.dt; }
 
 void VfxSystem::addRecordForTest(VfxRecord record) { m->add(record); }
 
@@ -517,6 +517,37 @@ void VfxSystem::restoreState(const std::shared_ptr<const void>& state) {
     if (const auto* s = static_cast<const Impl::State*>(state.get())) m->st = *s;
 }
 
+void VfxSystem::hashState(StateHash& h) const {
+    const Impl::State& s = m->st;
+    h.u64(s.records.size());
+    for (const VfxRecord& r : s.records) {
+        h.u32(static_cast<uint32_t>(r.kind));
+        h.u32(r.effect);
+        h.u32(r.seed);
+        h.u64(r.seq);
+        h.u64(r.spawnStep);   // r.sourceSeq is the combat log's, which is history: not hashed
+        h.entity(r.source);
+        h.entity(r.on);
+        for (int c = 0; c < 4; ++c)
+            for (int k = 0; k < 4; ++k) h.f32(r.pose[c][k]);
+        h.vec3(r.a);
+        h.vec3(r.b);
+        h.f32(r.life);
+    }
+    h.u64(s.nextSeq);
+    h.u64(s.steps);
+    for (const uint64_t d : s.dropped) h.u64(d);
+    h.u64(s.written);
+    h.u64(s.emitters.size());
+    for (const auto& [id, em] : s.emitters) {
+        h.u64(id);
+        h.boolean(em.active);
+        h.u64(em.since);
+        h.u64(em.emitted);
+    }
+    h.f32(s.dt);
+}
+
 VfxSystem& installVfx(World& world, AssetResolver& assets) {
     auto& reg = world.registry();
     if (const auto* installed = reg.ctx().find<VfxInstalled>()) return *installed->system;
@@ -528,7 +559,8 @@ VfxSystem& installVfx(World& world, AssetResolver& assets) {
     addSnapshotHook(reg, SnapshotHook{"vfx", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) {
                                           if (s) raw->restoreState(s);
-                                      }});
+                                      },
+                                      [raw](StateHash& h) { raw->hashState(h); }});
     return *system;
 }
 

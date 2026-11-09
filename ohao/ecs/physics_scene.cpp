@@ -1,5 +1,7 @@
 #include "ecs/physics_scene_impl.hpp"
 
+#include <algorithm>
+
 namespace ohao::ecs {
 
 
@@ -535,11 +537,6 @@ auto PhysicsScene::Impl::bodyIdentity() const -> std::vector<std::pair<pb::BodyH
     return out;
 }
 
-void PhysicsScene::Impl::restoreSimulation(const std::shared_ptr<const void>& state) {
-    savedPending = std::static_pointer_cast<const SavedSimulation>(state);
-    restoredSinceSpawn = true;
-}
-
 // Bodies up to date, then the motion a restore wrote: into the bodies (after their
 // teleports); players take theirs in their step, after its own teleport.
 void PhysicsScene::Impl::sync() {
@@ -569,6 +566,7 @@ struct PhysicsScene::Impl::SavedSimulation {
     std::vector<SavedPlayer> players;
     std::vector<std::pair<uint64_t, Pair>> pairs;               // the contact bookkeeping, entities by id
     std::size_t dormant{0};
+    uint64_t steps{0};                                          // the step count (the log's seq is the log's: step 3c)
 };
 
 std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
@@ -578,9 +576,78 @@ std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
     s->bodies = bodyIdentity();
     s->joints = jointIdentity();
     for (const auto& [e, p] : players) s->players.push_back(SavedPlayer{idOf(e), idOf(p.head), idOf(p.ground), p});
-    s->pairs.assign(pairs.begin(), pairs.end());
+    s->pairs.assign(pairs.begin(), pairs.end());   // in the map's order: a restore inserts them back in it
     s->dormant = dormant;
+    s->steps = steps;
     return s;
+}
+
+void PhysicsScene::Impl::restoreSimulation(const std::shared_ptr<const void>& state) {
+    savedPending = std::static_pointer_cast<const SavedSimulation>(state);
+    restoredSinceSpawn = true;
+    if (savedPending) steps = savedPending->steps;   // at once: the bodies wait for the next sync
+}
+
+void PhysicsScene::Impl::hashSimulation(StateHash& h) const {
+    std::shared_ptr<const void> live;
+    const SavedSimulation* s = savedPending.get();
+    if (!s) {
+        live = saveSimulation();
+        s = static_cast<const SavedSimulation*>(live.get());
+    }
+    if (!s) {
+        h.u64(0);
+        return;
+    }
+    h.string(s->backend);
+    h.u64(s->bodies.size());
+    for (const auto& [body, id] : s->bodies) {
+        h.u64(body);
+        h.u64(id);
+    }
+    h.u64(s->joints.size());
+    for (const auto& [joint, id] : s->joints) {
+        h.u64(joint);
+        h.u64(id);
+    }
+    h.u64(s->players.size());
+    for (const SavedPlayer& sp : s->players) {
+        const PlayerRecord& p = sp.record;
+        h.u64(sp.id);
+        h.u64(sp.headId);
+        h.u64(sp.groundId);
+        h.u64(p.character);
+        h.u64(p.inner);
+        h.vec3(p.written);
+        h.f32(p.writtenRot.w); h.f32(p.writtenRot.x); h.f32(p.writtenRot.y); h.f32(p.writtenRot.z);
+        h.vec3(p.horizontal);
+        h.f32(p.vy);
+        h.f32(p.yawDeg);
+        h.f32(p.pitchDeg);
+        h.vec3(p.headPos);
+        h.f32(p.headRot.w); h.f32(p.headRot.x); h.f32(p.headRot.y); h.f32(p.headRot.z);
+        h.f32(p.stride);
+        h.f32(p.airTop);
+        h.boolean(p.grounded);
+        h.u64(p.footsteps);
+        h.boolean(p.placed);
+    }
+    std::vector<std::pair<uint64_t, Pair>> pairsByKey = s->pairs;
+    std::sort(pairsByKey.begin(), pairsByKey.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    h.u64(pairsByKey.size());
+    for (const auto& [key, pair] : pairsByKey) {
+        h.u64(key);
+        h.u32(pair.count);
+        h.boolean(pair.trigger);
+        h.boolean(pair.dormant);
+        h.u64(pair.aId);
+        h.u64(pair.bId);
+        h.vec3(pair.point);
+        h.vec3(pair.normal);
+        h.u64(pair.since);
+    }
+    h.u64(s->dormant);
+    h.u64(s->steps);
 }
 
 // The saved simulation back in place, when its bodies and players are this world's (the same
@@ -637,6 +704,7 @@ PhysicsScene::PhysicsScene(entt::registry& reg, AssetResolver& assets) : m(std::
 
 std::shared_ptr<const void> PhysicsScene::saveSimulation() const { return m->saveSimulation(); }
 void PhysicsScene::restoreSimulation(const std::shared_ptr<const void>& state) { m->restoreSimulation(state); }
+void PhysicsScene::hashSimulation(StateHash& h) const { m->hashSimulation(h); }
 PhysicsScene::~PhysicsScene() = default;
 
 void PhysicsScene::sync(entt::registry&) { m->sync(); }
@@ -809,7 +877,8 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     // Snapshots carry the simulation, so a restore replays exactly (spec "Snapshots and replay").
     PhysicsScene* raw = scene.get();
     addSnapshotHook(reg, SnapshotHook{"physics", [raw] { return raw->saveSimulation(); },
-                                      [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); }});
+                                      [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); },
+                                      [raw](StateHash& h) { raw->hashSimulation(h); }});
     // Players spawn before the transform system, so a play scene's first frame is the spawn's.
     world.addSync("player_spawn", [scene](World&) { scene->spawnPlayers(); });
     world.addSync("physics", [scene](World& w) { scene->sync(w.registry()); });

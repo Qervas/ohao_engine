@@ -39,8 +39,10 @@ public:
     // empty Children and its CreationOrder.
     entt::entity create(std::string_view name, const Transform& local = {});
     // Same, with a caller-chosen id (from a file or a command). Returns entt::null and
-    // creates nothing when id is 0 or already in use.
-    entt::entity createWithId(uint64_t id, std::string_view name, const Transform& local = {});
+    // creates nothing when id is 0 or already in use. `hint`: the handle to take when it is free (a snapshot
+    // restore recreates an entity as it was, so references held as handles stay valid).
+    entt::entity createWithId(uint64_t id, std::string_view name, const Transform& local = {},
+                              entt::entity hint = entt::null);
 
     // Stable ids. Generated ids are splitmix64(seed + counter++), skipping 0 and ids in
     // use. The seed comes from std::random_device unless seedIds() fixes it; the whole
@@ -138,7 +140,7 @@ private:
     void onIdDestroyed(entt::registry& r, entt::entity e);
     void onIdUpdated(entt::registry& r, entt::entity e);
     void onInputActionsChanged(entt::registry& r, entt::entity e);
-    entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local);
+    entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local, entt::entity hint = entt::null);
     uint64_t nextId();
     bool claim(uint64_t id);
 

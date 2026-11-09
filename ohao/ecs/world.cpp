@@ -170,13 +170,13 @@ entt::entity World::create(std::string_view name, const Transform& local) {
     return createImpl(nextId(), name, local);
 }
 
-entt::entity World::createWithId(uint64_t id, std::string_view name, const Transform& local) {
+entt::entity World::createWithId(uint64_t id, std::string_view name, const Transform& local, entt::entity hint) {
     if (id == 0 || !claim(id)) return entt::null;
-    return createImpl(id, name, local);
+    return createImpl(id, name, local, hint);
 }
 
-entt::entity World::createImpl(uint64_t id, std::string_view name, const Transform& local) {
-    const entt::entity e = m_registry.create();
+entt::entity World::createImpl(uint64_t id, std::string_view name, const Transform& local, entt::entity hint) {
+    const entt::entity e = hint == entt::null ? m_registry.create() : m_registry.create(hint);
     m_registry.emplace<EntityId>(e, id);
     m_registry.emplace<Name>(e, std::string(name));
     m_registry.emplace<Transform>(e, local);

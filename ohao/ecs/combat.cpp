@@ -414,6 +414,7 @@ struct CombatSystem::Impl {
             roundInfo.started = true;
             deadFor = 0.0f;
             pushRound(CombatEvent::Kind::RoundStart);
+            roundStartStep = steps;
             roundStart = hook->save();
             return;
         }
@@ -448,7 +449,15 @@ struct CombatSystem::Impl {
         const bool pressed = !round.restart.empty() && world.input().pressed(round.restart);
         if (pressed || (playerDead && deadFor + kTimeEps >= round.restartDelay)) {
             const auto t0 = std::chrono::steady_clock::now();
-            hook->restore(roundStart);
+            // The restore puts back combat's own state too (the `combat` hook): what counts the round's history
+            // goes on from here instead.
+            const auto start = roundStart;
+            const uint64_t stepsNow = steps;
+            const uint32_t restartsNow = roundInfo.restarts;
+            hook->restore(start);
+            roundStart = start;
+            steps = stepsNow;
+            roundInfo.restarts = restartsNow;
             roundInfo.lastRestartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             ++roundInfo.restarts;
             roundInfo.phase = RoundPhase::Playing;
@@ -459,12 +468,69 @@ struct CombatSystem::Impl {
             pushRound(CombatEvent::Kind::Restart);
         }
     }
+
+    // ---- what a snapshot carries (the `combat` hook): everything a later step reads --------------
+    struct State {
+        std::vector<Grenade> grenades;
+        float grenadeCooldown{0.0f};
+        bool roundStarted{false};
+        std::shared_ptr<const void> roundStart;
+        uint64_t roundStartStep{0};
+        RoundInfo roundInfo;
+        float deadFor{0.0f};
+        uint64_t steps{0};
+        float lastDt{1.0f / 60.0f};
+    };
+    uint64_t roundStartStep{0};   // the step the round's start was taken at (what world.hash counts of it)
+
+    [[nodiscard]] std::shared_ptr<const void> save() const {
+        return std::make_shared<const State>(State{grenades, grenadeCooldown, roundStarted, roundStart, roundStartStep,
+                                                   roundInfo, deadFor, steps, lastDt});
+    }
+    void restore(const State& s) {
+        grenades = s.grenades;
+        grenadeCooldown = s.grenadeCooldown;
+        roundStarted = s.roundStarted;
+        roundStart = s.roundStart;
+        roundStartStep = s.roundStartStep;
+        roundInfo = s.roundInfo;
+        deadFor = s.deadFor;
+        steps = s.steps;
+        lastDt = s.lastDt;
+    }
+    void hash(StateHash& h) const {
+        h.u64(grenades.size());
+        for (const Grenade& g : grenades) {
+            h.vec3(g.prev);
+            h.vec3(g.pos);
+            h.vec3(g.vel);
+            h.f32(g.fuse);
+            h.boolean(g.resting);
+            h.entity(g.thrower);
+        }
+        h.f32(grenadeCooldown);
+        h.boolean(roundStarted);
+        h.boolean(roundStart != nullptr);
+        h.u64(roundStartStep);
+        h.boolean(roundInfo.started);
+        h.u32(static_cast<uint32_t>(roundInfo.phase));
+        h.f32(roundInfo.restartIn);
+        h.u32(roundInfo.restarts);
+        h.f32(deadFor);
+        h.u64(steps);
+        h.f32(lastDt);
+    }
 };
 
 CombatSystem::CombatSystem(World& world) : m(std::make_unique<Impl>(world)) {}
 CombatSystem::~CombatSystem() = default;
 
 void CombatSystem::step(float dt) { m->step(dt); }
+std::shared_ptr<const void> CombatSystem::saveState() const { return m->save(); }
+void CombatSystem::restoreState(const std::shared_ptr<const void>& state) {
+    if (const auto* s = static_cast<const Impl::State*>(state.get())) m->restore(*s);
+}
+void CombatSystem::hashState(StateHash& h) const { m->hash(h); }
 
 float CombatSystem::damage(entt::entity target, float amount, entt::entity source, glm::vec3 point) {
     if (target == entt::null || !m->reg.valid(target)) return 0.0f;
@@ -501,6 +567,10 @@ CombatSystem& installCombat(World& world) {
     auto system = std::make_shared<CombatSystem>(world);
     reg.ctx().emplace<CombatInstalled>(CombatInstalled{system.get()});
     world.addSimulate("combat", [system](World&, float dt) { system->step(dt); });
+    CombatSystem* raw = system.get();
+    addSnapshotHook(reg, SnapshotHook{"combat", [raw] { return raw->saveState(); },
+                                      [raw](const std::shared_ptr<const void>& s) { raw->restoreState(s); },
+                                      [raw](StateHash& h) { raw->hashState(h); }});
     // The first-person gun's placement and motion (presentation, render rate).
     installViewModel(world);
     return *system;

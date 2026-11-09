@@ -144,8 +144,9 @@ What every change must respect. The build checks some of these; the rest are her
   `replace<T>()` (or emplace/remove). A write through `get<T>()` is never seen.
 - **Systems are installed by `engine::installEngine` and `engine::installRendering`** (`ohao/engine/install.hpp`) in
   every host, and run in the order of `ecs/system_order.hpp`, whoever installs them; a new system adds its name
-  there (an unlisted name throws). A system with state a snapshot must carry registers `ecs::addSnapshotHook` under a
-  `kSnapshotOrder` name.
+  there (an unlisted name throws). A system with state a later step reads registers `ecs::addSnapshotHook` under a
+  `kSnapshotOrder` name, with save, restore and hash: the snapshot and `world.hash` cover it. A log's seq is history,
+  never state.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
   `addSync` (derived state, no dt). Before a `render()` call `world.sync()`, never
   `update()`: rendering must not step the simulation.

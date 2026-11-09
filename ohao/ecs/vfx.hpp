@@ -9,11 +9,12 @@
 //      boom, the smoke and the scorch decal straight down;
 //   3. steps placed VfxEmitters by step count (rate records a second, or one when activated);
 //   4. drops records past their life, and the oldest of a kind over its cap (counted).
-// Records are plain data, runtime only: carried by snapshots (the World's snapshot hooks), never saved or
-// hashed. The same steps give the same records in
+// Records are plain data, runtime only: carried by snapshots and covered by world.hash (the World's snapshot
+// hooks), never saved to a file. The same steps give the same records in
 // every host. A record's look is a closed form of its seed and age (vfx/particle_math.hpp), drawn by
 // the renderer; nothing here is drawn.
 
+#include "ecs/snapshot_hook.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "vfx/vfx_set.hpp"
 
@@ -100,6 +101,7 @@ public:
     // The state a snapshot carries (installVfx's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
+    void hashState(StateHash& h) const;   // what saveState keeps (world.hash)
 
     struct Impl;
 

@@ -6,6 +6,8 @@
 // cone, ignoring the shooter and triggers; what it hits takes damage if it or an ancestor has
 // Health. Shots, hits, damage, deaths and reloads are events: the step's list and a log of 1,024.
 
+#include "ecs/snapshot_hook.hpp"
+
 #include <glm/glm.hpp>
 #include <entt/entt.hpp>
 
@@ -62,6 +64,10 @@ public:
 
     // One fixed step (the `combat` simulate system).
     void step(float dt);
+    // The `combat` snapshot hook: grenades in flight, the round (its phase, timer and start), the step count and dt.
+    [[nodiscard]] std::shared_ptr<const void> saveState() const;
+    void restoreState(const std::shared_ptr<const void>& state);
+    void hashState(StateHash& h) const;
     // Takes `amount` hp from `target` (or the nearest ancestor with Health); returns its health
     // after (the current health for a target without Health, a dead one, or an amount not > 0).
     // A damage event, and a death event when it reaches 0.
@@ -76,7 +82,7 @@ public:
     [[nodiscard]] double lastStepMs() const noexcept;   // the last step's time in this system
     [[nodiscard]] float stepSeconds() const noexcept;   // the last step's dt (s); 1/60 before any step
     [[nodiscard]] RoundInfo round() const noexcept;
-    // The test grenades in flight (runtime: never saved), in throw order: where the last step left each
+    // The test grenades in flight (runtime: snapshotted and hashed, never saved to a file), in throw order: where the last step left each
     // and where this one did (the presentation draws between the two, sub-project 12).
     [[nodiscard]] std::vector<CombatGrenade> grenadesInFlight() const;
 
@@ -100,7 +106,7 @@ namespace combat {
 // The input-driven, living player's `grenade` action (G in the play scene) throws one from the eye
 // along the look plus a lift; it flies a ballistic arc in the combat step, stops where it first
 // meets a body, and goes off kFuse after the throw: an Explode event at its place, which the audio
-// schedule plays as `explode`. No damage. Runtime only: never saved, hashed or snapshotted; a
+// schedule plays as `explode`. No damage. Runtime only: snapshotted and hashed, never saved to a file; a
 // round's restart clears those in flight.
 inline constexpr const char* kGrenadeAction = "grenade";
 inline constexpr float kGrenadeSpeed = 9.0f;       // m/s along the look

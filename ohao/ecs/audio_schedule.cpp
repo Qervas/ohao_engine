@@ -922,6 +922,44 @@ void AudioSchedule::restoreState(const std::shared_ptr<const void>& state) {
     m->restored = true;
 }
 
+void AudioSchedule::hashState(StateHash& h) const {
+    const Impl::State& s = m->s;
+    h.u64(s.voices.size());
+    // v.seq is its play command's place in the log, which is history (never rewound by a restore) and orders
+    // voices only against each other, an order a restore keeps: not hashed.
+    for (const Impl::Voice& v : s.voices) {
+        h.u32(v.id);
+        h.u32(v.sound);
+        h.u32(v.bus);
+        h.u32(v.priority);
+        h.f32(v.audible);
+        h.u64(v.start);
+        h.u64(v.end);
+        h.u32(v.hold);
+        h.vec3(v.source);
+        h.boolean(v.occlude);
+        h.boolean(v.tracked);
+        h.u32(v.occl.walls);
+        h.f32(v.occl.db);
+        h.f32(static_cast<float>(v.occl.lowPassHz));
+    }
+    h.u32(s.nextVoice);
+    h.u64(s.robin.size());
+    for (const auto& [sound, next] : s.robin) {
+        h.u32(sound);
+        h.u32(next);
+    }
+    h.u64(s.duckUntil.size());
+    for (const uint64_t d : s.duckUntil) h.u64(d);
+    h.u64(s.busDuck.size());
+    for (const float d : s.busDuck) h.f32(d);
+    h.u64(s.busRelease.size());
+    for (const uint32_t r : s.busRelease) h.u32(r);
+    h.string(s.zone);
+    h.string(s.snapshot);
+    h.u64(s.steps);
+}
+
 std::vector<AudioCommand> AudioSchedule::commandsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
     std::vector<AudioCommand> out;
     const uint64_t oldest = m->log.empty() ? m->nextSeq : m->log.front().seq;
@@ -945,7 +983,8 @@ AudioSchedule& installAudio(World& world, AssetResolver& assets) {
     addSnapshotHook(reg, SnapshotHook{"audio_schedule", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) {
                                           if (s) raw->restoreState(s);
-                                      }});
+                                      },
+                                      [raw](StateHash& h) { raw->hashState(h); }});
     return *system;
 }
 

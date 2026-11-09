@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a built; 3b-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a and 3b built; 3c-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -106,6 +106,26 @@ and the baseline are unchanged.
 
 *Done when* `replay_test` passes from the new midway point. The baseline's scenes and logs are unchanged; its hashes
 are not, because the hash now covers more.
+
+*As built (2026-11-09):*
+- **Hooks are hashed.** `SnapshotHook` gains `hash`, fed through `ecs::StateHash`, an interface
+  `world_hash.cpp` implements so systems need no reflection. Hooks for `combat` and `animation` (its step
+  count) are added. Physics hashes its pending restore, if one waits for the next sync.
+- **The snapshot** keeps each row's handle, and a restore recreates a missing entity with it
+  (`createWithId(..., hint)`): references held as handles (`Joint::other`, systems' states) stay valid, with no
+  remap.
+- **The input.** The snapshot carries the World's `InputMap`. `world.restore` puts it back; a round's restart
+  does not, since the player's keys are where their hands are (`RestoreInput::No`).
+- **The restart keeps its history.** The restore inside it would now rewind combat's own state, so it keeps the
+  round's start snapshot, the step count and the restart count.
+- **Logs.** A log's seq is history: a restore never rewinds a log. So neither the counters nor the references
+  into a log are hashed: an audio voice's command seq, which only breaks ties in an order a restore keeps, and
+  a vfx record's combat seq. The first try hashed them and failed the replay.
+- **The gate.** `replay_test` takes its midway snapshot with a grenade in flight, a strafe and the aim held.
+  Planted, each caught: combat's hook restoring nothing, and a restore without the input. Each misses the
+  midway hash, and the replay drifts.
+- **The baseline.** The same 39 commands, the same scenes and logs; only the hashes differ.
+  `step3_baseline.py` keeps its own copy of the original fight.
 
 ## 3c. Typed events and one event log
 

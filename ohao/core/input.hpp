@@ -98,6 +98,32 @@ public:
     [[nodiscard]] std::vector<std::string> actionNames() const;
     [[nodiscard]] std::vector<std::string> axisNames() const;
 
+    // The step's state fed to `h` (anything with u64, f32 and string: world.hash's hasher): what each action
+    // did, the keys and buttons down, the virtual device, forced axes, the mouse. Bindings are not state: they
+    // follow InputActions, or code. A snapshot copies the whole map (World::input).
+    template <class H>
+    void hashState(H& h) const {
+        h.u64(m_state.size());
+        for (const auto& [name, s] : m_state) {
+            h.string(name);
+            h.u64((s.pressed ? 1u : 0u) | (s.held ? 2u : 0u) | (s.released ? 4u : 0u));
+        }
+        h.u64(m_down.size());
+        for (const Binding& b : m_down) h.u64((static_cast<uint64_t>(b.device) << 32) | static_cast<uint32_t>(b.code));
+        h.u64(m_virtualHeld.size());
+        for (const std::string& a : m_virtualHeld) h.string(a);
+        h.u64(m_axisForced.size());
+        for (const auto& [axis, v] : m_axisForced) {
+            h.string(axis);
+            h.f32(v);
+        }
+        h.f32(m_mouseDelta.x);
+        h.f32(m_mouseDelta.y);
+        h.f32(static_cast<float>(m_lastMouse.x));
+        h.f32(static_cast<float>(m_lastMouse.y));
+        h.u64(m_haveMouse ? 1 : 0);
+    }
+
 private:
     struct ActionState { bool pressed{false}, held{false}, released{false}; };
     struct AxisDef { Binding positive, negative; };

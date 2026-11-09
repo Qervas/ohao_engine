@@ -342,6 +342,7 @@ struct PhysicsScene::Impl {
     [[nodiscard]] std::vector<std::pair<pb::BodyHandle, uint64_t>> bodyIdentity() const;
 
     [[nodiscard]] std::shared_ptr<const void> saveSimulation() const;
+    void hashSimulation(StateHash& h) const;
     void restoreSimulation(const std::shared_ptr<const void>& state);
     bool restoreSaved();
 

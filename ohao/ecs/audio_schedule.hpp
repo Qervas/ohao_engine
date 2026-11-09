@@ -28,9 +28,11 @@
 //      most 16 rays a step: past the cap a re-cast keeps its last answer and a new voice counts as
 //      unoccluded, both counted, so the cap changes parameters, never which commands exist.
 // The director's state (voices, round robin, ducks, zone, snapshot, its step count) rides in the
-// World's snapshot hooks (after physics'): a restore or a round restart resumes the same schedule. It is
-// never saved or hashed. The log is not snapshotted: a restore writes new seqs. Plain data only: no
+// World's snapshot hooks: a restore or a round restart resumes the same schedule, and world.hash covers it. It is
+// never saved to a file. The log is history, not snapshotted: a restore writes new seqs. Plain data only: no
 // miniaudio, no reflection; the bank comes from ohao_audio_bank.
+#include "ecs/snapshot_hook.hpp"
+
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
@@ -227,6 +229,7 @@ public:
     // The director's state a snapshot carries (installAudio's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
+    void hashState(StateHash& h) const;   // what saveState keeps (world.hash)
 
 private:
     struct Impl;

@@ -84,6 +84,7 @@ public:
     [[nodiscard]] std::vector<AnimEvent> eventsSince(uint64_t seq, std::size_t max, uint64_t& dropped) const;
     [[nodiscard]] uint64_t nextEventSeq() const noexcept { return m_nextSeq; }
     [[nodiscard]] uint64_t steps() const noexcept { return m_steps; }
+    void setSteps(uint64_t steps) noexcept { m_steps = steps; }   // the `animation` snapshot hook's restore
     [[nodiscard]] double lastStepMs() const noexcept { return m_lastStepMs; }
     [[nodiscard]] double lastPoseMs() const noexcept { return m_lastPoseMs; }
 

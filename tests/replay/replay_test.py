@@ -4,14 +4,16 @@
 One headless `ohao serve` (no window, no GPU) plays the play scene: a walk, a turn, rounds fired at
 an enemy, a reload, a grenade thrown and left to explode. Every command is recorded. Then:
 
-  1. replay: restore the snapshot taken midway and re-issue the commands after it: the world reaches
-     the same world.hash, at every checkpoint;
+  1. replay: restore the snapshot taken midway (a grenade in flight, a strafe and the aim held: state the
+     components do not hold, step 3b) and re-issue the commands after it: the world reaches the same
+     world.hash, at every checkpoint;
   2. fresh: a new `ohao serve` process loads the scene and re-issues every command: the same hashes from
      the start. Both loads pass the same `seed`: entity ids are drawn from std::random_device otherwise
      (ohao/ecs/world.hpp), and world.hash includes the id generator's state.
 
-world.hash covers every saved component (transforms, health, weapons, AI, animators), so physics,
-combat, the enemy AI and animation must all replay bit for bit. The test also checks that the
+world.hash covers every saved component (transforms, health, weapons, AI, animators), every system's
+registered state (physics' simulation, combat's grenades and round, the audio schedule, vfx) and the input,
+so physics, combat, the enemy AI and animation must all replay bit for bit. The test also checks that the
 fight happened (rounds fired, a hit, the grenade's explosion, the player moved, the world changed),
 so it cannot pass on a world that stood still.
 
@@ -154,11 +156,11 @@ def first_half(r):
     step(r, 30, [{"action": "jump", "down": False}, {"axis": "move_forward", "value": None}])
 
 
-def second_half(r, s):
-    """The fight: face the nearest living enemy, three bursts, a reload, a grenade left to explode. The
-    facing is computed once, here, and recorded as a teleport, so a replay issues the same command. The
-    player is given 100,000 hit points first (a recorded edit): the enemies fire back, and a dead player's
-    round restarts to its start 3 s later, which would undo the walk and clear the grenade in flight."""
+def fight(r, s):
+    """The fight: face the nearest living enemy, three bursts, a reload, a grenade thrown, then a strafe with
+    the aim held while it flies. The facing is computed once, here, and recorded as a teleport, so a replay
+    issues the same command. The player is given 100,000 hit points first (a recorded edit): the enemies
+    fire back, and a dead player's round restarts to its start 3 s later, which would undo the walk."""
     info = s.tool("combat_info")
     me = next(c for c in info["combatants"] if c.get("player"))
     r.do("world_apply", {"commands": [{"op": "component.set", "id": me["entity"], "type": "Health",
@@ -176,7 +178,15 @@ def second_half(r, s):
     step(r, 100, [{"action": "reload", "down": False}])
     r.checkpoint()
     step(r, 1, [{"action": "grenade", "down": True}])
-    step(r, 160, [{"action": "grenade", "down": False}])   # explodes 150 steps after the throw
+    step(r, 30, [{"action": "grenade", "down": False}, {"axis": "move_right", "value": 1},
+                 {"action": "aim", "down": True}])
+    r.checkpoint()
+
+
+def after_throw(r):
+    """The grenade lands and explodes (150 steps after the throw); the strafe and the aim let go on the way."""
+    step(r, 20, [])
+    step(r, 110, [{"axis": "move_right", "value": None}, {"action": "aim", "down": False}])
     r.checkpoint()
 
 
@@ -194,9 +204,10 @@ def main():
         r = Recorder(s)
         first_half(r)
         r.checkpoint()
-        s.tool("world_snapshot", {"name": "mid"})   # no grenade in flight here: a restore keeps those
+        fight(r, s)
+        s.tool("world_snapshot", {"name": "mid"})   # a grenade in flight, a strafe and the aim held
         mid = len(r.commands)
-        second_half(r, s)
+        after_throw(r)
         end_pos = s.tool("player_info")["pos"]
         kinds, since = [], 0
         while True:   # the log in pages of 64
@@ -214,12 +225,12 @@ def main():
         check(len(set([start_hash] + r.hashes)) == len(r.hashes) + 1,
               "world.hash changed at every checkpoint (%d distinct)" % len(set([start_hash] + r.hashes)))
 
-        # 1. Replay from the midway snapshot.
+        # 1. Replay from the midway snapshot (taken right after the fourth checkpoint).
         s.tool("world_restore", {"name": "mid"})
-        check(hash_of(s) == r.hashes[0], "the restore puts back the midway world.hash")
+        check(hash_of(s) == r.hashes[3], "the restore puts back the midway world.hash")
         again = replay(s, r.commands[mid:])
-        check(again == r.hashes[1:], "replayed from midway: the same world.hash at %d checkpoints%s"
-              % (len(again), "" if again == r.hashes[1:] else " (got %s, want %s)" % (again, r.hashes[1:])))
+        check(again == r.hashes[4:], "replayed from midway: the same world.hash at %d checkpoint(s)%s"
+              % (len(again), "" if again == r.hashes[4:] else " (got %s, want %s)" % (again, r.hashes[4:])))
 
     except RuntimeError as e:
         failures.append(str(e))

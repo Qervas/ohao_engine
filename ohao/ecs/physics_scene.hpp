@@ -33,6 +33,7 @@
 //   - The backend is created at the first body, so a world without colliders pays nothing.
 //
 // No reflection: only components and the backend.
+#include "ecs/snapshot_hook.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/world.hpp"
@@ -236,6 +237,9 @@ public:
     // entities' bodies); else the components' path (teleports at rest, BodyMotion) applies.
     [[nodiscard]] std::shared_ptr<const void> saveSimulation() const;
     void restoreSimulation(const std::shared_ptr<const void>& state);
+    // What saveSimulation keeps, fed to world.hash: a restore not yet put in place (it waits for the next sync) is
+    // hashed as the state it puts back.
+    void hashSimulation(StateHash& h) const;
     // The backend, created on first use; tests step it.
     [[nodiscard]] physics::backend::IPhysicsBackend& backend();
     // The entity's body, or INVALID_BODY.

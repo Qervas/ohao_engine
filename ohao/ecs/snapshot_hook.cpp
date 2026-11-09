@@ -36,6 +36,16 @@ std::shared_ptr<const void> saveSystems(const entt::registry& registry) {
     return out;
 }
 
+void hashSystems(const entt::registry& registry, StateHash& h) {
+    const auto* hooks = registry.ctx().find<SnapshotHooks>();
+    if (!hooks) return;
+    for (const SnapshotHook& hook : hooks->hooks) {
+        if (!hook.hash) continue;
+        h.string(hook.name);
+        hook.hash(h);
+    }
+}
+
 void restoreSystems(const entt::registry& registry, const std::shared_ptr<const void>& saved) {
     const auto* hooks = registry.ctx().find<SnapshotHooks>();
     if (!hooks) return;

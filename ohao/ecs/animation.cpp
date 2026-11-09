@@ -1,5 +1,7 @@
 #include "ecs/animation.hpp"
 
+#include "ecs/snapshot_hook.hpp"
+
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/arms_anim.hpp"
@@ -338,6 +340,13 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     // The pose: after the drawn poses of what the step moved (interpolate, the gun), before the
     // render extract reads them (ecs::kSyncOrder).
     world.addSync("pose", [system](World& w) { system->pose(w); });
+    // The step count (events carry it). The graphs' state is the Animator's, a component; the log's seq is the log's.
+    AnimationSystem* raw = system.get();
+    addSnapshotHook(reg, SnapshotHook{"animation", [raw] { return std::make_shared<const uint64_t>(raw->steps()); },
+                                      [raw](const std::shared_ptr<const void>& s) {
+                                          if (s) raw->setSteps(*static_cast<const uint64_t*>(s.get()));
+                                      },
+                                      [raw](StateHash& h) { h.u64(raw->steps()); }});
     return *system;
 }
 

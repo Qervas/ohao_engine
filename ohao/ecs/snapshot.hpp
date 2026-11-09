@@ -39,6 +39,8 @@ struct Snapshot {
     Snapshot& operator=(const Snapshot&) = delete;
 
     std::vector<uint64_t> ids;         // row -> EntityId; rows are in creation order
+    std::vector<entt::entity> handles; // row -> the entity's handle: a restore recreates a missing one with it, so
+                                       // references held as handles (Joint::other, systems' states) stay valid
     std::vector<uint64_t> order;       // row -> CreationOrder
     std::vector<uint32_t> parent;      // row -> parent row, or kNoRow
     std::vector<uint32_t> childBegin;  // children of row r: children[childBegin[r] .. childBegin[r + 1])
@@ -51,6 +53,7 @@ struct Snapshot {
     World::IdGenState idGen{};
     uint64_t nextSeq{0};
     uint64_t frame{0};
+    InputMap input;                        // the World's input: held keys and axes carry across a step
     std::shared_ptr<const void> systems;   // the snapshot hooks' states (SystemStates), or null (not counted in bytes())
 
     [[nodiscard]] std::size_t rows() const noexcept { return ids.size(); }
@@ -67,9 +70,12 @@ struct RestoreStats {
 // Captures over an existing snapshot, reusing its memory: recapturing allocates nothing
 // once the world has stopped growing (an agent re-snapshotting "base" every step).
 void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapshot& into, uint64_t frame = 0);
+// What a restore puts back besides the components and the hooks' states: the World's input too (world.restore, a
+// replay), or not (a round's restart: the player's keys are where their hands are now).
+enum class RestoreInput : uint8_t { Yes, No };
 // `snapshot` must come from a world with the same registrations. Never fails. The components
-// first, then the snapshot hooks' states.
-RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot);
+// first, then the input, then the snapshot hooks' states.
+RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot, RestoreInput input = RestoreInput::Yes);
 
 // Puts the World's RoundHook (ecs/round_hook.hpp) in its context: a round's start is a snapshot of
 // the world taken with these types, a restart restores it. The world and types must outlive it.

@@ -166,8 +166,8 @@ step 2h, 2026-11-09), unchanged.
     scene) throws from the eye along the look; it flies in the combat step after the weapons,
     sticks where a ray along its move first meets something, and 2.5 s after the throw writes
     `explode` at its place, which the schedule plays occluded as a world source. No damage. A
-    grenade in flight is runtime only: never saved, hashed or snapshotted (a restore keeps the
-    ones in flight, a restart clears them).
+    grenade in flight is runtime: never saved to a file, but snapshotted and hashed with the round's
+    phase, timer and start (the `combat` hook, step 3b); a restart clears them.
   - Saved types hash their names even with no instances, so a new saved component moves every
     `world.hash` in the serve and CLI expectations, not only scenes that use it.
   - Enemies (step 2) are characters on the player's code: `PlayerController` with `spawn`
@@ -392,7 +392,7 @@ step 2h, 2026-11-09), unchanged.
   `audio_schedule`: it writes **spawn records** (effect, tracer, decal, light) from the step's
   `shot`/`hit`/`explode` after its last `restart` and from placed `VfxEmitter`s by step count,
   seeded from the vfx step and the event's index, capped by kind (the oldest dropped, counted).
-  **Records are runtime: never saved or hashed**; snapshots carry them (its `SnapshotHook` chains in
+  **Records are runtime: never saved to a file**; snapshots carry them and `world.hash` covers them (its `SnapshotHook` chains in
   front of the schedule's) and a restart puts back the round start's. Particles are a closed form
   of (record, index, age) (`vfx/particle_math.hpp`), never integrated. Agents read them through
   `vfx.info {since, max}`.

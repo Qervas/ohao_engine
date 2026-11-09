@@ -29,7 +29,8 @@ const T& at(const S& s, std::size_t i) {
 } // namespace
 
 std::size_t Snapshot::bytes() const noexcept {
-    std::size_t n = ids.size() * 8 + order.size() * 8 + parent.size() * 4 + childBegin.size() * 4 + children.size() * 4;
+    std::size_t n = ids.size() * 8 + handles.size() * sizeof(entt::entity) + order.size() * 8 + parent.size() * 4 +
+                    childBegin.size() * 4 + children.size() * 4;
     for (const SnapshotColumn& c : columns) n += c.rows.size() * 4 + c.valueBytes;
     return n;
 }
@@ -40,7 +41,7 @@ void installRoundHook(World& world, const reflect::TypeRegistry& types) {
         return std::make_shared<const Snapshot>(takeSnapshot(world, types));
     };
     hook.restore = [&world](const std::shared_ptr<const void>& s) {
-        if (s) restoreSnapshot(world, *static_cast<const Snapshot*>(s.get()));
+        if (s) restoreSnapshot(world, *static_cast<const Snapshot*>(s.get()), RestoreInput::No);
     };
     world.registry().ctx().insert_or_assign(std::move(hook));
 }
@@ -76,6 +77,7 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     }
     s.columns.resize(used);
     s.frame = frame;
+    s.input = world.input();
     s.systems = saveSystems(reg);
 }
 
@@ -116,11 +118,13 @@ void captureEntityTable(const World& world, Snapshot& s, std::vector<uint32_t>& 
 
     rowOf.assign(entitySlots(reg), kNoRow);
     s.ids.resize(n);
+    s.handles.resize(n);
     s.order.resize(n);
     for (std::size_t r = 0; r < n; ++r) {
         const uint32_t i = pos[r];
         rowOf[entityIndex(es[i])] = static_cast<uint32_t>(r);
         s.ids[r] = at<EntityId>(*idStore, i).value;
+        s.handles[r] = es[i];
         s.order[r] = seq[i];
     }
     const auto rowOfEntity = [&](entt::entity e) {
@@ -174,8 +178,9 @@ namespace {
 RestoreStats restoreComponents(World& world, const Snapshot& s);
 } // namespace
 
-RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
+RestoreStats restoreSnapshot(World& world, const Snapshot& s, RestoreInput input) {
     const RestoreStats stats = restoreComponents(world, s);
+    if (input == RestoreInput::Yes) world.input() = s.input;
     restoreSystems(world.registry(), s.systems);
     return stats;
 }
@@ -269,7 +274,8 @@ RestoreStats restoreComponents(World& world, const Snapshot& s) {
             if (live[r] != entt::null) continue;
             const std::string_view name = nameAt[r] != kNoRow ? std::string_view((*names)[nameAt[r]].value) : "";
             const Transform local = transformAt[r] != kNoRow ? (*transforms)[transformAt[r]] : Transform{};
-            const entt::entity e = world.createWithId(s.ids[r], name, local);
+            const entt::entity e =
+                world.createWithId(s.ids[r], name, local, r < s.handles.size() ? s.handles[r] : entt::entity{entt::null});
             reg.get<CreationOrder>(e).seq = s.order[r];
             // One allocation for its children instead of growing per child.
             if (const uint32_t kids = s.childBegin[r + 1] - s.childBegin[r]) childLists.get(e).entities.reserve(kids);
