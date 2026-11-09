@@ -1,28 +1,23 @@
 #!/usr/bin/env python3
 """gen_bindings -- every shader's bindings for C++, from Slang's reflection (system design 4.2, step 2e).
 
-    python tools/gen_bindings.py            regenerate ohao/render/shader_bindings/*.hpp
-    python tools/gen_bindings.py --check    exit 1 (naming the files) if any is out of date or missing
+The shader build runs it (shaders/CMakeLists.txt): each entry's compile writes its reflection JSON next to its
+SPIR-V, and this writes the headers from them, only those whose text changed:
 
-For each shader file with an entry point (or a ray tracing library), slangc's -reflection-json gives its
-parameters; the header, ohao/render/shader_bindings/<flattened path>.hpp, namespace ohao::shader::<flattened
-path>, holds one `Binding` per parameter (set, binding, descriptor type, count), each set's bindings in order
-(`kSet<N>`, what a descriptor set layout is made from), the stages the file's entry points run in (`kStages`),
-and the push-constant struct with every offset and the size static_asserted. C++ names these; it never types a
-binding number or a push-constant layout again.
+    python tools/gen_bindings.py --manifest build/shader_reflection/manifest.tsv --stamp FILE
+    python tools/gen_bindings.py --check    exit 1 naming each descriptor binding C++ types as a number
 
-slangc is the pinned one (shaders/slangc.version), found as the build finds it: $SLANGC, then
-~/.local/opt/slang-<pin>/bin, then PATH.
+The header of a shader file with entry points, ohao/render/shader_bindings/<flattened path>.hpp, namespace
+ohao::shader::<flattened path>, holds one `Binding` per parameter (set, binding, descriptor type, count), each
+set's bindings in order (`kSet<N>`, what a descriptor set layout is made from), the stages the file's entry points
+run in (`kStages`), and the push-constant struct with every offset and the size static_asserted. C++ names these;
+it never types a binding number or a push-constant layout again.
 """
 import argparse
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
-from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHADERS = os.path.join(ROOT, "shaders")
@@ -38,15 +33,6 @@ STAGE_BITS = {
     "callable": "VK_SHADER_STAGE_CALLABLE_BIT_KHR",
 }
 SHADER_ATTR = re.compile(r'^\s*\[shader\("([a-z]+)"\)\]\s*$')
-
-
-def slangc():
-    pin = open(os.path.join(SHADERS, "slangc.version"), encoding="utf-8").read().split()[0]
-    for c in (os.environ.get("SLANGC"), os.path.expanduser(f"~/.local/opt/slang-{pin}/bin/slangc"),
-              shutil.which("slangc")):
-        if c and os.path.exists(c):
-            return c
-    sys.exit("gen_bindings: no slangc (set SLANGC)")
 
 
 def shader_files():
@@ -68,17 +54,15 @@ def flat(path):
     return os.path.relpath(path, SHADERS)[:-len(".slang")].replace(os.sep, "_").replace("/", "_")
 
 
-def reflect(compiler, path, tmp):
-    """The reflection JSON of `path` (every entry point shares its parameters: checked by the caller)."""
-    name = flat(path)
-    out = os.path.join(tmp, name + ".json")
-    cmd = [compiler, path, "-target", "spirv", "-profile", "spirv_1_6", "-fvk-use-entrypoint-name",
-           "-matrix-layout-column-major", "-I", SHADERS, "-o", os.path.join(tmp, name + ".spv"),
-           "-reflection-json", out]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0 or not os.path.exists(out):
-        raise RuntimeError(f"slangc failed on {path}:\n{r.stderr[-2000:]}")
-    return json.load(open(out, encoding="utf-8"))
+def merged(path, jsons):
+    """One reflection for the file from its entries' (each compiled alone): the parameters every entry shares, and
+    every entry point."""
+    refls = [json.load(open(j, encoding="utf-8")) for j in jsons]
+    for j, r in zip(jsons[1:], refls[1:]):
+        if r["parameters"] != refls[0]["parameters"]:
+            raise RuntimeError(f"{path}: the entries of {os.path.basename(j)} and {os.path.basename(jsons[0])} "
+                               "see different parameters")
+    return {"parameters": refls[0]["parameters"], "entryPoints": [e for r in refls for e in r.get("entryPoints", [])]}
 
 
 def descriptor(t):
@@ -212,6 +196,7 @@ TYPED = [re.compile(p) for p in (
     r"VkDescriptorSetLayoutBinding\s*\{\s*\d", r"\{\s*\d+u?\s*,\s*VK_DESCRIPTOR_TYPE_",
     r"bindings?\[\w+\]\.binding\s*=", r"\bdstBinding\s*=\s*\w+\s*\+", r"\badd(Image)?\(\s*\d+\s*,",
     r"(?<!shader::)\blayoutBinding\(\s*[a-z]\w*\s*,", r"\b(rtc::)?descriptorWrite\(")]   # the old helpers took numbers
+ANY_TYPED = re.compile("|".join(f"(?:{r.pattern})" for r in TYPED))
 
 
 def typed_bindings():
@@ -224,7 +209,10 @@ def typed_bindings():
             if not f.endswith((".cpp", ".hpp")):
                 continue
             p = os.path.join(d, f)
-            for n, line in enumerate(open(p, encoding="utf-8"), 1):
+            text = open(p, encoding="utf-8").read()
+            if not ANY_TYPED.search(text):
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
                 code = line.split("//")[0]
                 if any(r.search(code) for r in TYPED):
                     hits.append(f"{os.path.relpath(p, ROOT)}:{n}: {line.strip()[:100]}")
@@ -233,14 +221,28 @@ def typed_bindings():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--check", action="store_true", help="exit 1 if any header is out of date")
+    ap.add_argument("--manifest", help="the build's (shader file, reflection JSON) pairs, one per entry: write the headers")
+    ap.add_argument("--stamp", help="a file touched once the headers are current (the build's record)")
+    ap.add_argument("--check", action="store_true", help="exit 1 naming each binding number C++ types")
     args = ap.parse_args()
-    compiler = slangc()
+    if args.check:
+        typed = typed_bindings()
+        for h in typed:
+            print(f"gen_bindings: a typed binding number (name the generated Binding): {h}")
+        return 1 if typed else 0
+    if not args.manifest:
+        ap.error("--manifest or --check")
+    key = lambda p: os.path.normcase(os.path.normpath(p))
+    jsons = {}
+    for line in open(args.manifest, encoding="utf-8"):
+        if line.strip():
+            src, js = line.rstrip("\n").split("\t")
+            jsons.setdefault(key(src), []).append(js)
     files = shader_files()
-    with tempfile.TemporaryDirectory() as tmp:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            refls = list(pool.map(lambda f: reflect(compiler, f[0], tmp), files))
-    want = {flat(p) + ".hpp": header(p, st, r) for (p, st), r in zip(files, refls)}
+    if {key(p) for p, _ in files} != set(jsons):
+        raise SystemExit("gen_bindings: the build's shaders and the files with [shader(...)] entry points differ "
+                         f"(re-run cmake): {sorted({key(p) for p, _ in files} ^ set(jsons))}")
+    want = {flat(p) + ".hpp": header(p, st, merged(p, jsons[key(p)])) for p, st in files}
     # all.hpp includes every header: shader_bindings.cpp compiles it, so each static_assert is checked every build.
     want["all.hpp"] = "// Generated by tools/gen_bindings.py: every shader's bindings. Do not edit.\n#pragma once\n" + \
         "".join(f'#include "render/shader_bindings/{f}"\n' for f in sorted(want))
@@ -248,21 +250,15 @@ def main():
     stale = sorted(f for f, text in want.items()
                    if not os.path.exists(os.path.join(OUT, f)) or open(os.path.join(OUT, f), encoding="utf-8").read() != text)
     extra = sorted(have - set(want))
-    if args.check:
-        typed = typed_bindings()
-        for h in typed:
-            print(f"gen_bindings: a typed binding number (name the generated Binding): {h}")
-        for f in stale:
-            print(f"gen_bindings: {f} is out of date (python tools/gen_bindings.py)")
-        for f in extra:
-            print(f"gen_bindings: {f} has no shader")
-        return 1 if stale or extra or typed else 0
     os.makedirs(OUT, exist_ok=True)
     for f in stale:
         open(os.path.join(OUT, f), "w", encoding="utf-8", newline="\n").write(want[f])
     for f in extra:
         os.remove(os.path.join(OUT, f))
-    print(f"gen_bindings: {len(want)} headers, {len(stale)} written, {len(extra)} removed")
+    if stale or extra:
+        print(f"gen_bindings: {len(want)} headers, written: {' '.join(stale) or '-'}, removed: {' '.join(extra) or '-'}")
+    if args.stamp:
+        open(args.stamp, "w").close()
     return 0
 
 

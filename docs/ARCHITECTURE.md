@@ -388,9 +388,11 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    keeps its name in the SPIR-V (pass it as `pName`). One entry gives `<flattened path>.spv`
    (`bench/gpu_calibrate.slang` → `bench_gpu_calibrate.slang.spv`), several
    `<flattened path>.<entry>.spv` (`core/gbuffer.slang` → `core_gbuffer.slang.opaque.spv`); a
-   `.slang` without an entry is a module (`import includes.scene.scene_data;`). Every SPIR-V is
-   rebuilt when any `.slang` changes, and `ohao doctor`'s `shaders.fresh` follows imports
-   transitively. Fullscreen raster passes reuse `postprocess/fullscreen.slang` (no vertex
+   `.slang` without an entry is a module (`import includes.scene.scene_data;`). A SPIR-V is
+   rebuilt when its file or one it imports changes (slangc's `-depfile`), and `ohao doctor`'s
+   `shaders.fresh` follows imports transitively. The same compile saves the entry's reflection
+   (`build/shader_reflection/`), from which the build writes `ohao/render/shader_bindings/<flattened
+   path>.hpp`: the pass names its bindings and push constants from it. Fullscreen raster passes reuse `postprocess/fullscreen.slang` (no vertex
    input, `vkCmdDraw(cmd, 3, 1, 0, 0)`); a vertex shader reading firstInstance or firstVertex
    uses `SV_VulkanInstanceID`/`SV_VulkanVertexID` (HLSL's `SV_InstanceID` leaves the base out).
    Constants and structs C++ shares with a shader go in `shaders/shared/layout.json`, then
@@ -638,8 +640,7 @@ Before it lands it is proven: plant a bug in what it covers and watch it fail.
 
 1. A Python harness under `tests/<area>/` (standard library, numpy or Pillow): it drives `ohao run` or
    `ohao serve`, prints `ok`/`FAIL` lines and ends with one JSON line `{"suite", "passed", "failed",
-   "failures"}`, exiting nonzero on any failure. A C++ suite uses `tests/common/harness.hpp` or
-   `ohao_gtest_main`.
+   "failures"}`, exiting nonzero on any failure. A C++ suite uses `tests/common/harness.hpp`.
 2. Register it in `ohao_register_harness_tests` (`cmake/ohao_tests.cmake`): `ohao_add_python_test(<name>
    LABEL quick|gpu|golden|slow [GPU] TIMEOUT <s> SCRIPT <path>)`, a `TIMEOUT` always, `GPU` if it
    creates a device, `LOCKS` for a fixed scratch path.

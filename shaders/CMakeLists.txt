@@ -9,6 +9,19 @@ set(SHADER_BINARY_FILES "")
 # one may emit other SPIR-V, so a mismatch is a warning here and in `ohao doctor` (tools.slangc).
 # slangc from Slang's own release unpacked at ~/.local/opt/slang-<pin> (Linux), the Vulkan SDK's
 # Bin ($VULKAN_SDK, then C:/VulkanSDK/<newest>), then PATH; -DSLANGC=<path> overrides them all.
+# `slangc -v`, asked once per binary (its path and time): each asking costs about 0.15 s, and a shader edit
+# reconfigures.
+function(ohao_slangc_version exe out)
+    file(TIMESTAMP "${exe}" stamp)
+    if(NOT "${OHAO_SLANGC_PROBED_${out}}" STREQUAL "${exe}|${stamp}")
+        execute_process(COMMAND ${exe} -v OUTPUT_VARIABLE o ERROR_VARIABLE e)
+        string(STRIP "${o}${e}" v)
+        set(OHAO_SLANGC_SEEN_${out} "${v}" CACHE INTERNAL "")
+        set(OHAO_SLANGC_PROBED_${out} "${exe}|${stamp}" CACHE INTERNAL "")
+    endif()
+    set(${out} "${OHAO_SLANGC_SEEN_${out}}" PARENT_SCOPE)
+endfunction()
+
 file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/slangc.version OHAO_SLANGC_PINNED LIMIT_COUNT 1)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/slangc.version)
 file(GLOB OHAO_VULKAN_SDK_BINS "C:/VulkanSDK/*/Bin")
@@ -20,8 +33,7 @@ if(NOT SLANGC)
     message(FATAL_ERROR "slangc not found: unpack Slang's release ${OHAO_SLANGC_PINNED} into "
                         "~/.local/opt/slang-${OHAO_SLANGC_PINNED}, or pass -DSLANGC=<path>")
 endif()
-execute_process(COMMAND ${SLANGC} -v OUTPUT_VARIABLE OHAO_SLANGC_OUT ERROR_VARIABLE OHAO_SLANGC_ERR)
-string(STRIP "${OHAO_SLANGC_OUT}${OHAO_SLANGC_ERR}" OHAO_SLANGC_VERSION)
+ohao_slangc_version(${SLANGC} OHAO_SLANGC_VERSION)
 string(FIND "${OHAO_SLANGC_VERSION}" "${OHAO_SLANGC_PINNED}" OHAO_SLANGC_AT)
 if(NOT OHAO_SLANGC_AT EQUAL 0)
     message(WARNING "slangc ${OHAO_SLANGC_VERSION} (${SLANGC}) is not the pinned ${OHAO_SLANGC_PINNED} "
@@ -41,8 +53,7 @@ if(NOT SLANGC_CPP)
     message(FATAL_ERROR "slangc for the CPU twins not found: unpack Slang's release ${OHAO_SLANGC_CPP_PINNED} into "
                         "~/.local/opt/slang-${OHAO_SLANGC_CPP_PINNED}, or pass -DSLANGC_CPP=<path>")
 endif()
-execute_process(COMMAND ${SLANGC_CPP} -v OUTPUT_VARIABLE OHAO_SLANGC_CPP_OUT ERROR_VARIABLE OHAO_SLANGC_CPP_ERR)
-string(STRIP "${OHAO_SLANGC_CPP_OUT}${OHAO_SLANGC_CPP_ERR}" OHAO_SLANGC_CPP_VERSION)
+ohao_slangc_version(${SLANGC_CPP} OHAO_SLANGC_CPP_VERSION)
 string(FIND "${OHAO_SLANGC_CPP_VERSION}" "${OHAO_SLANGC_CPP_PINNED}" OHAO_SLANGC_CPP_AT)
 if(NOT OHAO_SLANGC_CPP_AT EQUAL 0)
     message(WARNING "slangc ${OHAO_SLANGC_CPP_VERSION} (${SLANGC_CPP}) is not the CPU twins' pinned "
@@ -55,9 +66,17 @@ message(STATUS "slangc for the CPU twins: ${SLANGC_CPP} (${OHAO_SLANGC_CPP_VERSI
 # without one is a module, only imported (shared/layout.slang). The entry is the identifier
 # before the first '(' after the [shader(...)] attribute and any further [...] attribute lines;
 # its SPIR-V entry point keeps that name (-fvk-use-entrypoint-name). Matrices are column-major,
-# as in GLSL and glm. Each target depends on every .slang (imports), and the configure step
-# reruns when one changes, so a new entry point gets its rule.
+# as in GLSL and glm. The configure step reruns when a .slang changes, so a new entry point gets its rule.
+#
+# Each compile also writes the entry's reflection and the files it read (-depfile): a shader is rebuilt when
+# its own file or one it imports changes, not when any shader does. The reflection makes the binding headers
+# (below); its bytes do not change the SPIR-V.
 file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.slang")
+set(OHAO_SHADER_REFLECTION ${CMAKE_BINARY_DIR}/shader_reflection)
+file(MAKE_DIRECTORY ${OHAO_SHADER_REFLECTION})
+set(OHAO_REFLECTION_MANIFEST "")
+set(OHAO_REFLECTION_FILES "")
+set(OHAO_BINDING_HEADERS ${CMAKE_SOURCE_DIR}/ohao/render/shader_bindings/all.hpp)
 foreach(SLANG ${SLANG_SOURCES})
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SLANG})
     file(READ ${SLANG} SLANG_TEXT)
@@ -93,20 +112,47 @@ foreach(SLANG ${SLANG_SOURCES})
             set(SPIRV "${CMAKE_BINARY_DIR}/shaders/${SLANG_FLAT}.${ENTRY}.spv")
         endif()
         get_filename_component(SPIRV_NAME ${SPIRV} NAME)
+        set(REFL ${OHAO_SHADER_REFLECTION}/${SPIRV_NAME})
         add_custom_command(
             OUTPUT ${SPIRV}
+            BYPRODUCTS ${REFL}.json
             COMMAND ${SLANGC} ${SLANG} -target spirv -profile spirv_1_6 ${SLANG_CAPS} -entry ${ENTRY} -fvk-use-entrypoint-name
                     -matrix-layout-column-major -I ${CMAKE_CURRENT_SOURCE_DIR} -o ${SPIRV}
-            DEPENDS ${SLANG_SOURCES}
+                    -reflection-json ${REFL}.json -depfile ${REFL}.d
+            DEPENDS ${SLANG}
+            DEPFILE ${REFL}.d
             COMMENT "Compiling Slang shader ${SPIRV_NAME}"
         )
         list(APPEND SHADER_BINARY_FILES ${SPIRV})
+        list(APPEND OHAO_REFLECTION_FILES ${REFL}.json)
+        string(APPEND OHAO_REFLECTION_MANIFEST "${SLANG}\t${REFL}.json\n")
     endforeach()
+    if(SLANG_ENTRY_COUNT GREATER 0)
+        string(REGEX REPLACE "\\.slang$" ".hpp" SLANG_HEADER ${SLANG_FLAT})
+        list(APPEND OHAO_BINDING_HEADERS ${CMAKE_SOURCE_DIR}/ohao/render/shader_bindings/${SLANG_HEADER})
+    endif()
 endforeach()
 
-# Create shader compilation target
+# The binding headers (ohao/render/shader_bindings/<flattened path>.hpp, checked in so they can be read and
+# reviewed) are written from the reflection by tools/gen_bindings.py: only those whose text changed, so C++ is
+# recompiled only when a shader's parameters changed. They cannot go stale: every build makes them.
+if(NOT Python3_Interpreter_FOUND)
+    message(FATAL_ERROR "the shader binding headers need Python 3 (tools/gen_bindings.py)")
+endif()
+file(GENERATE OUTPUT ${OHAO_SHADER_REFLECTION}/manifest.tsv CONTENT "${OHAO_REFLECTION_MANIFEST}")
+add_custom_command(
+    OUTPUT ${OHAO_SHADER_REFLECTION}/bindings.stamp
+    BYPRODUCTS ${OHAO_BINDING_HEADERS}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_bindings.py
+            --manifest ${OHAO_SHADER_REFLECTION}/manifest.tsv --stamp ${OHAO_SHADER_REFLECTION}/bindings.stamp
+    DEPENDS ${OHAO_REFLECTION_FILES} ${OHAO_SHADER_REFLECTION}/manifest.tsv ${CMAKE_SOURCE_DIR}/tools/gen_bindings.py
+    COMMENT "Writing the shaders' binding headers"
+)
+
+# The libraries that include a binding header depend on this target (ohao/gpu/vulkan, ohao/render), so even a
+# first build compiles them against these shaders' headers.
 add_custom_target(shaders
-    DEPENDS ${SHADER_BINARY_FILES}
+    DEPENDS ${SHADER_BINARY_FILES} ${OHAO_SHADER_REFLECTION}/bindings.stamp
     COMMENT "Compiling all shaders"
 )
 

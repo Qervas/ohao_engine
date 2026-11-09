@@ -9,10 +9,6 @@
 add_library(ohao_test_harness INTERFACE)
 target_include_directories(ohao_test_harness INTERFACE ${CMAKE_SOURCE_DIR}/tests)
 
-# GoogleTest suites take this main instead of gtest_main: it prints the harness's JSON line.
-add_library(ohao_gtest_main STATIC ${CMAKE_SOURCE_DIR}/tests/common/gtest_main.cpp)
-target_link_libraries(ohao_gtest_main PUBLIC gtest ohao_test_harness)
-
 find_package(Python3 COMPONENTS Interpreter)
 
 #   ohao_add_test(<name> LABEL <label> [GPU] [SERIAL] [TIMEOUT <s>] [LOCKS <lock>...]

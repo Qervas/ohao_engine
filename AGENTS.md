@@ -45,6 +45,11 @@ cmake --build build --config Release -j16
 
 - **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a globbed directory is picked up
   by the next build. A new directory or target still needs a `CMakeLists.txt` edit.
+- **The edit loop is seconds** (2026-11-09): an unchanged tree builds in 0.06 s, a shader edit in about 1 s (CMake
+  reconfigures, 0.6 s, for the entry points; only that shader and those importing it are recompiled, from slangc's
+  `-depfile`), a renderer `.cpp` in about 2 s (mostly relinking 14 programs). The dependencies are re-checked only
+  when their declarations change (`OHAO_DEPENDENCIES_POPULATED`), and NRD's config header keeps its time across
+  configures, else every configure recompiles NRD and relinks everything.
 - **The `shaders` target is not in `ALL`**, but every target that loads SPIR-V depends on it, so building any of
   them builds the shaders. Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`.
 - **Every shader is Slang** (no GLSL, no glslc). A `.slang` with one `[shader(...)]` entry point gives
@@ -52,10 +57,11 @@ cmake --build build --config Release -j16
   `<flattened path>.<entry>.spv`, without one it is a module (`import shared.layout;`). Constants and structs
   shared with C++ live in `shaders/shared/layout.json`; regenerate their `.slang`/`.hpp` with
   `python tools/gen_layout.py` (`--check` says whether they are current). **Bindings come from the shaders:**
-  `python tools/gen_bindings.py` writes `ohao/render/shader_bindings/<shader>.hpp` from Slang's reflection (each
-  binding named, each set in order, the push constants); C++ names them (`shader::write`, `shader::layoutBindings`)
-  and never types a binding number, and a hand-written push struct carries `OHAO_CHECK_PUSH`. `tools/check.py`
-  fails the build on a stale header or a typed number. Regenerate after any shader's parameters change. See ARCHITECTURE.md, "add a render pass".
+  the shader build writes `ohao/render/shader_bindings/<shader>.hpp` (checked in, to be read) from the reflection
+  each entry's compile saves (`tools/gen_bindings.py`: each binding named, each set in order, the push constants),
+  only the headers whose text changed; C++ names them (`shader::write`, `shader::layoutBindings`) and never types a
+  binding number, and a hand-written push struct carries `OHAO_CHECK_PUSH`. `tools/check.py` fails the build on a
+  typed number. See ARCHITECTURE.md, "add a render pass".
 - **`GLFW_INCLUDE_NONE`** before GLFW's header (`ohao/runtime/window.cpp`): without it GLFW includes `GL/gl.h`,
   which Fedora does not ship by default. The engine is Vulkan only.
 

@@ -13,8 +13,8 @@ Steps (sub-project 4 spec, "One entry point"):
   2. configure, if the build directory has no CMakeCache.txt;
   3. build the `shaders` target first, then everything (at most 6 jobs: heavier parallel
      load has crashed the reference machine);
-     Then the API's methods against docs/agents/ohao-cli.md's Methods table, and the shader binding headers
-     against the shaders (tools/gen_bindings.py --check): a difference fails the build.
+     Then the API's methods against docs/agents/ohao-cli.md's Methods table, and no binding number typed in C++
+     (tools/gen_bindings.py --check): either fails the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;

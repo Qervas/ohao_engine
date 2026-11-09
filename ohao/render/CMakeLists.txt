@@ -14,6 +14,7 @@ file(GLOB_RECURSE RENDERER_SOURCES CONFIGURE_DEPENDS
 )
 
 add_library(ohao_renderer ${RENDERER_SOURCES})
+add_dependencies(ohao_renderer shaders)   # it includes render/shader_bindings/*.hpp, which the shader build writes
 
 target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
