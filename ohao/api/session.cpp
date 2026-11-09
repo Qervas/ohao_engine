@@ -17,136 +17,6 @@ namespace {
 
 constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope
 
-// ---- the method table -------------------------------------------------------------------
-
-std::vector<reflect::MethodDoc> buildMethods() {
-    const reflect::TypeRegistry& p = paramsRegistry();
-    return {
-        {"engine.info", p.find<EngineInfoParams>(),
-         "{protocolVersion, schemaHash, version, host, time, gpu?: {name, driver, rayTracing, meshShaders}}",
-         "Handshake: protocol version, schemaHash (key cached catalogues on it), engine version, host, time state; "
-         "gpu once the host has a device (headless: at its first render)."},
-        {"schema.get", p.find<SchemaGetParams>(), "the catalogue (ohao_schema.json), compact",
-         "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."},
-        {"scene.validate", p.find<SceneValidateParams>(), "{ok, errors?, warnings?, upgraded?, more?}",
-         "Checks a scene exactly as scene.load would, without touching the world. checkAssets also reports model "
-         "files that do not exist (E_ASSET_NOT_FOUND)."},
-        {"scene.load", p.find<SceneLoadParams>(), "{entities, preserved?, upgraded?, warnings?}",
-         "Loads a scene into the world, which must be empty unless replace (then cleared first; snapshots kept). "
-         "All or nothing. seed fixes the id generator for later creates."},
-        {"scene.save", p.find<SceneSaveParams>(), "{scene} or {path, bytes}",
-         "The canonical scene. Without a path it is returned as an object (compact)."},
-        {"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host, time}",
-         "Cheap orientation: sizes, identity and the time state."},
-        {"world.summary", p.find<WorldSummaryParams>(), "{entities, roots, components, bounds?, outline, moreRoots?}",
-         "Counts per component, bounds of entity origins, a capped hierarchy outline (more, moreRoots: children, "
-         "roots left out)."},
-        {"world.query", p.find<WorldQueryParams>(), "{count, entities, missing?, next?}",
-         "Entities in creation order, filtered (all filters must match) and projected. fields: \"/Type\" or "
-         "\"/Type/field\"; without fields each entity is its file form."},
-        {"world.apply", p.find<WorldApplyParams>(), "{applied, results, inverse}",
-         "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."},
-        {"world.step", p.find<WorldStepParams>(), "{frame, watch?: {entities, count, missing?, next?}}",
-         "Runs frames fixed steps (simulate systems per step, then sync once). watch returns fields after the last "
-         "step, as world.query. E_STATE while realtime runs. Cancellable between steps."},
-        {"time.get", p.find<TimeGetParams>(), "{mode, paused, frame, fixedDt, fps?}",
-         "Lockstep (steps on request) or realtime (from wall time), paused, frame (steps run) and the fixed step."},
-        {"time.set", p.find<TimeSetParams>(), "as time.get",
-         "Changes the mode, pause state or fixed step. Never runs or drops a step. Headless hosts: lockstep only "
-         "(E_STATE)."},
-        {"world.hash", p.find<WorldHashParams>(), "{hash, frame}",
-         "A 64-bit hash of the authoring state (ids, hierarchy, saved components, id generator, creation order). "
-         "Runtime state is not hashed."},
-        {"world.diff", p.find<WorldDiffParams>(),
-         "{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}",
-         "Changes since a snapshot: per entity, \"/Type/field\" (\"/Type\" when added or removed) with old and new "
-         "values; created and destroyed ids; more: past limit."},
-        {"input.inject", p.find<InputInjectParams>(), "{queued, firstStep, lastStep}",
-         "Queues input events by simulation step (0: the next). Actions and axes act as one more device (an axis "
-         "holds until changed; null releases it); keys go through the bindings; mouse entries are deltas."},
-        {"input.state", p.find<InputStateParams>(), "{actions: {name: {held, pressed, released}}, axes: {name: value}}",
-         "The input map as the last step saw it."},
-        {"input.record", p.find<InputRecordParams>(), "{path, steps, events}",
-         "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording in the output directory: input events by "
-         "step, {step, hash} every 60 steps, the final hash. Starting releases held input."},
-        {"input.replay", p.find<InputReplayParams>(), "{steps, events, checkpoints, frame}",
-         "Replays a recording in lockstep from the current world, which must hash as its start (load with its "
-         "seed, or restore). E_REPLAY names the first diverging step. Cancellable."},
-        {"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
-         "Captures the world in memory under a name (replacing it): ids, hierarchy, saved components, id generator, "
-         "frame."},
-        {"world.restore", p.find<WorldRestoreParams>(), "{created, destroyed, changed, frame}",
-         "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
-        {"render.capture", p.find<RenderCaptureParams>(),
-         "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, gpuMs?, timings?: [[name, ms], ...], "
-         "deterministic, validation?} (+ the inline image)",
-         "Renders through the Camera to a PNG (path) and/or an inline preview (maxSize; region zooms). A window "
-         "captures at its own size; realtime: its next presented frame (deterministic false). Left-out quality, "
-         "post, ev100, tonemap: render.settings'. Cancellable, with progress."},
-        {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
-         "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
-         "saved; captures default to them. E_STATE on a host that renders nothing."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
-         "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
-         "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."},
-        {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
-         "Engine log records after since (pass the last read's next), filtered by level and channel."},
-        {"level.info", p.find<LevelInfoParams>(),
-         "{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders, bodies, spawns: [{tag, entity, pos, yawDeg}], "
-         "lights, cameras, warnings, errors?, loadMs}",
-         "A Level's summary: counts, colliders by shape, bodies by motion, spawns in node order (first 8). "
-         "E_NOT_FOUND for no level or a non-level entity."},
-        {"level.reload", p.find<LevelReloadParams>(), "as level.info",
-         "Re-reads the level's file and rebuilds its entities and bodies in place; an unchanged file keeps world.hash."},
-        {"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
-         "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."},
-        {"physics.info", p.find<PhysicsInfoParams>(),
-         "{bodies, shapes, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}]}",
-         "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."},
-        {"physics.events", p.find<PhysicsEventsParams>(),
-         "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}",
-         "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface, "
-         "oldest first; pass next as since to read on."},
-        {"physics.contacts", p.find<PhysicsContactsParams>(),
-         "{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}",
-         "Body pairs touching now (resting included) and bodies in triggers, by id; since: the step they began."},
-        {"player.info", p.find<PlayerInfoParams>(),
-         "{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}",
-         "The player: feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
-         "input.inject and world.step."},
-        {"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
-         "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."},
-        {"combat.info", p.find<CombatInfoParams>(),
-         "{steps, round?: {started, phase, restartIn?, restarts}, combatants: [{entity, name, player?, health?, max?, "
-         "dead?, pos, weapon?: {ammo, magazine, reloading, bloomDeg, kickDeg, shots}, enemy?: {state, lastSeen?}}], more?}",
-         "The fight: the round (playing, dead, won) and everything with Health or a Weapon, in id order. Fire with "
-         "input.inject (fire, reload) and world.step."},
-        {"combat.events", p.find<CombatEventsParams>(),
-         "{events: [{seq, step, kind, source?, sn?, target?, tn?, ...}], next, dropped?}",
-         "Shots (point, dir, coneDeg), hits (point, normal, dist, surface), damage (amount, health), deaths, "
-         "reloads (ammo), round_start, restart, win; oldest first. Pass next as since to read on."},
-        {"combat.damage", p.find<CombatDamageParams>(), "{entity, name, health, max, dead, taken}",
-         "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
-         "events; a dead enemy lies down at the next step."},
-        {"animation.info", p.find<AnimationInfoParams>(),
-         "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?, events: "
-         "[{seq, step, entity, layer, clip, name}], next, dropped?}",
-         "Each Animator's layers (state, clip time in s, the fade) and the clip events after since. Force a state "
-         "with component.set on Animator."},
-        {"audio.info", p.find<AudioInfoParams>(),
-         "{device, sampleRate?, horizonMs, snapshot: {name, blend}, zone, listener?, buses: [{name, db, cap?, voices?, "
-         "mix?}], voices: {playing, dropped, stolen, device?}, rays: {cast, capped}, late?, mixMs?, commands: [{seq, "
-         "step, op, ...}], next, dropped?}",
-         "The voice schedule's commands after since and the bus mix; a window adds the device's half."},
-        {"audio.mix", p.find<AudioMixParams>(), "as audio.info, without commands",
-         "Listening overrides in the device only (never the world, schedule or snapshots): a bus's db, mute, solo; "
-         "a forced snapshot; clear."},
-        {"vfx.info", p.find<VfxInfoParams>(),
-         "{set, steps, caps, live, dropped?, particles, records: [{seq, step, effect|tracer|decal|light, at, on?}], next}",
-         "Effect spawn records the step wrote, after since; particles null headless."},
-    };
-}
-
 std::string readFile(const std::string& path, bool& ok) {
     std::ifstream f(path, std::ios::binary);
     ok = static_cast<bool>(f);
@@ -949,42 +819,154 @@ bool logRead(Session::Impl& s, const JsonDocument&, const JsonNode& params, Deco
     return true;
 }
 
-struct MethodEntry {
-    std::string_view name;
+// One row per method: its doc (the catalogue, MCP tools/list, the CLI's method list) and its handler. A method
+// exists only as a row, so dispatch and the docs cannot disagree.
+struct Method {
+    reflect::MethodDoc doc;
     MethodFn fn;
     bool mutates{false};   // may change the world (Session::changeCount)
 };
-constexpr MethodEntry kDispatch[] = {
-    {"engine.info", engineInfo},     {"schema.get", schemaGet},         {"scene.validate", sceneValidate},
-    {"scene.load", sceneLoad, true}, {"scene.save", sceneSave},         {"world.info", worldInfo},
-    {"world.summary", methodSummary}, {"world.query", methodQuery},     {"world.apply", methodApply, true},
-    {"world.step", worldStep, true}, {"time.get", timeGet},             {"time.set", timeSet},
-    {"world.hash", worldHash},       {"world.diff", worldDiff},         {"input.inject", methodInputInject},
-    {"input.state", methodInputState}, {"input.record", methodInputRecord},
-    {"input.replay", methodInputReplay, true},
-    {"world.snapshot", worldSnapshot},
-    {"world.restore", worldRestore, true}, {"render.capture", renderCapture},
-    {"render.stats", renderStats},   {"render.settings", renderSettings}, {"log.read", logRead},
-    {"level.info", methodLevelInfo}, {"level.reload", methodLevelReload, true},
-    {"physics.raycast", methodPhysicsRaycast}, {"physics.info", methodPhysicsInfo}, {"physics.events", methodPhysicsEvents},
-    {"physics.contacts", methodPhysicsContacts}, {"player.info", methodPlayerInfo},
-    {"player.teleport", methodPlayerTeleport, true},
-    {"combat.info", methodCombatInfo}, {"combat.events", methodCombatEvents},
-    {"combat.damage", methodCombatDamage, true},
-    {"animation.info", methodAnimationInfo},
-    {"audio.info", methodAudioInfo},  {"audio.mix", methodAudioMix},
-    {"vfx.info", methodVfxInfo},
-};
 
-const MethodEntry* findMethod(std::string_view name) {
-    const auto it = std::find_if(std::begin(kDispatch), std::end(kDispatch),
-                                 [&](const MethodEntry& e) { return e.name == name; });
-    return it == std::end(kDispatch) ? nullptr : it;
+const std::vector<Method>& methodTable() {
+    static const std::vector<Method> table = [] {
+        const reflect::TypeRegistry& p = paramsRegistry();
+        return std::vector<Method>{
+        {{"engine.info", p.find<EngineInfoParams>(),
+           "{protocolVersion, schemaHash, version, host, time, gpu?: {name, driver, rayTracing, meshShaders}}",
+           "Handshake: protocol version, schemaHash (key cached catalogues on it), engine version, host, time state; "
+           "gpu once the host has a device (headless: at its first render)."}, engineInfo},
+        {{"schema.get", p.find<SchemaGetParams>(), "the catalogue (ohao_schema.json), compact",
+           "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."}, schemaGet},
+        {{"scene.validate", p.find<SceneValidateParams>(), "{ok, errors?, warnings?, upgraded?, more?}",
+           "Checks a scene exactly as scene.load would, without touching the world. checkAssets also reports model "
+           "files that do not exist (E_ASSET_NOT_FOUND)."}, sceneValidate},
+        {{"scene.load", p.find<SceneLoadParams>(), "{entities, preserved?, upgraded?, warnings?}",
+           "Loads a scene into the world, which must be empty unless replace (then cleared first; snapshots kept). "
+           "All or nothing. seed fixes the id generator for later creates."}, sceneLoad, true},
+        {{"scene.save", p.find<SceneSaveParams>(), "{scene} or {path, bytes}",
+           "The canonical scene. Without a path it is returned as an object (compact)."}, sceneSave},
+        {{"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host, time}",
+           "Cheap orientation: sizes, identity and the time state."}, worldInfo},
+        {{"world.summary", p.find<WorldSummaryParams>(), "{entities, roots, components, bounds?, outline, moreRoots?}",
+           "Counts per component, bounds of entity origins, a capped hierarchy outline (more, moreRoots: children, "
+           "roots left out)."}, methodSummary},
+        {{"world.query", p.find<WorldQueryParams>(), "{count, entities, missing?, next?}",
+           "Entities in creation order, filtered (all filters must match) and projected. fields: \"/Type\" or "
+           "\"/Type/field\"; without fields each entity is its file form."}, methodQuery},
+        {{"world.apply", p.find<WorldApplyParams>(), "{applied, results, inverse}",
+           "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."}, methodApply, true},
+        {{"world.step", p.find<WorldStepParams>(), "{frame, watch?: {entities, count, missing?, next?}}",
+           "Runs frames fixed steps (simulate systems per step, then sync once). watch returns fields after the last "
+           "step, as world.query. E_STATE while realtime runs. Cancellable between steps."}, worldStep, true},
+        {{"time.get", p.find<TimeGetParams>(), "{mode, paused, frame, fixedDt, fps?}",
+           "Lockstep (steps on request) or realtime (from wall time), paused, frame (steps run) and the fixed step."}, timeGet},
+        {{"time.set", p.find<TimeSetParams>(), "as time.get",
+           "Changes the mode, pause state or fixed step. Never runs or drops a step. Headless hosts: lockstep only "
+           "(E_STATE)."}, timeSet},
+        {{"world.hash", p.find<WorldHashParams>(), "{hash, frame}",
+           "A 64-bit hash of the authoring state (ids, hierarchy, saved components, id generator, creation order). "
+           "Runtime state is not hashed."}, worldHash},
+        {{"world.diff", p.find<WorldDiffParams>(),
+           "{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}",
+           "Changes since a snapshot: per entity, \"/Type/field\" (\"/Type\" when added or removed) with old and new "
+           "values; created and destroyed ids; more: past limit."}, worldDiff},
+        {{"input.inject", p.find<InputInjectParams>(), "{queued, firstStep, lastStep}",
+           "Queues input events by simulation step (0: the next). Actions and axes act as one more device (an axis "
+           "holds until changed; null releases it); keys go through the bindings; mouse entries are deltas."}, methodInputInject},
+        {{"input.state", p.find<InputStateParams>(), "{actions: {name: {held, pressed, released}}, axes: {name: value}}",
+           "The input map as the last step saw it."}, methodInputState},
+        {{"input.record", p.find<InputRecordParams>(), "{path, steps, events}",
+           "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording in the output directory: input events by "
+           "step, {step, hash} every 60 steps, the final hash. Starting releases held input."}, methodInputRecord},
+        {{"input.replay", p.find<InputReplayParams>(), "{steps, events, checkpoints, frame}",
+           "Replays a recording in lockstep from the current world, which must hash as its start (load with its "
+           "seed, or restore). E_REPLAY names the first diverging step. Cancellable."}, methodInputReplay, true},
+        {{"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
+           "Captures the world in memory under a name (replacing it): ids, hierarchy, saved components, id generator, "
+           "frame."}, worldSnapshot},
+        {{"world.restore", p.find<WorldRestoreParams>(), "{created, destroyed, changed, frame}",
+           "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."}, worldRestore, true},
+        {{"render.capture", p.find<RenderCaptureParams>(),
+           "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, gpuMs?, timings?: [[name, ms], ...], "
+           "deterministic, validation?} (+ the inline image)",
+           "Renders through the Camera to a PNG (path) and/or an inline preview (maxSize; region zooms). A window "
+           "captures at its own size; realtime: its next presented frame (deterministic false). Left-out quality, "
+           "post, ev100, tonemap: render.settings'. Cancellable, with progress."}, renderCapture},
+        {{"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
+           "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
+           "saved; captures default to them. E_STATE on a host that renders nothing."}, renderSettings},
+        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
+           "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
+           "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."}, renderStats},
+        {{"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
+           "Engine log records after since (pass the last read's next), filtered by level and channel."}, logRead},
+        {{"level.info", p.find<LevelInfoParams>(),
+           "{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders, bodies, spawns: [{tag, entity, pos, yawDeg}], "
+           "lights, cameras, warnings, errors?, loadMs}",
+           "A Level's summary: counts, colliders by shape, bodies by motion, spawns in node order (first 8). "
+           "E_NOT_FOUND for no level or a non-level entity."}, methodLevelInfo},
+        {{"level.reload", p.find<LevelReloadParams>(), "as level.info",
+           "Re-reads the level's file and rebuilds its entities and bodies in place; an unchanged file keeps world.hash."}, methodLevelReload, true},
+        {{"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
+           "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."}, methodPhysicsRaycast},
+        {{"physics.info", p.find<PhysicsInfoParams>(),
+           "{bodies, shapes, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}]}",
+           "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."}, methodPhysicsInfo},
+        {{"physics.events", p.find<PhysicsEventsParams>(),
+           "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}",
+           "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface, "
+           "oldest first; pass next as since to read on."}, methodPhysicsEvents},
+        {{"physics.contacts", p.find<PhysicsContactsParams>(),
+           "{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}",
+           "Body pairs touching now (resting included) and bodies in triggers, by id; since: the step they began."}, methodPhysicsContacts},
+        {{"player.info", p.find<PlayerInfoParams>(),
+           "{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}",
+           "The player: feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
+           "input.inject and world.step."}, methodPlayerInfo},
+        {{"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
+           "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."}, methodPlayerTeleport, true},
+        {{"combat.info", p.find<CombatInfoParams>(),
+           "{steps, round?: {started, phase, restartIn?, restarts}, combatants: [{entity, name, player?, health?, max?, "
+           "dead?, pos, weapon?: {ammo, magazine, reloading, bloomDeg, kickDeg, shots}, enemy?: {state, lastSeen?}}], more?}",
+           "The fight: the round (playing, dead, won) and everything with Health or a Weapon, in id order. Fire with "
+           "input.inject (fire, reload) and world.step."}, methodCombatInfo},
+        {{"combat.events", p.find<CombatEventsParams>(),
+           "{events: [{seq, step, kind, source?, sn?, target?, tn?, ...}], next, dropped?}",
+           "Shots (point, dir, coneDeg), hits (point, normal, dist, surface), damage (amount, health), deaths, "
+           "reloads (ammo), round_start, restart, win; oldest first. Pass next as since to read on."}, methodCombatEvents},
+        {{"combat.damage", p.find<CombatDamageParams>(), "{entity, name, health, max, dead, taken}",
+           "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
+           "events; a dead enemy lies down at the next step."}, methodCombatDamage, true},
+        {{"animation.info", p.find<AnimationInfoParams>(),
+           "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?, events: "
+           "[{seq, step, entity, layer, clip, name}], next, dropped?}",
+           "Each Animator's layers (state, clip time in s, the fade) and the clip events after since. Force a state "
+           "with component.set on Animator."}, methodAnimationInfo},
+        {{"audio.info", p.find<AudioInfoParams>(),
+           "{device, sampleRate?, horizonMs, snapshot: {name, blend}, zone, listener?, buses: [{name, db, cap?, voices?, "
+           "mix?}], voices: {playing, dropped, stolen, device?}, rays: {cast, capped}, late?, mixMs?, commands: [{seq, "
+           "step, op, ...}], next, dropped?}",
+           "The voice schedule's commands after since and the bus mix; a window adds the device's half."}, methodAudioInfo},
+        {{"audio.mix", p.find<AudioMixParams>(), "as audio.info, without commands",
+           "Listening overrides in the device only (never the world, schedule or snapshots): a bus's db, mute, solo; "
+           "a forced snapshot; clear."}, methodAudioMix},
+        {{"vfx.info", p.find<VfxInfoParams>(),
+           "{set, steps, caps, live, dropped?, particles, records: [{seq, step, effect|tracer|decal|light, at, on?}], next}",
+           "Effect spawn records the step wrote, after since; particles null headless."}, methodVfxInfo},
+        };
+    }();
+    return table;
+}
+
+const Method* findMethod(std::string_view name) {
+    const auto& t = methodTable();
+    const auto it = std::find_if(t.begin(), t.end(), [&](const Method& m) { return m.doc.name == name; });
+    return it == t.end() ? nullptr : &*it;
 }
 
 Diagnostic unknownMethod(std::string_view method) {
     std::vector<std::string_view> names;
-    for (const auto& e : kDispatch) names.push_back(e.name);
+    for (const Method& m : methodTable()) names.push_back(m.doc.name);
     Diagnostic d;
     d.code = "E_METHOD";
     d.message = "no method is named '" + std::string(method) + "'";
@@ -1023,8 +1005,12 @@ std::string errorEnvelope(std::vector<Diagnostic>& errors) {
 } // namespace
 
 std::span<const reflect::MethodDoc> methods() {
-    static const std::vector<reflect::MethodDoc> table = buildMethods();
-    return table;
+    static const std::vector<reflect::MethodDoc> docs = [] {
+        std::vector<reflect::MethodDoc> out;
+        for (const Method& m : methodTable()) out.push_back(m.doc);
+        return out;
+    }();
+    return docs;
 }
 
 int exitClass(std::string_view code) noexcept {
@@ -1241,7 +1227,7 @@ namespace {
 
 // Runs one method, writing its result value into `out`. The status says how it ended;
 // errors are left in ctx.
-CallStatus run(Session::Impl& m, const MethodEntry& method, const JsonDocument& doc, const JsonNode& params,
+CallStatus run(Session::Impl& m, const Method& method, const JsonDocument& doc, const JsonNode& params,
                DecodeContext& ctx, JsonWriter& out, const CallControl* control) {
     if (params.type != JsonType::Object) {
         ctx.error("E_TYPE", params, "params is an object", "object", ctx.gotText(params));
@@ -1267,7 +1253,7 @@ CallStatus run(Session::Impl& m, const MethodEntry& method, const JsonDocument& 
 CallOutcome Session::call(std::string_view method, const JsonDocument& doc, const JsonNode& params,
                           const CallControl* control) {
     CallOutcome o;
-    const MethodEntry* found = findMethod(method);
+    const Method* found = findMethod(method);
     if (!found) {
         o.status = CallStatus::UnknownMethod;
         o.errors.push_back(unknownMethod(method));
@@ -1292,7 +1278,7 @@ CallOutcome Session::call(std::string_view method, const JsonDocument& doc, cons
 }
 
 std::string Session::call(std::string_view method, std::string_view params) {
-    const MethodEntry* found = findMethod(method);
+    const Method* found = findMethod(method);
     if (!found) {
         std::vector<Diagnostic> errs{unknownMethod(method)};
         return errorEnvelope(errs);

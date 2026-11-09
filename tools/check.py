@@ -13,6 +13,7 @@ Steps (sub-project 4 spec, "One entry point"):
   2. configure, if the build directory has no CMakeCache.txt;
   3. build the `shaders` target first, then everything (at most 6 jobs: heavier parallel
      load has crashed the reference machine);
+     Then the API's methods against docs/agents/ohao-cli.md's Methods table (a difference fails the build).
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
@@ -176,6 +177,25 @@ def ohao_exe(build_dir, config):
     return None
 
 
+def check_method_docs(build_dir, config, out):
+    """The API's methods (the catalogue, from the one method table) against the Methods table of
+    docs/agents/ohao-cli.md: two places that must agree (system design 4.2). -> a list of problems."""
+    exe = ohao_exe(build_dir, config)
+    if not exe.exists():
+        return [f"{exe} is missing"]
+    dest = out / "catalogue"
+    r = subprocess.run([str(exe), "schema", "-o", str(dest)], capture_output=True, text=True)
+    if r.returncode != 0:
+        return [f"ohao schema failed (exit {r.returncode}): {r.stderr.strip()[-400:]}"]
+    catalogue = json.loads((dest / "ohao_schema.json").read_text(encoding="utf-8"))
+    code = {m["name"] for m in catalogue["methods"]}
+    text = (ROOT / "docs/agents/ohao-cli.md").read_text(encoding="utf-8")
+    section = text.split("\n## Methods\n", 1)[1].split("\n## ", 1)[0]
+    documented = set(re.findall(r"^\| `([a-z]+\.[a-z]+)` \|", section, re.M))
+    return ([f"{n}: a method docs/agents/ohao-cli.md does not list" for n in sorted(code - documented)] +
+            [f"{n}: listed in docs/agents/ohao-cli.md, no such method" for n in sorted(documented - code)])
+
+
 def run_doctor(build_dir, config, labels, out):
     """`ohao doctor` (--cpu-only unless a GPU label is selected) -> its verdict, or None
     when this build has no ohao executable (the check's own fixtures)."""
@@ -302,6 +322,12 @@ def main(argv=None):
         result["build"] = build(cmake, build_dir, args.config, jobs, out)
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
+            return finish(result, out)
+        problems = check_method_docs(build_dir, args.config, out)
+        if problems:
+            result["build"]["ok"] = False
+            result["build"]["tail"] = "\n".join(problems)
+            print("check: the method docs disagree with the code:\n  " + "\n  ".join(problems), flush=True)
             return finish(result, out)
 
     selected = None
