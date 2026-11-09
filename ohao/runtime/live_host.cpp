@@ -1,4 +1,5 @@
 #include "runtime/live_host.hpp"
+#include "engine/install.hpp"
 #include "runtime/sleep_until.hpp"
 
 #include "core/log.hpp"
@@ -86,18 +87,8 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_liveMode = m_renderer->getRenderMode();
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
-    ecs::installRenderExtract(*m_world, m_renderer->renderScene());
-    ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
-    level::installLevels(*m_world, *m_assets, types);   // before instantiate: Level components expand into entities
-    ecs::installPhysics(*m_world, *m_assets);            // after transform: colliders become bodies
-    ecs::installCombat(*m_world);                        // weapons fire after physics steps
-    ecs::installAnimation(*m_world, *m_assets);          // animators step after combat; pose before the extract
-    // The audio schedule: the step's last. OHAO_AUDIO_TRACE=1 logs its commands (check_live compares
-    // a window's with a headless host's).
-    ecs::installAudio(*m_world, *m_assets).setTrace(audioTraceRequested());
-    ecs::installVfx(*m_world, *m_assets);   // effects' spawn records (inserted before the schedule)
-    // The step's effect records into the frame (age at this frame's alpha), as every host draws them.
-    ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
+    engine::installEngine(*m_world, {*m_assets, types, audioTraceRequested()});
+    engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);

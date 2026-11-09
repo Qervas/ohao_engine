@@ -267,9 +267,7 @@ void installViewModel(World& world) {
     auto state = std::make_shared<ViewModelState>();
     reg.ctx().emplace<ViewModelInstalled>(ViewModelInstalled{state});
     auto system = std::make_shared<ViewModelSystem>(state);
-    const auto names = world.syncNames();
-    const bool interpolate = std::find(names.begin(), names.end(), "interpolate") != names.end();
-    world.addSyncAfter(interpolate ? "interpolate" : "transform", "view_model", [system](World& w) { system->run(w); });
+    world.addSync("view_model", [system](World& w) { system->run(w); });
 }
 
 const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun) {

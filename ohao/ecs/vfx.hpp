@@ -9,8 +9,8 @@
 //      boom, the smoke and the scorch decal straight down;
 //   3. steps placed VfxEmitters by step count (rate records a second, or one when activated);
 //   4. drops records past their life, and the oldest of a kind over its cap (counted).
-// Records are plain data, runtime only: carried by snapshots (the World's SnapshotHook, chained with
-// physics' and the audio schedule's), never saved or hashed. The same steps give the same records in
+// Records are plain data, runtime only: carried by snapshots (the World's snapshot hooks), never saved or
+// hashed. The same steps give the same records in
 // every host. A record's look is a closed form of its seed and age (vfx/particle_math.hpp), drawn by
 // the renderer; nothing here is drawn.
 
@@ -97,7 +97,7 @@ public:
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;
 
-    // The state a snapshot carries (installVfx chains them into the SnapshotHook).
+    // The state a snapshot carries (installVfx's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
 
@@ -107,8 +107,8 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `vfx` simulate system (before audio_schedule, else last) and chains its state into the
-// World's SnapshotHook. Returns the installed system if there is one.
+// Installs the `vfx` simulate system (its place: ecs::kSimulateOrder) and its snapshot hook. Returns the
+// installed system if there is one.
 VfxSystem& installVfx(World& world, AssetResolver& assets);
 [[nodiscard]] VfxSystem* vfxSystem(World& world);
 [[nodiscard]] const VfxSystem* vfxSystem(const World& world);

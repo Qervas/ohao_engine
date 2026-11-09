@@ -322,7 +322,7 @@ void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backen
     }
     reg.ctx().emplace<InstantiateInstalled>();
     auto state = std::make_shared<InstantiateState>(world, std::move(backend), assets);
-    world.addSyncBefore("transform", "instantiate", [state](World&) { state->run(); });
+    world.addSync("instantiate", [state](World&) { state->run(); });
 }
 
 void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,

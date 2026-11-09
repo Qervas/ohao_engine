@@ -28,7 +28,7 @@
 //      most 16 rays a step: past the cap a re-cast keeps its last answer and a new voice counts as
 //      unoccluded, both counted, so the cap changes parameters, never which commands exist.
 // The director's state (voices, round robin, ducks, zone, snapshot, its step count) rides in the
-// World's SnapshotHook beside physics': a restore or a round restart resumes the same schedule. It is
+// World's snapshot hooks (after physics'): a restore or a round restart resumes the same schedule. It is
 // never saved or hashed. The log is not snapshotted: a restore writes new seqs. Plain data only: no
 // miniaudio, no reflection; the bank comes from ohao_audio_bank.
 #include <entt/entt.hpp>
@@ -224,7 +224,7 @@ public:
     // The preset of the zone holding `p` ("" in none), fitted zones included.
     [[nodiscard]] std::string zoneAt(glm::vec3 p) const;
 
-    // The director's state a snapshot carries (installAudio chains them into the SnapshotHook).
+    // The director's state a snapshot carries (installAudio's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
 
@@ -233,9 +233,8 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `audio_schedule` simulate system (after installAnimation, so it is the step's last) and
-// chains its state into the World's SnapshotHook (installPhysics' must be there already). Returns the
-// installed one if there is one.
+// Installs the `audio_schedule` simulate system (the step's last: ecs::kSimulateOrder) and its snapshot
+// hook. Returns the installed one if there is one.
 AudioSchedule& installAudio(World& world, AssetResolver& assets);
 [[nodiscard]] AudioSchedule* audioSchedule(World& world);
 [[nodiscard]] const AudioSchedule* audioSchedule(const World& world);

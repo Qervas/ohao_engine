@@ -1,4 +1,5 @@
 #include "ecs/world.hpp"
+#include "ecs/system_order.hpp"
 #include "ecs/fly_controller_system.hpp"
 #include "ecs/spin_system.hpp"
 #include "ecs/transform_system.hpp"
@@ -7,6 +8,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <stdexcept>
 #include <random>
 
 namespace ohao::ecs {
@@ -56,8 +58,7 @@ World::World() : m_idGen{randomSeed(), 0} {
     // Engine-provided behaviour, once per fixed step.
     addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });
     addSimulate("fly_controller", [](World& w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); });
-    // Structural: transforms are propagated before every host system (instantiate is
-    // inserted right before it, the render extract right after).
+    // Structural: transforms are propagated (the other systems take their places around it).
     addSync("transform", [](World& w) { updateTransforms(w.registry()); });
 }
 
@@ -235,12 +236,30 @@ void World::setTransform(entt::entity e, const Transform& local) {
     m_registry.patch<Transform>(e, [&](Transform& t) { t = local; });
 }
 
+namespace {
+// Inserts (name, fn) at its place in `order`.
+template <class List, class Fn, std::size_t N>
+void placeSystem(List& list, const std::array<std::string_view, N>& order, std::string name, Fn fn, const char* kind) {
+    const auto rank = [&](std::string_view n) -> std::size_t {
+        const auto it = std::find(order.begin(), order.end(), n);
+        return it == order.end() ? N : static_cast<std::size_t>(it - order.begin());
+    };
+    const std::size_t r = rank(name);
+    if (r == N)
+        throw std::logic_error(std::string(kind) + " system '" + name + "' is not in its order list (ecs/system_order.hpp)");
+    const auto at = std::find_if(list.begin(), list.end(), [&](const auto& s) { return rank(s.first) >= r; });
+    if (at != list.end() && at->first == name)
+        throw std::logic_error(std::string(kind) + " system '" + name + "' installed twice");
+    list.emplace(at, std::move(name), std::move(fn));
+}
+} // namespace
+
 void World::addSimulate(std::string name, SimulateSystem fn) {
-    m_simulate.emplace_back(std::move(name), std::move(fn));
+    placeSystem(m_simulate, kSimulateOrder, std::move(name), std::move(fn), "simulate");
 }
 
 void World::addSync(std::string name, SyncSystem fn) {
-    m_sync.emplace_back(std::move(name), std::move(fn));
+    placeSystem(m_sync, kSyncOrder, std::move(name), std::move(fn), "sync");
 }
 
 void World::simulate(float dt) {
@@ -271,22 +290,6 @@ bool World::runSync(std::string_view name) {
             return true;
         }
     return false;
-}
-
-void World::addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn) {
-    auto it = std::find_if(m_sync.begin(), m_sync.end(), [&](const auto& s) { return s.first == anchor; });
-    if (it != m_sync.end()) ++it;
-    m_sync.emplace(it, std::move(name), std::move(fn));
-}
-
-void World::addSyncBefore(std::string_view anchor, std::string name, SyncSystem fn) {
-    const auto it = std::find_if(m_sync.begin(), m_sync.end(), [&](const auto& s) { return s.first == anchor; });
-    m_sync.emplace(it, std::move(name), std::move(fn));
-}
-
-void World::addSimulateBefore(std::string_view anchor, std::string name, SimulateSystem fn) {
-    const auto it = std::find_if(m_simulate.begin(), m_simulate.end(), [&](const auto& s) { return s.first == anchor; });
-    m_simulate.emplace(it, std::move(name), std::move(fn));
 }
 
 std::vector<std::string> World::simulateNames() const {

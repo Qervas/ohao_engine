@@ -45,6 +45,7 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
+#include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
@@ -290,13 +291,7 @@ struct Context {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
-        level::installLevels(*world, *assets, engineTypes());   // Level components expand into entities
-        ecs::installPhysics(*world, *assets);                    // and their colliders into bodies
-        ecs::installCombat(*world);                              // weapons fire after physics steps
-        ecs::installAnimation(*world, *assets);                  // animators step after combat
-        // The audio schedule: the step's last (OHAO_AUDIO_TRACE=1 logs its commands).
-        ecs::installAudio(*world, *assets).setTrace(runtime::audioTraceRequested());
-        ecs::installVfx(*world, *assets);                        // effects' spawn records, before the schedule
+        engine::installEngine(*world, {*assets, engineTypes(), runtime::audioTraceRequested()});
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);

@@ -1,4 +1,5 @@
 #include "ohao/render_host.hpp"
+#include "engine/install.hpp"
 
 #include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
@@ -73,9 +74,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
                 m_defaultEv100 = pp->ev100();
                 m_defaultCurve = pp->displayCurve();
             }
-        ecs::installRenderExtract(*m_world, m_renderer->renderScene());
-        ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
-        ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);   // likewise
+        engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
         if (m_settingsSet) runtime::applyRenderSettings(*m_renderer, m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size

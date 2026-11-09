@@ -1,0 +1,53 @@
+#include "ecs/snapshot_hook.hpp"
+
+#include "ecs/system_order.hpp"
+
+#include <algorithm>
+#include <stdexcept>
+#include <string>
+
+namespace ohao::ecs {
+namespace {
+
+std::size_t rank(std::string_view name) {
+    const auto it = std::find(kSnapshotOrder.begin(), kSnapshotOrder.end(), name);
+    if (it == kSnapshotOrder.end())
+        throw std::logic_error("snapshot hook '" + std::string(name) + "' is not in ecs::kSnapshotOrder");
+    return static_cast<std::size_t>(it - kSnapshotOrder.begin());
+}
+
+} // namespace
+
+void addSnapshotHook(entt::registry& registry, SnapshotHook hook) {
+    const std::size_t r = rank(hook.name);
+    auto& hooks = registry.ctx().contains<SnapshotHooks>() ? registry.ctx().get<SnapshotHooks>().hooks
+                                                           : registry.ctx().emplace<SnapshotHooks>().hooks;
+    const auto at = std::find_if(hooks.begin(), hooks.end(), [&](const SnapshotHook& h) { return rank(h.name) >= r; });
+    if (at != hooks.end() && at->name == hook.name)
+        throw std::logic_error("snapshot hook '" + std::string(hook.name) + "' registered twice");
+    hooks.insert(at, std::move(hook));
+}
+
+std::shared_ptr<const void> saveSystems(const entt::registry& registry) {
+    const auto* hooks = registry.ctx().find<SnapshotHooks>();
+    if (!hooks || hooks->hooks.empty()) return nullptr;
+    auto out = std::make_shared<SystemStates>();
+    for (const SnapshotHook& h : hooks->hooks) out->states.emplace_back(h.name, h.save ? h.save() : nullptr);
+    return out;
+}
+
+void restoreSystems(const entt::registry& registry, const std::shared_ptr<const void>& saved) {
+    const auto* hooks = registry.ctx().find<SnapshotHooks>();
+    if (!hooks) return;
+    const auto* states = static_cast<const SystemStates*>(saved.get());
+    for (const SnapshotHook& h : hooks->hooks) {
+        if (!h.restore) continue;
+        std::shared_ptr<const void> state;
+        if (states)
+            for (const auto& [name, s] : states->states)
+                if (name == h.name) state = s;
+        h.restore(state);
+    }
+}
+
+} // namespace ohao::ecs

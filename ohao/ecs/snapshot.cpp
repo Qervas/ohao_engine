@@ -76,8 +76,7 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     }
     s.columns.resize(used);
     s.frame = frame;
-    const auto* hook = reg.ctx().find<SnapshotHook>();
-    s.systems = hook && hook->save ? hook->save() : nullptr;
+    s.systems = saveSystems(reg);
 }
 
 std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types, bool runtime) {
@@ -177,7 +176,7 @@ RestoreStats restoreComponents(World& world, const Snapshot& s);
 
 RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
     const RestoreStats stats = restoreComponents(world, s);
-    if (const auto* hook = world.registry().ctx().find<SnapshotHook>(); hook && hook->restore) hook->restore(s.systems);
+    restoreSystems(world.registry(), s.systems);
     return stats;
 }
 

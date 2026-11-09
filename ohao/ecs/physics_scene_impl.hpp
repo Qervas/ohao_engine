@@ -164,7 +164,7 @@ struct PhysicsScene::Impl {
     ankerl::unordered_dense::set<entt::entity> posedExternally;
     bool writingPose{false};
 
-    // The simulation a snapshot carries (SnapshotHook): the backend's state (bodies, contact
+    // The simulation a snapshot carries (its snapshot hook): the backend's state (bodies, contact
     // cache, characters), which body is whose, the players and the contact bookkeeping. A restore
     // hands it back; the next sync puts it in place if the bodies are the same ones, else the
     // components' path (teleports and BodyMotion) does what it can.
@@ -331,7 +331,7 @@ struct PhysicsScene::Impl {
     // Every joint's constraint and its entity's id, by handle.
     [[nodiscard]] std::vector<std::pair<pb::ConstraintHandle, uint64_t>> jointIdentity() const;
 
-    // ---- snapshots (SnapshotHook) ----------------------------------------------------------------
+    // ---- snapshots (its snapshot hook) ----------------------------------------------------------------
 
     struct SavedPlayer {
         uint64_t id{0}, headId{0}, groundId{0};

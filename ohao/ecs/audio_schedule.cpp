@@ -98,11 +98,6 @@ struct AudioInstalled {
     AudioSchedule* system{nullptr};
 };
 
-// The hook chained in front of physics': both states, in one pointer.
-struct ChainedState {
-    std::shared_ptr<const void> previous, audio;
-};
-
 } // namespace
 
 // ---- the listener, occlusion, zones ------------------------------------------------------------
@@ -945,22 +940,12 @@ AudioSchedule& installAudio(World& world, AssetResolver& assets) {
     auto system = std::make_shared<AudioSchedule>(world, assets);
     reg.ctx().emplace<AudioInstalled>(AudioInstalled{system.get()});
     world.addSimulate("audio_schedule", [system](World&, float) { system->step(); });
-    // Snapshots carry the director's state beside what was there (physics'): both in one pointer.
+    // Snapshots carry the schedule's state (restored after physics', ecs::kSnapshotOrder).
     AudioSchedule* raw = system.get();
-    SnapshotHook previous;
-    if (const auto* hook = reg.ctx().find<SnapshotHook>()) previous = *hook;
-    SnapshotHook chained{[previous, raw]() -> std::shared_ptr<const void> {
-                             auto both = std::make_shared<ChainedState>();
-                             if (previous.save) both->previous = previous.save();
-                             both->audio = raw->saveState();
-                             return both;
-                         },
-                         [previous, raw](const std::shared_ptr<const void>& state) {
-                             const auto* both = static_cast<const ChainedState*>(state.get());
-                             if (previous.restore) previous.restore(both ? both->previous : nullptr);
-                             if (both) raw->restoreState(both->audio);
-                         }};
-    reg.ctx().insert_or_assign<SnapshotHook>(std::move(chained));
+    addSnapshotHook(reg, SnapshotHook{"audio_schedule", [raw] { return raw->saveState(); },
+                                      [raw](const std::shared_ptr<const void>& s) {
+                                          if (s) raw->restoreState(s);
+                                      }});
     return *system;
 }
 

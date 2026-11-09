@@ -195,10 +195,7 @@ struct VfxDraw {
 
 void installVfxDraw(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets) {
     auto state = std::make_shared<VfxDraw>(VfxDraw{scene, textures, assets});
-    const auto names = world.syncNames();
-    const bool extract = std::find(names.begin(), names.end(), "render_extract") != names.end();
-    if (extract) world.addSyncAfter("render_extract", "vfx_draw", [state](World& w) { state->run(w); });
-    else world.addSync("vfx_draw", [state](World& w) { state->run(w); });
+    world.addSync("vfx_draw", [state](World& w) { state->run(w); });
 }
 
 } // namespace ohao::ecs

@@ -110,11 +110,6 @@ struct VfxInstalled {
     VfxSystem* system{nullptr};
 };
 
-// The hook chained in front of what was there (physics' and the audio schedule's): both states.
-struct ChainedState {
-    std::shared_ptr<const void> previous, vfx;
-};
-
 std::size_t kindIndex(VfxRecord::Kind k) { return static_cast<std::size_t>(k); }
 
 } // namespace
@@ -527,23 +522,13 @@ VfxSystem& installVfx(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<VfxInstalled>()) return *installed->system;
     auto system = std::make_shared<VfxSystem>(world, assets);
     reg.ctx().emplace<VfxInstalled>(VfxInstalled{system.get()});
-    // After combat, impact_marks and the animation step; before the audio schedule (the step's last).
-    world.addSimulateBefore("audio_schedule", "vfx", [system](World&, float dt) { system->step(dt); });
+    // After combat and the animation step; before the audio schedule (the step's last).
+    world.addSimulate("vfx", [system](World&, float dt) { system->step(dt); });
     VfxSystem* raw = system.get();
-    SnapshotHook previous;
-    if (const auto* hook = reg.ctx().find<SnapshotHook>()) previous = *hook;
-    SnapshotHook chained{[previous, raw]() -> std::shared_ptr<const void> {
-                             auto both = std::make_shared<ChainedState>();
-                             if (previous.save) both->previous = previous.save();
-                             both->vfx = raw->saveState();
-                             return both;
-                         },
-                         [previous, raw](const std::shared_ptr<const void>& state) {
-                             const auto* both = static_cast<const ChainedState*>(state.get());
-                             if (previous.restore) previous.restore(both ? both->previous : nullptr);
-                             if (both) raw->restoreState(both->vfx);
-                         }};
-    reg.ctx().insert_or_assign<SnapshotHook>(std::move(chained));
+    addSnapshotHook(reg, SnapshotHook{"vfx", [raw] { return raw->saveState(); },
+                                      [raw](const std::shared_ptr<const void>& s) {
+                                          if (s) raw->restoreState(s);
+                                      }});
     return *system;
 }
 

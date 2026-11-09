@@ -80,13 +80,10 @@ public:
     void attach(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
+    // A system goes to its name's place in ecs::kSimulateOrder / kSyncOrder (ecs/system_order.hpp), whoever
+    // installs it and whenever; a name not listed, or one already installed, throws std::logic_error.
     void addSimulate(std::string name, SimulateSystem fn);
     void addSync(std::string name, SyncSystem fn);
-    // Inserts right after / before the sync system named `anchor` (appends if there is none).
-    void addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn);
-    void addSyncBefore(std::string_view anchor, std::string name, SyncSystem fn);
-    // Inserts right before the simulate system named `anchor` (appends if there is none).
-    void addSimulateBefore(std::string_view anchor, std::string name, SimulateSystem fn);
     // One fixed step: every simulate system, in order.
     void simulate(float dt);
     // Every sync system, in order.

@@ -29,9 +29,16 @@ renderer exists. Hosts differ by config (which parts, the audio trace), never by
 is missing is an error, not an append. The snapshot hooks chain explicitly (physics, then schedule, then vfx), so
 order is no longer what keeps physics' hook.
 
-*Done when* `ohao`, `ohao serve`, `LiveHost`, the render host and the benches call these two and nothing else
-installs a system; the window's and the CLI's system lists are equal (logged at install, compared once); the
-gates pass (`replay_test` holds `world.hash`).
+*Done when* `ohao`, `ohao serve`, `LiveHost` and the render host call these two; the window's and the CLI's
+system lists are equal; the gates pass (`replay_test` holds `world.hash`).
+
+*As built (2026-11-09):* the order is a list, `ecs/system_order.hpp`: `World::addSync`/`addSimulate` place a system
+at its name's position and throw on a name not listed or installed twice, so the lists are equal by construction
+(the anchors and name probes are gone). The hosts differed in one pair: the window ran `instantiate` before
+`player_spawn`, the CLI after; the list keeps the CLI's, which the goldens and `world.hash` expectations were
+recorded with. Snapshot hooks are named and restored in `kSnapshotOrder` (physics, audio_schedule, vfx). The
+benches keep installing single systems: each times one system, and with the order fixed a subset cannot run out of
+order; making them install everything would change what their budgets measure.
 
 ## 2c. One method table
 

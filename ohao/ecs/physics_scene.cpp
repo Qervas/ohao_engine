@@ -808,20 +808,14 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
     // Snapshots carry the simulation, so a restore replays exactly (spec "Snapshots and replay").
     PhysicsScene* raw = scene.get();
-    reg.ctx().emplace<SnapshotHook>(SnapshotHook{[raw] { return raw->saveSimulation(); },
-                                                 [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); }});
+    addSnapshotHook(reg, SnapshotHook{"physics", [raw] { return raw->saveSimulation(); },
+                                      [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); }});
     // Players spawn before the transform system, so a play scene's first frame is the spawn's.
-    world.addSyncBefore("transform", "player_spawn", [scene](World&) { scene->spawnPlayers(); });
-    world.addSyncAfter("transform", "physics", [scene](World& w) { scene->sync(w.registry()); });
-    // Render interpolation, before the render extract reads the poses (installRenderExtract
-    // places itself after it when it comes later).
-    const auto names = world.syncNames();
-    const auto interpolate = [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); };
-    if (std::find(names.begin(), names.end(), "render_extract") != names.end())
-        world.addSyncBefore("render_extract", "interpolate", interpolate);
-    else
-        world.addSyncAfter("physics", "interpolate", interpolate);
-    // Once per fixed step, after the simulate systems added so far (spin, fly controller).
+    world.addSync("player_spawn", [scene](World&) { scene->spawnPlayers(); });
+    world.addSync("physics", [scene](World& w) { scene->sync(w.registry()); });
+    // Render interpolation, before the render extract reads the poses.
+    world.addSync("interpolate", [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); });
+    // Once per fixed step, after spin and the fly controller.
     world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w, dt); });
     return *scene;
 }
