@@ -1,6 +1,6 @@
 ---
 name: add-component
-description: Add a new ECS component to OHAO that scene files, the API and agents can use - struct, registration with docs/units/limits, per-type writer, docs. Use when a feature needs new per-entity data.
+description: Add a new ECS component to OHAO that scene files, the API and agents can use - struct, registration with docs/units/limits, docs. Use when a feature needs new per-entity data.
 ---
 
 # Add a component
@@ -15,8 +15,7 @@ as the worked example: `git grep -l "Spin" -- ohao` lists the places a saved com
    `.host(makeComponentOps<T>())`, docs on the type and every field, a unit from `knownUnits()`
    (`ohao/reflect/registry.cpp`; add one if needed) or `.unitless()`, limits. `.singleton()` /
    `.runtime()` where they apply.
-3. **Writer** for a saved component: `writeFields` in `ohao/ecs/scene_writers.hpp/.cpp`, fields in
-   registration order, each guarded by `!omit || !same(...)`.
+3. **No writer:** the scene save is the generic reflection writer; the registration defines the file form.
 4. **Docs**: the component table in `docs/agents/ohao-cli.md`.
 5. **Check it by hand**: `build/Release/ohao schema -o build/schema` writes the schema (`scene.schema.json`)
    with the type, its docs and units; a scene that uses it round-trips (`ohao fmt` it, load it, the same

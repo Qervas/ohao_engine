@@ -99,31 +99,10 @@ checks every link and every `#include` against the library that owns the include
 `ohao_ecs -> ohao_renderer` (step 3). No other upward edge existed. Planted `#include "ecs/world.hpp"` in
 `core/log.cpp`: configure failed naming the file and the edge.
 
-## 2f result (2026-11-09): waiting for Frank's ruling
+## 2f result (2026-11-09)
 
-`scene_bench --breakdown 10000`: the per-type writers save bench10k in 7.40 ms (median), the generic reflection
-writer in 10.20 ms, against the 10 ms budget. The generic writer is 2% over, so the hand writers cannot be deleted
-under the current budget. Options: raise `save_pretty` to 11 ms and delete the 677 lines of hand writers (one source:
-the registration); or keep them and restore their byte-for-byte check against the generic writer; or generate them
-at build. Budgets change only by Frank's ruling.
-
-## 2h. `AGENTS.md` under 300 lines
-
-Each gotcha becomes one of: a check in code (an assert, a configure error, a gate), a comment where the code is, a
-line in `ARCHITECTURE.md`, or nothing (fixed, or describes history). `AGENTS.md` keeps how to build, test and
-work, the gates, and the rules no code can hold.
-
-*Done when* it is under 300 lines and every removed rule is accounted for in the change record.
-
-## 2i. CI on both systems
-
-`.github/workflows/ci.yml`: Windows (MSVC) and Linux (GCC) build, `ohao doctor --cpu-only`, the `quick` gates. No
-GPU on hosted runners: the GPU gates stay local. It runs only once pushed, which is Frank's call; until then it is
-checked by `act` or not at all, and the change record says which.
-
-*Done when* both jobs pass on GitHub (after Frank pushes).
-
-## Step done when
-
-C++ holds no literal binding number, every host installs through one function, `AGENTS.md` is under 300 lines, and
-CI is green on Windows and Linux.
+Frank raised `save_pretty` to 11 ms. `saveScene` is now the generic reflection writer alone: the 36 per-type
+writers (`ecs/scene_writers.*`, 677 lines), the layout tree they fed (`reflect/json_layout.*`) and the second save
+path are deleted. Every checked-in scene (22) saves byte for byte as before (each saved by the old and the new build
+and compared); bench10k `save_pretty` 10.32 ms (p95 10.40). A detour measured on the way: the old tree path with the
+generic writer feeding it was 15.6 ms (it renders compact text and parses it back).

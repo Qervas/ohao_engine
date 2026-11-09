@@ -295,10 +295,8 @@ Followed for `Spin`. Files, in order:
    `.max()`/`.uiRange()` where values are bounded. `.singleton()` for one per world,
    `.runtime()` for derived state that is never saved. A unit not in the vocabulary goes
    into `kUnits` in `ohao/reflect/registry.cpp` (that changes both catalogue goldens).
-3. **Its writer** (saved components): declare `writeFields(const T&, const T*, FieldSink&)`
-   in `ohao/ecs/scene_writers.hpp` and define it in `scene_writers.cpp`, fields in
-   registration order, each written only when it differs from `omit`
-   (`if (!omit || !same(...))`). `makeComponentOps` finds it by overload.
+3. **Nothing else for the file form:** the scene save is the generic reflection writer, so the
+   registration is the component's only definition in a file.
 4. **Check it by hand:** `ohao schema -o build/schema` shows the type with its docs and units; a
    scene that uses it saves, reloads and keeps its `world.hash`. A saved type hashes its name even
    with no instances, so it moves every `world.hash` in `tests/serve/expected`: read the diff, then

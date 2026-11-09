@@ -290,8 +290,8 @@ void breakdown(int n) {
                              t.rotation.w, t.scale.x});
     char fbuf[32];
     std::size_t sink = 0;
-    // Each fast path next to the reference it replaced (the tree decoder, the generic
-    // writer, std::to_chars), so a regression in either shows.
+    // Each fast path next to the reference it replaced (the tree decoder, std::to_chars), so a
+    // regression in either shows.
     std::vector<Op> ops = {
         {"parse pretty (tree, warm)", {}, [&] { (void)parser.parse(pretty); }, {}},
         {"validate pretty (streaming)", {}, [&] { (void)validateScene(pretty, engineTypes()); }, {}},
@@ -301,9 +301,8 @@ void breakdown(int n) {
          [&] { (void)loadScene(*fresh, pretty, engineTypes()); }, [&] { fresh.reset(); }},
         {"load pretty (tree)", [&] { fresh = std::make_unique<World>(); },
          [&] { (void)loadSceneReference(*fresh, pretty, engineTypes()); }, [&] { fresh.reset(); }},
-        {"save pretty (per-type writers)", {}, [&] { (void)save(world); }, {}},
-        {"save pretty (generic writer)", {}, [&] { (void)saveSceneGeneric(world, engineTypes()); }, {}},
-        {"save compact (per-type writers)", {}, [&] { (void)save(world, JsonLayout::Compact); }, {}},
+        {"save pretty", {}, [&] { (void)save(world); }, {}},
+        {"save compact", {}, [&] { (void)save(world, JsonLayout::Compact); }, {}},
         {"Transform floats: formatFloat32", {}, [&] {
              for (float f : fs) sink += static_cast<std::size_t>(reflect::formatFloat32(f, fbuf) - fbuf);
          }, {}},

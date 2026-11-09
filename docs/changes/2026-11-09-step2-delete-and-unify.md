@@ -1,8 +1,7 @@
 # Step 2: delete and unify (parts a to h)
 
 **Spec:** `docs/specs/2026-11-08-system-design.md`, 4.1, 4.2, 4.9 and 5 (step 2); plan
-`docs/plans/2026-11-09-step2-delete-and-unify.md`. **Status:** 2a-2e, 2g, 2h built; 2f waiting for Frank's ruling on the
-save budget; 2i not started.
+`docs/plans/2026-11-09-step2-delete-and-unify.md`. **Status:** 2a-2h built; 2i not started.
 
 ## 1. Summary
 
@@ -27,7 +26,9 @@ and a shader disagree or a dependency points up a layer. `AGENTS.md` went from 1
   build on a stale header, a binding declared twice, or a binding number typed in C++.
 - **2g, layers** (`110d6d3f`): `cmake/ohao_layers.cmake` fails configure on a link or include up a layer; one listed
   exception (`ohao_ecs -> ohao_renderer`, step 3).
-- **2h, AGENTS.md** (this commit): see 4.
+- **2f, one scene writer**: the save budget raised to 11 ms (Frank); the 36 hand writers, the layout tree and the
+  second save path deleted (about 1,200 lines); every checked-in scene saves byte for byte as before.
+- **2h, AGENTS.md** (`c6c49f6d`): see 4.
 
 ## 3. Bugs and drift found and fixed
 
@@ -65,12 +66,12 @@ Deleted: the validation layer's report limit (already under "Gates").
 ## 5. Results
 
 Gates after each part: 10 of 10 (quick, gpu, golden), validation clean, goldens unchanged, no Xid; GPU at most 51.6 C.
-2f, measured (`scene_bench --breakdown 10000`): per-type writers 7.40 ms, generic writer 10.20 ms, budget 10 ms.
+2f (`scene_bench --check`): `save_pretty` 10.32 ms against 11 (the hand writers had been 7.40); every other budget
+as before except `restore_unchanged` at 1.054 ms against 1, which restore code not touched here measures (not
+compared with the old build).
 
 ## 6. Known gaps
 
-- 2f waits for Frank: raise the save budget to 11 ms and delete the 677 lines of hand writers, keep them with their
-  byte-for-byte check, or generate them.
 - 2i (CI on Windows and Linux) is not written: it runs only once pushed, which is Frank's call.
 - The benches still install single systems (they time one each); with the order fixed by the list this cannot
   misorder anything.
