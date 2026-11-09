@@ -440,8 +440,7 @@ Over MCP, `logging/setLevel` also streams records at that level and above as
 
 ## A whole session
 
-`tests/serve/e2e_mcp.py` is a stdlib-only MCP client running one, against a hidden
-window: initialize → load `helmet_game` → summary → an edit → snapshot → record → a
+A session against a hidden window goes: initialize → load `helmet_game` → summary → an edit → snapshot → record → a
 61-step flight → step with `watch` → capture inline and to a file → log read → stop
 recording → restore → replay (every checkpoint matches) → capture again, bit-identical
 to the first → load the blockout level → `level_info` → a ray down at the player spawn →
@@ -452,10 +451,6 @@ same hash and the same picture → load the play scene again → `combat_info` �
 down → `audio_info`'s newest commands, a bus muted and one soloed, `clear` (`world_hash`
 unchanged) → `combat_events` → look with the HUD → `combat_damage` kills the player → the
 restart → clear the room → won.
-
-```console
-$ python tests/serve/e2e_mcp.py > /dev/null   # gpu
-```
 
 ## Limits
 

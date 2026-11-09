@@ -299,7 +299,7 @@ a `[shader]` attribute's place) are stated in `AGENTS.md`.
   tests (time `pt.manifold` with `render.capture {timings}`, never wall time: a cold compile hides in it).
   **Step 2b** (same spec, "Step 2b as designed", M12): the sun through an owned solid (two refractions) onto X, which the
   camera side never renders (nothing to drop), by the seeded walk (`manifoldGlass`, `rt/manifold_cert.slang`'s
-  `manifoldWalkPair<S, false>`; `manifold_tests` t15 holds its form to light traced through a glass ball; `check_caustics`
+  `manifoldWalkPair<S, false>`; `manifold_tests` t15 held its form to light traced through a glass ball, `check_caustics`
   m4-m6 on the GPU). **Opt-in, `OHAO_MANIFOLD_GLASS=1`** (since 2026-11-08; its tests set it): its re-find walks ran some
   frames for seconds, a dispatch the GPU cannot preempt (two firmware crashes came during them), until the work is bounded
   per dispatch. Without it nothing renders that light: the frame is darker, not split. Gotchas: it walks a whole instance, so one draw of each (instance, material) runs it (the

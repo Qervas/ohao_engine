@@ -66,20 +66,21 @@ is commit `7e7211cf`). A test is added back only when a real bug got through, ne
 
 | Requirement | Gate | Label | Time |
 |---|---|---|---|
-| 1. Never hurt the machine | every test has a time limit; `tools/check.py` fails a run during which the kernel logged an NVIDIA GPU fault (Xid); `check_validation`: the Vulkan validation layer over Cornell, the helmet, the animation rig and the play scene, deferred and path traced | gpu | 14 s |
-| 2. The renderer is right | `check_analytic` (both renderers against `albedo/π × irradiance` under one light; an emissive quad's form factor), `check_env_orientation` (a sky the right way up), `check_material` (the white furnace renders 1, the closed emitting box its closed form) | gpu | 45 s |
-| 3. No visual accident | `render_golden`: 5 scenes (Cornell deferred and path traced, the Damaged Helmet, the play scene, glass) | golden | 6 s |
+| 1. Never hurt the machine | every test has a time limit; `tools/check.py` fails a run during which the kernel logged an NVIDIA GPU fault (Xid); `check_validation`: the Vulkan validation layer over Cornell, the helmet, the animation rig, the play scene, caustics and smoke, deferred and path traced, and the teardown | gpu | 4 s |
+| 2. The renderer is right | `check_analytic` (both renderers against `albedo/π × irradiance` under one light; an emissive quad's form factor), `check_env_orientation` (a sky the right way up), `check_material` (the white furnace renders 1, the closed emitting box its closed form) | gpu | 6 s |
+| 3. No visual accident | `render_golden`: 5 scenes (Cornell deferred and path traced, the Damaged Helmet, the play scene, glass) | golden | 4 s |
 | 4. Gameplay replays exactly | `replay_test`: the play scene's fight restored from a midway snapshot, and in a new process, reaches the same `world.hash` at every checkpoint (headless, no GPU) | quick | 0.1 s |
 | 5. It builds | `tools/check.py` builds first, then runs `ohao doctor` | | |
 
-**Temporary tests** (Frank: deleted when their work is done): `manifold_tests` and `check_caustics` (`slow`) with
-caustics step 2; `check_serve`, `e2e_mcp` and `ohao_game_presentation` until the agent-interface and window work
-they guard is settled.
+**Every gate runs in seconds** (Frank, 2026-11-09): a GPU check is one `ohao serve` process
+(`tests/common/ohao_serve.py`: one device, the programs compiled once, scenes loaded in turn) at the fewest pixels
+and samples that hold its bars. A check that launches a process per render, or renders more than its measure needs,
+is a bug. **While iterating, run `--changed`**: it runs what the changed files reach (an ECS file: `replay_test`,
+0.1 s); the whole set only to close a step.
 
 ```
-python tools/check.py                    # build, ohao doctor, the default set (quick, gpu): about 2 minutes
-python tools/check.py --all              # adds golden and slow
 python tools/check.py --changed [REF]    # only what the files changed since REF reach (tools/check_changed.py)
+python tools/check.py                    # build, ohao doctor, every gate (quick, gpu, golden): about 15 s of tests
 ```
 
 `check.py` finds the real CMake, builds the `shaders` target and then everything (at most 6 jobs), runs
@@ -91,7 +92,9 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
 - **Every test exits 0 on success** and nonzero on any failure, and ends with one JSON line `{"suite", "passed",
   "failed", "failures"}`. Register a new one with `ohao_add_python_test`/`ohao_add_test` (`cmake/ohao_tests.cmake`),
   with a `TIMEOUT` and, if it touches the GPU, `GPU` (GPU tests never run two at once).
-- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail. 2026-11-08, each caught:
+- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail. 2026-11-09, after the gates
+  became one process each: 64x sampler anisotropy (`check_validation`, the first case: the sampler is made once) and a
+  rough metal's multiple scattering x0.9 (`check_material`, furnace 0.934), both caught. 2026-11-08, each caught:
   a no-op physics restore (`replay_test`, all 3 checkpoints); 1% brightness in `displayPixel` (all 5 goldens);
   the path tracer's sky upside down (`check_env_orientation`); +8% on a light sample's geometry term
   (`check_analytic`, deferred x1.10); a rough metal's multiple scattering x0.9 (`check_material`, furnace 0.93);

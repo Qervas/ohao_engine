@@ -45,7 +45,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LABELS = ["quick", "gpu"]
+DEFAULT_LABELS = ["quick", "gpu", "golden"]
 ALL_LABELS = DEFAULT_LABELS + ["golden", "slow"]
 KNOWN_LABELS = ALL_LABELS
 MAX_JOBS = int(os.environ.get("OHAO_MAX_JOBS", "6"))

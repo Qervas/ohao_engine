@@ -20,9 +20,7 @@ as the worked example: `git grep -l "Spin" -- ohao` lists the places a saved com
 5. **Check it by hand**: `build/Release/ohao schema -o build/schema` writes the schema (`scene.schema.json`)
    with the type, its docs and units; a scene that uses it round-trips (`ohao fmt` it, load it, the same
    `world.hash` after a save and reload).
-6. **Verify** (`verify` skill). A new saved type hashes its name even with no instances, so it moves every
-   `world.hash` in `tests/serve/expected`: look at the diff, then `python tests/serve/check_serve.py --update`.
-   `replay_test` holds the gameplay replay with the new type in the hash.
+6. **Verify** (`verify` skill): `replay_test` holds the gameplay replay with the new type in the hash.
 
 Changing an existing saved component: bump `.version(n)` and add an `.upgrade()`, and load an old-version
 file (`tests/scenes/v1/`) to see it upgrade.

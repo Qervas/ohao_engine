@@ -59,7 +59,8 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
   - **slangc 2026.20's C++ emitter re-reads a member after a store to it**: `Sampler.next()` (`const float u =
     point[dim & 3u]; ++dim; return u;`) became `dim = dim + 1; return point[dim & 3]` in C++, so every draw was the next
     coordinate; its SPIR-V of the same code loads first, as written. The twins (`tools/caustics`, `tools/material`)
-    stay on 2025.11 (`SLANGC_CPP`) until a release's C++ passes `manifold_tests` and `openpbr_tables --check`.
+    stay on 2025.11 (`SLANGC_CPP`) until a release's C++ passes `openpbr_tables --check` (the manifold twin and its `manifold_tests` were deleted
+    2026-11-09 with the parked caustics work; git has them).
   - `ohao serve` on stdio interrupts its reader with SIGUSR1 (no `SA_RESTART`), the POSIX `CancelSynchronousIo`.
   - NRI (under NRD) is told of no surface extension (`nrd_denoise.cpp`): given `VK_KHR_surface` it resolves the surface
     functions of every platform it was built for (Xlib and Wayland), a window's instance on Hyprland has Wayland's alone,

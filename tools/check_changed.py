@@ -11,32 +11,25 @@ import fnmatch
 import subprocess
 from pathlib import Path
 
-CAUSTICS = ["manifold_tests", "check_caustics"]   # temporary, with caustics step 2
 
 # (glob, targets). fnmatch globs on '/'-separated paths; '*' crosses directories.
 RULES: list[tuple[str, list[str]]] = [
     # Nothing a test reads.
     ("site/*", []), ("docs/*", []), ("*.md", []), ("LICENSE", []), (".gitignore", []), ("tests/bench/*", []),
     ("tools/bench/*", []),
-    # Caustics step 2: the manifold solver, its CPU twin, the pass.
-    ("shaders/rt/manifold*", CAUSTICS), ("tools/caustics/*", ["manifold_tests"]),
-    ("tests/renderer/manifold_tests.cpp", ["manifold_tests"]), ("tests/renderer/check_caustics.py", ["check_caustics"]),
-    ("ohao/render/rt/manifold_*", ["check_caustics"]), ("ohao/render/rt/caustic_*", ["check_caustics"]),
-    ("shaders/rt/caustics.slang", ["check_caustics", "label:gpu"]),
-    ("shaders/rt/path_tracer.slang", ["check_caustics", "label:gpu"]),
-    ("ohao/render/rt/path_tracer*", ["check_caustics", "label:gpu"]),
     # The renderer: every GPU gate.
-    ("ohao/render/*", ["label:gpu"]), ("ohao/gpu/*", ["label:gpu"]), ("shaders/*", ["label:gpu"]),
+    ("ohao/render/*", ["label:gpu", "render_golden"]), ("ohao/gpu/*", ["label:gpu", "render_golden"]),
+    ("shaders/*", ["label:gpu", "render_golden"]),
     ("tests/renderer/*", ["label:gpu"]), ("tests/validation/*", ["check_validation"]),
     ("tests/golden/*", ["render_golden"]),
     # Gameplay: anything a world steps through, and the scenes it plays.
     ("ohao/ecs/*", ["replay_test"]), ("ohao/physics/*", ["replay_test"]), ("ohao/level/*", ["replay_test"]),
     ("ohao/anim/*", ["replay_test"]), ("ohao/audio/*", ["replay_test"]), ("ohao/vfx/*", ["replay_test"]),
-    ("assets/*", ["replay_test", "label:gpu"]), ("tests/replay/*", ["replay_test"]),
-    # The agent interface (temporary gates).
-    ("ohao/api/*", ["check_serve", "e2e_mcp", "replay_test"]), ("ohao/rpc/*", ["check_serve", "e2e_mcp", "replay_test"]),
-    ("tests/serve/*", ["check_serve", "e2e_mcp"]), ("tests/scenes/*", ["check_serve"]),
-    ("ohao/runtime/*", ["ohao_game_presentation", "e2e_mcp"]),
+    ("assets/*", ["replay_test", "label:gpu", "render_golden"]), ("tests/replay/*", ["replay_test"]),
+    # The agent interface and the hosts: replays go through ohao serve; captures through the render host.
+    ("ohao/api/*", ["replay_test"]), ("ohao/rpc/*", ["replay_test"]), ("ohao/engine/*", ["replay_test"]),
+    ("ohao/runtime/*", ["label:gpu", "render_golden"]), ("tools/ohao/*", ["replay_test", "label:gpu", "render_golden"]),
+    ("tests/common/*", ["label:gpu", "replay_test"]),
 ]
 
 

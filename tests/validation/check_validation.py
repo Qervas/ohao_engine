@@ -19,6 +19,9 @@ with identical consecutive messages folded into one line followed by
 and the engine confirms the layer loaded with "Validation layers ENABLED". A run
 without that confirmation did not check anything and is reported as such.
 
+One validated `ohao serve` renders every case in turn; messages are attributed to the case whose
+capture was running, and the process's teardown is a case of its own.
+
 Usage (from repo root):
   python tests/validation/check_validation.py        # all scenes
   python tests/validation/check_validation.py -v     # also list every distinct VUID
@@ -33,83 +36,50 @@ Exit 0 when every scene is clean, 1 otherwise, 2 if validation did not run.
 import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+from ohao_serve import ROOT, Serve  # noqa: E402
 
+OUT = "build/validation"
+W, H = 320, 180   # validation checks what is recorded, not how many pixels
 
-def _bin(path):
-    """A built binary's path: Windows names it .exe."""
-    return path + (".exe" if os.name == "nt" else "")
-
+# (name, scene, steps before the capture, render.capture params). One validated `ohao serve` renders them all in
+# turn: the layer and the pipelines load once, and the process's teardown is validated at the end.
+C, HELMET, RIG, PLAY = ("assets/scenes/%s.scene.json" % n for n in ("cornell_box", "damaged_helmet", "anim_rig",
+                                                                    "blockout_play"))
+OFFLINE, REALTIME = {"mode": "rt_offline", "spp": 4, "denoise": "none"}, {"mode": "rt_realtime", "spp": 4, "denoise": "none"}
+NRD, DLSS = {**REALTIME, "denoise": "nrd"}, {**REALTIME, "spp": 8, "denoise": "dlss"}
+DEFERRED = {"mode": "deferred", "frames": 4}
 SCENES = [
-    ("cornell_box deferred",
-     [_bin("build/Release/cornell_box"), "{out}", "4", "deferred", "--denoise=none"]),
-    ("damaged_helmet deferred",
-     [_bin("build/Release/model_viewer"), "assets/test_models/DamagedHelmet.glb", "{out}", "4",
-      "deferred", "--denoise=none"]),
-    # The path tracer: offline, realtime, and realtime through NRD (its push-descriptor path) and DLSS RR.
-    ("cornell_box rt_offline",
-     [_bin("build/Release/cornell_box"), "{out}", "4", "rt_offline", "--denoise=none"]),
-    ("cornell_box rt_realtime",
-     [_bin("build/Release/cornell_box"), "{out}", "4", "rt_realtime", "--denoise=none"]),
-    ("cornell_box rt_realtime nrd",
-     [_bin("build/Release/cornell_box"), "{out}", "4", "rt_realtime", "--denoise=nrd"]),
-    # DLSS Ray Reconstruction (NGX): its guides, the feature's evaluation and its tonemap. Where the SDK
-    # is absent (tools/fetch_dlss.py) --denoise dlss falls back to none and the case still runs.
-    ("cornell_box rt_realtime dlss",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/cornell_box.scene.json", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
-    ("damaged_helmet rt_offline",
-     [_bin("build/Release/model_viewer"), "assets/test_models/DamagedHelmet.glb", "{out}", "4",
-      "rt_offline", "--denoise=none"]),
-    # A skinned instance (sub-project 10): the skin, bounds and BLAS refit passes, then every
-    # consumer of the deformed mesh (G-buffer, RT shadows and GI, the path tracer, NRD).
-    ("anim_rig deferred",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
-      "--mode", "deferred", "--frames", "4", "--size", "640x360"]),
-    ("anim_rig rt_offline",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
-      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
-    ("anim_rig rt_realtime",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
-    ("anim_rig rt_realtime nrd",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
-    # The play scene's two skinned enemies (sub-project 10 step 2) a second into the fight: attacking,
-    # their rifles and muzzle lights in hand, through every renderer.
-    ("play deferred",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "deferred", "--frames", "4", "--size", "640x360", "--hud"]),
-    ("play rt_offline",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
-    ("play rt_realtime",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
-    ("play rt_realtime nrd",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
-    ("play rt_realtime dlss",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "8", "--denoise", "dlss", "--size", "640x360"]),
-    # sub-project 24: caustics' light pass (its own pipeline, the splat buffer and its barriers).
-    ("caustics rt_offline",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/caustics.scene.json", "--render", "{out}",
-      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
-    # sub-project 12: the doorway's smoke (a VfxEmitter's spheres in the shadow and GI traces, its particles
-    # and the forward pass), through the raster and both path-traced modes.
-    ("smoke doorway deferred",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "deferred", "--frames", "4", "--size", "640x360", "--hud"]),
-    ("smoke doorway rt_offline",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
-    ("smoke doorway rt_realtime",
-     [_bin("build/Release/ohao"), "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
-      "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
+    ("cornell_box deferred", C, 0, DEFERRED),
+    ("damaged_helmet deferred", HELMET, 0, DEFERRED),
+    # The path tracer: offline, realtime, and realtime through NRD (its push-descriptor path) and DLSS RR (where
+    # the SDK is absent, tools/fetch_dlss.py, dlss falls back to none and the case still runs).
+    ("cornell_box rt_offline", C, 0, OFFLINE),
+    ("cornell_box rt_realtime", C, 0, REALTIME),
+    ("cornell_box rt_realtime nrd", C, 0, NRD),
+    ("cornell_box rt_realtime dlss", C, 0, DLSS),
+    ("damaged_helmet rt_offline", HELMET, 0, OFFLINE),
+    # A skinned instance (sub-project 10): the skin, bounds and BLAS refit passes, then every consumer of the
+    # deformed mesh (G-buffer, RT shadows and GI, the path tracer, NRD).
+    ("anim_rig deferred", RIG, 0, DEFERRED),
+    ("anim_rig rt_offline", RIG, 0, OFFLINE),
+    ("anim_rig rt_realtime", RIG, 0, REALTIME),
+    ("anim_rig rt_realtime nrd", RIG, 0, NRD),
+    # The play scene's two skinned enemies a second into the fight: attacking, their rifles and muzzle lights in
+    # hand, through every renderer, the HUD on the raster frame.
+    ("play deferred", PLAY, 60, {**DEFERRED, "hud": True}),
+    ("play rt_offline", PLAY, 60, OFFLINE),
+    ("play rt_realtime", PLAY, 60, REALTIME),
+    ("play rt_realtime nrd", PLAY, 60, NRD),
+    ("play rt_realtime dlss", PLAY, 60, DLSS),
+    # Caustics' light pass (its own pipeline, the splat buffer and its barriers).
+    ("caustics rt_offline", "assets/scenes/caustics.scene.json", 0, OFFLINE),
+    # The doorway's smoke (a VfxEmitter's spheres in the shadow and GI traces, its particles and the forward pass).
+    ("smoke doorway deferred", "assets/scenes/smoke_doorway.scene.json", 60, {**DEFERRED, "hud": True}),
+    ("smoke doorway rt_offline", "assets/scenes/smoke_doorway.scene.json", 60, OFFLINE),
+    ("smoke doorway rt_realtime", "assets/scenes/smoke_doorway.scene.json", 60, REALTIME),
 ]
 
 LINE = re.compile(r"^[TDIWE] validation: (.*?)\r?$", re.M)
@@ -131,17 +101,8 @@ def messages(log):
     return out
 
 
-def run(name, argv, verbose):
-    """-> (ok, message, record): ok is None when the layer did not load."""
-    with tempfile.TemporaryDirectory() as tmp:
-        argv = [a.replace("{out}", os.path.join(tmp, "out.png")) for a in argv]
-        argv[0] = os.path.abspath(os.path.normpath(argv[0]))   # CreateProcess wants a real path
-        env = dict(os.environ, OHAO_VALIDATION="1")
-        r = subprocess.run(argv, env=env, capture_output=True, text=True, errors="replace")
-    log = r.stdout + r.stderr
-    if "Validation layers ENABLED" not in log:
-        return None, f"{name}: validation layer did not load -- check NOT run", {"name": name, "status": "skip"}
-    msgs = messages(log)
+def record(name, msgs, error, verbose):
+    """-> (ok, message, record) for one case: its validation messages, or the error its capture raised."""
     counts = {}
     for v, _ in msgs:
         counts[v] = counts.get(v, 0) + 1
@@ -149,9 +110,9 @@ def run(name, argv, verbose):
     if msgs:
         rec["first"] = {"vuid": msgs[0][0].strip(), "text": msgs[0][1].strip()[:260]}
         rec["counts"] = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:12])
-    if r.returncode != 0:
-        rec.update(status="fail", exit=r.returncode)
-        return False, f"{name}: exited {r.returncode} ({len(msgs)} validation messages)", rec
+    if error:
+        rec.update(status="fail", error=error)
+        return False, f"{name}: {error} ({len(msgs)} validation messages)", rec
     if not msgs:
         rec["status"] = "pass"
         return True, f"{name}: clean", rec
@@ -165,6 +126,38 @@ def run(name, argv, verbose):
     return False, out, rec
 
 
+def run_all(verbose):
+    """Every case in one validated serve process, then its teardown: [(ok, message, record)], or None when the
+    layer did not load."""
+    log_path = os.path.join(ROOT, OUT, "serve.stderr.txt")
+    def log_from(offset):
+        with open(log_path, "rb") as f:
+            f.seek(offset)
+            return f.read().decode(errors="replace")
+    results = []
+    s = Serve(OUT, env=dict(os.environ, OHAO_VALIDATION="1"))
+    try:
+        for name, scene, steps, params in SCENES:
+            start = os.path.getsize(log_path)
+            error = None
+            try:
+                s.load(scene)
+                if steps:
+                    s.call("world.step", {"frames": steps})
+                s.call("render.capture", {"path": OUT + "/out.png", "width": W, "height": H, **params})
+            except RuntimeError as e:
+                error = str(e)[-200:]
+            results.append(record(name, messages(log_from(start)), error, verbose))
+    finally:
+        start = os.path.getsize(log_path)
+        code = s.close()
+    if "Validation layers ENABLED" not in log_from(0):
+        return None
+    teardown = messages(log_from(start))
+    results.append(record("teardown", teardown, None if code == 0 else f"ohao serve exited {code}", verbose))
+    return results
+
+
 def main():
     verbose = "-v" in sys.argv
     json_path = None
@@ -173,7 +166,12 @@ def main():
         if i + 1 >= len(sys.argv):
             sys.exit("--json needs a file")
         json_path = sys.argv[i + 1]
-    results = [run(n, a, verbose) for n, a in SCENES]
+    results = run_all(verbose)
+    if results is None:
+        print("[SKIP]  validation layer did not load -- check NOT run")
+        print(json.dumps({"suite": "check_validation", "passed": 0, "failed": 1,
+                          "failures": ["the validation layer did not load"]}, separators=(",", ":")))
+        return 2
     for ok, msg, _ in results:
         tag = "PASS" if ok else ("SKIP" if ok is None else "FAIL")
         print(f"[{tag}]  {msg}")

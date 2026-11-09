@@ -298,9 +298,8 @@ Followed for `Spin`. Files, in order:
 3. **Nothing else for the file form:** the scene save is the generic reflection writer, so the
    registration is the component's only definition in a file.
 4. **Check it by hand:** `ohao schema -o build/schema` shows the type with its docs and units; a
-   scene that uses it saves, reloads and keeps its `world.hash`. A saved type hashes its name even
-   with no instances, so it moves every `world.hash` in `tests/serve/expected`: read the diff, then
-   `python tests/serve/check_serve.py --update`. `replay_test` holds gameplay replays with it in the hash.
+   scene that uses it saves, reloads and keeps its `world.hash`. `replay_test` holds gameplay replays with it in
+   the hash.
 5. **Docs:** the component table in `docs/agents/ohao-cli.md`.
 
 Changing an existing saved component later: bump `.version(n)` in its registration and add an
@@ -366,15 +365,10 @@ method, the MCP tool (`.` becomes `_`), the catalogue entry and its JSON Schema,
    `s.cancelRequested()` between whole steps and reports `s.control->progress`. Anything
    that needs a GPU goes through `s.render` (the session's `api::Host`), never the
    renderer: the API stays GPU-free.
-3. **Register it:** a `MethodDoc` in `buildMethods` (name, params struct, a compact result
-   shape, one doc line: the MCP description agents read) and the handler in `kDispatch`,
-   with `mutates = true` if it changes the world (a window host in lockstep redraws only
-   after such calls).
-4. **The serve goldens:** an example in `EXAMPLES` of `tests/serve/check_serve.py` (its schema
-   through `jsonschema`, the server accepting it), then, after reading the diff,
-   `python tests/serve/check_serve.py --update` (`schemaHash`, `tools/list`). Keep the doc line to
-   one sentence: `tools/list` stays under 28 KB.
-5. **Docs:** the method table in `docs/agents/ohao-cli.md`, and `docs/agents/ohao-serve.md`
+3. **Register it:** one row in `methodTable` (`ohao/api/session.cpp`): name, params struct, a compact
+   result shape, one doc line (the MCP description agents read; keep it one sentence), the handler, and
+   `mutates = true` if it changes the world (a window host in lockstep redraws only after such calls).
+4. **Docs:** the method table in `docs/agents/ohao-cli.md`, and `docs/agents/ohao-serve.md`
    if it changes how a session goes.
 
 ## Recipe: add a render pass (and its shader)

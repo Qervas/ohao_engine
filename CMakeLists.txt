@@ -115,14 +115,8 @@ add_subdirectory(shaders)
 add_subdirectory(ohao)
 add_subdirectory(examples)
 
-# The tests that are suites of their own (the gates are in cmake/ohao_tests.cmake).
-option(BUILD_RENDERER_TESTS "Build the renderer's suites (manifold_tests, temporary)" ON)
-if(BUILD_RENDERER_TESTS)
-    add_subdirectory(tests/renderer)
-endif()
-# OpenPBR's energy-table generator, and the manifold solver's CPU twin (manifold_tests).
+# OpenPBR's energy-table generator.
 add_subdirectory(tools/material)
-add_subdirectory(tools/caustics)
 option(BUILD_SCENE_BENCH "Build scene_bench (scene codec/snapshot/API budgets; CPU only)" ON)
 if(BUILD_SCENE_BENCH)
     add_subdirectory(tools/bench)

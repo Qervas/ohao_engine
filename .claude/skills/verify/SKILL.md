@@ -9,9 +9,8 @@ The gates serve five requirements (AGENTS.md, "Gates"): never hurt the machine, 
 against closed forms, a handful of goldens, gameplay replays exactly, it builds. One command:
 
 ```
-python tools/check.py --changed      # while iterating: only what the change reaches
-python tools/check.py                # to close a step: build, ohao doctor, quick + gpu (~2 minutes)
-python tools/check.py --all          # adds the goldens and the slow caustics checks
+python tools/check.py --changed      # while iterating: only what the change reaches (seconds)
+python tools/check.py                # to close a step: build, ohao doctor, every gate (about 15 s of tests)
 ```
 
 Exit 0 = pass, 1 = a test failed or the kernel logged a GPU fault during the run (`gpuFaults` in
