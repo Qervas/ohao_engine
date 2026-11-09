@@ -1,4 +1,5 @@
 #include "bindless_texture_manager.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "../../gpu/vulkan/gpu_allocator.hpp"
 #include <algorithm>
 #include <cmath>
@@ -533,8 +534,7 @@ bool BindlessTextureManager::updateTextureFromMemory(BindlessTextureHandle handl
         .commandBufferCount = 1,
         .pCommandBuffers = &cmd,
     };
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
     vkDestroyBuffer(m_device, stagingBuffer, nullptr);
     vkFreeMemory(m_device, stagingMemory, nullptr);
@@ -902,8 +902,7 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
         .pCommandBuffers = &cmd,
     };
 
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
 
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
     vkDestroyBuffer(m_device, stagingBuffer, nullptr);

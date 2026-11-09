@@ -16,7 +16,10 @@ since the doc checker was deleted (2026-11-08), so trust the code over a stale e
   `run --script` prints one JSON line per operation instead.
 - **Exit codes:** 0 ok · 1 validation, usage or input error · 2 asset or instantiate
   error (`E_ASSET_NOT_FOUND`, `E_ASSET_INVALID`, `E_MESH_INVALID`) · 3 GPU or internal
-  error (`E_RENDER`, `E_INTERNAL`).
+  error (`E_RENDER`, `E_INTERNAL`) · 5 a GPU fault: a lost device, or a frame not finished within 2 s (a hang). No
+  JSON reaches stdout then: stderr carries one `E gpu: GPU fault: {...}` line (`fault`, `where`, `frame`, `ran`: for
+  each frame in flight the passes that began and finished and the last one that did, `deviceFault`: the driver's
+  report). The process exits at once, without Vulkan teardown.
 - **No GPU unless something renders.** validate, fmt, apply, query, summary and run
   without `--render` never create a Vulkan device.
 - **Deterministic.** The same build, inputs and `--seed` give byte-identical stdout and

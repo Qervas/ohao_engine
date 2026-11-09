@@ -22,7 +22,7 @@
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
 //                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
 //                                [--mode deferred|rt_realtime|rt_offline] [--spp N]
-//                                [--present immediate|mailbox|fifo] [--sound]]
+//                                [--present immediate|mailbox|fifo] [--sound] [--fps N]]
 //                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
 //                 over newline-delimited JSON until stdin closes (ohao/rpc). --pipe NAME serves
 //                 \\.\pipe\ohao-NAME instead: one local client of the current user, until it
@@ -730,6 +730,8 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     long long spp = 64;
     std::string err;
     if (intOpt(a, "--spp", 1, 65536, spp, err)) cfg.spp = static_cast<int>(spp);
+    long long fps = -1;   // the frame-rate cap: the display's refresh rate unless --fps (0: none)
+    if (has(a, "--fps") && intOpt(a, "--fps", 0, 1000, fps, err)) cfg.maxFps = static_cast<int>(fps);
     runtime::LiveHost host;
     if (!host.initialize(cfg, engineTypes())) {
         OHAO_LOG(Error, rpc, "serve: no window or no usable GPU");
@@ -758,10 +760,10 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     pump.poll = [&server](std::chrono::milliseconds wait) { return server.poll(wait); };
     pump.flush = [&server] { server.flush(); };
     server.start();
-    (void)host.run(runtime::GameHooks{}, &pump);
+    const runtime::RunReport run = host.run(runtime::GameHooks{}, &pump);
     server.stop();   // the window closed while the client still holds stdin: stop reading
     (void)host.shutdown();
-    return kOk;
+    return run.error.empty() ? kOk : kInternal;
 }
 
 int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const WindowOption& win) {
@@ -771,7 +773,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     if (!intOpt(a, "--max-message", 1024, 1ll << 30, maxMessage, err)) return usage(err);
     if (has(a, "--seed") && a.positional.empty()) return usage("--seed needs a scene");
     if (has(a, "--lockstep") && has(a, "--realtime")) return usage("--lockstep and --realtime exclude each other");
-    for (const char* o : {"--realtime", "--vsync", "--hidden", "--sound", "--mode", "--spp", "--present"})
+    for (const char* o : {"--realtime", "--vsync", "--hidden", "--sound", "--mode", "--spp", "--present", "--fps"})
         if (has(a, o) && !win.on)
             return usage(std::string(o) + " needs --window (a headless host is lockstep; its captures name their mode)");
     if (has(a, "--present") && !presentModeFromName(opt(a, "--present")))
@@ -783,6 +785,8 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     }
     long long spp = 64;
     if (!intOpt(a, "--spp", 1, 65536, spp, err)) return usage(err);
+    long long fps = -1;
+    if (has(a, "--fps") && !intOpt(a, "--fps", 0, 1000, fps, err)) return usage(err);
     if (has(a, "--log-level")) {
         const auto level = log::parseLevel(opt(a, "--log-level"));
         if (!level) return usage("--log-level is one of: trace, debug, info, warn, error, off");
@@ -863,7 +867,7 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden", "--sound"},
                                  {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp",
-                                  "--present"});
+                                  "--present", "--fps"});
         return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {

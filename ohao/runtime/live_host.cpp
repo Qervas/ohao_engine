@@ -1,4 +1,5 @@
 #include "runtime/live_host.hpp"
+#include "runtime/sleep_until.hpp"
 
 #include "core/log.hpp"
 #include "ecs/animation.hpp"
@@ -65,6 +66,12 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
         return false;
     }
     m_renderer->setRenderMode(RenderMode::Deferred);
+    m_maxFps = cfg.maxFps < 0 ? (m_window.refreshRate() > 0 ? m_window.refreshRate() : 60) : cfg.maxFps;
+    if (m_renderer->presentMode() == PresentMode::Fifo) m_maxFps = 0;
+    m_framePeriod = m_maxFps > 0 ? std::chrono::nanoseconds(1'000'000'000LL / m_maxFps) : std::chrono::nanoseconds(0);
+    OHAO_LOG(Info, runtime, "live host: frame rate {}", m_maxFps > 0 ? std::format("capped at {} fps", m_maxFps)
+                                                      : std::string(m_renderer->presentMode() == PresentMode::Fifo
+                                                                        ? "paced by the display (fifo)" : "uncapped"));
     if (auto* deferred = m_renderer->getDeferredRenderer())
         if (auto* pp = deferred->getPostProcessing()) {
             m_defaultEv100 = pp->ev100();
@@ -134,11 +141,18 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
 
     auto last = Clock::now();
     uint64_t frame = 0;
+    std::string error;
+    // What escapes a frame ends the loop in order (the report says what); a GPU fault never returns here
+    // (gpu::reportFault exits the process).
+    try {
     while (!m_quit && !m_window.shouldClose()) {
         if (m_cfg.frameLimit > 0 && frame >= static_cast<uint64_t>(m_cfg.frameLimit)) break;
         if (static_cast<int64_t>(frame) == m_cfg.resizeAtFrame)
             m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
+        // The frame-rate cap: sleep before the poll, so the poll is as fresh as uncapped; the frame starts later.
+        if (m_framePeriod.count() > 0 && m_time.running() && m_lastFrameStart != FrameTime{})
+            sleepUntil(m_lastFrameStart + m_framePeriod);
         const FrameTime frameStart = Clock::now();
         // Late input sampling (spec "Present mode and late input sampling"): the input is polled
         // only once the frames queued ahead are few enough, so it goes into the very next frame.
@@ -262,6 +276,10 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         if (pump && pump->flush) pump->flush();   // replies after the frame they caused
         ++frame;
     }
+    } catch (const std::exception& e) {
+        error = e.what();
+        OHAO_LOG(Error, runtime, "live host: frame {} ended the loop: {}", frame, error);
+    }
     if (pump && pump->flush) pump->flush();
 
     RunReport r;
@@ -274,6 +292,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
     r.avgFrameMs = m_stats.avgCpuMs();
     r.avgGpuMs = m_stats.avgGpuMs();
     r.fps = m_stats.fps();
+    r.error = std::move(error);
     return r;
 }
 
@@ -356,6 +375,7 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
         out.p99Ms = p->p99Ms;
         out.steps = p->steps;
         out.discardedSteps = p->discardedSteps;
+        out.maxFps = m_maxFps;
         st->pacing = out;
     }
     return st;

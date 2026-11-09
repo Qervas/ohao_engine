@@ -534,6 +534,8 @@ private:
     std::unique_ptr<Swapchain> m_swapchain;
     // VK_KHR_present_id + VK_KHR_present_wait were enabled (a window on a device with both).
     bool m_presentWaitEnabled{false};
+    bool m_bufferMarkerEnabled{false};   // pass breadcrumbs (VK_AMD_buffer_marker)
+    bool m_deviceFaultEnabled{false};    // VK_EXT_device_fault
     std::chrono::steady_clock::time_point m_lastSubmitAt{};
     PFN_vkWaitForPresentKHR m_waitForPresent{nullptr};
     PresentWaiter m_presentWaiter;   // stopped before the swapchain goes

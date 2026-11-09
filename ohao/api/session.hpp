@@ -181,6 +181,7 @@ struct RenderStats {
         double medianMs{0.0}, p95Ms{0.0}, p99Ms{0.0};
         std::array<uint64_t, 4> steps{};   // frames that ran 0, 1, 2, 3+ steps
         uint64_t discardedSteps{0};
+        int maxFps{0};             // the window's frame-rate cap (0: none, or paced by fifo)
     };
     std::optional<Latency> latency;
     std::optional<Pacing> pacing;

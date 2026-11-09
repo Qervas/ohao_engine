@@ -896,6 +896,7 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
         for (std::size_t i = 0; i < 4; ++i) { out.key(kSteps[i]); out.uint64(pc->steps[i]); }
         out.endObject();
         out.key("discardedSteps"); out.uint64(pc->discardedSteps);
+        out.key("maxFps"); out.int64(pc->maxFps);
         out.endObject();
     }
     if (const auto& a = st->audio) {

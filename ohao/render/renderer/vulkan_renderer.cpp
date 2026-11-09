@@ -1,4 +1,5 @@
 #include "vulkan_renderer_impl.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include <algorithm>
 #include <cstring>
 #include "render/camera/camera.hpp"
@@ -139,7 +140,9 @@ bool VulkanRenderer::initialize() {
         }
         // Per-pass GPU timing: one query pool per frame slot. Without timestamps the
         // renderer still renders; it just reports no timings.
-        (void)m_passTimer.init(m_device, m_physicalDevice, m_graphicsQueueFamily, MAX_FRAMES_IN_FLIGHT);
+        (void)m_passTimer.init(m_device, m_physicalDevice, m_graphicsQueueFamily, MAX_FRAMES_IN_FLIGHT,
+                               m_bufferMarkerEnabled);
+        gpu::setFaultContext([this] { return m_passTimer.describe(); });
 
         // Set shader base path for all render passes
         RenderPassBase::setShaderBasePath(m_shaderBasePath);
@@ -247,6 +250,7 @@ void VulkanRenderer::shutdown() {
         m_swapchain.reset();
 
         // Cleanup multi-frame resources
+        gpu::setFaultContext({});
         m_passTimer.destroy();
         m_frameResources.shutdown();
 
@@ -256,6 +260,7 @@ void VulkanRenderer::shutdown() {
         }
 
         // Cleanup device
+        gpu::setFaultDevice(VK_NULL_HANDLE, false);
         vkDestroyDevice(m_device, nullptr);
     }
 
@@ -984,8 +989,7 @@ bool VulkanRenderer::readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1081,8 +1085,7 @@ bool VulkanRenderer::readbackDepthAOV(std::vector<float>& depthData, uint32_t& w
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1178,8 +1181,7 @@ bool VulkanRenderer::readbackRoughnessAOV(std::vector<float>& roughData, uint32_
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1278,8 +1280,7 @@ bool VulkanRenderer::readbackDiffuseRadiance(std::vector<float>& data, uint32_t&
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1375,8 +1376,7 @@ bool VulkanRenderer::readbackSpecularRadiance(std::vector<float>& data, uint32_t
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1472,8 +1472,7 @@ bool VulkanRenderer::readbackDenoisedDiffuse(std::vector<float>& data, uint32_t&
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1569,8 +1568,7 @@ bool VulkanRenderer::readbackDenoisedSpecular(std::vector<float>& data, uint32_t
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1663,8 +1661,7 @@ bool VulkanRenderer::readbackNrdComposed(std::vector<float>& data,
     submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers    = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1760,8 +1757,7 @@ bool VulkanRenderer::readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t&
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
@@ -1857,8 +1853,7 @@ bool VulkanRenderer::readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& 
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submit, "readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);

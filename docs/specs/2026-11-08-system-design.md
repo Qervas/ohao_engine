@@ -247,8 +247,9 @@ shading, the path tracer and the deterministic simulation stay; the skeleton aro
 
 **Step 1, fault containment (small).** Check every result; fence timeouts; a device-lost path with breadcrumbs and
 `VK_EXT_device_fault`; a catch around the window loop; a frame-rate cap in windows.
-*Done when* an injected `VK_ERROR_DEVICE_LOST` at the submit wrapper produces a report naming the last finished pass
-and a clean exit, and a real GPU fault does the same.
+*Done when* an injected `VK_ERROR_DEVICE_LOST` at the submit wrapper and an injected hang (a fence never submitted)
+each produce a report naming what each frame in flight ran and an exit within 2.5 s. A real GPU fault is not caused on
+purpose (it risks the machine, requirement 1): its report is checked when one happens.
 
 **Step 2, delete and unify (medium).**
 - Delete: the graph's unreachable allocator, render-pass and framebuffer code; the ten readbacks (one remains);

@@ -1104,6 +1104,15 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
     (the frame is the sky, the passes list has no `rt.gi`).
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
+- **A GPU fault is a report and an exit** (system design step 1, `gpu/vulkan/gpu_fault.*`): every submit, frame fence,
+  acquire and present goes through it; a lost device, or a fence not signalled within 2 s (`kGpuTimeout`, Windows' TDR
+  delay), logs one `GPU fault: {...}` line on the `gpu` channel (what each frame in flight ran, from breadcrumbs the
+  pass timer writes with `VK_AMD_buffer_marker`; `VK_EXT_device_fault`'s report) and exits 5 with no Vulkan teardown.
+  A new submit uses `gpu::submit` or `gpu::submitAndWait`, never `vkQueueSubmit` + `vkQueueWaitIdle`; a new pass is
+  timed (`GpuPassTimer::begin`/`end`), or a fault inside it is reported as its neighbour's. A single submit that
+  legitimately needs over 2 s is an unbounded dispatch: split it. `OHAO_INJECT_GPU_FAULT=lost:N` or `hang:N` fakes one
+  at frame N without touching the GPU. Windows are capped at the display's refresh rate (`--fps N`, 0 uncapped; fifo
+  is paced by the display).
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
   Cornell). It clears on reboot; it is not your change. `ohao doctor`'s `gpu.wedged`
   check says so. On Linux the NVIDIA open kernel module's GSP firmware can fail outright (`journalctl -k`:

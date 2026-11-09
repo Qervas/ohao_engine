@@ -71,6 +71,10 @@ struct LiveConfig {
     TimeMode timeMode{TimeMode::realtime};   // a game steps from wall time; a server waits
     std::string root{"."};                   // the project root asset paths are relative to
     int frameLimit{0};                       // 0 = run until closed
+    // The frame-rate cap while realtime (system design 4.7: an uncapped window ran a laptop GPU from 65 to 87 C in a
+    // minute for frames nobody saw). -1: the display's refresh rate (60 if unknown); 0: none. Off under fifo, which
+    // the display already paces.
+    int maxFps{-1};
     int resizeAtFrame{-1};                   // scripted resize, for the presentation gate
     VkExtent2D resizeTo{1280, 720};
     // What the window presents: deferred, or the path tracer (needs ray tracing; without it
@@ -107,6 +111,7 @@ struct RunReport {
     double   avgFrameMs{0.0};
     double   avgGpuMs{0.0};
     double   fps{0.0};
+    std::string error;              // what escaped a frame and ended the loop; empty when it ended normally
 };
 
 class LiveHost final : public api::Host {
@@ -203,6 +208,8 @@ private:
     FrameLog m_frameLog;
     std::vector<LookInFlight> m_looks;
     FrameTime m_lastFrameStart{};
+    std::chrono::nanoseconds m_framePeriod{0};   // the frame-rate cap's period (0: none)
+    int m_maxFps{0};
     FrameTime m_frameView{};   // this frame's view resolve (renderFrame)
     bool m_releaseOnResume{false};      // stepping stopped: the next step starts with a focus loss
     bool m_needRender{true};            // a resize, a capture, the first frame
