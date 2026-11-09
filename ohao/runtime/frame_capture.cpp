@@ -333,57 +333,6 @@ std::optional<api::RenderStats> summarizeFrames(std::span<const render::FrameTim
     return st;
 }
 
-api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
-    const VulkanRenderer::RenderSettings r = renderer.renderSettings();
-    api::RenderSettings s;
-    s.quality = r.quality == RenderQuality::Reference ? api::Quality::reference : api::Quality::realtime;
-    s.rtDirect = {r.rtDirect, static_cast<int32_t>(r.rtDirectCandidates), static_cast<int32_t>(r.rtDirectSpatial),
-                  r.rtDirectFullResolution ? api::TraceResolution::full : api::TraceResolution::half};
-    s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::TraceResolution::full : api::TraceResolution::half,
-              static_cast<int32_t>(r.rtGIRays)};
-    s.sss = r.sss;
-    s.geometry = r.geometry == GpuCulling::Geometry::Meshlets    ? api::GeometryPath::meshlets
-                 : r.geometry == GpuCulling::Geometry::Instances ? api::GeometryPath::instances
-                                                                 : api::GeometryPath::automatic;
-    s.occlusionCulling = r.occlusionCulling;
-    s.csm = {static_cast<int32_t>(r.csmCascades), static_cast<int32_t>(r.csmSize)};
-    s.ev100 = r.ev100;
-    s.tonemap = r.tonemap == render::DisplayCurve::Neutral ? api::Tonemap::neutral : api::Tonemap::agx;
-    s.autoExposure = r.autoExposure;
-    s.exposureCompensation = r.exposureCompensation;
-    s.vfx = {r.vfxParticles, r.vfxSoft, r.vfxTracers, r.vfxDecals, r.vfxSmokeInGi};
-    return s;
-}
-
-void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s) {
-    VulkanRenderer::RenderSettings r;
-    r.quality = s.quality == api::Quality::reference ? RenderQuality::Reference : RenderQuality::Realtime;
-    r.rtDirect = s.rtDirect.enabled;
-    r.rtDirectCandidates = static_cast<uint32_t>(std::clamp(s.rtDirect.candidates, 1, 32));
-    r.rtDirectSpatial = static_cast<uint32_t>(std::clamp(s.rtDirect.spatial, 0, 8));
-    r.rtDirectFullResolution = s.rtDirect.resolution == api::TraceResolution::full;
-    r.rtGI = s.rtGI.enabled;
-    r.rtGIFullResolution = s.rtGI.resolution == api::TraceResolution::full;
-    r.rtGIRays = static_cast<uint32_t>(std::clamp(s.rtGI.rays, 1, 32));
-    r.sss = s.sss;
-    r.geometry = s.geometry == api::GeometryPath::meshlets    ? GpuCulling::Geometry::Meshlets
-                 : s.geometry == api::GeometryPath::instances ? GpuCulling::Geometry::Instances
-                                                              : GpuCulling::Geometry::Auto;
-    r.occlusionCulling = s.occlusionCulling;
-    r.csmCascades = static_cast<uint32_t>(std::clamp(s.csm.cascades, 1, 4));
-    r.csmSize = static_cast<uint32_t>(std::clamp(s.csm.size, 512, 4096));
-    r.ev100 = s.ev100;
-    r.tonemap = s.tonemap == api::Tonemap::neutral ? render::DisplayCurve::Neutral : render::DisplayCurve::AgX;
-    r.autoExposure = s.autoExposure;
-    r.exposureCompensation = s.exposureCompensation;
-    r.vfxParticles = s.vfx.particles;
-    r.vfxSoft = s.vfx.soft;
-    r.vfxTracers = s.vfx.tracers;
-    r.vfxDecals = s.vfx.decals;
-    r.vfxSmokeInGi = s.vfx.smokeInGi;
-    renderer.setRenderSettings(r);
-}
-
 api::Host::GpuInfo gpuInfo(const VulkanRenderer& renderer) {
     api::Host::GpuInfo g;
     if (renderer.getPhysicalDevice() == VK_NULL_HANDLE) return g;

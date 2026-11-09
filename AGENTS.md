@@ -199,11 +199,10 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
   history and clear what they keep in their own command buffer, after the frames in flight
   by queue order. Nothing a frame renders may depend on its frame-in-flight slot (TAA's
   jitter is indexed by the frames since the reset).
-- Render settings (`VulkanRenderer::RenderSettings`, `render.settings`) are read back from
-  the subsystems that own them, never cached, and both structs' defaults (the api one in
-  `ohao/api/params.hpp` too) must equal what a fresh renderer starts with: a headless host
-  reports them before its renderer exists and captures pass them explicitly (EV100 0.5: an
-  exposure of 1.0 there once made headless captures brighter than the window's). A GI resolution or
+- Render settings are one struct, `render::RenderSettings` (`render/renderer/render_settings.hpp`, `render.settings`
+  reads and writes it by reflection), read back from the subsystems that own them, never cached. Its defaults must
+  equal what a fresh renderer starts with: a headless host reports them before its renderer exists and captures
+  pass them explicitly (EV100 0.5: an exposure of 1.0 there once made headless captures brighter than the window's). A GI resolution or
   CSM size change rebuilds images after `vkDeviceWaitIdle`; nothing else idles. The GI
   shift (`flags.w`, 1 at half resolution) keeps the half-resolution expressions literally
   behind a branch: folding it into a multiply changed FMA contraction and moved goldens.

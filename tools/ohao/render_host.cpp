@@ -34,7 +34,7 @@ std::optional<api::RenderStats> RenderHost::renderStats(int frames) {
 
 std::optional<api::RenderSettings> RenderHost::renderSettings() {
     if (m_kind == api::HostKind::Cli) return std::nullopt;
-    if (m_renderer) return runtime::readRenderSettings(*m_renderer);
+    if (m_renderer) return m_renderer->renderSettings();
     return m_settings;
 }
 
@@ -42,7 +42,7 @@ void RenderHost::setRenderSettings(const api::RenderSettings& settings) {
     if (m_kind == api::HostKind::Cli) return;
     m_settings = settings;
     m_settingsSet = true;
-    if (m_renderer) runtime::applyRenderSettings(*m_renderer, settings);
+    if (m_renderer) m_renderer->setRenderSettings(settings);
 }
 
 std::optional<api::Host::GpuInfo> RenderHost::gpuInfo() {
@@ -75,7 +75,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
                 m_defaultCurve = pp->displayCurve();
             }
         engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
-        if (m_settingsSet) runtime::applyRenderSettings(*m_renderer, m_settings);
+        if (m_settingsSet) m_renderer->setRenderSettings(m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size
     }

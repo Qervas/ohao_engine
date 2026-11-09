@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/display/display.hpp"
+#include "render/renderer/render_settings.hpp"
 #include "render/sky/atmosphere.hpp"
 
 #include <optional>
@@ -260,35 +261,10 @@ public:
     void setRTDirectEnabled(bool on) noexcept { m_rtDirectWanted = on; }
     [[nodiscard]] bool rtDirectEnabled() const noexcept { return m_rtDirectWanted; }
 
-    // Every quality knob in one value (sub-project 2b spec, "The agent-facing surface":
-    // render.settings). The defaults are the budgeted configuration. Set it between frames;
-    // a GI resolution or CSM size change idles the device and rebuilds those images.
-    // renderSettings() reads the knobs back from the passes that hold them.
-    struct RenderSettings {
-        RenderQuality quality{RenderQuality::Realtime};
-        bool rtDirect{true};
-        uint32_t rtDirectCandidates{8};  // light points a pixel draws a frame (1-32)
-        uint32_t rtDirectSpatial{2};     // realtime: neighbours a pixel's reservoir reuses (0-8)
-        bool rtDirectFullResolution{false};  // realtime: resample and trace every pixel, not half
-        bool rtGI{true};
-        bool rtGIFullResolution{false};  // realtime: the trace at the frame's size, not half
-        uint32_t rtGIRays{2};            // realtime: rays a pixel (1-32)
-        bool sss{true};
-        GpuCulling::Geometry geometry{GpuCulling::Geometry::Auto};
-        bool occlusionCulling{true};
-        uint32_t csmCascades{4};         // the CSM fallback (without RT direct light): 1-4
-        uint32_t csmSize{2048};          // 512-4096
-        float ev100{render::kDefaultEv100};   // the display transform's camera (EV100, ISO 100)
-        render::DisplayCurve tonemap{render::DisplayCurve::AgX};
-        bool autoExposure{false};          // a window's camera meters its frames (captures never do)
-        float exposureCompensation{0.0f};  // EV added to what auto exposure meters
-        // render.settings vfx (sub-project 12): presentation switches for A/B captures, all on.
-        bool vfxParticles{true};         // the lit particles
-        bool vfxSoft{true};              // their soft fade against the scene's depth
-        bool vfxTracers{true};
-        bool vfxDecals{true};
-        bool vfxSmokeInGi{true};         // RT direct light and RT GI attenuate through the smoke proxies
-    };
+    // Every quality knob in one value (render/renderer/render_settings.hpp; render.settings). Set it between
+    // frames; a GI resolution or CSM size change idles the device and rebuilds those images. renderSettings()
+    // reads the knobs back from the passes that hold them; out-of-range counts are clamped.
+    using RenderSettings = render::RenderSettings;
     void setRenderSettings(const RenderSettings& s);
     [[nodiscard]] RenderSettings renderSettings() const;
     // Clustered lighting: the newest finished frame's froxel overflow (lights left out of

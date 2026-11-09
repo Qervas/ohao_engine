@@ -373,33 +373,45 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
     OHAO_LOG(Info, gpu, "Render mode set to: {}", names[static_cast<int>(mode)]);
 }
 
+namespace {
+render::DisplayCurve displayCurve(render::Tonemap t) {
+    return t == render::Tonemap::neutral ? render::DisplayCurve::Neutral : render::DisplayCurve::AgX;
+}
+} // namespace
+
 void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
-    m_renderQuality = s.quality;
-    m_rtDirectWanted = s.rtDirect;
+    const auto clamp = [](int32_t v, int32_t lo, int32_t hi) { return static_cast<uint32_t>(std::clamp(v, lo, hi)); };
+    m_renderQuality = s.quality == render::Quality::reference ? RenderQuality::Reference : RenderQuality::Realtime;
+    m_rtDirectWanted = s.rtDirect.enabled;
     if (!m_deferredRenderer) return;
     DeferredRenderer& d = *m_deferredRenderer;
-    d.setDirectSampling(s.rtDirectCandidates, s.rtDirectSpatial, s.rtDirectFullResolution);
-    d.setRTGIEnabled(s.rtGI);
-    if (s.rtGIFullResolution != d.rtGIFullResolution() || s.rtGIRays != d.rtGIRays())
-        d.setRTGIRealtime(s.rtGIFullResolution, s.rtGIRays);
+    d.setDirectSampling(clamp(s.rtDirect.candidates, 1, 32), clamp(s.rtDirect.spatial, 0, 8),
+                        s.rtDirect.resolution == render::TraceResolution::full);
+    d.setRTGIEnabled(s.rtGI.enabled);
+    const bool giFull = s.rtGI.resolution == render::TraceResolution::full;
+    const uint32_t giRays = clamp(s.rtGI.rays, 1, 32);
+    if (giFull != d.rtGIFullResolution() || giRays != d.rtGIRays()) d.setRTGIRealtime(giFull, giRays);
     d.setSSSEnabled(s.sss);
-    d.setDecalsDrawn(s.vfxDecals);
-    d.setSmokeInGi(s.vfxSmokeInGi);
+    d.setDecalsDrawn(s.vfx.decals);
+    d.setSmokeInGi(s.vfx.smokeInGi);
     if (VfxRenderer* v = d.vfxRenderer()) {
-        v->setParticlesEnabled(s.vfxParticles);
-        v->setSoftEnabled(s.vfxSoft);
-        v->setTracersEnabled(s.vfxTracers);
+        v->setParticlesEnabled(s.vfx.particles);
+        v->setSoftEnabled(s.vfx.soft);
+        v->setTracersEnabled(s.vfx.tracers);
     }
-    if (s.csmCascades != d.csmCascades() || s.csmSize != d.csmSize()) d.configureCSM(s.csmCascades, s.csmSize);
+    const uint32_t cascades = clamp(s.csm.cascades, 1, 4), size = clamp(s.csm.size, 512, 4096);
+    if (cascades != d.csmCascades() || size != d.csmSize()) d.configureCSM(cascades, size);
     if (GpuCulling* c = d.culling()) {
         GpuCulling::Settings cs = c->settings();
-        cs.geometry = s.geometry;
+        cs.geometry = s.geometry == render::GeometryPath::meshlets    ? GpuCulling::Geometry::Meshlets
+                      : s.geometry == render::GeometryPath::instances ? GpuCulling::Geometry::Instances
+                                                                      : GpuCulling::Geometry::Auto;
         cs.occlusion = s.occlusionCulling;
         c->setSettings(cs);
     }
     if (auto* pp = d.getPostProcessing()) {
         pp->setEv100(s.ev100);
-        pp->setDisplayCurve(s.tonemap);
+        pp->setDisplayCurve(displayCurve(s.tonemap));
         pp->setAutoExposure(s.autoExposure);
         pp->setExposureCompensation(s.exposureCompensation);
     }
@@ -407,33 +419,37 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
 
 VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     RenderSettings s;
-    s.quality = m_renderQuality;
-    s.rtDirect = m_rtDirectWanted;
+    s.quality = m_renderQuality == RenderQuality::Reference ? render::Quality::reference : render::Quality::realtime;
+    s.rtDirect.enabled = m_rtDirectWanted;
     if (!m_deferredRenderer) return s;
+    const auto res = [](bool full) { return full ? render::TraceResolution::full : render::TraceResolution::half; };
     DeferredRenderer& d = *m_deferredRenderer;
-    s.rtDirectCandidates = d.directCandidates();
-    s.rtDirectSpatial = d.directSpatial();
-    s.rtDirectFullResolution = d.directFullResolution();
-    s.rtGI = d.rtGIEnabled();
-    s.rtGIFullResolution = d.rtGIFullResolution();
-    s.rtGIRays = d.rtGIRays();
+    s.rtDirect.candidates = static_cast<int32_t>(d.directCandidates());
+    s.rtDirect.spatial = static_cast<int32_t>(d.directSpatial());
+    s.rtDirect.resolution = res(d.directFullResolution());
+    s.rtGI.enabled = d.rtGIEnabled();
+    s.rtGI.resolution = res(d.rtGIFullResolution());
+    s.rtGI.rays = static_cast<int32_t>(d.rtGIRays());
     s.sss = d.sssEnabled();
-    s.vfxDecals = d.decalsDrawn();
-    s.vfxSmokeInGi = d.smokeInGi();
+    s.vfx.decals = d.decalsDrawn();
+    s.vfx.smokeInGi = d.smokeInGi();
     if (const VfxRenderer* v = d.vfxRenderer()) {
-        s.vfxParticles = v->particlesEnabled();
-        s.vfxSoft = v->softEnabled();
-        s.vfxTracers = v->tracersEnabled();
+        s.vfx.particles = v->particlesEnabled();
+        s.vfx.soft = v->softEnabled();
+        s.vfx.tracers = v->tracersEnabled();
     }
-    s.csmCascades = d.csmCascades();
-    s.csmSize = d.csmSize();
+    s.csm.cascades = static_cast<int32_t>(d.csmCascades());
+    s.csm.size = static_cast<int32_t>(d.csmSize());
     if (GpuCulling* c = d.culling()) {
-        s.geometry = c->settings().geometry;
+        const GpuCulling::Geometry g = c->settings().geometry;
+        s.geometry = g == GpuCulling::Geometry::Meshlets    ? render::GeometryPath::meshlets
+                     : g == GpuCulling::Geometry::Instances ? render::GeometryPath::instances
+                                                            : render::GeometryPath::automatic;
         s.occlusionCulling = c->settings().occlusion;
     }
     if (auto* pp = d.getPostProcessing()) {
         s.ev100 = pp->ev100();
-        s.tonemap = pp->displayCurve();
+        s.tonemap = pp->displayCurve() == render::DisplayCurve::Neutral ? render::Tonemap::neutral : render::Tonemap::agx;
         s.autoExposure = pp->autoExposure();
         s.exposureCompensation = pp->exposureCompensation();
     }
@@ -753,7 +769,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     m_deferredRenderer->onResize(m_width, m_height);
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
         pp->setEv100(RenderSettings{}.ev100);
-        pp->setDisplayCurve(RenderSettings{}.tonemap);
+        pp->setDisplayCurve(displayCurve(RenderSettings{}.tonemap));
     }
     // capture.preview: without it, inline captures read the full frame and preview on the CPU.
     m_previewPass = std::make_unique<CapturePreviewPass>();

@@ -8,6 +8,7 @@
 // Free-JSON members (world.apply's commands, an inline scene) are JsonRefs, checked by the
 // command and scene decoders.
 #include "core/input.hpp"
+#include "render/renderer/render_settings.hpp"
 #include "core/timeline.hpp"
 
 #include <glm/vec2.hpp>
@@ -31,9 +32,9 @@ enum class SaveLayout : uint8_t { compact, pretty };
 enum class CaptureMode : uint8_t { deferred, rt_realtime, rt_offline };
 enum class Denoiser : uint8_t { none, oidn, nrd, dlss };
 enum class PostEffect : uint8_t { bloom, taa };
-enum class Quality : uint8_t { realtime, reference };
-// The display curve (frontier F2, ruling F-R4): AgX by default, Khronos PBR Neutral for material review.
-enum class Tonemap : uint8_t { agx, neutral };
+// render.settings' types are the renderer's own (render/renderer/render_settings.hpp): one struct.
+using render::Quality;
+using render::Tonemap;
 enum class LogLevelName : uint8_t { trace, debug, info, warn, error };
 enum class LogChannelName : uint8_t { render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime, vfx };
 
@@ -176,48 +177,14 @@ struct RenderCaptureParams {
     bool caustics{true};                           // light traced from the sun for this capture (rt_offline; ruling C1)
 };
 
-// render.settings (sub-project 2b spec, "The agent-facing surface"): every quality knob of
-// the host's renderer. Host state: never in scene files. The defaults are the budgeted frame.
-enum class TraceResolution : uint8_t { half, full };
-enum class GeometryPath : uint8_t { automatic, meshlets, instances };   // "auto", "meshlets", "instances"
-
-struct RtDirectSettings {
-    bool enabled{true};
-    int32_t candidates{8};
-    int32_t spatial{2};
-    TraceResolution resolution{TraceResolution::half};
-};
-struct RtGISettings {
-    bool enabled{true};
-    TraceResolution resolution{TraceResolution::half};
-    int32_t rays{2};
-};
-struct CsmSettings {
-    int32_t cascades{4};
-    int32_t size{2048};
-};
-// render.settings vfx (sub-project 12): presentation switches for A/B captures, never in the World.
-struct VfxSettings {
-    bool particles{true};
-    bool soft{true};
-    bool tracers{true};
-    bool decals{true};
-    bool smokeInGi{true};
-};
-struct RenderSettings {
-    Quality quality{Quality::realtime};
-    RtDirectSettings rtDirect;
-    RtGISettings rtGI;
-    bool sss{true};
-    GeometryPath geometry{GeometryPath::automatic};
-    bool occlusionCulling{true};
-    CsmSettings csm;
-    float ev100{0.5f};      // the camera's exposure (render::kDefaultEv100, VulkanRenderer::RenderSettings)
-    Tonemap tonemap{Tonemap::agx};
-    bool autoExposure{false};          // a window meters its frames; captures always use ev100
-    float exposureCompensation{0.0f};  // EV added to what auto exposure meters
-    VfxSettings vfx;
-};
+// render.settings (sub-project 2b spec, "The agent-facing surface"): the renderer's RenderSettings.
+using render::TraceResolution;
+using render::GeometryPath;
+using render::RtDirectSettings;
+using render::RtGISettings;
+using render::CsmSettings;
+using render::VfxSettings;
+using render::RenderSettings;
 
 // Without `set`: read. With it: the members given change, the rest keep their value.
 struct RenderSettingsParams {

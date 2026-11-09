@@ -374,12 +374,12 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
 
 std::optional<api::RenderSettings> LiveHost::renderSettings() {
     if (!m_renderer) return std::nullopt;
-    return readRenderSettings(*m_renderer);
+    return m_renderer->renderSettings();
 }
 
 void LiveHost::setRenderSettings(const api::RenderSettings& settings) {
     if (!m_renderer) return;
-    applyRenderSettings(*m_renderer, settings);
+    m_renderer->setRenderSettings(settings);
     m_needRender = true;
 }
 

@@ -67,10 +67,6 @@ void readCaptureOutputs(VulkanRenderer& renderer, const api::RenderRequest& r, b
 // first; never waits on the GPU).
 [[nodiscard]] std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count);
 
-// render.settings on a renderer: the renderer's settings as the API's, and the API's applied
-// (between frames; a GI resolution or CSM size change idles the device).
-[[nodiscard]] api::RenderSettings readRenderSettings(const VulkanRenderer& renderer);
-void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& settings);
 // engine.info's gpu for the renderer's device.
 [[nodiscard]] api::Host::GpuInfo gpuInfo(const VulkanRenderer& renderer);
 
