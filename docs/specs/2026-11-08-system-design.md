@@ -76,7 +76,7 @@ Frank's, 2026-11-08. They decide what "good design" means here; nothing below is
 - `vkQueueSubmit`'s result is ignored (`render_dispatch.cpp:220, 413`); fence waits never time out; there is no
   device-lost path, no `VK_EXT_device_fault`, no breadcrumbs; the window loop catches no exception.
 - Nothing bounds a dispatch's total work; "never ship an unbounded dispatch" is a sentence in `AGENTS.md`.
-- On Linux the GPU's firmware failed seven times during GPU work (`AGENTS.md`, the GSP entry). Whatever the cause,
+- On Linux the GPU's firmware failed seven times during GPU work (`docs/notes/platform.md`, the GSP entry). Whatever the cause,
   the engine cannot say which pass was running.
 
 **4. The engine and the game are tangled, on one thread.**
