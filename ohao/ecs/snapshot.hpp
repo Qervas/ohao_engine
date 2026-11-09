@@ -76,8 +76,9 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
 // What a restore puts back besides the components and the hooks' states: the World's input too (world.restore, a
 // replay), or not (a round's restart: the player's keys are where their hands are now).
 enum class RestoreInput : uint8_t { Yes, No };
-// `snapshot` must come from a world with the same registrations. Never fails. The components
-// first, then the input, the World's step, the snapshot hooks' states, and the next step's events.
+// `snapshot` must come from a world with the same registrations. The components first, then the input, the World's
+// step, the snapshot hooks' states, a `world.restore` event (history: no step reads it), and the snapshot's next-step
+// events. Between steps only, as takeSnapshot: during a step it throws std::logic_error (ask with World::defer).
 RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot, RestoreInput input = RestoreInput::Yes);
 
 // Puts the World's RoundHook (ecs/round_hook.hpp) in its context: a round's start is a snapshot of

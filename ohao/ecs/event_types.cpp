@@ -5,6 +5,7 @@
 #include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
 
 namespace ohao::ecs {
 
@@ -39,6 +40,12 @@ void registerEventTypes(reflect::TypeRegistry& r) {
         .field("joint", &JointBreakEvent::joint).entity().doc("The Joint's entity")
         .field("other", &JointBreakEvent::other).entity().doc("The other body's entity; none: the world")
         .field("point", &JointBreakEvent::point).doc("Its anchor, world").unit("m");
+
+    // ---- the World ----------------------------------------------------------------------------
+    r.type<RestoreEvent>("RestoreEvent").event()
+        .doc("world.restore: a restore (world.restore, a round's restart) put the world back to another moment; in "
+             "the history only, before the restored next-step events")
+        .field("step", &RestoreEvent::step).doc("The World's step the world went back to").unitless();
 
     // ---- animation ----------------------------------------------------------------------------
     r.type<ClipEvent>("ClipEvent").event()

@@ -38,13 +38,13 @@ constexpr float kTimeEps = 1e-5f;
 
 void CombatHud::observe(const World& world) {
     const EventLog& log = world.events();
-    const auto* restarts = log.find<RoundEvent>(slice_events::kRestart);
+    const auto* restores = log.find<RestoreEvent>(kRestoreChannel);
     const auto* damage = log.find<DamageEvent>(slice_events::kDamage);
-    if (!restarts || !damage) return;
+    if (!restores || !damage) return;
     const entt::entity player = playerOf(world);
     const uint64_t playerId = player != entt::null ? world.idOf(player) : 0;
     m_cursor = log.visit(m_cursor, SIZE_MAX, [&](const EventChannelBase& c, std::size_t i) {
-        if (&c == restarts) {
+        if (&c == restores) {   // any restore (a round's restart too): what it marked was another moment's
             m_hitStep = m_hurtStep = 0;
             m_hurtAmount = 0.0f;
         } else if (&c == damage) {

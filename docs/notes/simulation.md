@@ -195,12 +195,15 @@ step 2h, 2026-11-09), unchanged.
   - `scene.load` runs `level`, `player_spawn`, `transform` and `physics` sync, so a snapshot
     right after a load holds the built bodies; a restore of one taken before the bodies existed
     rebuilt them, and a character standing on a slope replayed one float off.
-  - The round (step 3): a world with the saved singleton `Round` starts it at the end of its
-    first combat step (`round_start`, a snapshot through the `RoundHook` in the registry's
-    context, which `api::Session` installs with `ecs::installRoundHook`; a bare World installs
-    it itself, else the round warns once and never runs) and restarts at the end of the step
-    the player has been dead `restartDelay` (3 s) or `restart` is pressed: `world.hash` after
-    that step is the start's. Every enemy dead is `win` once, then the round waits for
+  - The round (step 3): a world with the saved singleton `Round` starts it in its first combat
+    step (`round_start`) and keeps its start, a snapshot through the `RoundHook` in the registry's
+    context (which `api::Session` installs with `ecs::installRoundHook`; a bare World installs it
+    itself, else the round warns once and never runs), taken at that step's end. It restarts at the
+    end of the step the player has been dead `restartDelay` (3 s) or `restart` is pressed. Both go
+    through `World::defer` (step 3d): they run between steps, after the step's last system. Nothing
+    snapshots or restores inside a step (takeSnapshot and restoreSnapshot throw there). After the
+    restart the world is the round's start (its canonical scene), and the next step is the round's
+    second again; it starts with the restore's `world.restore` (history) and `slice.restart`. Every enemy dead is `win` once, then the round waits for
     `restart`. A dead player neither walks, turns, jumps nor fires. A character a restore
     creates starts where its restored entity stands, never at a spawn.
   - Presentation (step 4). The muzzle flash is a `Light` with a saved `Muzzle {intensity,
@@ -298,8 +301,8 @@ step 2h, 2026-11-09), unchanged.
     what it changed) and `assets/anim/enemy.animgraph.json` (body `move`/`combat`/`death`/`dead`;
     additive `aim`, `fire`, `reload`, `hit`). Its driver `enemy` (`ecs/enemy_anim.cpp`, the slice's,
     registered by `installSlice`) reads saved state and the step's slice events. A restart restores the
-    round's start inside the combat step (until step 3d), which ends the step's events (ecs/events.hpp), so
-    a restart step steps the restored Animators exactly as the round's first step did. Damage dealt
+    round's start between steps (World::defer), so the step after a restart steps the restored Animators
+    exactly as the round's second step did. Damage dealt
     between steps (`combat.damage`) is the next step's: it flinches and kills as a round's does.
   - Additive clips are authored as rest × delta (the layer adds rest⁻¹ × clip): a pack clip used
     additively is re-referenced to its own first frame by the tool, never added raw.

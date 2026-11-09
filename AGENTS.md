@@ -196,7 +196,8 @@ What every change must respect. The build checks some of these; the rest are her
   others is an event in the World's log (`ecs/events.hpp`): a channel it writes, read by the systems after it in the
   step, never a log of its own; an event's `seq` is history, never state.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
-  `addSync` (derived state, no dt). Before a `render()` call `world.sync()`, never
+  `addSync` (derived state, no dt). Nothing snapshots or restores the world inside a step: a system asks with
+  `World::defer`, which runs after the step's last system (takeSnapshot and restoreSnapshot throw inside a step). Before a `render()` call `world.sync()`, never
   `update()`: rendering must not step the simulation.
 - Input is stepped per simulation step, not per frame: read `pressed`/`released` in a
   simulate system or `fixedUpdate`, never once per frame (two steps in one frame would

@@ -98,14 +98,10 @@ public:
                 st.cursorSet = true;
             }
             const auto* shots = log.find<ShotEvent>(slice_events::kShot);
-            const auto* restarts = log.find<RoundEvent>(slice_events::kRestart);
+            const auto* restores = log.find<RestoreEvent>(kRestoreChannel);
             st.cursor = log.visit(st.cursor, SIZE_MAX, [&](const EventChannelBase& c, std::size_t i) {
-                if (restarts && &c == restarts) {
-                    restarted = true;
-                    m_shots.clear();   // rounds before the restart belong to the round that ended
-                } else if (shots && &c == shots) {
-                    m_shots.push_back(world.findById(shots->at(i).value.shooter));
-                }
+                if (restores && &c == restores) restarted = true;   // any restore: the guns' motion starts over
+                else if (shots && &c == shots) m_shots.push_back(world.findById(shots->at(i).value.shooter));
             });
         }
 

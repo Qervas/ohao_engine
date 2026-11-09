@@ -439,7 +439,8 @@ struct CombatSystem::Impl {
             deadFor = 0.0f;
             out.roundStart.emit(RoundEvent{});
             roundStartStep = steps;
-            roundStart = hook->save();
+            // The round's start: the world at the end of this step, between steps (World::defer).
+            world.defer([this, hook](World&) { roundStart = hook->save(); });
             return;
         }
         // The player: the first character moved by input, in id order.
@@ -471,26 +472,31 @@ struct CombatSystem::Impl {
         }
         roundInfo.restartIn = playerDead ? std::max(0.0f, round.restartDelay - deadFor) : 0.0f;
         const bool pressed = !round.restart.empty() && world.input().pressed(round.restart);
-        if (pressed || (playerDead && deadFor + kTimeEps >= round.restartDelay)) {
-            const auto t0 = std::chrono::steady_clock::now();
-            // The restore puts back combat's own state too (the `combat` hook): what counts the round's history
-            // goes on from here instead.
-            const auto start = roundStart;
-            const uint64_t stepsNow = steps;
-            const uint32_t restartsNow = roundInfo.restarts;
-            hook->restore(start);
-            roundStart = start;
-            steps = stepsNow;
-            roundInfo.restarts = restartsNow;
-            roundInfo.lastRestartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-            ++roundInfo.restarts;
-            roundInfo.phase = RoundPhase::Playing;
-            roundInfo.restartIn = 0.0f;
-            deadFor = 0.0f;
-            grenades.clear();   // runtime: the round's start had none in flight
-            grenadeCooldown = 0.0f;
-            out.restart.emit(RoundEvent{});
-        }
+        if ((pressed || (playerDead && deadFor + kTimeEps >= round.restartDelay)) && roundStart)
+            world.defer([this, hook](World&) { restart(*hook); });   // after this step's last system
+    }
+
+    // Back to the round's start, between steps: the next step is the round's second again, and starts with the
+    // restore's `world.restore` and then `slice.restart`.
+    void restart(const RoundHook& hook) {
+        const auto t0 = std::chrono::steady_clock::now();
+        // The restore puts back combat's own state too (the `combat` hook): what counts the round's history goes on
+        // from here instead.
+        const auto start = roundStart;
+        const uint64_t stepsNow = steps;
+        const uint32_t restartsNow = roundInfo.restarts;
+        hook.restore(start);
+        roundStart = start;
+        steps = stepsNow;
+        roundInfo.restarts = restartsNow;
+        roundInfo.lastRestartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ++roundInfo.restarts;
+        roundInfo.phase = RoundPhase::Playing;
+        roundInfo.restartIn = 0.0f;
+        deadFor = 0.0f;
+        grenades.clear();   // runtime: the round's start had none in flight
+        grenadeCooldown = 0.0f;
+        out.restart.emit(RoundEvent{});
     }
 
     // ---- what a snapshot carries (the `combat` hook): everything a later step reads --------------

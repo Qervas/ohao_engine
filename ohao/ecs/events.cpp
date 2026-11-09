@@ -56,7 +56,7 @@ struct SavedWindow {
 } // namespace
 
 std::shared_ptr<const void> EventLog::saveWindow() const {
-    if (m_inStep || m_windowSeq == m_nextSeq) return nullptr;
+    if (m_windowSeq == m_nextSeq) return nullptr;
     auto saved = std::make_shared<SavedWindow>();
     std::vector<int> slot(m_channels.size(), -1);
     walk(m_windowSeq, m_nextSeq - m_windowSeq, [&](const EventChannelBase& c, std::size_t) {

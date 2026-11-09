@@ -9,10 +9,9 @@
 //     between steps (an API call, a body removed in a sync) belongs to the next step. A channel's writers run
 //     before its readers (ecs/system_order.hpp), so a step's events are read in that step and a reader keeps no
 //     state.
-//   - State: the events the next step will read. A snapshot taken between steps carries them (saveWindow), and
-//     world.hash covers them; a restore drops the next step's events and puts the snapshot's back. A snapshot taken
-//     during a step carries none, and a restore during a step (a round's restart) ends the step's events: what the
-//     step had emitted was undone with the world, so the systems after it read only what follows.
+//   - State: the events the next step will read. A snapshot carries them (saveWindow), and world.hash covers them;
+//     a restore drops the next step's events and puts the snapshot's back. Snapshots and restores happen between
+//     steps only (World::defer): a step's events are always the step's.
 //   - History: every event also stays in one history of the last kHistory, by seq (from 1, no gaps across
 //     channels). History is never rewound, hashed or snapshotted: a restore's events get new seqs. Observers (the
 //     API's events.read, the HUD, the audio player) read it by cursor. Events leave it only at a step's end, never
@@ -256,8 +255,9 @@ public:
     // The step's events become history; the history drops what is over kHistory.
     void endStep();
     void setStep(uint64_t step) noexcept { m_step = step; }   // a restore
-    // A restore: the step's (or the next step's) events are history, then the snapshot's come back.
-    [[nodiscard]] std::shared_ptr<const void> saveWindow() const;   // null during a step, or with none
+    // A snapshot's and a restore's (between steps): the next step's events; a restore makes them history, then the
+    // snapshot's come back.
+    [[nodiscard]] std::shared_ptr<const void> saveWindow() const;   // null with none
     void restoreWindow(const std::shared_ptr<const void>& saved);
 
 private:

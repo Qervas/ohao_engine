@@ -3,7 +3,8 @@
 // docs/specs/2026-10-27-combat-design.md, "Death, restart, win"): a whole-world snapshot, which
 // needs the reflection layer that ECS system sources may not include. A host that has the type
 // registry puts a RoundHook in the registry's context (ecs::installRoundHook, ecs/snapshot.hpp;
-// api::Session does it); without one a world never starts a round.
+// api::Session does it); without one a world never starts a round. Combat calls both through World::defer: between
+// steps, never inside one.
 #include <functional>
 #include <memory>
 

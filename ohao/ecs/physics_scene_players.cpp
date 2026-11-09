@@ -315,7 +315,6 @@ auto PhysicsScene::Impl::playerEvent(PhysicsEvent::Kind kind, entt::entity e, co
 // Every player, once per step, before the bodies step (spec: the character moves first); its
 // footsteps and landing go into `out`.
 void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out) {
-    spawnPlayers();
     if (players.empty() || !(dt > 0.0f) || !backend) return;
     const glm::vec3 gravity = backend->getGravity();
     const glm::vec2 mouse = input.mouseDelta();
@@ -460,6 +459,10 @@ void PhysicsScene::Impl::step(const InputMap& input, float dt) {
         return;
     }
     propagateTransforms(reg);
+    // Characters first, as World::sync runs player_spawn before physics: a restore's parked characters are back
+    // before its simulation is matched to the bodies (else a restore across a death, its character parked, misses
+    // the exact path and bodies come back only by their poses).
+    spawnPlayers();
     stepDt = dt;
     sync();
     stepDt = 0.0f;

@@ -97,7 +97,8 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     api::Session installs): round_start and a snapshot   (ecs::installRoundHook)
                     at its first step's end; the player dead for
                     restartDelay, or `restart` pressed -> the snapshot
-                    restored at this step's end (restart); every Enemy
+                    restored at this step's end (restart; both by
+                    World::defer, between steps); every Enemy
                     dead -> win, then waits for `restart`; within each
                     weapon, a round lights its Muzzle light for
                     Muzzle.time (WeaponState.flash), then intensity 0
@@ -119,6 +120,8 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
     events for the step (EventReader::read); one emitted between steps (an API call, a body
     removed in a sync) is the next step's, carried by a snapshot and hashed until it runs;
     events.read reads the history, the last 8,192, by seq
+    then what the step deferred runs (World::defer: a round's snapshot, its restart): between
+    steps, so nothing snapshots or restores inside a step
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost):
   runtime::AudioPlayer  (LiveConfig::sound, ohao_game without --mute) the audio.* events

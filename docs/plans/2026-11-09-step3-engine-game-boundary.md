@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a, 3b and 3c built (3g merged into 3c); 3d-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3d built (3g merged into 3c); 3e-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -417,6 +417,47 @@ Two commits, each through the hook:
 - **A temporary restart check:** a death, the restart, and the world equal to the round's start.
 - **Measured,** not gated: `physics_bench`'s restart time.
 - **Expected change in the baseline:** none, since its fight never restarts.
+
+*As built (2026-11-09), deciding by AGENTS.md's "Deciding":*
+- **`World::defer(op)`.**
+  - During a step, `op` runs after the step's last system: the step's events are already history, so it runs
+    between steps. Between steps it runs at once.
+  - This is the deferred-commands pattern (Bevy's `Commands` applied at a sync point, flecs' deferred
+    operations), with one sync point a step.
+  - `takeSnapshot` and `restoreSnapshot` throw inside a step. The log's ending of a step's events by a restore
+    during the step is deleted.
+- **Combat** defers both the round's start snapshot (at the end of its first step, as its doc always said) and
+  the restart (`restart()`).
+- **`world.restore` is history only.** This differs from the plan, which had it in the next step's events.
+  - First principles: a restore must leave the world hashing as its snapshot. An event in the next step's
+    events is state, so it would break that (`replay_test` checks the restored hash).
+  - A restore is a fact for observers, not an input to the simulation. So `restoreSnapshot` emits it
+    (`{step}`: the step it went back to) and then ends the window, before the snapshot's events come back. The
+    history holds it; no step reads it.
+  - The channel exists from the World's construction, so the catalogue lists it.
+- **The audio schedule keeps its restore hook's flag.** 3c.2 already deleted its restart test. Its `stop_world`
+  is output, and the hook sees every restore, so no event is needed.
+- **Observers.** The HUD and the view model reset on `world.restore`, any restore. The view model's "drop the
+  rounds before a restart" is deleted.
+- **Physics: nothing to cut.** The plan's premise was that it had a restored-player path for restores inside
+  a step. It has none: that path serves every restore. What 3d fixed instead is 3c's finding.
+  - The physics step synced bodies (and matched a restore's saved simulation to them) before spawning
+    players, the opposite of `World::sync`'s order (`player_spawn` before `physics`).
+  - So a restore across a death, whose character was parked, failed the identity check and took the inexact
+    path.
+  - The step now spawns players first. The step-1 kill, snapshot and restore replays exactly; it failed on
+    3c.1 and on 3c.2.
+- **The temporary restart check** (deleted after):
+  - The player, killed between steps 2 and 3, restarts after `restartDelay`.
+  - The history ends `world.restore` (`step: 1`) then `slice.restart`.
+  - The canonical scene after the restart equals the one saved at the round's start, and the step after it
+    equals the round's second step.
+  - Planted, the round's start snapshot taken inside the step: the step throws.
+- **Unchanged:** the baseline matches 3c.2 exactly, hashes included (its fight never restarts, and its
+  players spawn at load). Every gate passes.
+- **Cost:** the restart's restore takes 0.0043 ms median (budget 2 ms): 0.0034 before step 3, 0.0040 at 3c.2.
+- **`events.read`** writes a non-entity `uint64` field as a number (`world.restore`'s `step`), not a
+  16-hex-digit id.
 
 ## 3e. One clock
 

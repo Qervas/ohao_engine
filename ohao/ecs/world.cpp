@@ -37,6 +37,7 @@ glm::mat4 Transform::matrix() const {
 }
 
 World::World() : m_idGen{randomSeed(), 0} {
+    (void)m_events.writer<RestoreEvent>(kRestoreChannel, "world");   // its channel, before any restore
     m_registry.on_update<Transform>().connect<&World::onTransformChanged>(this);
     // The id index follows EntityId on every path (World::destroy, registry().destroy,
     // registry().clear). These hooks only touch m_byId, never a pool.
@@ -267,6 +268,16 @@ void World::simulate(float dt) {
     for (auto& [name, fn] : m_simulate) fn(*this, dt);
     m_events.endStep();
     m_pendingLook = glm::vec2(0.0f);   // the step took it
+    for (std::size_t i = 0; i < m_deferred.size(); ++i) {   // between steps now: an op may defer another (at once)
+        auto op = std::move(m_deferred[i]);
+        op(*this);
+    }
+    m_deferred.clear();
+}
+
+void World::defer(std::function<void(World&)> op) {
+    if (m_events.inStep()) m_deferred.push_back(std::move(op));
+    else op(*this);
 }
 
 void World::sync() {

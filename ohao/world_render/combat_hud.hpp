@@ -38,7 +38,7 @@ public:
     static constexpr float kHurtMaxAlpha = 0.55f;
 
     // Reads the slice's events since the last call (the World's log): the player's last damaging round and the
-    // last damage it took (a restart forgets both).
+    // last damage it took (a restore, a round's restart too, forgets both).
     void observe(const World& world);
     // The HUD's content for a width x height frame, the world as it is now.
     [[nodiscard]] HudState state(const World& world, uint32_t width, uint32_t height) const;

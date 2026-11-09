@@ -15,6 +15,13 @@
 
 namespace ohao::ecs {
 
+// A restore put the world back to another moment (restoreSnapshot): `world.restore`, in the history only (emitted
+// before the snapshot's next-step events come back, so no step reads it); the HUD and agents read it there.
+inline constexpr const char* kRestoreChannel = "world.restore";
+struct RestoreEvent {
+    uint64_t step{0};   // the World's step the world went back to
+};
+
 // The game world: an EnTT registry plus two explicitly ordered lists of systems, one per
 // phase (sub-project 4 spec, "System phases"). Systems run in exactly the order they were
 // added -- no discovery, no sorting.
@@ -87,8 +94,13 @@ public:
     // installs it and whenever; a name not listed, or one already installed, throws std::logic_error.
     void addSimulate(std::string name, SimulateSystem fn);
     void addSync(std::string name, SyncSystem fn);
-    // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp).
+    // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp),
+    // then what the step deferred runs.
     void simulate(float dt);
+    // Work that must happen between steps (a snapshot, a restore: step 3d): asked during a step, it runs after the
+    // step's last system, in the order asked, with the step's events already history; asked between steps, at once.
+    // Nothing snapshots or restores the world inside a step.
+    void defer(std::function<void(World&)> op);
     // The steps simulated (saved and hashed): the step running, or the last one between steps.
     [[nodiscard]] uint64_t steps() const noexcept { return m_events.step(); }
     void setSteps(uint64_t steps) noexcept { m_events.setStep(steps); }   // a restore
@@ -159,6 +171,7 @@ private:
     std::vector<std::pair<std::string, SyncSystem>> m_sync;
     InputMap m_input;
     EventLog m_events;
+    std::vector<std::function<void(World&)>> m_deferred;
     bool m_bindingsDirty{false};
     float m_renderAlpha{1.0f};
     glm::vec2 m_pendingLook{0.0f};

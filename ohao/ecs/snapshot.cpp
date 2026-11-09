@@ -5,6 +5,7 @@
 #include "ecs/scene_types.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <cstring>
 
 namespace ohao::ecs {
@@ -55,6 +56,7 @@ Snapshot takeSnapshot(const World& world, const reflect::TypeRegistry& types, ui
 }
 
 void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapshot& s, uint64_t frame) {
+    if (world.events().inStep()) throw std::logic_error("takeSnapshot during a step: ask for it with World::defer");
     thread_local std::vector<uint32_t> rowOf;
     captureEntityTable(world, s, rowOf);
     const entt::registry& reg = world.registry();
@@ -181,11 +183,13 @@ RestoreStats restoreComponents(World& world, const Snapshot& s);
 } // namespace
 
 RestoreStats restoreSnapshot(World& world, const Snapshot& s, RestoreInput input) {
+    if (world.events().inStep()) throw std::logic_error("restoreSnapshot during a step: ask for it with World::defer");
     const RestoreStats stats = restoreComponents(world, s);
     if (input == RestoreInput::Yes) world.input() = s.input;
     world.setSteps(s.steps);
     restoreSystems(world.registry(), s.systems);
-    world.events().restoreWindow(s.events);
+    world.events().writer<RestoreEvent>(kRestoreChannel, "world").emit(RestoreEvent{s.steps});
+    world.events().restoreWindow(s.events);   // the restore's event is history now; the snapshot's come back
     return stats;
 }
 

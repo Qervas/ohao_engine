@@ -84,7 +84,9 @@ void writePayload(const Session::Impl& s, const void* value, const TypeInfo& t, 
                     }
                     break;
                 }
-                [[fallthrough]];
+                out.key(f.name);   // a count, not an id: a number
+                out.uint64(*static_cast<const uint64_t*>(at));
+                break;
             default:
                 out.key(f.name);
                 f.ops->write(value, out, *f.type);
