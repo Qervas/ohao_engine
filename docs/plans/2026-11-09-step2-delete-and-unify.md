@@ -93,6 +93,20 @@ render systems move behind `installRendering`; where it cannot yet, the exceptio
 
 *Done when* configure fails on an upward link (proven by planting one) and the listed exceptions are the only ones.
 
+*As built (2026-11-09):* `cmake/ohao_layers.cmake` gives each library a level (core 0; gpu, reflect, level, anim,
+audio bank, vfx, physics 1; asset, audio 2; renderer 3; ecs 4; level world 5; engine 6; api 7; rpc, runtime 8) and
+checks every link and every `#include` against the library that owns the included header. The only exception is
+`ohao_ecs -> ohao_renderer` (step 3). No other upward edge existed. Planted `#include "ecs/world.hpp"` in
+`core/log.cpp`: configure failed naming the file and the edge.
+
+## 2f result (2026-11-09): waiting for Frank's ruling
+
+`scene_bench --breakdown 10000`: the per-type writers save bench10k in 7.40 ms (median), the generic reflection
+writer in 10.20 ms, against the 10 ms budget. The generic writer is 2% over, so the hand writers cannot be deleted
+under the current budget. Options: raise `save_pretty` to 11 ms and delete the 677 lines of hand writers (one source:
+the registration); or keep them and restore their byte-for-byte check against the generic writer; or generate them
+at build. Budgets change only by Frank's ruling.
+
 ## 2h. `AGENTS.md` under 300 lines
 
 Each gotcha becomes one of: a check in code (an assert, a configure error, a gate), a comment where the code is, a

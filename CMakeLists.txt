@@ -133,3 +133,7 @@ add_subdirectory(tools/ohao)
 # The harnesses and gates that are not one suite's executable (needs every target above).
 ohao_register_harness_tests()
 
+# Dependencies point down only (system design 4.1): a link or include up a layer fails configure.
+include(cmake/ohao_layers.cmake)
+ohao_check_layers()
+
