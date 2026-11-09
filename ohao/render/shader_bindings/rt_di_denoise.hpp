@@ -41,5 +41,10 @@ static_assert(offsetof(DIPush, trace) == 64);
 static_assert(sizeof(DIPush) == 80);
 
 using PushConstants = DIPush;
+inline constexpr uint32_t kPushSize = sizeof(DIPush);
 
 } // namespace ohao::shader::rt_di_denoise
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_di_denoise) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_di_denoise(T, X) X(T, extent, 0) X(T, params, 16) X(T, cameraPos, 32) X(T, weather, 48) X(T, trace, 64)

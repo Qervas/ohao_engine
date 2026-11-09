@@ -23,5 +23,10 @@ static_assert(offsetof(HiZPush, size) == 0);
 static_assert(sizeof(HiZPush) == 16);
 
 using PushConstants = HiZPush;
+inline constexpr uint32_t kPushSize = sizeof(HiZPush);
 
 } // namespace ohao::shader::cull_hiz
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, cull_hiz) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_cull_hiz(T, X) X(T, size, 0)

@@ -22,5 +22,10 @@ static_assert(offsetof(ShadowPush, viewProj) == 0);
 static_assert(sizeof(ShadowPush) == 64);
 
 using PushConstants = ShadowPush;
+inline constexpr uint32_t kPushSize = sizeof(ShadowPush);
 
 } // namespace ohao::shader::shadow_shadow_csm
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, shadow_shadow_csm) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_shadow_shadow_csm(T, X) X(T, viewProj, 0)

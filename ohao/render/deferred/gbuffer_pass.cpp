@@ -1,4 +1,6 @@
 #include "gbuffer_pass.hpp"
+#include "render/shader_bindings/core_gbuffer.hpp"
+#include "render/shader_bindings/cull_meshlets.hpp"
 #include "gpu_culling.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include "render/scene/render_scene.hpp"
@@ -8,6 +10,26 @@
 #include <cstring>
 
 namespace ohao {
+
+namespace {
+// Set 1, the scene, as the G-buffer (core/gbuffer.slang) and its meshlet path (cull/meshlets.slang) read it: the
+// G-buffer's six tables, then the meshlet path's arenas, commands and Hi-Z. Both shaders declare the shared ones alike.
+namespace G = shader::core_gbuffer;
+namespace M = shader::cull_meshlets;
+constexpr std::array<shader::Binding, 12> kScene{G::instances, G::matRows, G::materialRefs, G::camera, G::sssTiles,
+                                                 G::draws, M::vertices, M::meshlets, M::meshletVertices,
+                                                 M::meshletTriangles, M::commands, M::hiz};
+constexpr bool same(const shader::Binding& a, const shader::Binding& b) {
+    return a.set == b.set && a.binding == b.binding && a.type == b.type;
+}
+static_assert(same(M::instances, G::instances) && same(M::camera, G::camera) && same(M::draws, G::draws));
+constexpr bool inOrder() {
+    for (std::size_t i = 0; i < kScene.size(); ++i)
+        if (kScene[i].set != 1 || kScene[i].binding != i) return false;
+    return true;
+}
+static_assert(inOrder(), "the scene set's bindings are 0..11 in order (the infos below are indexed by binding)");
+} // namespace
 
 GBufferPass::~GBufferPass() {
     cleanup();
@@ -24,7 +46,6 @@ bool GBufferPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createGBuffer()) return false;
     if (!createRenderPass()) return false;
     if (!createFramebuffer()) return false;
-    if (!createDescriptors()) return false;
     if (!createSceneDescriptors()) return false;
     if (!createPipeline()) return false;
 
@@ -52,19 +73,7 @@ void GBufferPass::cleanup() {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
     }
-    if (m_sampler != VK_NULL_HANDLE) {
-        vkDestroySampler(m_device, m_sampler, nullptr);
-        m_sampler = VK_NULL_HANDLE;
-    }
-    if (m_descriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
-        m_descriptorPool = VK_NULL_HANDLE;
-    }
     destroySceneDescriptors();
-    if (m_gbufferLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_device, m_gbufferLayout, nullptr);
-        m_gbufferLayout = VK_NULL_HANDLE;
-    }
     if (m_framebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
         m_framebuffer = VK_NULL_HANDLE;
@@ -304,22 +313,12 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
     const VkDescriptorImageInfo hizInfo{VK_NULL_HANDLE, m_culling->hizView(), VK_IMAGE_LAYOUT_GENERAL};
     std::array<VkWriteDescriptorSet, kSceneBindings> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = m_sceneSets[frameIndex];
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = sceneBindingType(i);
-        if (i == kSceneHiZ) writes[i].pImageInfo = &hizInfo;
+        writes[i] = shader::write(kScene[i], m_sceneSets[frameIndex]);
+        if (kScene[i].type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) writes[i].pImageInfo = &hizInfo;
         else writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     return true;
-}
-
-VkDescriptorType GBufferPass::sceneBindingType(uint32_t binding) {
-    if (binding == 3) return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    if (binding == kSceneHiZ) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 }
 
 bool GBufferPass::createSceneDescriptors() {
@@ -333,10 +332,7 @@ bool GBufferPass::createSceneDescriptors() {
 
     std::array<VkDescriptorSetLayoutBinding, kSceneBindings> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = sceneBindingType(i);
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = geometryStages();
+        bindings[i] = shader::layoutBinding(kScene[i], geometryStages());
     }
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -427,7 +423,6 @@ void GBufferPass::onResize(uint32_t width, uint32_t height) {
     destroyGBuffer();
     createGBuffer();
     createFramebuffer();
-    createDescriptors();
 }
 
 void GBufferPass::setViewProjection(const glm::mat4& view, const glm::mat4& proj,
@@ -638,104 +633,6 @@ bool GBufferPass::createFramebuffer() {
     framebufferInfo.layers = 1;
 
     return vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffer) == VK_SUCCESS;
-}
-
-bool GBufferPass::createDescriptors() {
-    // Create sampler for G-Buffer textures
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.anisotropyEnable = VK_FALSE;
-    samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-
-    if (m_sampler == VK_NULL_HANDLE) {
-        if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_sampler) != VK_SUCCESS) {
-            return false;
-        }
-    }
-
-    // Descriptor set layout for G-Buffer access
-    std::array<VkDescriptorSetLayoutBinding, GBUFFER_COUNT> bindings{};
-    for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-        bindings[i].pImmutableSamplers = nullptr;
-    }
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
-
-    if (m_gbufferLayout == VK_NULL_HANDLE) {
-        if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_gbufferLayout) != VK_SUCCESS) {
-            return false;
-        }
-    }
-
-    // Descriptor pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = GBUFFER_COUNT;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 1;
-
-    if (m_descriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
-    }
-
-    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Allocate descriptor set
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_gbufferLayout;
-
-    if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_gbufferDescriptor) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Update descriptor set
-    std::array<VkDescriptorImageInfo, GBUFFER_COUNT> imageInfos{};
-    std::array<VkWriteDescriptorSet, GBUFFER_COUNT> writes{};
-
-    for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
-        imageInfos[i].sampler = m_sampler;
-        imageInfos[i].imageView = m_gbuffer[i].view;
-        imageInfos[i].imageLayout = (i == kDepth) ?
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = m_gbufferDescriptor;
-        writes[i].dstBinding = i;
-        writes[i].dstArrayElement = 0;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].descriptorCount = 1;
-        writes[i].pImageInfo = &imageInfos[i];
-    }
-
-    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-
-    return true;
 }
 
 bool GBufferPass::createPipeline() {

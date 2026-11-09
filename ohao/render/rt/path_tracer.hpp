@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/display/display.hpp"
+#include "render/shader_bindings/rt_path_tracer.hpp"
 #include "render/rt/emissive_lights.hpp"
 
 // Path Tracer — full Vulkan RT pipeline that replaces rasterization entirely.
@@ -524,7 +525,7 @@ private:
         glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
         glm::vec4 jitter;               // xy=Halton(2,3) pixel offset (0 without NRD or DLSS RR), zw=0
     };  // total = 256 bytes
-    OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);
+    OHAO_CHECK_PUSH(PTPushConstants, rt_path_tracer)   // rt/path_tracer.slang's
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 

@@ -24,5 +24,10 @@ static_assert(offsetof(HudPush, pad) == 8);
 static_assert(sizeof(HudPush) == 16);
 
 using PushConstants = HudPush;
+inline constexpr uint32_t kPushSize = sizeof(HudPush);
 
 } // namespace ohao::shader::hud_hud
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, hud_hud) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_hud_hud(T, X) X(T, invSize, 0) X(T, pad, 8)

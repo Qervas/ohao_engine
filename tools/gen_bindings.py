@@ -177,6 +177,9 @@ def header(path, stages, refl):
             continue
         ty, count = descriptor(p["type"])
         s = b.get("space", 0)
+        clash = [n for i, n in sets.get(s, []) if i == b["index"]]
+        if clash:
+            raise RuntimeError(f"{path}: set {s} binding {b['index']} is both {clash[0]} and {p['name']}")
         bindings.append(f"inline constexpr Binding {p['name']}{{{s}, {b['index']}, {ty}, {count}}};")
         sets.setdefault(s, []).append((b["index"], p["name"]))
     if push:
@@ -194,8 +197,38 @@ def header(path, stages, refl):
     if push:
         out += ["", f"// The push constants (the shader's {push['name']}).", ""] + structs
         out.append(f"using PushConstants = {push['name']};")
+        out.append(f"inline constexpr uint32_t kPushSize = sizeof({push['name']});")
     out += ["", f"}} // namespace ohao::shader::{name}", ""]
+    if push:
+        fields = " ".join(f"X(T, {f['name']}, {f['binding']['offset']})" for f in push["fields"])
+        out += ["// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, " + name + ") holds a C++",
+                "// struct to them.", f"#define OHAO_PUSH_FIELDS_{name}(T, X) {fields}", ""]
     return "\n".join(out)
+
+
+# A descriptor binding typed as a number in C++ (vertex-input bindings are not descriptors and are not matched).
+TYPED = [re.compile(p) for p in (
+    r"dstBinding\s*=\s*\d", r"\blayoutBinding\(\s*\d", r"\bdescriptorWrite\([^,()]+,\s*\d",
+    r"VkDescriptorSetLayoutBinding\s*\{\s*\d", r"\{\s*\d+u?\s*,\s*VK_DESCRIPTOR_TYPE_",
+    r"bindings?\[\w+\]\.binding\s*=", r"\bdstBinding\s*=\s*\w+\s*\+", r"\badd(Image)?\(\s*\d+\s*,",
+    r"(?<!shader::)\blayoutBinding\(\s*[a-z]\w*\s*,", r"\b(rtc::)?descriptorWrite\(")]   # the old helpers took numbers
+
+
+def typed_bindings():
+    """file:line of every descriptor binding C++ types as a number instead of naming a generated Binding."""
+    hits = []
+    for d, _, files in os.walk(os.path.join(ROOT, "ohao")):
+        if os.path.abspath(d).startswith(OUT):
+            continue
+        for f in files:
+            if not f.endswith((".cpp", ".hpp")):
+                continue
+            p = os.path.join(d, f)
+            for n, line in enumerate(open(p, encoding="utf-8"), 1):
+                code = line.split("//")[0]
+                if any(r.search(code) for r in TYPED):
+                    hits.append(f"{os.path.relpath(p, ROOT)}:{n}: {line.strip()[:100]}")
+    return hits
 
 
 def main():
@@ -216,11 +249,14 @@ def main():
                    if not os.path.exists(os.path.join(OUT, f)) or open(os.path.join(OUT, f), encoding="utf-8").read() != text)
     extra = sorted(have - set(want))
     if args.check:
+        typed = typed_bindings()
+        for h in typed:
+            print(f"gen_bindings: a typed binding number (name the generated Binding): {h}")
         for f in stale:
             print(f"gen_bindings: {f} is out of date (python tools/gen_bindings.py)")
         for f in extra:
             print(f"gen_bindings: {f} has no shader")
-        return 1 if stale or extra else 0
+        return 1 if stale or extra or typed else 0
     os.makedirs(OUT, exist_ok=True)
     for f in stale:
         open(os.path.join(OUT, f), "w", encoding="utf-8", newline="\n").write(want[f])

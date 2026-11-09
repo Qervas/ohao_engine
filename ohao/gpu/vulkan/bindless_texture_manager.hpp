@@ -65,6 +65,10 @@ struct BindlessTextureInfo {
 // Manages bindless texture array with dynamic updates
 class BindlessTextureManager {
 public:
+    // The table's binding in its set; every shader that reads it declares it there
+    // (render/shader_bindings/shader_bindings.cpp holds them to it).
+    static constexpr uint32_t kBinding = 0;
+
     BindlessTextureManager() = default;
     ~BindlessTextureManager();
 

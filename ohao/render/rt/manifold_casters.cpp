@@ -1,4 +1,5 @@
 #include "render/rt/manifold_casters.hpp"
+#include "render/shader_bindings/rt_manifold_gather.hpp"
 
 #include "core/log.hpp"
 #include "gpu/shared_layout.hpp"
@@ -55,7 +56,8 @@ bool ManifoldCasters::create(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physical = physicalDevice;
     VkDescriptorSetLayoutBinding bindings[9];
-    for (uint32_t i = 0; i < 9; ++i) bindings[i] = rtc::layoutBinding(i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    for (uint32_t i = 0; i < 9; ++i) bindings[i] = shader::layoutBinding(shader::rt_manifold_gather::kSet0[i]);
+    static_assert(shader::rt_manifold_gather::kSet0.size() == 9);
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = 9;
     li.pBindings = bindings;
@@ -269,7 +271,7 @@ void ManifoldCasters::record(VkCommandBuffer cmd, uint32_t frameSlot, VkBuffer v
         };
         VkWriteDescriptorSet w[9];
         for (uint32_t i = 0; i < 9; ++i) {
-            w[i] = rtc::descriptorWrite(set, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            w[i] = shader::write(shader::rt_manifold_gather::kSet0[i], set);
             w[i].pBufferInfo = &infos[i];
         }
         vkUpdateDescriptorSets(m_device, 9, w, 0, nullptr);

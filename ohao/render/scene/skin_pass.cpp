@@ -1,4 +1,5 @@
 #include "render/scene/skin_pass.hpp"
+#include "render/shader_bindings/skin_skin.hpp"
 
 #include "core/log.hpp"
 #include "gpu/shared_layout.hpp"
@@ -9,7 +10,7 @@
 namespace ohao::render {
 
 namespace {
-constexpr uint32_t kBindings = 4;   // vertices, palettes, meshlets, meshlet vertices
+constexpr uint32_t kBindings = shader::skin_skin::kSet0.size();   // vertices, palettes, meshlets, meshlet vertices
 constexpr VkDeviceSize kMinPaletteBytes = 64u * 1024u;
 }
 
@@ -17,7 +18,7 @@ bool SkinPass::initialize(VkDevice device, VkPhysicalDevice physical) {
     m_device = device;
     m_physical = physical;
     std::array<VkDescriptorSetLayoutBinding, kBindings> bindings{};
-    for (uint32_t i = 0; i < kBindings; ++i) bindings[i] = rtc::layoutBinding(i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    for (uint32_t i = 0; i < kBindings; ++i) bindings[i] = shader::layoutBinding(shader::skin_skin::kSet0[i]);
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindings;
@@ -100,7 +101,7 @@ bool SkinPass::prepare(uint32_t slotIndex, std::span<const Job> jobs, VkBuffer v
     }};
     std::array<VkWriteDescriptorSet, kBindings> writes{};
     for (uint32_t i = 0; i < kBindings; ++i) {
-        writes[i] = rtc::descriptorWrite(s.set, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writes[i] = shader::write(shader::skin_skin::kSet0[i], s.set);
         writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, kBindings, writes.data(), 0, nullptr);

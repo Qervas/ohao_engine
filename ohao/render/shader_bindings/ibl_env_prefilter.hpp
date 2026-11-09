@@ -26,5 +26,10 @@ static_assert(offsetof(EnvPrefilterPush, params) == 16);
 static_assert(sizeof(EnvPrefilterPush) == 32);
 
 using PushConstants = EnvPrefilterPush;
+inline constexpr uint32_t kPushSize = sizeof(EnvPrefilterPush);
 
 } // namespace ohao::shader::ibl_env_prefilter
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, ibl_env_prefilter) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_ibl_env_prefilter(T, X) X(T, size, 0) X(T, params, 16)

@@ -64,5 +64,10 @@ static_assert(offsetof(LightingPush, envIntensity) == 180);
 static_assert(sizeof(LightingPush) == 192);
 
 using PushConstants = LightingPush;
+inline constexpr uint32_t kPushSize = sizeof(LightingPush);
 
 } // namespace ohao::shader::core_deferred_lighting
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, core_deferred_lighting) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_core_deferred_lighting(T, X) X(T, invViewProj, 0) X(T, view, 64) X(T, cameraPos, 128) X(T, pad0, 140) X(T, screenSize, 144) X(T, lightCount, 152) X(T, flags, 156) X(T, wetness, 160) X(T, sliceScale, 164) X(T, snowCover, 168) X(T, sliceBias, 172) X(T, frostCover, 176) X(T, envIntensity, 180)

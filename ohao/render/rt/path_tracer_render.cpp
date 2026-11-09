@@ -3,6 +3,7 @@
 // Push-constant flag constants (kPTFlag*) moved here since this TU is their sole consumer.
 
 #include "path_tracer.hpp"
+#include "render/shader_bindings/rt_path_tracer.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
@@ -25,6 +26,7 @@
 #endif
 
 namespace ohao {
+namespace P = shader::rt_path_tracer;
 
 namespace {
 constexpr uint32_t kPTFlagEnableAOVs = 1u << 0;
@@ -205,26 +207,26 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 0;
+    writes[writeCount].dstBinding = P::scene.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     writes[writeCount].pNext = &asWrite;
     writeCount++;
 
-    addImage(1, &accumInfo);
-    addImage(2, &outputInfo);
-    addImage(3, &accumHistoryInfo);
-    addImage(6, &albedoAOVInfo);
-    addImage(7, &normalAOVInfo);
+    addImage(P::accumBuffer.binding, &accumInfo);
+    addImage(P::outputImage.binding, &outputInfo);
+    addImage(P::accumHistory.binding, &accumHistoryInfo);
+    addImage(P::albedoAOV.binding, &albedoAOVInfo);
+    addImage(P::normalAOV.binding, &normalAOVInfo);
     const VkDescriptorImageInfo emissionInfo{VK_NULL_HANDLE, m_emissionAOVView, VK_IMAGE_LAYOUT_GENERAL};
-    addImage(13, &emissionInfo);
+    addImage(P::emissionAOV.binding, &emissionInfo);
     // Binding 43: the emissive lights' power image, every level, sampled (read with Load).
     const VkDescriptorImageInfo powerInfo{VK_NULL_HANDLE, m_emissive->powerView(), VK_IMAGE_LAYOUT_GENERAL};
     {
         VkWriteDescriptorSet& w = writes[writeCount++];
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.dstSet = set;
-        w.dstBinding = 43;
+        w.dstBinding = P::emissivePower.binding;
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         w.pImageInfo = &powerInfo;
@@ -233,13 +235,13 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // RenderScene buffers: 4 vertex arena, 5 index arena, 8 mesh table, 9 triangle
     // material slots, 10 material table, 11 RT lights, 36 instances, 37 material refs.
     const struct { uint32_t binding; VkBuffer buffer; } sceneBuffers[] = {
-        {4, m_vertexArena}, {5, m_indexArena}, {8, m_meshTable}, {9, m_triangleSlots},
-        {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
-        {38, m_openpbrTables.buffer()}, {39, m_radianceCache.keys()}, {40, m_radianceCache.accum()},
-        {41, m_radianceCache.resolved()}, {42, m_emissive->lightBuffer()}, {44, m_emissive->rangeBuffer(frameSlot)},
-        {45, m_emissive->firstBuffer(frameSlot)}, {46, m_guiding.states()}, {49, m_guiding.proposals()},
-        {50, m_guiding.pixel()}, {51, m_caustics.table()}, {52, m_caustics.splat()}, {53, m_caustics.stats()},
-        {54, m_manifold.tris()}, {55, m_manifold.nodes()}, {56, m_manifold.draws(frameSlot)}, {57, m_manifold.requests()},
+        {P::vertices.binding, m_vertexArena}, {P::indices.binding, m_indexArena}, {P::meshes.binding, m_meshTable}, {P::triangleSlots.binding, m_triangleSlots},
+        {P::materials.binding, m_materialTable}, {P::lightData.binding, m_lightBuffer}, {P::instances.binding, m_instances}, {P::materialRefs.binding, m_materialRefs},
+        {P::openpbrTables.binding, m_openpbrTables.buffer()}, {P::cacheKeys.binding, m_radianceCache.keys()}, {P::cacheAccum.binding, m_radianceCache.accum()},
+        {P::cacheResolved.binding, m_radianceCache.resolved()}, {P::emissiveLights.binding, m_emissive->lightBuffer()}, {P::emissiveRanges.binding, m_emissive->rangeBuffer(frameSlot)},
+        {P::emissiveFirst.binding, m_emissive->firstBuffer(frameSlot)}, {P::guideStates.binding, m_guiding.states()}, {P::guideProposals.binding, m_guiding.proposals()},
+        {P::guidePixel.binding, m_guiding.pixel()}, {P::causticCasters.binding, m_caustics.table()}, {P::causticSplat.binding, m_caustics.splat()}, {P::causticStats.binding, m_caustics.stats()},
+        {P::manifoldTris.binding, m_manifold.tris()}, {P::manifoldNodes.binding, m_manifold.nodes()}, {P::manifoldDraws.binding, m_manifold.draws(frameSlot)}, {P::manifoldRequests.binding, m_manifold.requests()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -268,7 +270,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (textureCount > 0) {
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = set;
-        writes[writeCount].dstBinding = 12;
+        writes[writeCount].dstBinding = P::textures.binding;
         writes[writeCount].descriptorCount = textureCount;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[writeCount].pImageInfo = texInfos.data();
@@ -283,7 +285,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         envCdfInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = set;
-        writes[writeCount].dstBinding = 17;
+        writes[writeCount].dstBinding = P::envCdf.binding;
         writes[writeCount].descriptorCount = 1;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[writeCount].pBufferInfo = &envCdfInfo;
@@ -296,7 +298,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     motionVectorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 19;
+    writes[writeCount].dstBinding = P::motionVector.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo = &motionVectorInfo;
@@ -308,7 +310,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 20;
+    writes[writeCount].dstBinding      = P::depthAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &depthInfo;
@@ -320,7 +322,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     roughInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 21;
+    writes[writeCount].dstBinding      = P::roughnessAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &roughInfo;
@@ -332,7 +334,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     diffRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 22;
+    writes[writeCount].dstBinding      = P::diffuseRadiance.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &diffRadianceInfo;
@@ -344,7 +346,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     specRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 23;
+    writes[writeCount].dstBinding      = P::specularRadiance.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &specRadianceInfo;
@@ -356,7 +358,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     diffAlbedoInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 24;
+    writes[writeCount].dstBinding      = P::diffuseAlbedoAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &diffAlbedoInfo;
@@ -368,7 +370,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     specColorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 25;
+    writes[writeCount].dstBinding      = P::specColorAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &specColorInfo;
@@ -380,7 +382,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     normalRoughnessInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 26;
+    writes[writeCount].dstBinding      = P::normalRoughnessAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &normalRoughnessInfo;

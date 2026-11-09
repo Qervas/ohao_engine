@@ -17,6 +17,7 @@ struct Binding {
     uint32_t binding;
     VkDescriptorType type;
     uint32_t count;   // 0: an unsized array
+    constexpr bool operator==(const Binding&) const = default;
 };
 
 // A set's layout bindings, each visible to `stages`.
@@ -26,6 +27,12 @@ struct Binding {
     out.reserve(set.size());
     for (const Binding& b : set) out.push_back({b.binding, b.type, b.count, stages, nullptr});
     return out;
+}
+
+// One layout binding of `b` (a set's layout made a binding at a time).
+[[nodiscard]] inline VkDescriptorSetLayoutBinding layoutBinding(const Binding& b,
+                                                                VkShaderStageFlags stages = VK_SHADER_STAGE_COMPUTE_BIT) {
+    return {b.binding, b.type, b.count, stages, nullptr};
 }
 
 // A descriptor write of `b` into `set` (fill pImageInfo, pBufferInfo or pNext).
@@ -41,3 +48,12 @@ struct Binding {
 }
 
 } // namespace ohao::shader
+
+// Holds a hand-written C++ push-constant struct `T` to shader `ns`'s (a generated header's OHAO_PUSH_FIELDS_<ns>):
+// every field the shader has must be in T, under the same name, at the same offset, and T no larger than the
+// shader's block.
+#define OHAO_CHECK_PUSH_FIELD(T, field, offset) \
+    static_assert(offsetof(T, field) == (offset), #T "." #field " is not where the shader has it");
+#define OHAO_CHECK_PUSH(T, ns)                                   \
+    OHAO_PUSH_FIELDS_##ns(T, OHAO_CHECK_PUSH_FIELD)              \
+    static_assert(sizeof(T) <= ::ohao::shader::ns::kPushSize, #T " is larger than the shader's push constants");

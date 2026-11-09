@@ -38,7 +38,7 @@ public:
 private:
     void writeSmoke(uint32_t slot, const render::RenderScene& scene, bool smokeInGi);
 
-    static constexpr uint32_t kBindings = 8;         // 0-6 the scene's tables, 7 the smoke proxies
+    static constexpr uint32_t kBindings = 8;         // 0-6 the scene's tables, 7 the smoke proxies (rt/alpha_test.slang)
     static constexpr uint32_t kSceneBindings = 7;
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physical{VK_NULL_HANDLE};

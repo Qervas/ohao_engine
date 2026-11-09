@@ -1,4 +1,5 @@
 #include "render/vfx/decal_pass.hpp"
+#include "render/shader_bindings/vfx_decal.hpp"
 
 #include "core/log.hpp"
 
@@ -43,11 +44,13 @@ bool DecalPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkD
 
 bool DecalPass::createLayouts(VkDescriptorSetLayout textures) {
     // Set 0: the records, the position and the depth (sampled where the decal's surface is read).
+    namespace D = shader::vfx_decal;
     const std::array<VkDescriptorSetLayoutBinding, 3> bindings{{
-        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        shader::layoutBinding(D::decals, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT),
+        shader::layoutBinding(D::gPosition, VK_SHADER_STAGE_FRAGMENT_BIT),
+        shader::layoutBinding(D::sceneDepth, VK_SHADER_STAGE_FRAGMENT_BIT),
     }};
+    static_assert(D::kSet0.size() == 3);
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -279,15 +282,15 @@ void DecalPass::writeSet(uint32_t slot, VkBuffer decals) {
     VkDescriptorImageInfo position{VK_NULL_HANDLE, m_position, kReadOnly};
     VkDescriptorImageInfo depth{VK_NULL_HANDLE, m_depth, kDepthReadOnly};
     if (decals != VK_NULL_HANDLE) {
-        w.push_back(rtc::descriptorWrite(s.set, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        w.push_back(shader::write(shader::vfx_decal::decals, s.set));
         w.back().pBufferInfo = &buffer;
     }
     if (m_position != VK_NULL_HANDLE) {
-        w.push_back(rtc::descriptorWrite(s.set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
+        w.push_back(shader::write(shader::vfx_decal::gPosition, s.set));
         w.back().pImageInfo = &position;
     }
     if (m_depth != VK_NULL_HANDLE) {
-        w.push_back(rtc::descriptorWrite(s.set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
+        w.push_back(shader::write(shader::vfx_decal::sceneDepth, s.set));
         w.back().pImageInfo = &depth;
     }
     if (!w.empty()) vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);

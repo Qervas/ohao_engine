@@ -21,5 +21,10 @@ static_assert(offsetof(CalibratePush, iterations) == 0);
 static_assert(sizeof(CalibratePush) == 4);
 
 using PushConstants = CalibratePush;
+inline constexpr uint32_t kPushSize = sizeof(CalibratePush);
 
 } // namespace ohao::shader::bench_gpu_calibrate
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, bench_gpu_calibrate) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_bench_gpu_calibrate(T, X) X(T, iterations, 0)

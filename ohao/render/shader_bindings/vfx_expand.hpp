@@ -38,5 +38,10 @@ static_assert(offsetof(VfxExpandPush, config) == 112);
 static_assert(sizeof(VfxExpandPush) == 128);
 
 using PushConstants = VfxExpandPush;
+inline constexpr uint32_t kPushSize = sizeof(VfxExpandPush);
 
 } // namespace ohao::shader::vfx_expand
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, vfx_expand) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_vfx_expand(T, X) X(T, viewProj, 0) X(T, viewZ, 64) X(T, camera, 80) X(T, screen, 96) X(T, config, 112)

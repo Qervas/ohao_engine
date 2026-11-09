@@ -1,6 +1,8 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/shader_bindings/postprocess_bloom_downsample.hpp"
+#include "render/shader_bindings/postprocess_bloom_upsample.hpp"
 #include "render/frame/frame_resources.hpp"
 #include <array>
 #include <vector>
@@ -99,6 +101,11 @@ private:
         float filterRadius;
         float blendFactor;
     };
+    // The upsample's params; the downsample reads blendFactor's slot as isFirstPass (> 0.5: the Karis average).
+    OHAO_CHECK_PUSH(SampleParams, postprocess_bloom_upsample)
+    static_assert(offsetof(shader::postprocess_bloom_downsample::DownsampleParams, isFirstPass) ==
+                      offsetof(SampleParams, blendFactor) &&
+                  sizeof(shader::postprocess_bloom_downsample::DownsampleParams) == sizeof(SampleParams));
 };
 
 } // namespace ohao

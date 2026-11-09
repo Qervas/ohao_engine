@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/material/openpbr_tables_buffer.hpp"
+#include "render/shader_bindings/core_deferred_lighting.hpp"
 #include "render_pass_base.hpp"
 #include "gbuffer_pass.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -165,8 +166,7 @@ private:
         float frostCover{0.0f};   // Default to no frost
         float envIntensity{1.0f}; // Environment.intensity: scales the IBL terms
     };
-                          // Total: 184 bytes
-
+    OHAO_CHECK_PUSH(LightingParams, core_deferred_lighting)   // shaders/core/deferred_lighting.slang's
     LightingParams m_params{};
 };
 

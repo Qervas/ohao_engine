@@ -1,4 +1,5 @@
 #include "render/rt/denoise/dlss_rr.hpp"
+#include "render/shader_bindings/rt_dlss_display.hpp"
 
 // When OHAO_DLSS=OFF this TU compiles to no-op stubs (same pattern as
 // nrd_denoise.cpp under OHAO_NRD). No NGX headers, no NGX symbols.
@@ -334,14 +335,8 @@ bool DlssRR::evaluate(VkCommandBuffer cmd, const EvalInputs& in) {
 bool DlssRR::createTonemapPipeline() {
     if (m_tmPipeline) return true;
 
-    // 1. Descriptor set layout: binding 0 = HDR in (storage), binding 1 = LDR out (storage).
-    VkDescriptorSetLayoutBinding bindings[2] = {};
-    for (uint32_t i = 0; i < 2; ++i) {
-        bindings[i].binding         = i;
-        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
+    // 1. Descriptor set layout: rt/dlss_display.slang's set 0 (the HDR in, the LDR out).
+    const auto bindings = shader::layoutBindings(shader::rt_dlss_display::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 2;
@@ -433,11 +428,7 @@ void DlssRR::tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInV
     infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSet writes[2] = {};
     for (uint32_t i = 0; i < 2; ++i) {
-        writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = set;
-        writes[i].dstBinding      = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[i] = shader::write(shader::rt_dlss_display::kSet0[i], set);
         writes[i].pImageInfo      = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
@@ -445,7 +436,7 @@ void DlssRR::tonemap(VkCommandBuffer cmd, uint32_t frameSlot, VkImageView hdrInV
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipelineLayout, 0, 1,
                             &set, 0, nullptr);
-    const struct { float exposure; uint32_t curve; } display{exposure, curve};
+    const shader::rt_dlss_display::PushConstants display{exposure, curve};
     vkCmdPushConstants(cmd, m_tmPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(display), &display);
     vkCmdDispatch(cmd, (width + 7u) / 8u, (height + 7u) / 8u, 1);
 }

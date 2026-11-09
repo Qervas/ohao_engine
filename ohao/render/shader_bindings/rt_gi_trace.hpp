@@ -59,5 +59,10 @@ static_assert(offsetof(GITracePush, cameraPos) == 48);
 static_assert(sizeof(GITracePush) == 64);
 
 using PushConstants = GITracePush;
+inline constexpr uint32_t kPushSize = sizeof(GITracePush);
 
 } // namespace ohao::shader::rt_gi_trace
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_gi_trace) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_gi_trace(T, X) X(T, extent, 0) X(T, seed, 16) X(T, flags, 32) X(T, cameraPos, 48)

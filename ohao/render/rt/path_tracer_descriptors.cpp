@@ -2,6 +2,7 @@
 // Kept as a member of class PathTracer; no behavior change.
 
 #include "path_tracer.hpp"
+#include "render/shader_bindings/rt_path_tracer.hpp"
 
 #include <vector>
 #include "core/log.hpp"
@@ -39,6 +40,7 @@ bool PathTracer::createDescriptorResources() {
     constexpr VkShaderStageFlags HIT = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
     constexpr VkShaderStageFlags MISS = VK_SHADER_STAGE_MISS_BIT_KHR;
 
+    namespace P = shader::rt_path_tracer;
     std::vector<VkDescriptorSetLayoutBinding> bindings;
     std::vector<VkDescriptorBindingFlags> bindingFlags;
     const auto add = [&](uint32_t binding, VkDescriptorType type, VkShaderStageFlags stages,
@@ -51,56 +53,61 @@ bool PathTracer::createDescriptorResources() {
     constexpr VkDescriptorType IMAGE = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     constexpr VkDescriptorType BUFFER = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 
-    add(0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, RGEN);  // TLAS (RenderScene)
-    add(1, IMAGE, RGEN);                                           // accumulation, this frame's (RGBA32F)
-    add(2, IMAGE, RGEN);                                           // output (RGBA8)
-    add(3, IMAGE, RGEN);                                           // accumulation, the previous frame's (read)
+    add(P::scene.binding, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, RGEN);  // TLAS (RenderScene)
+    add(P::accumBuffer.binding, IMAGE, RGEN);                                           // accumulation, this frame's (RGBA32F)
+    add(P::outputImage.binding, IMAGE, RGEN);                                           // output (RGBA8)
+    add(P::accumHistory.binding, IMAGE, RGEN);                                           // accumulation, the previous frame's (read)
     // RenderScene scene data, read by the hit shaders (closestHit / anyHit) and by manifoldConnect's glass walk
     // (caustics step 2b: the solid's triangles):
-    add(4, BUFFER, RGEN | HIT);    // vertex arena (Vertex = 25 floats)
-    add(5, BUFFER, RGEN | HIT);    // index arena (mesh-local indices)
-    add(6, IMAGE, RGEN);    // albedo AOV (RGBA32F)
-    add(7, IMAGE, RGEN);    // normal AOV (RGBA32F)
-    add(8, BUFFER, RGEN | HIT);    // mesh table (MeshGpu)
-    add(9, BUFFER, HIT);    // triangle material slots
-    add(10, BUFFER, RGEN | HIT);   // material table (kMaterialRows float4s a material; the raygen reads emissive lights')
-    add(11, BUFFER, RGEN | MISS);   // RT lights: header {count, envTexIdx, envIntensity} + GPULight[]
+    add(P::vertices.binding, BUFFER, RGEN | HIT);    // vertex arena (Vertex = 25 floats)
+    add(P::indices.binding, BUFFER, RGEN | HIT);    // index arena (mesh-local indices)
+    add(P::albedoAOV.binding, IMAGE, RGEN);    // albedo AOV (RGBA32F)
+    add(P::normalAOV.binding, IMAGE, RGEN);    // normal AOV (RGBA32F)
+    add(P::meshes.binding, BUFFER, RGEN | HIT);    // mesh table (MeshGpu)
+    add(P::triangleSlots.binding, BUFFER, HIT);    // triangle material slots
+    add(P::materials.binding, BUFFER, RGEN | HIT);   // material table (kMaterialRows float4s a material; the raygen reads emissive lights')
+    add(P::lightData.binding, BUFFER, RGEN | MISS);   // RT lights: header {count, envTexIdx, envIntensity} + GPULight[]
     // Bindless textures (closest-hit, any-hit, miss for the env map), the table's whole
     // capacity. Not a variable count: that flag is only legal on a layout's highest binding
     // (VUID 03004), and every set is allocated at the full capacity anyway.
-    add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,
+    add(P::textures.binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
-    add(13, IMAGE, RGEN);   // the camera ray's emission (RGBA16F): nrd_compose adds it back
-    add(17, BUFFER, RGEN);  // the environment's 2D CDF (render/rt/env_cdf.hpp)
-    add(19, IMAGE, RGEN);   // motion vector AOV (RG16F) — Sub-plan 3.A
-    add(20, IMAGE, RGEN);   // depth AOV (R32F) — Sub-plan 3.B
-    add(21, IMAGE, RGEN);   // roughness AOV — Sub-plan 3.B
-    add(22, IMAGE, RGEN);   // diffuse radiance (RGBA32F) — Sub-plan 3.C
-    add(23, IMAGE, RGEN);   // specular radiance (RGBA32F) — Sub-plan 3.C
-    add(24, IMAGE, RGEN);   // diffuse albedo AOV (RGBA8) — Sub-plan 3.C.6
-    add(25, IMAGE, RGEN);   // specular color AOV (RGBA8) — Sub-plan 3.C.6
-    add(26, IMAGE, RGEN);   // normal+roughness packed AOV — Sub-plan 4.B
-    add(36, BUFFER, RGEN | HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
-    add(37, BUFFER, HIT);   // instance material refs
-    add(38, BUFFER, RGEN | HIT);  // OpenPBR's energy tables (rt/path_tracer.slang; anyHit: a pane's transmission)
-    add(39, BUFFER, RGEN);  // the radiance cache: keys,
-    add(40, BUFFER, RGEN);  // this frame's sums,
-    add(41, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)
-    add(42, BUFFER, RGEN);  // the emissive triangle lights (render/rt/emissive_lights.hpp),
-    add(43, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RGEN);   // their power image (every level),
-    add(44, BUFFER, RGEN);  // their header and instance ranges,
-    add(45, BUFFER, HIT);   // each instance slot's first light (a bounce that meets one)
-    add(46, BUFFER, RGEN);  // path guiding: the grid's states (render/rt/path_guiding.hpp),
-    add(49, BUFFER, RGEN);  // this frame's proposals,
-    add(50, BUFFER, RGEN);  // each pixel's sample radiance and proposal count
-    add(51, BUFFER, RGEN);  // caustics: the lights' disks (render/rt/caustic_pass.hpp),
-    add(52, BUFFER, RGEN);  // the light pass's splats,
-    add(53, BUFFER, RGEN);  // its clamped count (and the manifold pass's counters)
-    add(54, BUFFER, RGEN);  // caustics step 2: the owned casters' triangles (render/rt/manifold_casters.hpp),
-    add(55, BUFFER, RGEN);  // their clusters and groups,
-    add(56, BUFFER, RGEN);  // the owned draws and a word a material,
-    add(57, BUFFER, RGEN);  // the camera side's requests
+    add(P::emissionAOV.binding, IMAGE, RGEN);   // the camera ray's emission (RGBA16F): nrd_compose adds it back
+    add(P::envCdf.binding, BUFFER, RGEN);  // the environment's 2D CDF (render/rt/env_cdf.hpp)
+    add(P::motionVector.binding, IMAGE, RGEN);   // motion vector AOV (RG16F) — Sub-plan 3.A
+    add(P::depthAOV.binding, IMAGE, RGEN);   // depth AOV (R32F) — Sub-plan 3.B
+    add(P::roughnessAOV.binding, IMAGE, RGEN);   // roughness AOV — Sub-plan 3.B
+    add(P::diffuseRadiance.binding, IMAGE, RGEN);   // diffuse radiance (RGBA32F) — Sub-plan 3.C
+    add(P::specularRadiance.binding, IMAGE, RGEN);   // specular radiance (RGBA32F) — Sub-plan 3.C
+    add(P::diffuseAlbedoAOV.binding, IMAGE, RGEN);   // diffuse albedo AOV (RGBA8) — Sub-plan 3.C.6
+    add(P::specColorAOV.binding, IMAGE, RGEN);   // specular color AOV (RGBA8) — Sub-plan 3.C.6
+    add(P::normalRoughnessAOV.binding, IMAGE, RGEN);   // normal+roughness packed AOV — Sub-plan 4.B
+    add(P::instances.binding, BUFFER, RGEN | HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
+    add(P::materialRefs.binding, BUFFER, HIT);   // instance material refs
+    add(P::openpbrTables.binding, BUFFER, RGEN | HIT);  // OpenPBR's energy tables (rt/path_tracer.slang; anyHit: a pane's transmission)
+    add(P::cacheKeys.binding, BUFFER, RGEN);  // the radiance cache: keys,
+    add(P::cacheAccum.binding, BUFFER, RGEN);  // this frame's sums,
+    add(P::cacheResolved.binding, BUFFER, RGEN);  // resolved radiance (render/rt/radiance_cache.hpp)
+    add(P::emissiveLights.binding, BUFFER, RGEN);  // the emissive triangle lights (render/rt/emissive_lights.hpp),
+    add(P::emissivePower.binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RGEN);   // their power image (every level),
+    add(P::emissiveRanges.binding, BUFFER, RGEN);  // their header and instance ranges,
+    add(P::emissiveFirst.binding, BUFFER, HIT);   // each instance slot's first light (a bounce that meets one)
+    add(P::guideStates.binding, BUFFER, RGEN);  // path guiding: the grid's states (render/rt/path_guiding.hpp),
+    add(P::guideProposals.binding, BUFFER, RGEN);  // this frame's proposals,
+    add(P::guidePixel.binding, BUFFER, RGEN);  // each pixel's sample radiance and proposal count
+    add(P::causticCasters.binding, BUFFER, RGEN);  // caustics: the lights' disks (render/rt/caustic_pass.hpp),
+    add(P::causticSplat.binding, BUFFER, RGEN);  // the light pass's splats,
+    add(P::causticStats.binding, BUFFER, RGEN);  // its clamped count (and the manifold pass's counters)
+    add(P::manifoldTris.binding, BUFFER, RGEN);  // caustics step 2: the owned casters' triangles (render/rt/manifold_casters.hpp),
+    add(P::manifoldNodes.binding, BUFFER, RGEN);  // their clusters and groups,
+    add(P::manifoldDraws.binding, BUFFER, RGEN);  // the owned draws and a word a material,
+    add(P::manifoldRequests.binding, BUFFER, RGEN);  // the camera side's requests
 
+    if (bindings.size() != P::kSet0.size()) {   // a binding the shader declares and this layout lacks, or the reverse
+        OHAO_LOG(Error, render, "PathTracer: the layout has {} bindings, rt/path_tracer.slang's set 0 {}", bindings.size(),
+                 P::kSet0.size());
+        return false;
+    }
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
     flagsInfo.bindingCount = static_cast<uint32_t>(bindingFlags.size());

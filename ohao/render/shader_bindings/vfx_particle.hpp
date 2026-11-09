@@ -36,5 +36,10 @@ static_assert(offsetof(VfxDrawPush, screen) == 112);
 static_assert(sizeof(VfxDrawPush) == 128);
 
 using PushConstants = VfxDrawPush;
+inline constexpr uint32_t kPushSize = sizeof(VfxDrawPush);
 
 } // namespace ohao::shader::vfx_particle
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, vfx_particle) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_vfx_particle(T, X) X(T, viewProj, 0) X(T, right, 64) X(T, up, 80) X(T, range, 96) X(T, screen, 112)

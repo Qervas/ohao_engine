@@ -41,5 +41,10 @@ static_assert(offsetof(GBufferPush, m) == 16);
 static_assert(sizeof(GBufferPush) == 64);
 
 using PushConstants = GBufferPush;
+inline constexpr uint32_t kPushSize = sizeof(GBufferPush);
 
 } // namespace ohao::shader::cull_meshlets
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, cull_meshlets) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_cull_meshlets(T, X) X(T, fragment, 0) X(T, m, 16)

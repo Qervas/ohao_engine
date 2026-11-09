@@ -151,7 +151,7 @@ bool BindlessTextureManager::createDescriptorResources() {
     flagsInfo.pBindingFlags = &bindingFlags;
 
     VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
+    binding.binding = kBinding;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     binding.descriptorCount = m_maxTextures;
     binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
@@ -677,7 +677,7 @@ void BindlessTextureManager::updateDescriptorSet() {
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = m_descriptorSet;
-        write.dstBinding = 0;
+        write.dstBinding = kBinding;
         write.dstArrayElement = i;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

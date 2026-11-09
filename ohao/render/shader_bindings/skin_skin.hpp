@@ -28,5 +28,10 @@ static_assert(offsetof(SkinPush, meshlets) == 32);
 static_assert(sizeof(SkinPush) == 48);
 
 using PushConstants = SkinPush;
+inline constexpr uint32_t kPushSize = sizeof(SkinPush);
 
 } // namespace ohao::shader::skin_skin
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, skin_skin) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_skin_skin(T, X) X(T, mesh, 0) X(T, palette, 16) X(T, meshlets, 32)

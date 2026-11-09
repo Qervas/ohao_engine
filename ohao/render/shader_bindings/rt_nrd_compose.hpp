@@ -29,5 +29,10 @@ static_assert(offsetof(DisplayParams, curve) == 4);
 static_assert(sizeof(DisplayParams) == 8);
 
 using PushConstants = DisplayParams;
+inline constexpr uint32_t kPushSize = sizeof(DisplayParams);
 
 } // namespace ohao::shader::rt_nrd_compose
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_nrd_compose) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_nrd_compose(T, X) X(T, exposure, 0) X(T, curve, 4)

@@ -75,5 +75,10 @@ static_assert(offsetof(PushConstants, jitter) == 240);
 static_assert(sizeof(PushConstants) == 256);
 
 using PushConstants = PushConstants;
+inline constexpr uint32_t kPushSize = sizeof(PushConstants);
 
 } // namespace ohao::shader::rt_path_tracer
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_path_tracer) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_path_tracer(T, X) X(T, invView, 0) X(T, invProj, 64) X(T, prevViewProj, 128) X(T, params, 192) X(T, control, 208) X(T, tuning, 224) X(T, jitter, 240)

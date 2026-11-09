@@ -25,5 +25,10 @@ static_assert(offsetof(UpsampleParams, blendFactor) == 12);
 static_assert(sizeof(UpsampleParams) == 16);
 
 using PushConstants = UpsampleParams;
+inline constexpr uint32_t kPushSize = sizeof(UpsampleParams);
 
 } // namespace ohao::shader::postprocess_bloom_upsample
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_bloom_upsample) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_postprocess_bloom_upsample(T, X) X(T, texelSize, 0) X(T, filterRadius, 8) X(T, blendFactor, 12)

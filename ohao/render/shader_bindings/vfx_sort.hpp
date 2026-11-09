@@ -22,5 +22,10 @@ static_assert(offsetof(VfxSortPush, range) == 0);
 static_assert(sizeof(VfxSortPush) == 16);
 
 using PushConstants = VfxSortPush;
+inline constexpr uint32_t kPushSize = sizeof(VfxSortPush);
 
 } // namespace ohao::shader::vfx_sort
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, vfx_sort) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_vfx_sort(T, X) X(T, range, 0)

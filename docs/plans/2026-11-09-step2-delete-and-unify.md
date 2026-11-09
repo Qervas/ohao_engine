@@ -67,6 +67,16 @@ twice today, comments already disagreeing) come from its header. `gen_layout --c
 *Done when* no C++ file types a binding number (a grep at configure fails the build on one), and the goldens are
 unchanged.
 
+*As built (2026-11-09):* the headers are checked in (`ohao/render/shader_bindings/`, as `gen_layout` does), and
+`tools/check.py`'s build stage runs `gen_bindings --check`: a stale header, a set/binding declared twice in one
+shader, or a binding typed as a number in C++ fails it. Hand-written push-constant structs (with their defaults and
+`glm` types) are held to the shader by `OHAO_CHECK_PUSH` (every field's name and offset, the size). What the
+generated names found: `rt/restir_di.slang` declared binding 45 twice (its `gLayers` and `rt/lights.slang`'s
+`emissiveFirst`; `gLayers` moved to 26); the deferred lighting layout declared and wrote bindings 3 and 4 the shader
+does not have (deleted); the G-buffer pass built and wrote a descriptor set no shader read (deleted); the TAA push
+carried 8 bytes the shader lacks; bloom's C++ struct names the downsample's `isFirstPass` slot `blendFactor`
+(now asserted to coincide). The `rtc::layoutBinding`/`descriptorWrite` helpers are deleted.
+
 ## 2f. Scene writers
 
 36 hand-written per-type writers repeat the registrations. Measure the generic reflection writer on `scene_bench`

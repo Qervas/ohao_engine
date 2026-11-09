@@ -78,7 +78,7 @@ import rt.smoke_proxy;
 [[vk::binding(5, 0)]] Texture2D<float4> gOpenPBR;    // base_diffuse_roughness, (specular_ior - 1) / 2.55
 [[vk::binding(6, 0)]] Texture2D<float2> gVelocity;   // UV motion: current minus previous
 [[vk::binding(7, 0)]] StructuredBuffer<float> openpbrTables;
-[[vk::binding(45, 0)]] Texture2D<uint2> gLayers;     // OpenPBR's layers (material/material_layers.slang)
+[[vk::binding(26, 0)]] Texture2D<uint2> gLayers;     // OpenPBR's layers (material/material_layers.slang; 45 is rt/lights.slang's emissiveFirst)
 // Reservoirs (the trace image's size), two RGBA32F images each: A (the point, the light as bits), B (W,
 // M; spatial's output: z the point's target at its trace pixel, the bound of what it may shade).
 [[vk::binding(8, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> prevA;   // last frame's, after reuse

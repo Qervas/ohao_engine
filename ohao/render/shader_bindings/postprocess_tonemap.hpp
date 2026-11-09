@@ -31,5 +31,10 @@ static_assert(offsetof(DisplayParams, frameWeight) == 16);
 static_assert(sizeof(DisplayParams) == 20);
 
 using PushConstants = DisplayParams;
+inline constexpr uint32_t kPushSize = sizeof(DisplayParams);
 
 } // namespace ohao::shader::postprocess_tonemap
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_tonemap) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_postprocess_tonemap(T, X) X(T, exposure, 0) X(T, bloomWeight, 4) X(T, curve, 8) X(T, autoExposure, 12) X(T, frameWeight, 16)

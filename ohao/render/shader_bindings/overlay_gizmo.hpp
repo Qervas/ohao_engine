@@ -21,5 +21,10 @@ static_assert(offsetof(GizmoParams, highlightColor) == 128);
 static_assert(sizeof(GizmoParams) == 144);
 
 using PushConstants = GizmoParams;
+inline constexpr uint32_t kPushSize = sizeof(GizmoParams);
 
 } // namespace ohao::shader::overlay_gizmo
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, overlay_gizmo) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_overlay_gizmo(T, X) X(T, viewProj, 0) X(T, model, 64) X(T, highlightColor, 128)

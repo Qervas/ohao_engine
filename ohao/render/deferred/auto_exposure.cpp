@@ -1,4 +1,5 @@
 #include "render/deferred/auto_exposure.hpp"
+#include "render/shader_bindings/postprocess_exposure.hpp"
 
 #include "core/log.hpp"
 
@@ -8,13 +9,14 @@ namespace {
 constexpr uint32_t kBins = 128;   // exposure.slang's kExposureBins
 
 struct ExposureParams {
-    uint32_t width, height;
+    glm::uvec2 size;
     float minLog2, rangeLog2;
     float lowFraction, highFraction;
     float compensation, dt;
     float speedUp, speedDown;
     uint32_t reset, pad;
 };
+OHAO_CHECK_PUSH(ExposureParams, postprocess_exposure)   // postprocess/exposure.slang's
 
 bool createDeviceBuffer(VkDevice device, VkPhysicalDevice physical, VkDeviceSize size, VkBuffer& buffer,
                         VkDeviceMemory& memory) {
@@ -49,9 +51,9 @@ bool AutoExposure::initialize(VkDevice device, VkPhysicalDevice physicalDevice) 
             return false;
 
     const VkDescriptorSetLayoutBinding bindings[] = {
-        rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-        rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        shader::layoutBinding(shader::postprocess_exposure::hdr),
+        shader::layoutBinding(shader::postprocess_exposure::bins),
+        shader::layoutBinding(shader::postprocess_exposure::state),
     };
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = 3;
@@ -104,9 +106,9 @@ void AutoExposure::record(VkCommandBuffer cmd, uint32_t slot, VkImageView hdr, V
     const VkDescriptorSet set = m_sets[slot];
     const VkDescriptorImageInfo image{sampler, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const VkDescriptorBufferInfo bins{m_bins, 0, VK_WHOLE_SIZE}, state{m_state, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w[3] = {rtc::descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                 rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                 rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+    VkWriteDescriptorSet w[3] = {shader::write(shader::postprocess_exposure::hdr, set),
+                                 shader::write(shader::postprocess_exposure::bins, set),
+                                 shader::write(shader::postprocess_exposure::state, set)};
     w[0].pImageInfo = &image;
     w[1].pBufferInfo = &bins;
     w[2].pBufferInfo = &state;
@@ -133,8 +135,7 @@ void AutoExposure::record(VkCommandBuffer cmd, uint32_t slot, VkImageView hdr, V
         m_cleared = true;
     }
 
-    const ExposureParams pc{width,
-                            height,
+    const ExposureParams pc{glm::uvec2(width, height),
                             settings.minLog2,
                             settings.rangeLog2,
                             settings.lowFraction,

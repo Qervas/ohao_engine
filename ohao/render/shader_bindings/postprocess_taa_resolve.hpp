@@ -32,5 +32,10 @@ static_assert(offsetof(TAAParams, flags) == 16);
 static_assert(sizeof(TAAParams) == 24);
 
 using PushConstants = TAAParams;
+inline constexpr uint32_t kPushSize = sizeof(TAAParams);
 
 } // namespace ohao::shader::postprocess_taa_resolve
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_taa_resolve) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_postprocess_taa_resolve(T, X) X(T, texelSize, 0) X(T, blendFactor, 8) X(T, motionScale, 12) X(T, flags, 16)

@@ -34,5 +34,10 @@ static_assert(offsetof(SSSPush, cameraPos) == 32);
 static_assert(sizeof(SSSPush) == 48);
 
 using PushConstants = SSSPush;
+inline constexpr uint32_t kPushSize = sizeof(SSSPush);
 
 } // namespace ohao::shader::postprocess_sss
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_sss) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_postprocess_sss(T, X) X(T, extent, 0) X(T, params, 16) X(T, cameraPos, 32)

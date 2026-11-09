@@ -237,23 +237,4 @@ void destroyHostBuffer(VkDevice device, HostBuffer& buf) {
     buf = HostBuffer{};
 }
 
-VkDescriptorSetLayoutBinding layoutBinding(uint32_t index, VkDescriptorType type, VkShaderStageFlags stages) {
-    VkDescriptorSetLayoutBinding b{};
-    b.binding = index;
-    b.descriptorType = type;
-    b.descriptorCount = 1;
-    b.stageFlags = stages;
-    return b;
-}
-
-VkWriteDescriptorSet descriptorWrite(VkDescriptorSet set, uint32_t index, VkDescriptorType type) {
-    VkWriteDescriptorSet w{};
-    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w.dstSet = set;
-    w.dstBinding = index;
-    w.descriptorCount = 1;
-    w.descriptorType = type;
-    return w;
-}
-
 } // namespace ohao::rtc

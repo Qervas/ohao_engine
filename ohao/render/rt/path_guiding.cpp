@@ -1,4 +1,5 @@
 #include "render/rt/path_guiding.hpp"
+#include "render/shader_bindings/rt_path_guiding_update.hpp"
 
 #include "core/log.hpp"
 #include "gpu/shared_layout.hpp"
@@ -79,7 +80,8 @@ bool PathGuiding::create(VkDevice device, VkPhysicalDevice physicalDevice) {
         return false;
     }
     VkDescriptorSetLayoutBinding bindings[5];
-    for (uint32_t i = 0; i < 5; ++i) bindings[i] = rtc::layoutBinding(i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    for (uint32_t i = 0; i < 5; ++i) bindings[i] = shader::layoutBinding(shader::rt_path_guiding_update::kSet0[i]);
+    static_assert(shader::rt_path_guiding_update::kSet0.size() == 5);
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layoutInfo.bindingCount = 5;
     layoutInfo.pBindings = bindings;
@@ -121,7 +123,7 @@ void PathGuiding::writeSet() {
                                              {m_pixel.buffer, 0, VK_WHOLE_SIZE}};
     VkWriteDescriptorSet writes[5];
     for (uint32_t i = 0; i < 5; ++i) {
-        writes[i] = rtc::descriptorWrite(m_set, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writes[i] = shader::write(shader::rt_path_guiding_update::kSet0[i], m_set);
         writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);

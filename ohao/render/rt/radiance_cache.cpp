@@ -1,4 +1,5 @@
 #include "render/rt/radiance_cache.hpp"
+#include "render/shader_bindings/rt_radiance_cache_resolve.hpp"
 
 #include "core/log.hpp"
 #include "render/rt/rt_compute.hpp"
@@ -28,6 +29,7 @@ struct ResolveConstants {
     uint32_t staleFrames;
     uint32_t pad;
 };
+OHAO_CHECK_PUSH(ResolveConstants, rt_radiance_cache_resolve)   // rt/radiance_cache_resolve.slang's
 
 } // namespace
 
@@ -44,9 +46,9 @@ bool RadianceCache::create(VkDevice device, VkPhysicalDevice physicalDevice, uin
     }
 
     const VkDescriptorSetLayoutBinding bindings[] = {
-        rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        shader::layoutBinding(shader::rt_radiance_cache_resolve::keys),
+        shader::layoutBinding(shader::rt_radiance_cache_resolve::accum),
+        shader::layoutBinding(shader::rt_radiance_cache_resolve::resolved),
     };
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layoutInfo.bindingCount = 3;
@@ -74,7 +76,7 @@ bool RadianceCache::create(VkDevice device, VkPhysicalDevice physicalDevice, uin
                                             {m_resolved, 0, VK_WHOLE_SIZE}};
     VkWriteDescriptorSet writes[3];
     for (uint32_t i = 0; i < 3; ++i) {
-        writes[i] = rtc::descriptorWrite(m_set, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writes[i] = shader::write(shader::rt_radiance_cache_resolve::kSet0[i], m_set);
         writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);

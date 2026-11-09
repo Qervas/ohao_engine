@@ -27,5 +27,10 @@ static_assert(offsetof(GuidePush, config) == 16);
 static_assert(sizeof(GuidePush) == 32);
 
 using PushConstants = GuidePush;
+inline constexpr uint32_t kPushSize = sizeof(GuidePush);
 
 } // namespace ohao::shader::rt_path_guiding_update
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_path_guiding_update) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_path_guiding_update(T, X) X(T, camera, 0) X(T, config, 16)

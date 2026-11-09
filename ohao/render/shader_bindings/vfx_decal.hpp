@@ -31,5 +31,10 @@ static_assert(offsetof(DecalPush, screen) == 80);
 static_assert(sizeof(DecalPush) == 96);
 
 using PushConstants = DecalPush;
+inline constexpr uint32_t kPushSize = sizeof(DecalPush);
 
 } // namespace ohao::shader::vfx_decal
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, vfx_decal) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_vfx_decal(T, X) X(T, viewProj, 0) X(T, camera, 64) X(T, screen, 80)

@@ -51,7 +51,11 @@ cmake --build build --config Release -j16
   `<flattened path>.spv` (`postprocess/tonemap.slang` → `postprocess_tonemap.slang.spv`), with several
   `<flattened path>.<entry>.spv`, without one it is a module (`import shared.layout;`). Constants and structs
   shared with C++ live in `shaders/shared/layout.json`; regenerate their `.slang`/`.hpp` with
-  `python tools/gen_layout.py` (`--check` says whether they are current). See ARCHITECTURE.md, "add a render pass".
+  `python tools/gen_layout.py` (`--check` says whether they are current). **Bindings come from the shaders:**
+  `python tools/gen_bindings.py` writes `ohao/render/shader_bindings/<shader>.hpp` from Slang's reflection (each
+  binding named, each set in order, the push constants); C++ names them (`shader::write`, `shader::layoutBindings`)
+  and never types a binding number, and a hand-written push struct carries `OHAO_CHECK_PUSH`. `tools/check.py`
+  fails the build on a stale header or a typed number. Regenerate after any shader's parameters change. See ARCHITECTURE.md, "add a render pass".
 - **`GLFW_INCLUDE_NONE`** before GLFW's header (`ohao/runtime/window.cpp`): without it GLFW includes `GL/gl.h`,
   which Fedora does not ship by default. The engine is Vulkan only.
 

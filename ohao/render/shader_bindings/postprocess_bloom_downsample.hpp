@@ -25,5 +25,10 @@ static_assert(offsetof(DownsampleParams, isFirstPass) == 12);
 static_assert(sizeof(DownsampleParams) == 16);
 
 using PushConstants = DownsampleParams;
+inline constexpr uint32_t kPushSize = sizeof(DownsampleParams);
 
 } // namespace ohao::shader::postprocess_bloom_downsample
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_bloom_downsample) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_postprocess_bloom_downsample(T, X) X(T, texelSize, 0) X(T, filterRadius, 8) X(T, isFirstPass, 12)

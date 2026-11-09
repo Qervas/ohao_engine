@@ -40,5 +40,10 @@ static_assert(offsetof(CullPush, extra) == 112);
 static_assert(sizeof(CullPush) == 128);
 
 using PushConstants = CullPush;
+inline constexpr uint32_t kPushSize = sizeof(CullPush);
 
 } // namespace ohao::shader::cull_instances
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, cull_instances) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_cull_instances(T, X) X(T, viewProj, 0) X(T, config, 64) X(T, hiz, 80) X(T, camera, 96) X(T, extra, 112)

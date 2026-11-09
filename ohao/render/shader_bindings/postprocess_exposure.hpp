@@ -43,5 +43,10 @@ static_assert(offsetof(ExposureParams, pad) == 44);
 static_assert(sizeof(ExposureParams) == 48);
 
 using PushConstants = ExposureParams;
+inline constexpr uint32_t kPushSize = sizeof(ExposureParams);
 
 } // namespace ohao::shader::postprocess_exposure
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_exposure) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_postprocess_exposure(T, X) X(T, size, 0) X(T, minLog2, 8) X(T, rangeLog2, 12) X(T, lowFraction, 16) X(T, highFraction, 20) X(T, compensation, 24) X(T, dt, 28) X(T, speedUp, 32) X(T, speedDown, 36) X(T, reset, 40) X(T, pad, 44)

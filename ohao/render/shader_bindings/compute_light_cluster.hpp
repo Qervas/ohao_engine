@@ -29,5 +29,10 @@ static_assert(offsetof(ClusterPush, config) == 96);
 static_assert(sizeof(ClusterPush) == 112);
 
 using PushConstants = ClusterPush;
+inline constexpr uint32_t kPushSize = sizeof(ClusterPush);
 
 } // namespace ohao::shader::compute_light_cluster
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, compute_light_cluster) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_compute_light_cluster(T, X) X(T, view, 0) X(T, proj, 64) X(T, screen, 80) X(T, config, 96)

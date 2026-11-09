@@ -15,7 +15,7 @@ inline constexpr Binding gSpecular{0, 4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
 inline constexpr Binding gOpenPBR{0, 5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
 inline constexpr Binding gVelocity{0, 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
 inline constexpr Binding openpbrTables{0, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
-inline constexpr Binding gLayers{0, 45, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
+inline constexpr Binding gLayers{0, 26, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
 inline constexpr Binding prevA{0, 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
 inline constexpr Binding prevB{0, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
 inline constexpr Binding midA{0, 13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
@@ -49,7 +49,7 @@ inline constexpr Binding atTextures{2, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMP
 inline constexpr Binding smokeProxies{1, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 
 // Set 0, in binding order: its descriptor set layout (layoutBindings).
-inline constexpr std::array<Binding, 31> kSet0{scene, gPosition, gNormal, gAlbedo, gSpecular, gOpenPBR, gVelocity, openpbrTables, prevA, prevB, materials, lightData, textures, midA, midB, outA, outB, noisyDiffuse, noisySpecular, meanDiffuse, meanSpecular, surfA, surfB, prevSurfA, prevSurfB, guide, emissiveLights, emissivePower, emissiveRanges, emissiveFirst, gLayers};
+inline constexpr std::array<Binding, 31> kSet0{scene, gPosition, gNormal, gAlbedo, gSpecular, gOpenPBR, gVelocity, openpbrTables, prevA, prevB, materials, lightData, textures, midA, midB, outA, outB, noisyDiffuse, noisySpecular, meanDiffuse, meanSpecular, surfA, surfB, prevSurfA, prevSurfB, guide, gLayers, emissiveLights, emissivePower, emissiveRanges, emissiveFirst};
 
 // Set 1, in binding order: its descriptor set layout (layoutBindings).
 inline constexpr std::array<Binding, 8> kSet1{atInstances, atMaterialRefs, atMaterials, atMeshes, atTriangleSlots, atIndices, atVertices, smokeProxies};
@@ -74,5 +74,10 @@ static_assert(offsetof(DIPush, trace) == 64);
 static_assert(sizeof(DIPush) == 80);
 
 using PushConstants = DIPush;
+inline constexpr uint32_t kPushSize = sizeof(DIPush);
 
 } // namespace ohao::shader::rt_restir_di
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_restir_di) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_restir_di(T, X) X(T, extent, 0) X(T, params, 16) X(T, cameraPos, 32) X(T, weather, 48) X(T, trace, 64)

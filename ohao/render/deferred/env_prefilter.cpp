@@ -1,4 +1,5 @@
 #include "render/deferred/env_prefilter.hpp"
+#include "render/shader_bindings/ibl_env_prefilter.hpp"
 
 #include "core/log.hpp"
 #include "gpu/shared_layout.hpp"
@@ -52,10 +53,10 @@ bool EnvPrefilter::initialize(VkDevice device, VkPhysicalDevice physicalDevice) 
     m_physicalDevice = physicalDevice;
 
     const VkDescriptorSetLayoutBinding bindings[] = {
-        rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        rtc::layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLER),
-        rtc::layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        shader::layoutBinding(shader::ibl_env_prefilter::inImage),
+        shader::layoutBinding(shader::ibl_env_prefilter::chain),
+        shader::layoutBinding(shader::ibl_env_prefilter::chainSampler),
+        shader::layoutBinding(shader::ibl_env_prefilter::outImage),
     };
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -187,10 +188,10 @@ VkDescriptorSet EnvPrefilter::allocateSet(VkImageView in, VkImageLayout inLayout
     const VkDescriptorImageInfo samplerInfo{m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     const VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, out, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w[4] = {
-        rtc::descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLER),
-        rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        shader::write(shader::ibl_env_prefilter::inImage, set),
+        shader::write(shader::ibl_env_prefilter::chain, set),
+        shader::write(shader::ibl_env_prefilter::chainSampler, set),
+        shader::write(shader::ibl_env_prefilter::outImage, set),
     };
     w[0].pImageInfo = &inInfo;
     w[1].pImageInfo = &chainInfo;

@@ -17,5 +17,10 @@ static_assert(offsetof(TracerPush, viewProj) == 0);
 static_assert(sizeof(TracerPush) == 64);
 
 using PushConstants = TracerPush;
+inline constexpr uint32_t kPushSize = sizeof(TracerPush);
 
 } // namespace ohao::shader::vfx_tracer
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, vfx_tracer) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_vfx_tracer(T, X) X(T, viewProj, 0)

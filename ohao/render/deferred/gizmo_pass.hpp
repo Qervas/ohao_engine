@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/shader_bindings/overlay_gizmo.hpp"
 #include "../gizmo/gizmo_meshes.hpp"
 
 namespace ohao {
@@ -80,6 +81,7 @@ private:
         glm::mat4 model;
         glm::vec4 highlightColor;  // xyz = color, w = factor
     };
+    OHAO_CHECK_PUSH(GizmoPushConstants, overlay_gizmo)   // overlay/gizmo.slang's
 };
 
 } // namespace ohao

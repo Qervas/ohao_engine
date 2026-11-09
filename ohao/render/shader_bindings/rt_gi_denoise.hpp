@@ -41,5 +41,10 @@ static_assert(offsetof(GIDenoisePush, cameraPos) == 32);
 static_assert(sizeof(GIDenoisePush) == 48);
 
 using PushConstants = GIDenoisePush;
+inline constexpr uint32_t kPushSize = sizeof(GIDenoisePush);
 
 } // namespace ohao::shader::rt_gi_denoise
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_gi_denoise) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_gi_denoise(T, X) X(T, extent, 0) X(T, params, 16) X(T, cameraPos, 32)

@@ -36,5 +36,10 @@ static_assert(offsetof(GBufferPush, pad1) == 12);
 static_assert(sizeof(GBufferPush) == 16);
 
 using PushConstants = GBufferPush;
+inline constexpr uint32_t kPushSize = sizeof(GBufferPush);
 
 } // namespace ohao::shader::core_gbuffer
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, core_gbuffer) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_core_gbuffer(T, X) X(T, tilesX, 0) X(T, tilesY, 4) X(T, pad0, 8) X(T, pad1, 12)

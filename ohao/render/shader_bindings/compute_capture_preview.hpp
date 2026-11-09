@@ -24,5 +24,10 @@ static_assert(offsetof(PreviewPush, dst) == 16);
 static_assert(sizeof(PreviewPush) == 32);
 
 using PushConstants = PreviewPush;
+inline constexpr uint32_t kPushSize = sizeof(PreviewPush);
 
 } // namespace ohao::shader::compute_capture_preview
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, compute_capture_preview) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_compute_capture_preview(T, X) X(T, src, 0) X(T, dst, 16)

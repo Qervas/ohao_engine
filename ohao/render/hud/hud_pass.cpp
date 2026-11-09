@@ -1,4 +1,5 @@
 #include "render/hud/hud_pass.hpp"
+#include "render/shader_bindings/hud_hud.hpp"
 
 #include "core/log.hpp"
 
@@ -13,6 +14,7 @@ struct HudPush {
     float invSize[2];
     float pad[2];
 };
+OHAO_CHECK_PUSH(HudPush, hud_hud)   // hud/hud.slang's
 
 constexpr VkDeviceSize kItemBytes = sizeof(render::HudItem) * render::kHudMaxItems;
 
@@ -24,8 +26,8 @@ bool HudPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physicalDevice = physicalDevice;
     const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    const VkDescriptorSetLayoutBinding bindings[] = {rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stages),
-                                                     rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stages)};
+    const VkDescriptorSetLayoutBinding bindings[] = {shader::layoutBinding(shader::hud_hud::items, stages),
+                                                     shader::layoutBinding(shader::hud_hud::font, stages)};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = 2;
@@ -56,8 +58,8 @@ bool HudPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
         if (vkAllocateDescriptorSets(m_device, &ai, &m_sets[s]) != VK_SUCCESS) return false;
         const VkDescriptorBufferInfo items{m_itemBuffers[s].buffer, 0, kItemBytes};
         const VkDescriptorBufferInfo font{m_font.buffer, 0, rows.size_bytes()};
-        VkWriteDescriptorSet writes[2] = {rtc::descriptorWrite(m_sets[s], 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                          rtc::descriptorWrite(m_sets[s], 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+        VkWriteDescriptorSet writes[2] = {shader::write(shader::hud_hud::items, m_sets[s]),
+                                          shader::write(shader::hud_hud::font, m_sets[s])};
         writes[0].pBufferInfo = &items;
         writes[1].pBufferInfo = &font;
         vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);

@@ -52,5 +52,10 @@ static_assert(offsetof(ForwardPush, proj) == 128);
 static_assert(sizeof(ForwardPush) == 192);
 
 using PushConstants = ForwardPush;
+inline constexpr uint32_t kPushSize = sizeof(ForwardPush);
 
 } // namespace ohao::shader::vfx_transparent_mesh
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, vfx_transparent_mesh) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_vfx_transparent_mesh(T, X) X(T, view, 0) X(T, camera, 64) X(T, screen, 80) X(T, config, 96) X(T, env, 112) X(T, proj, 128)

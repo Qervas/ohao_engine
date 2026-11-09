@@ -29,5 +29,10 @@ static_assert(offsetof(ResolveConstants, pad) == 12);
 static_assert(sizeof(ResolveConstants) == 16);
 
 using PushConstants = ResolveConstants;
+inline constexpr uint32_t kPushSize = sizeof(ResolveConstants);
 
 } // namespace ohao::shader::rt_radiance_cache_resolve
+
+// Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, rt_radiance_cache_resolve) holds a C++
+// struct to them.
+#define OHAO_PUSH_FIELDS_rt_radiance_cache_resolve(T, X) X(T, capacity, 0) X(T, maxSamples, 4) X(T, staleFrames, 8) X(T, pad, 12)
