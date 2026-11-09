@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """check.py -- build OHAO and run its tests from one command, with one verdict.
 
-    python tools/check.py [--labels quick,gpu] [--all] [--changed [REF]] [--jobs 6] [--config Release]
+    python tools/check.py [--labels quick,gpu] [--all] [--changed [REF] | --staged] [--jobs 6] [--config Release]
                           [--no-build] [--no-doctor] [--build-dir build] [--out DIR] [--ctest-jobs 4]
 
 --changed [REF] runs only the tests the files changed since REF (default HEAD: the working tree,
 staged or not, and untracked files) reach, by tools/check_changed.py's rules; a path no rule covers
-runs the default labels. For iterating; close a build step with the full run.
+runs the default labels. For iterating; close a build step with the full run. --staged: the same for the
+files the next commit changes (the pre-commit hook, .githooks/). Either one builds nothing when the files
+reach no test (docs).
+
+Two checks never run at once (<build>/check.lock): a build during another's tests breaks them, and GPU
+jobs run one at a time. A second waits for the first.
 
 Steps (sub-project 4 spec, "One entry point"):
   1. preflight: the CMake to use (never conda's) and the Python modules the harnesses need;
@@ -171,6 +176,32 @@ def build(cmake, build_dir, config, jobs, out):
     return {"ok": True, "seconds": round(time.perf_counter() - t0, 1)}
 
 
+def hold_lock(path):
+    """Waits for, then holds, the lock on `path` until this process exits: two checks never overlap."""
+    f = open(path, "a+")
+    try:
+        import fcntl
+    except ImportError:   # Windows
+        import msvcrt
+        said = False
+        while True:
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                return f
+            except OSError:
+                if not said:
+                    print("check: another check is running; waiting for it", flush=True)
+                    said = True
+                time.sleep(0.5)
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("check: another check is running; waiting for it", flush=True)
+        fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
 def ohao_exe(build_dir, config):
     for c in (build_dir / config / "ohao.exe", build_dir / config / "ohao", build_dir / "ohao.exe"):
         if c.is_file():
@@ -284,13 +315,18 @@ def main(argv=None):
     ap.add_argument("--out", default=None, help="where check.json, junit.xml and logs go (default <build>/check)")
     ap.add_argument("--changed", nargs="?", const="HEAD", default=None, metavar="REF",
                     help="only the tests the files changed since REF (default HEAD) reach (tools/check_changed.py)")
+    ap.add_argument("--staged", action="store_true", help="only the tests the staged files reach (the pre-commit hook)")
     args = ap.parse_args(argv)
+    if args.staged and args.changed is not None:
+        ap.error("--changed and --staged are one or the other")
 
     labels = ALL_LABELS if args.all else [l for l in args.labels.split(",") if l]
     unknown = [l for l in labels if l not in KNOWN_LABELS]
     build_dir = (ROOT / args.build_dir).resolve()
     out = Path(args.out).resolve() if args.out else build_dir / "check"
     out.mkdir(parents=True, exist_ok=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    held = hold_lock(build_dir / "check.lock")   # noqa: F841 -- held until the process exits
     jobs = max(1, min(args.jobs, MAX_JOBS))
 
     result = {"ok": False, "labels": labels, "build": None, "doctor": None, "tests": [],
@@ -316,6 +352,27 @@ def main(argv=None):
         print(f"check: {e}", file=sys.stderr)
         return finish(result, out, code=2)
 
+    paths = None
+    if args.changed is not None or args.staged:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import check_changed
+        try:
+            paths = check_changed.staged_paths(ROOT) if args.staged else check_changed.changed_paths(ROOT, args.changed)
+        except RuntimeError as e:
+            result["error"] = str(e)
+            return finish(result, out, code=2)
+        before, why = check_changed.select(paths, test_labels(ctest, build_dir, args.config), DEFAULT_LABELS, ROOT)
+        if not before:   # nothing a test reads (docs, the hooks): nothing to build either
+            result["changed"] = {"ref": "staged" if args.staged else args.changed, "paths": why, "tests": []}
+            print(f"check: {len(paths)} changed file(s) reach no test: nothing to build or run", flush=True)
+            result["ok"] = True
+            return finish(result, out)
+        if args.staged:
+            loose = check_changed.unstaged_paths(ROOT)
+            if loose:
+                print(f"check: the working tree is built and tested; {len(loose)} tracked file(s) differ from what is "
+                      f"staged: {' '.join(loose[:8])}{' ...' if len(loose) > 8 else ''}", flush=True)
+
     if args.no_build:
         result["build"] = {"ok": True, "skipped": True}
     else:
@@ -335,17 +392,10 @@ def main(argv=None):
             return finish(result, out)
 
     selected = None
-    if args.changed is not None:
-        sys.path.insert(0, str(ROOT / "tools"))
-        import check_changed
+    if paths is not None:   # chosen again after the build: a test the change registers exists now
         labels_of = test_labels(ctest, build_dir, args.config)
-        try:
-            paths = check_changed.changed_paths(ROOT, args.changed)
-        except RuntimeError as e:
-            result["error"] = str(e)
-            return finish(result, out, code=2)
         selected, why = check_changed.select(paths, labels_of, DEFAULT_LABELS, ROOT)
-        result["changed"] = {"ref": args.changed, "paths": why, "tests": selected}
+        result["changed"] = {"ref": "staged" if args.staged else args.changed, "paths": why, "tests": selected}
         for p, t in why.items():
             print(f"check: changed {p} -> {'every default test (no rule)' if t == 'unmapped' else ', '.join(t) or 'nothing'}",
                   flush=True)

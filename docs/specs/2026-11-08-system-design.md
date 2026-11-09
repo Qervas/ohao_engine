@@ -233,8 +233,10 @@ added and removed, 74 tests built and cut to 10).
 
 ### 4.9 Build, CI, platforms
 
-- CI on every push (GitHub Actions): Windows (MSVC) and Linux (GCC) builds, the CPU gates (`replay_test` and the
-  consistency checks the generated code makes possible). GPU gates on a self-hosted runner when one exists.
+- CI on the machine that builds (Frank, 2026-11-09; this said GitHub Actions, Windows and Linux, CPU gates only):
+  git hooks run `tools/check.py`, before each commit what its files reach (GPU gates included, in seconds), before
+  each push the whole check. A cloud runner has no GPU and runs only once pushed; a Windows clone runs the same
+  hooks.
 - Every dependency pinned to a tag or commit (stb is on `master` today); dead ones deleted (`tinyfiledialogs.cmake`).
 - Windows-only paths and presets kept only where Windows needs them; `CMakePresets.json` gets a Linux preset.
 
@@ -259,10 +261,10 @@ purpose (it risks the machine, requirement 1): its report is checked when one ha
 - Unify: generated bindings (4.2); one method table; one `RenderSettings`; one `installEngine`; install-time
   ordering errors; the scene writers decided by measurement; the dependency check at configure.
 - `AGENTS.md` under 300 lines: each rule becomes code or is deleted.
-- CI on both systems.
+- CI on the machine (4.9).
 
 *Done when* C++ holds no literal binding number, every host installs through one function, `AGENTS.md` is under 300
-lines, and CI is green on Windows and Linux.
+lines, and the hooks pass on this machine.
 
 **Step 3, the engine/game boundary (large).** The game API; `games/slice` as a module; the declared scheduler
 (serial); complete state and typed events; the round restart as a request; one `dt`; input per player; event names as

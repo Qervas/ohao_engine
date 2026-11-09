@@ -41,6 +41,7 @@ harness reads.
 cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc \
   -DSLANGC_CPP=$HOME/.local/opt/slang-2025.11/bin/slangc -DPython3_EXECUTABLE=$PWD/.venv/bin/python
 cmake --build build --config Release -j16
+git config core.hooksPath .githooks      # the light CI, once per clone ("Gates")
 ```
 
 - **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a globbed directory is picked up
@@ -88,6 +89,10 @@ is a bug. **While iterating, run `--changed`**: it runs what the changed files r
 python tools/check.py --changed [REF]    # only what the files changed since REF reach (tools/check_changed.py)
 python tools/check.py                    # build, ohao doctor, every gate (quick, gpu, golden): about 10 s in all
 ```
+
+**Light CI, on this machine** (Frank, 2026-11-09): `.githooks/pre-commit` runs `tools/check.py --staged` (what the
+commit's files reach; a docs commit builds and runs nothing) and `.githooks/pre-push` the whole check; a failure
+blocks the commit or the push. Never `--no-verify`. Two checks never overlap: a second waits on `build/check.lock`.
 
 `check.py` finds the real CMake, builds the `shaders` target and then everything (at most 6 jobs), runs
 `ohao doctor` (an error-level failure stops the run), runs CTest with the chosen labels and writes one verdict,
@@ -197,7 +202,7 @@ What every change must respect. The build checks some of these; the rest are her
   (measurements, benchmark medians/p95, golden max_abs), known gaps. Facts and numbers only,
   from runs, never estimates.
 - **Commits:** local, one or a few per step, subject `type(scope): what` (`feat`, `fix`,
-  `perf`, `docs`, `test`), body saying why. Never push, merge, rebase or reset without
+  `perf`, `docs`, `test`), body saying why; the pre-commit hook gates each one. Never push, merge, rebase or reset without
   the owner's say-so.
 - **Forward only.** Old code and docs are reference, not something to preserve: delete
   what is dead, and describe the tree as it is, not its history.

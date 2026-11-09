@@ -2,7 +2,7 @@
 
 A changed path is matched against RULES top to bottom; every rule that matches adds its targets
 (test names, or `label:<label>` for every test with that label). A path no rule matches selects
-the whole default set (quick, gpu): an unmapped change is never tested by nothing. Paths that
+the whole default set (quick, gpu, golden): an unmapped change is never tested by nothing. Paths that
 cannot change a test's result select nothing.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 RULES: list[tuple[str, list[str]]] = [
     # Nothing a test reads.
     ("site/*", []), ("docs/*", []), ("*.md", []), ("LICENSE", []), (".gitignore", []), ("tests/bench/*", []),
-    ("tools/bench/*", []),
+    ("tools/bench/*", []), (".githooks/*", []), (".claude/*", []),
     # The renderer: every GPU gate.
     ("ohao/render/*", ["label:gpu", "render_golden"]), ("ohao/gpu/*", ["label:gpu", "render_golden"]),
     ("shaders/*", ["label:gpu", "render_golden"]),
@@ -41,6 +41,20 @@ def changed_paths(root: Path, ref: str) -> list[str]:
             raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()}")
         return [l for l in r.stdout.splitlines() if l]
     return sorted(set(git("diff", "--name-only", ref)) | set(git("ls-files", "--others", "--exclude-standard")))
+
+
+def staged_paths(root: Path) -> list[str]:
+    """The files the next commit changes (staged, deleted ones included): what the pre-commit hook checks."""
+    r = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True, cwd=root)
+    if r.returncode != 0:
+        raise RuntimeError(f"git diff --cached: {r.stderr.strip()}")
+    return sorted(l for l in r.stdout.splitlines() if l)
+
+
+def unstaged_paths(root: Path) -> list[str]:
+    """Tracked files whose working copy differs from what is staged: built and tested, but not in the commit."""
+    r = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True, cwd=root)
+    return sorted(l for l in r.stdout.splitlines() if l) if r.returncode == 0 else []
 
 
 def select(paths: list[str], labels_of: dict[str, list[str]], default_labels: list[str], root: Path | None = None):

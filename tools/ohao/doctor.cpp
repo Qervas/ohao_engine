@@ -403,19 +403,8 @@ void toolChecks(const Options& o, std::vector<Check>& out) {
                            "tools/check.py refuses conda's"));
     else
         out.push_back(pass("tools.cmake", "warn", cmake.generic_string()));
-
-#ifdef _WIN32
-    const char* quiet = " >NUL 2>&1";
-#else
-    const char* quiet = " >/dev/null 2>&1";
-#endif
-    const int rc = std::system((std::string("python -c \"import numpy, PIL, jsonschema\"") + quiet).c_str());
-    if (rc == 0)
-        out.push_back(pass("python.deps", "warn", "python with numpy, Pillow and jsonschema"));
-    else
-        out.push_back(fail("python.deps", "warn",
-                           "python with numpy, Pillow and jsonschema not found: the test harnesses need them",
-                           "pip install numpy Pillow jsonschema"));
+    // The harnesses' Python modules are checked by tools/check.py, on the interpreter CTest runs them with (the
+    // configured Python3_EXECUTABLE): `python` on PATH is often another one.
 }
 
 } // namespace

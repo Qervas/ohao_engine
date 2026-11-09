@@ -1,7 +1,7 @@
 # Step 2: delete and unify (parts a to h)
 
 **Spec:** `docs/specs/2026-11-08-system-design.md`, 4.1, 4.2, 4.9 and 5 (step 2); plan
-`docs/plans/2026-11-09-step2-delete-and-unify.md`. **Status:** 2a-2h built; 2i not started.
+`docs/plans/2026-11-09-step2-delete-and-unify.md`. **Status:** 2a-2i built.
 
 ## 1. Summary
 
@@ -29,6 +29,14 @@ and a shader disagree or a dependency points up a layer. `AGENTS.md` went from 1
 - **2f, one scene writer**: the save budget raised to 11 ms (Frank); the 36 hand writers, the layout tree and the
   second save path deleted (about 1,200 lines); every checked-in scene saves byte for byte as before.
 - **2h, AGENTS.md** (`c6c49f6d`): see 4.
+- **2i, CI on this machine**: `.githooks/pre-commit` runs `tools/check.py --staged`, the gates the staged files reach
+  (a docs commit builds and runs nothing); `.githooks/pre-push` the whole check. Two checks never overlap
+  (`build/check.lock`). Spec 4.9 corrected: it planned GitHub Actions on Windows and Linux, CPU gates only; Frank
+  ruled for CI on this machine (2026-11-09), where the GPU gates run too. Proven before the commit through a scratch
+  index: a docs change passed in 0.17 s without building; a compile error in `ecs/physics_scene.cpp` blocked the
+  commit in 3.4 s; a no-op physics restore blocked it in 10.2 s (`replay_test` failed, the one test chosen). Also
+  deleted: `ohao doctor`'s `python.deps`, which ran `python` on PATH (not the configured interpreter the harnesses
+  use) and warned on every run here; `check.py` checks the right one.
 
 ## 3. Bugs and drift found and fixed
 
@@ -72,7 +80,7 @@ compared with the old build).
 
 ## 6. Known gaps
 
-- 2i (CI on Windows and Linux) is not written: it runs only once pushed, which is Frank's call.
+- 2i: the Windows clone needs `git config core.hooksPath .githooks` once; no hook has run there.
 - The benches still install single systems (they time one each); with the order fixed by the list this cannot
   misorder anything.
 - The path tracer's layout keeps its per-binding stage masks by hand (reflection does not say which stage reads a
