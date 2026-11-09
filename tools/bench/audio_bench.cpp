@@ -47,6 +47,7 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/scene_view.hpp"
+#include "ecs/slice.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
@@ -281,10 +282,10 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    (void)ecs::installCombat(w);
     ecs::installRoundHook(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    ecs::installSlice(w);   // combat and the animation drivers
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) return out;
     for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
     entt::entity player = entt::null;
@@ -390,11 +391,11 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     physics.teleportPlayer(player, {-0.5f, 0.0f, 1.4f}, 0.0f);
     uint64_t rays = 0;
     for (int i = 0; i < steps; ++i) {
+        const uint64_t before = w.events().nextSeq() - 1;
         w.update(kDt);
         if (i >= 20) out.stepMs.push_back(audio.lastStepMs());
-        uint64_t shots = 0;
-        for (const ecs::CombatEvent& e : ecs::combatEvents(w))
-            if (e.kind == ecs::CombatEvent::Kind::Shot) ++shots;
+        const auto* shotsIn = w.events().find<ecs::ShotEvent>(ecs::slice_events::kShot);
+        const uint64_t shots = shotsIn ? shotsIn->since(before).size() : 0;
         out.shots += shots;
         out.mostShots = std::max(out.mostShots, shots);
         out.mostRays = std::max(out.mostRays, audio.stats().raysCast - rays);
@@ -435,10 +436,10 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    (void)ecs::installCombat(w);
     ecs::installRoundHook(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    ecs::installSlice(w);   // combat and the animation drivers
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) {
         error = "grenade-spatial: the play scene did not load";
         return false;

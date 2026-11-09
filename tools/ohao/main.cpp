@@ -10,7 +10,7 @@
 //   ohao query    <scene> [--ids a,b] [--name N] [--name-contains S] [--has T,U] [--fields /T,/T/f]
 //                 [--limit N] [--offset N] [--defaults]
 //   ohao summary  <scene> [--depth D] [--max-children N] [--max-nodes N]
-//   ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
+//   ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl] [--game slice|none]
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
 //                  [--denoise X] [--size WxH] [--post bloom,taa] [--ev100 EV] [--tonemap agx|neutral]
 //                  [--quality realtime|reference] [--hud] [--guiding] [--no-caustics] [--hdr out.pfm]]
@@ -20,6 +20,7 @@
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
+//                 [--game slice|none]   the game after the engine's systems (default: the slice)
 //                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
 //                                [--mode deferred|rt_realtime|rt_offline] [--spp N]
 //                                [--present immediate|mailbox|fifo] [--sound] [--fps N]]
@@ -45,6 +46,7 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
+#include "ecs/slice.hpp"
 #include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/log.hpp"
@@ -206,6 +208,17 @@ struct Args {
     std::string error;
 };
 
+// --game: the game a world plays after the engine's systems: the slice (the default) or none.
+bool playsSlice(const Args& a) {
+    const auto it = a.options.find("--game");
+    return it == a.options.end() || it->second != "none";
+}
+std::string gameError(const Args& a) {
+    const auto it = a.options.find("--game");
+    return it == a.options.end() || it->second == "slice" || it->second == "none" ? std::string()
+                                                                                    : "--game is slice or none";
+}
+
 // `flags` take no value; every other --option takes one.
 Args parseArgs(int argc, char** argv, int first, std::initializer_list<std::string_view> flags,
                std::initializer_list<std::string_view> valued) {
@@ -287,11 +300,13 @@ struct Context {
     std::unique_ptr<ecs::World> world;
     std::unique_ptr<api::Session> session;
 
-    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli) {
+    // `slice`: the slice installed after the engine (ecs/slice.hpp); false: an engine-only world (--game none).
+    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli, bool slice = true) {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
         engine::installEngine(*world, {*assets, engineTypes()});
+        if (slice) ecs::installSlice(*world);
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);
@@ -599,7 +614,7 @@ int cmdRun(const Args& a) {
         }
     }
 
-    Context c(opt(a, "--root", "."));
+    Context c(opt(a, "--root", "."), api::HostKind::Cli, playsSlice(a));
     const bool lines = script.has_value();
     int worst = kOk;
     std::string combined;   // without a script: {"result": {method: result, ...}}
@@ -724,6 +739,7 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     if (has(a, "--present")) cfg.present = *presentModeFromName(opt(a, "--present"));   // checked by cmdServe
     cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
     cfg.sound = has(a, "--sound");  // the voice schedule played on the default device
+    cfg.slice = playsSlice(a);
     cfg.root = opt(a, "--root", ".");
     const std::string mode = opt(a, "--mode", "deferred");
     cfg.mode = mode == "rt_realtime" ? RenderMode::RTRealtime : mode == "rt_offline" ? RenderMode::RTOffline : RenderMode::Deferred;
@@ -808,7 +824,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     }
     if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage), *transport);
     const std::string root = opt(a, "--root", ".");
-    Context c(root, api::HostKind::Headless);
+    Context c(root, api::HostKind::Headless, playsSlice(a));
     api::PathPolicy policy;
     policy.root = root;
     policy.out = opt(a, "--out");
@@ -867,8 +883,9 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden", "--sound"},
                                  {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp",
-                                  "--present", "--fps"});
-        return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
+                                  "--present", "--fps", "--game"});
+        const std::string error = a.error.empty() ? gameError(a) : a.error;
+        return error.empty() ? cmdServe(a, allow, win) : usage(error);
     }
     if (cmd == "schema") {
         const Args a = parseArgs(argc, argv, 2, {}, {"-o"});
@@ -899,8 +916,9 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding", "--no-caustics"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
                                   "--frames", "--denoise", "--size", "--post", "--ev100", "--tonemap", "--quality", "--hdr", "--save",
-                                  "--root"});
-        return a.error.empty() ? cmdRun(a) : usage(a.error);
+                                  "--root", "--game"});
+        const std::string error = a.error.empty() ? gameError(a) : a.error;
+        return error.empty() ? cmdRun(a) : usage(error);
     }
     if (cmd == "doctor") {
         const Args a = parseArgs(argc, argv, 2, {"--cpu-only"}, {"--root", "--shader-dir", "--spirv-dir"});

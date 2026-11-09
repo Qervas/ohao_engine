@@ -227,16 +227,17 @@ the throw as an `explode` event and sound at its place, a source to listen to (a
   `weapon` (`ammo`, `magazine`, `reloading`, `bloomDeg`, `kickDeg`, `shots`), `enemy` (`state`
   idle, chase, attack or dead; `lastSeen`, where it last saw the player). Aim with
   `player_teleport {pos: its own pos, yawDeg}` toward an enemy's `pos`, then fire.
-- `combat_events {since, max}`: shots (eye, `dir`, `coneDeg`), hits (what, where, `surface`),
-  damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`,
-  `explode` (`point`);
-  read on with the reply's `next`, as `events_read`.
+- `events_read {names: ["slice.*"]}`: the slice's events: `slice.shot` (its eye, `dir`, `coneDeg`, `hit`
+  where it stopped), `slice.hit` (what, where, `surface`), `slice.damage` (`amount`, `health` after),
+  `slice.death`, `slice.reload` / `slice.reloaded` (`ammo`), `slice.round_start`, `slice.restart`,
+  `slice.win`, `slice.explode` (`point`); read on with the reply's `next`.
 - `combat_damage {entity, amount, source?}`: takes hit points as a round would, from the
   entity's `Health` or its nearest ancestor's (an enemy's body or head entity is fine); a dead
   enemy plays its death clip from the next step, its `Transform` upright where it stood. 0 to
-  10,000; `E_NOT_FOUND` for what has no `Health`.
-- `animation_info {entity?, since?, max?}`: every `Animator`'s layers (each state, its clip and
-  the time into it, the fade) and the animation events after a cursor. The enemies' body layer
+  10,000; `E_NOT_FOUND` for what has no `Health`. Between steps, its damage and death are the next
+  step's events (that step's sounds and clips hear them, as a round's).
+- `animation_info {entity?}`: every `Animator`'s layers (each state, its clip and the time into it,
+  the fade); its clip events are `events_read`'s `anim.clip_event`. The enemies' body layer
   is `move`, `combat`, `death` or `dead`, with additive `aim`, `fire`, `reload`, `hit`; the
   player's arms (`Arms`, below the view model) are `ready` (the hip-to-sights blend by `aim`),
   `sprint` or `reload`, with an additive `fire`. Events: `mag_out`, `mag_in`, `bolt`,
@@ -257,11 +258,12 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"combat.damage","result":{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"taken":100}}
 {"method":"world.step","result":{"frame":2}}
 {"method":"combat.info","result":{"steps":2,"round":{"started":true,"phase":"won","restarts":0},"combatants":[{"entity":"5c0b1a7e00000001","name":"Player","player":true,"health":100,"max":100,"dead":false,"pos":[1.5,0,2.2],"weapon":{"ammo":30,"magazine":30,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0}},{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"pos":[-2.5,0.3,-2],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}},{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"pos":[3,0.506,-1.999],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}}]}}
-{"method":"combat.events","result":{"events":[{"seq":1,"step":1,"kind":"round_start"},{"seq":2,"step":1,"kind":"damage","source":"5c0b1a7e00000001","sn":"Player","target":"5c0b1a7e00000010","tn":"EnemyA","amount":60,"health":40},{"seq":3,"step":1,"kind":"damage","target":"5c0b1a7e00000010","tn":"EnemyA","amount":40,"health":0},{"seq":4,"step":1,"kind":"death","target":"5c0b1a7e00000010","tn":"EnemyA"},{"seq":5,"step":1,"kind":"damage","target":"5c0b1a7e00000020","tn":"EnemyB","amount":100,"health":0},{"seq":6,"step":1,"kind":"death","target":"5c0b1a7e00000020","tn":"EnemyB"},{"seq":7,"step":2,"kind":"win"}],"next":7}}
+{"method":"events.read","result":{"events":[{"seq":3,"step":1,"event":"slice.round_start"},{"seq":6,"step":2,"event":"slice.damage","source":"5c0b1a7e00000001","sourceName":"Player","target":"5c0b1a7e00000010","targetName":"EnemyA","point":[-2.5,0.3,-2],"amount":60,"health":40},{"seq":7,"step":2,"event":"slice.damage","target":"5c0b1a7e00000010","targetName":"EnemyA","point":[-2.5,0.3,-2],"amount":40,"health":0},{"seq":8,"step":2,"event":"slice.death","target":"5c0b1a7e00000010","targetName":"EnemyA","point":[-2.5,0.3,-2]},{"seq":9,"step":2,"event":"slice.damage","target":"5c0b1a7e00000020","targetName":"EnemyB","point":[3,0.506,-1.999],"amount":100,"health":0},{"seq":10,"step":2,"event":"slice.death","target":"5c0b1a7e00000020","targetName":"EnemyB","point":[3,0.506,-1.999]},{"seq":11,"step":2,"event":"slice.win"}],"next":14}}
 ```
 
 Step once before damaging anyone: the round's start is the world at the end of its first step,
-and a restart goes back there. A real fight (`tests/replay/replay_test.py`'s `second_half`) faces each
+and a restart goes back there. The damage done between steps belongs to the next step (step 2): its sounds
+and clips hear it, as a round's would. A real fight (`tests/replay/replay_test.py`'s `second_half`) faces each
 enemy with `player_teleport` and fires bursts of three (`fire` down for 13 steps) until
 `combat_info` says it is dead; the same fight in a window and headless reaches the same
 `world_hash` and HUD picture.
@@ -452,7 +454,7 @@ to the first → load the blockout level → `level_info` → a ray down at the 
 footsteps → look → `player_teleport` → `physics_contacts` → restore → the same walk, to the
 same hash and the same picture → load the play scene again → `combat_info` → shoot EnemyA
 down → `events_read`'s newest `audio.*`, a bus muted and one soloed, `clear` (`world_hash`
-unchanged) → `combat_events` → look with the HUD → `combat_damage` kills the player → the
+unchanged) → `events_read` → look with the HUD → `combat_damage` kills the player → the
 restart → clear the room → won.
 
 ## Limits

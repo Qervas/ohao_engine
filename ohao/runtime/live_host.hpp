@@ -87,6 +87,8 @@ struct LiveConfig {
     // footsteps, combat, handling, the mix). ohao_game turns it on (--mute off: the schedule is still
     // built, no device is made); a server's window stays silent.
     bool sound{false};
+    // The game installed after the engine: the slice (ecs/slice.hpp), or none (an engine-only world).
+    bool slice{true};
     // Draws the measured latency and frame time top left (ohao_game --latency; sub-project 9).
     bool latencyReadout{false};
     // The window's camera meters its deferred frames (render.settings autoExposure; frontier F2 T2).

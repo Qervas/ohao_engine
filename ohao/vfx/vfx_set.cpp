@@ -191,14 +191,14 @@ int indexOf(const std::vector<T>& v, std::string_view name) {
 
 std::string substitute(std::string_view pattern, std::string_view with) {
     std::string s(pattern);
-    const auto at = s.find("{surface}");
-    if (at != std::string::npos) s.replace(at, 9, with);
+    const auto at = s.find("{tag}");
+    if (at != std::string::npos) s.replace(at, 5, with);
     return s;
 }
 
 template <class T>
 int resolveIn(const std::vector<T>& v, std::string_view pattern, std::string_view surface, std::string_view fallback) {
-    if (pattern.find("{surface}") == std::string_view::npos) return indexOf(v, pattern);
+    if (pattern.find("{tag}") == std::string_view::npos) return indexOf(v, pattern);
     if (const int i = indexOf(v, substitute(pattern, surface)); i >= 0) return i;
     return fallback.empty() ? -1 : indexOf(v, substitute(pattern, fallback));
 }
@@ -438,19 +438,23 @@ Result<VfxSet, std::vector<VfxError>> parseVfxSet(std::string_view json) {
         p.fail("/tracers", "not an object of tracers");
     }
 
-    // Events: names resolved against what was declared above (a {surface} name through its fallback).
+    // Events, by channel name: names resolved against what was declared above (a {tag} name through its
+    // fallback).
     if (object events; doc["events"].get_object().get(events) == simdjson::SUCCESS) {
         for (auto [name, value] : events) {
             const std::string path = "/events/" + esc(name);
-            EventBinding* b = name == "shot" ? &s.shot : name == "hit" ? &s.hit : name == "explode" ? &s.explode : nullptr;
-            if (!b) { p.fail(path, "shot, hit or explode"); continue; }
+            s.events.emplace_back();
+            EventBinding* b = &s.events.back();
+            b->on = std::string(name);
+            if (b->on.empty()) p.fail(path, "an event channel's name, e.g. slice.hit");
             object o;
             if (value.get_object().get(o) != simdjson::SUCCESS) { p.fail(path, "not an object"); continue; }
-            p.keys(o, {"effect", "tracer", "decal", "fallback"}, path);
+            p.keys(o, {"effect", "tracer", "decal", "fallback", "ahead"}, path);
             if (element e; o["fallback"].get(e) == simdjson::SUCCESS) p.str(e, b->fallback, path + "/fallback");
+            if (element e; o["ahead"].get(e) == simdjson::SUCCESS) p.num(e, b->ahead, path + "/ahead", 0.0, 10.0);
             bool needsFallback = false;
             const auto check = [&](const std::string& n, const std::string& at, bool decal) {
-                const bool surfaced = n.find("{surface}") != std::string::npos;
+                const bool surfaced = n.find("{tag}") != std::string::npos;
                 needsFallback |= surfaced;
                 const int i = decal ? resolveIn(s.decals, n, "", b->fallback) : resolveIn(s.effects, n, "", b->fallback);
                 if (surfaced && b->fallback.empty()) return;   // reported once, at /fallback
@@ -480,7 +484,7 @@ Result<VfxSet, std::vector<VfxError>> parseVfxSet(std::string_view json) {
             if (element e; o["tracer"].get(e) == simdjson::SUCCESS && p.str(e, b->tracer, path + "/tracer") &&
                            s.tracer(b->tracer) < 0)
                 p.fail(path + "/tracer", "no tracer named '" + b->tracer + "'");
-            if (needsFallback && b->fallback.empty()) p.fail(path + "/fallback", "a {surface} name needs a fallback surface");
+            if (needsFallback && b->fallback.empty()) p.fail(path + "/fallback", "a {tag} name needs a fallback tag");
         }
     } else if (element e; doc["events"].get(e) == simdjson::SUCCESS) {
         p.fail("/events", "not an object of events");
@@ -549,12 +553,7 @@ VfxSet defaultVfxSet() {
     DecalDesc mark;   // ecs/impact_marks.cpp's quad: 8 cm, dark, rough
     mark.name = "mark";
     s.decals.push_back(mark);
-    s.shot.effects = {"muzzle"};
-    s.hit.effects = {"impact_{surface}"};
-    s.hit.fallback = "default";
-    s.hit.decal = "mark";
-    s.explode.effects = {"grenade_boom", "smoke_cloud"};
-    return s;
+    return s;   // no events: a game's set binds its own channels
 }
 
 std::string vfxSetJsonSchema() {
@@ -562,7 +561,7 @@ std::string vfxSetJsonSchema() {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ohao.dev/schema/vfx-set.json",
   "title": "OHAO effect set (.vfx.json)",
-  "description": "docs/specs/2026-10-28-vfx-design.md, 'Data: the VFX set'. Cross-references (an emitter's or decal's texture, an event's effects, decal and tracer, a {surface} name's fallback) are checked by the engine's parser.",
+  "description": "docs/specs/2026-10-28-vfx-design.md, 'Data: the VFX set'. Cross-references (an emitter's or decal's texture, an event's effects, decal and tracer, a {tag} name's fallback) are checked by the engine's parser.",
   "type": "object",
   "additionalProperties": false,
   "$defs": {
@@ -573,9 +572,11 @@ std::string vfxSetJsonSchema() {
               "description": "\"#rrggbb\" (sRGB) or [r, g, b] (linear)"},
     "names": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
     "binding": {"type": "object", "additionalProperties": false,
-                "properties": {"effect": {"$ref": "#/$defs/names", "description": "Effects; a name may hold {surface}"},
-                               "tracer": {"type": "string"}, "decal": {"type": "string", "description": "May hold {surface}"},
-                               "fallback": {"type": "string", "description": "The surface a {surface} name falls back to"}}}
+                "properties": {"effect": {"$ref": "#/$defs/names", "description": "Effects; a name may hold {tag} (the event's tag: a hit's surface)"},
+                               "tracer": {"type": "string", "description": "From the effects' place to where the event ended"},
+                               "decal": {"type": "string", "description": "On what the event reached; may hold {tag}"},
+                               "fallback": {"type": "string", "description": "The tag a {tag} name falls back to"},
+                               "ahead": {"type": "number", "minimum": 0, "maximum": 10, "description": "m along the event's direction the effects start (a muzzle ahead of the eye)"}}}
   },
   "properties": {
     "textures": {"type": "object", "additionalProperties": {
@@ -622,8 +623,8 @@ std::string vfxSetJsonSchema() {
                      "width": {"type": "number", "minimum": 0}, "color": {"$ref": "#/$defs/color"},
                      "intensity": {"type": "number", "minimum": 0}, "everyPlayer": {"type": "integer", "minimum": 0},
                      "everyEnemy": {"type": "integer", "minimum": 0}, "minDistance": {"type": "number", "minimum": 0}}}},
-    "events": {"type": "object", "additionalProperties": false, "properties": {
-      "shot": {"$ref": "#/$defs/binding"}, "hit": {"$ref": "#/$defs/binding"}, "explode": {"$ref": "#/$defs/binding"}}},
+    "events": {"type": "object", "description": "What a game's events spawn, by channel name (events.read's names, e.g. slice.hit)",
+               "additionalProperties": {"$ref": "#/$defs/binding"}},
     "caps": {"type": "object", "additionalProperties": false,
              "properties": {"records": {"type": "integer", "minimum": 1}, "particles": {"type": "integer", "minimum": 1},
                             "decals": {"type": "integer", "minimum": 1}, "tracers": {"type": "integer", "minimum": 1},

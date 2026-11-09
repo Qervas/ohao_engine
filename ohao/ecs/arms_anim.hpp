@@ -8,8 +8,8 @@
 //   aim         WeaponState.aim (0 from the hip .. 1 down the sights)
 //   alive       Health above 0
 //   reloadTime  Weapon.reloadTime (the reload clip's rateFrom: its mag_in lands on the weapon's reloaded)
-// and the events `shot` (the owner's round) and `reload`, from the step's combat events after its last
-// `restart` (a restart restores the round's start mid-step).
+// and the events `shot` (the owner's round) and `reload`, from the step's slice events, in the order they
+// happened.
 #include "ecs/animation.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/components.hpp"
@@ -24,10 +24,9 @@ namespace ohao::ecs {
 // Any of the owner's state may be missing (before the first combat step there is no WeaponState): it
 // reads as at rest.
 void driveArmsAnim(uint64_t ownerId, const PlayerController* controller, const PlayerState* body, const Health* health,
-                   const Weapon* weapon, const WeaponState* state, std::span<const CombatEvent> stepEvents,
-                   AnimParams& out);
+                   const Weapon* weapon, const WeaponState* state, const DriverEvents& events, AnimParams& out);
 
-// The driver `arms` (installAnimation registers it).
-void registerArmsDriver(AnimationSystem& animation);
+// The driver `arms` (installSlice registers it), reading the slice's channels of `log`.
+void registerArmsDriver(AnimationSystem& animation, EventLog& log);
 
 } // namespace ohao::ecs

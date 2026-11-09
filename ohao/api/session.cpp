@@ -900,7 +900,7 @@ const std::vector<Method>& methodTable() {
            "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."}, renderStats},
         {{"events.read", p.find<EventsReadParams>(), "{events: [{seq, step, event, ...fields}], next, dropped?}",
            "The world's events after since (pass the last read's next), oldest first, every channel or the named ones "
-           "(physics.*, anim.clip_event, audio.*): each its channel's fields (schema.get's events). dropped: events "
+           "(slice.*, physics.*, anim.clip_event, audio.*): each its channel's fields (schema.get's events). dropped: events "
            "the history (the last 8,192) no longer holds."}, methodEventsRead},
         {{"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
            "Engine log records after since (pass the last read's next), filtered by level and channel."}, logRead},
@@ -930,10 +930,6 @@ const std::vector<Method>& methodTable() {
            "dead?, pos, weapon?: {ammo, magazine, reloading, bloomDeg, kickDeg, shots}, enemy?: {state, lastSeen?}}], more?}",
            "The fight: the round (playing, dead, won) and everything with Health or a Weapon, in id order. Fire with "
            "input.inject (fire, reload) and world.step."}, methodCombatInfo},
-        {{"combat.events", p.find<CombatEventsParams>(),
-           "{events: [{seq, step, kind, source?, sn?, target?, tn?, ...}], next, dropped?}",
-           "Shots (point, dir, coneDeg), hits (point, normal, dist, surface), damage (amount, health), deaths, "
-           "reloads (ammo), round_start, restart, win; oldest first. Pass next as since to read on."}, methodCombatEvents},
         {{"combat.damage", p.find<CombatDamageParams>(), "{entity, name, health, max, dead, taken}",
            "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
            "events; a dead enemy lies down at the next step."}, methodCombatDamage, true},

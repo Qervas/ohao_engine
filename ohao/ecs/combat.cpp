@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "ecs/audio_schedule.hpp"
 #include "ecs/enemy_ai.hpp"
 #include "ecs/round_hook.hpp"
 #include "ecs/physics_scene.hpp"
@@ -13,13 +14,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <deque>
 
 namespace ohao::ecs {
 
 namespace {
 
-constexpr std::size_t kLogCapacity = 1024;
 // Cooldowns and reloads count down by dt; this absorbs the float error of their sums, so 10 Hz at
 // 60 Hz steps fires on every sixth step exactly.
 constexpr float kTimeEps = 1e-5f;
@@ -35,6 +34,54 @@ uint32_t mix(uint32_t x) {   // lowbias32 (Wellons): a full-avalanche 32-bit has
     x *= 0x846ca68bU;
     x ^= x >> 16;
     return x;
+}
+
+// The cues the engine's data binds to (ecs/events.hpp).
+Cue shotCue(const ShotEvent& e) {
+    Cue c;
+    c.at = e.eye;
+    c.dir = e.dir;
+    c.to = e.hit;
+    c.source = e.shooter;
+    c.n = e.round;
+    return c;
+}
+Cue hitCue(const HitEvent& e) {
+    Cue c;
+    c.at = e.point;
+    c.normal = e.normal;
+    c.dir = e.dir;
+    c.source = e.shooter;
+    c.target = e.body;
+    c.tag = e.surface;
+    return c;
+}
+Cue damageCue(const DamageEvent& e) {
+    Cue c;
+    c.at = e.point;
+    c.source = e.source;
+    c.target = e.target;
+    return c;
+}
+Cue deathCue(const DeathEvent& e) {
+    Cue c;
+    c.at = e.point;
+    c.source = e.killer;
+    c.target = e.target;
+    return c;
+}
+Cue reloadCue(const ReloadEvent& e) {
+    Cue c;
+    c.source = e.holder;
+    if (e.ammo == 0) c.tag = "empty";
+    return c;
+}
+Cue roundCue(const RoundEvent&) { return Cue{}; }
+Cue explodeCue(const ExplodeEvent& e) {
+    Cue c;
+    c.at = e.point;
+    c.source = e.thrower;
+    return c;
 }
 
 glm::quat yawQuat(float deg) { return glm::angleAxis(glm::radians(deg), glm::vec3(0.0f, 1.0f, 0.0f)); }
@@ -66,25 +113,40 @@ glm::vec3 spreadDirection(glm::vec3 aim, float coneDeg, uint32_t seed, uint32_t 
 struct CombatSystem::Impl {
     World& world;
     entt::registry& reg;
-    std::vector<CombatEvent> stepEvents;
-    std::deque<CombatEvent> log;
-    uint64_t nextSeq{0};
+    struct Out {
+        EventWriter<ShotEvent> shot;
+        EventWriter<HitEvent> hit;
+        EventWriter<DamageEvent> damage;
+        EventWriter<DeathEvent> death;
+        EventWriter<ReloadEvent> reload, reloaded;
+        EventWriter<RoundEvent> roundStart, restart, win;
+        EventWriter<ExplodeEvent> explode;
+    } out;
     uint64_t steps{0};
     double lastMs{0.0};
     float lastDt{1.0f / 60.0f};
     std::vector<std::pair<uint64_t, entt::entity>> order;   // the step's weapons by id
 
-    explicit Impl(World& w) : world(w), reg(w.registry()) {}
-
-    void push(CombatEvent ev) {
-        ev.step = steps;
-        ev.seq = nextSeq++;
-        ev.sourceId = ev.source != entt::null && reg.valid(ev.source) ? world.idOf(ev.source) : 0;
-        ev.targetId = ev.target != entt::null && reg.valid(ev.target) ? world.idOf(ev.target) : 0;
-        stepEvents.push_back(ev);
-        log.push_back(std::move(ev));
-        if (log.size() > kLogCapacity) log.pop_front();
+    explicit Impl(World& w) : world(w), reg(w.registry()) {
+        namespace se = slice_events;
+        EventLog& log = w.events();
+        const auto with = [](auto writer, auto cue) {
+            writer.channel()->setCue(cue);
+            return writer;
+        };
+        out.shot = with(log.writer<ShotEvent>(se::kShot, "combat"), &shotCue);
+        out.hit = with(log.writer<HitEvent>(se::kHit, "combat"), &hitCue);
+        out.damage = with(log.writer<DamageEvent>(se::kDamage, "combat"), &damageCue);
+        out.death = with(log.writer<DeathEvent>(se::kDeath, "combat"), &deathCue);
+        out.reload = with(log.writer<ReloadEvent>(se::kReload, "combat"), &reloadCue);
+        out.reloaded = with(log.writer<ReloadEvent>(se::kReloaded, "combat"), &reloadCue);
+        out.roundStart = with(log.writer<RoundEvent>(se::kRoundStart, "combat"), &roundCue);
+        out.restart = with(log.writer<RoundEvent>(se::kRestart, "combat"), &roundCue);
+        out.win = with(log.writer<RoundEvent>(se::kWin, "combat"), &roundCue);
+        out.explode = with(log.writer<ExplodeEvent>(se::kExplode, "combat"), &explodeCue);
     }
+
+    [[nodiscard]] uint64_t idOf(entt::entity e) const { return e != entt::null && reg.valid(e) ? world.idOf(e) : 0; }
 
     // The entity whose Health a hit on `e` takes from: itself or its nearest ancestor with one.
     [[nodiscard]] entt::entity healthOf(entt::entity e) const {
@@ -108,18 +170,9 @@ struct CombatSystem::Impl {
         if (!(amount > 0.0f) || !(before > 0.0f)) return before;
         const float after = std::max(0.0f, before - amount);
         reg.patch<Health>(owner, [&](Health& h) { h.current = after; });
-        CombatEvent ev;
-        ev.kind = CombatEvent::Kind::Damage;
-        ev.source = source;
-        ev.target = owner;
-        ev.point = point;
-        ev.amount = before - after;
-        ev.health = after;
-        push(ev);
+        out.damage.emit(DamageEvent{idOf(source), idOf(owner), point, before - after, after});
         if (after == 0.0f) {
-            ev.kind = CombatEvent::Kind::Death;
-            ev.amount = 0.0f;
-            push(ev);
+            out.death.emit(DeathEvent{idOf(source), idOf(owner), point});
             OHAO_LOG(Debug, ecs, "combat: {} killed {}", world.idOf(source), world.idOf(owner));
         }
         return after;
@@ -150,22 +203,14 @@ struct CombatSystem::Impl {
 
     void reloadStarts(entt::entity e, WeaponState& s, const Weapon& w) {
         s.reloading = w.reloadTime;
-        CombatEvent ev;
-        ev.kind = CombatEvent::Kind::Reload;
-        ev.source = e;
-        ev.amount = static_cast<float>(s.ammo);
-        push(ev);
+        out.reload.emit(ReloadEvent{idOf(e), s.ammo});
         if (!(s.reloading > kTimeEps)) reloadEnds(e, s, w);   // an instant reload
     }
 
     void reloadEnds(entt::entity e, WeaponState& s, const Weapon& w) {
         s.reloading = 0.0f;
         s.ammo = w.magazine;
-        CombatEvent ev;
-        ev.kind = CombatEvent::Kind::Reloaded;
-        ev.source = e;
-        ev.amount = static_cast<float>(s.ammo);
-        push(ev);
+        out.reloaded.emit(ReloadEvent{idOf(e), s.ammo});
     }
 
     void fire(entt::entity e, const Weapon& w, WeaponState& s, PhysicsScene& physics) {
@@ -176,24 +221,13 @@ struct CombatSystem::Impl {
         const float cone = (w.spreadDeg + s.bloomDeg) * (1.0f - 0.5f * s.aim);
         const uint32_t shot = s.shots;
         const glm::vec3 dir = combat::spreadDirection(aim, cone, w.seed, shot);
-        CombatEvent ev;
-        ev.kind = CombatEvent::Kind::Shot;
-        ev.source = e;
-        ev.point = eye;
-        ev.normal = dir;
-        ev.amount = cone;
-        push(ev);
-        if (const auto hit = physics.raycastFrom(eye, dir, w.range, e)) {
-            CombatEvent h;
-            h.kind = CombatEvent::Kind::Hit;
-            h.source = e;
-            h.target = hit->entity;
-            h.point = hit->point;
-            h.normal = hit->normal;
-            h.amount = hit->dist;
+        const auto hit = physics.raycastFrom(eye, dir, w.range, e);
+        const uint64_t shooter = idOf(e);
+        out.shot.emit(ShotEvent{shooter, eye, dir, cone, shot + 1, hit ? std::optional<glm::vec3>(hit->point) : std::nullopt});
+        if (hit) {
             const auto* c = hit->entity != entt::null && reg.valid(hit->entity) ? reg.try_get<Collider>(hit->entity) : nullptr;
-            h.surface = c && !c->surface.empty() ? c->surface : std::string("default");
-            push(h);
+            out.hit.emit(HitEvent{shooter, idOf(hit->entity), hit->point, hit->normal, dir, hit->dist,
+                                  c && !c->surface.empty() ? c->surface : std::string("default")});
             if (hit->entity != entt::null) damage(hit->entity, w.damage, e, hit->point);
         }
         // Recoil turns a player's view now; the vertical part is recovered later.
@@ -300,7 +334,6 @@ struct CombatSystem::Impl {
         const auto t0 = std::chrono::steady_clock::now();
         ++steps;
         if (dt > 0.0f) lastDt = dt;
-        stepEvents.clear();
         PhysicsScene* physics = physicsScene(world);
         // The enemies decide first: their triggers fire in this step's weapons, their moves walk in
         // the next step's physics.
@@ -315,6 +348,8 @@ struct CombatSystem::Impl {
         }
         if (physics && dt > 0.0f) stepGrenades(dt, *physics);
         stepRound(dt);
+        // The mix the round asks for: dead while the player is, won once the room is cleared.
+        requestMixSnapshot(world, roundInfo.phase == RoundPhase::Dead ? "dead" : roundInfo.phase == RoundPhase::Won ? "won" : "default");
         lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
 
@@ -371,13 +406,7 @@ struct CombatSystem::Impl {
             g.fuse -= dt;
         }
         for (const Grenade& g : grenades)
-            if (g.fuse <= kTimeEps) {
-                CombatEvent ev;
-                ev.kind = CombatEvent::Kind::Explode;
-                ev.source = g.thrower;
-                ev.point = g.pos;
-                push(ev);
-            }
+            if (g.fuse <= kTimeEps) out.explode.emit(ExplodeEvent{idOf(g.thrower), g.pos});
         std::erase_if(grenades, [](const Grenade& g) { return g.fuse <= kTimeEps; });
     }
 
@@ -388,11 +417,6 @@ struct CombatSystem::Impl {
     float deadFor{0.0f};
     bool warnedNoHook{false};
 
-    void pushRound(CombatEvent::Kind kind) {
-        CombatEvent ev;
-        ev.kind = kind;
-        push(ev);
-    }
 
     // The world with a Round: starts it (a snapshot of the world after this step), watches the
     // player's death and the enemies', and goes back to the start restartDelay after the death or
@@ -413,7 +437,7 @@ struct CombatSystem::Impl {
             roundInfo = RoundInfo{};
             roundInfo.started = true;
             deadFor = 0.0f;
-            pushRound(CombatEvent::Kind::RoundStart);
+            out.roundStart.emit(RoundEvent{});
             roundStartStep = steps;
             roundStart = hook->save();
             return;
@@ -436,7 +460,7 @@ struct CombatSystem::Impl {
         }
         if (enemies > 0 && dead == enemies && roundInfo.phase != RoundPhase::Won && !playerDead) {
             roundInfo.phase = RoundPhase::Won;
-            pushRound(CombatEvent::Kind::Win);
+            out.win.emit(RoundEvent{});
         }
         if (playerDead) {
             roundInfo.phase = RoundPhase::Dead;
@@ -465,7 +489,7 @@ struct CombatSystem::Impl {
             deadFor = 0.0f;
             grenades.clear();   // runtime: the round's start had none in flight
             grenadeCooldown = 0.0f;
-            pushRound(CombatEvent::Kind::Restart);
+            out.restart.emit(RoundEvent{});
         }
     }
 
@@ -537,18 +561,6 @@ float CombatSystem::damage(entt::entity target, float amount, entt::entity sourc
     return m->damage(target, amount, source, point);
 }
 
-std::span<const CombatEvent> CombatSystem::stepEvents() const noexcept { return m->stepEvents; }
-
-std::vector<CombatEvent> CombatSystem::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
-    const uint64_t first = m->nextSeq - m->log.size();
-    dropped = since < first ? first - since : 0;
-    std::vector<CombatEvent> out;
-    for (std::size_t i = static_cast<std::size_t>(std::max(since, first) - first); i < m->log.size() && out.size() < max; ++i)
-        out.push_back(m->log[i]);
-    return out;
-}
-
-uint64_t CombatSystem::nextEventSeq() const noexcept { return m->nextSeq; }
 uint64_t CombatSystem::steps() const noexcept { return m->steps; }
 double CombatSystem::lastStepMs() const noexcept { return m->lastMs; }
 float CombatSystem::stepSeconds() const noexcept { return m->lastDt; }
@@ -584,27 +596,6 @@ CombatSystem* combatSystem(World& world) {
 const CombatSystem* combatSystem(const World& world) {
     const auto* installed = world.registry().ctx().find<CombatInstalled>();
     return installed ? installed->system : nullptr;
-}
-
-std::span<const CombatEvent> combatEvents(const World& world) {
-    const CombatSystem* s = combatSystem(world);
-    return s ? s->stepEvents() : std::span<const CombatEvent>{};
-}
-
-const char* combatEventKindName(CombatEvent::Kind kind) noexcept {
-    switch (kind) {
-        case CombatEvent::Kind::Shot: return "shot";
-        case CombatEvent::Kind::Hit: return "hit";
-        case CombatEvent::Kind::Damage: return "damage";
-        case CombatEvent::Kind::Death: return "death";
-        case CombatEvent::Kind::Reload: return "reload";
-        case CombatEvent::Kind::Reloaded: return "reloaded";
-        case CombatEvent::Kind::RoundStart: return "round_start";
-        case CombatEvent::Kind::Restart: return "restart";
-        case CombatEvent::Kind::Win: return "win";
-        case CombatEvent::Kind::Explode: return "explode";
-    }
-    return "?";
 }
 
 } // namespace ohao::ecs

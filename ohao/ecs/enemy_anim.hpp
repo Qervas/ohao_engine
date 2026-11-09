@@ -7,7 +7,7 @@
 //   mode      EnemyState.mode (Idle 0, Chase 1, Attack 2, Dead 3)
 //   alive     Health above 0
 // and the events `shot` (its round), `hit` (damage it took and lived), `reload`, `death`, from the
-// step's combat events after its last `restart` (a restart restores the round's start mid-step).
+// step's slice events, in the order they happened.
 #include "ecs/animation.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/components.hpp"
@@ -20,9 +20,9 @@ namespace ohao::ecs {
 
 // Any of the state may be missing (a dead enemy has lost its character): it reads as at rest.
 void driveEnemyAnim(const World& world, entt::entity e, const EnemyState* state, const PlayerState* body,
-                    const MoveIntent* intent, std::span<const CombatEvent> stepEvents, AnimParams& out);
+                    const MoveIntent* intent, const DriverEvents& events, AnimParams& out);
 
-// The driver `enemy` (installAnimation registers it).
-void registerEnemyDriver(AnimationSystem& animation);
+// The driver `enemy` (installSlice registers it), reading the slice's channels of `log`.
+void registerEnemyDriver(AnimationSystem& animation, EventLog& log);
 
 } // namespace ohao::ecs

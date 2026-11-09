@@ -6,17 +6,17 @@
 // is the step's last (installAudio, called after installAnimation).
 //
 // Each step, in this order:
-//   1. A round restart in the step (or any restore since the last step) writes `stop_world`; a restore
-//      also brings the device back to the restored mix (`resync` commands).
+//   1. Any restore since the last step (a round's restart too) writes `stop_world` and brings the device
+//      back to the restored mix (`resync` commands).
 //   2. The listener's zone: the highest-priority ReverbZone holding the listener at the step (ties: the
 //      lowest id), else the bank's defaultZone; a change writes `zone` (the preset, its bed, a 30-step
 //      blend). A zone whose preset the bank lacks is W_AUDIO_PRESET and counts as the default.
-//   3. The snapshot from the round: `dead` while the player is dead, `won` once the room is cleared,
-//      else `default`; a change writes `snapshot` with the blend of the one entered (`inSteps`), or of
-//      the one left (`outSteps`) on the way back to `default`.
-//   4. The sounds the step's events name (physics footsteps and landings, combat, animation clip
-//      events), by the rules Feel's runtime players had (combatSoundNames, animSoundNames, footsteps by
-//      surface, round robin per sound), each placed at the ear or at its point on its curve, then
+//   3. The snapshot the game asks for (requestMixSnapshot; the slice: `dead` while the player is dead,
+//      `won` once the room is cleared), else `default`; a change writes `snapshot` with the blend of the
+//      one entered (`inSteps`), or of the one left (`outSteps`) on the way back to `default`.
+//   4. The sounds the step's events name: physics footsteps and landings by surface, a game's events by
+//      the bank's `events` (their cues, in the order they happened), animation clip events by
+//      animSoundNames, round robin per sound; each placed at the ear or at its point on its curve, then
 //      admitted against its bus's cap and the bank's global `voices`: a lower priority is stolen first,
 //      then the quieter at the listener, then the older; with no victim the new one is `dropped`.
 //      Enemies' footsteps come from their clip events (foot_l, foot_r); physics' footsteps stay for the
@@ -55,7 +55,6 @@ namespace ohao::ecs {
 
 class World;
 class AssetResolver;
-struct CombatEvent;
 struct ClipEvent;
 
 constexpr uint32_t kRaysPerStep = 16;         // occlusion rays a step
@@ -140,11 +139,18 @@ struct AudioOcclusion {
     float lowPassHz{0.0f};
     uint32_t blendSteps{0};
 };
-// The world's voices fade (a round restart, a restore).
+// The world's voices fade: a restore (a round's restart too) put back another moment.
 struct AudioStopWorld {
     uint32_t blendSteps{0};
-    bool resync{false};           // a restore's, not a restart's
 };
+
+// The mix snapshot a game asks for (requestMixSnapshot; "default" until one asks).
+struct MixRequest {
+    std::string snapshot{"default"};
+};
+// A game asks for a mix snapshot (the slice: `dead` while the player is, `won` once the room is cleared): the
+// schedule moves to it at its next step, if the bank has it. The request holds until another.
+void requestMixSnapshot(World& world, std::string_view snapshot);
 
 struct AudioScheduleStats {
     uint64_t raysCast{0};     // occlusion rays cast, ever
@@ -187,13 +193,8 @@ struct SoundRequest {
 [[nodiscard]] std::string listenerZone(const World& world, glm::vec3 listener);
 
 // ---- the rules (Feel's runtime players', sub-projects 6, 7, 9, 10; moved here unchanged) -----------
-// The sounds a combat event names: the player's round "fire", anyone else's "enemy_fire"; a hit
-// "impact_<surface>"; a death "death"; a grenade going off "explode" (at its place); the player's
-// reload "reload", after "empty" when the magazine ran dry. Nothing else: damage makes no sound (the player's hurt cue masked the enemy's shot that
-// caused it; Frank's hand test, audio spec ruling 22).
-[[nodiscard]] std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerId);
-// The player's own combat sounds (at the ear): fire, reload, empty.
-[[nodiscard]] bool combatSoundAtEar(std::string_view name) noexcept;
+// A game's events play by the bank's `events` (audio/audio_bank.hpp, EventSound): the cue's channel, its source
+// (the listener's player or not) and tag choose the sounds.
 // An animation event's: mag_out, mag_in, bolt and body_fall play their own name; foot_l and foot_r a
 // footstep ("footstep"; the surface is the character's ground's); nothing else.
 [[nodiscard]] std::vector<std::string> animSoundNames(const ClipEvent& e);

@@ -2,7 +2,6 @@
 
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
-#include "ecs/combat.hpp"
 #include "world_render/instantiate.hpp"
 #include "ecs/physics_scene.hpp"
 #include "world_render/render_extract.hpp"
@@ -15,7 +14,6 @@ namespace ohao::engine {
 void installEngine(ecs::World& world, const EngineConfig& config) {
     level::installLevels(world, config.assets, config.types);
     ecs::installPhysics(world, config.assets);
-    ecs::installCombat(world);
     ecs::installAnimation(world, config.assets);
     ecs::installAudio(world, config.assets);
     ecs::installVfx(world, config.assets);

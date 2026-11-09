@@ -114,13 +114,18 @@ struct TracerDesc {
     float minDistance{0.0f};         // m: no tracer for a hit nearer than this
 };
 
-// What a combat event spawns. Names may hold "{surface}" (the hit's Collider.surface); a name that
-// does not exist then falls back to `fallback` in its place.
+// What a game's event spawns (the set's `events`, by channel name; step 3c): read through its cue (ecs/events.hpp).
+// Effects start `ahead` m along the cue's direction from its place, facing its normal (else its direction, else
+// up); a tracer runs from there to where the cue ended (else kTracerMiss on); a decal goes on what it reached.
+// Names may hold "{tag}" (the cue's tag, "default" when empty: a hit's surface); a name that does not exist
+// then falls back to `fallback` in its place.
 struct EventBinding {
+    std::string on;                  // the channel (slice.hit)
     std::vector<std::string> effects;
     std::string tracer;
     std::string decal;
     std::string fallback;
+    float ahead{0.0f};               // m along the cue's direction (a shot's muzzle ahead of the eye)
 };
 
 struct VfxCaps {
@@ -136,7 +141,7 @@ struct VfxSet {
     std::vector<EffectDesc> effects;
     std::vector<DecalDesc> decals;
     std::vector<TracerDesc> tracers;
-    EventBinding shot, hit, explode;
+    std::vector<EventBinding> events;
     VfxCaps caps;
 
     [[nodiscard]] int texture(std::string_view name) const;
@@ -145,7 +150,7 @@ struct VfxSet {
     [[nodiscard]] int tracer(std::string_view name) const;
 };
 
-// The effect (decal) a binding's `pattern` names for a hit on `surface`: "{surface}" replaced by the
+// The effect (decal) a binding's `pattern` names for the tag `surface`: "{tag}" replaced by the
 // surface, else by `fallback` when no effect (decal) is named that. -1: none.
 [[nodiscard]] int resolveEffect(const VfxSet& set, std::string_view pattern, std::string_view surface,
                                 std::string_view fallback);
@@ -159,9 +164,9 @@ struct VfxError {
 
 [[nodiscard]] Result<VfxSet, std::vector<VfxError>> parseVfxSet(std::string_view json);
 
-// The set every host starts with: today's presets as data (the window's muzzle flash, impact sparks
-// and dust by surface, render/particles' explosion and smoke), the impact marks' look as a decal, no
-// tracers.
+// The set every host starts with: today's presets as data (the window's muzzle flash, impact sparks and dust by
+// surface, render/particles' explosion and smoke), the impact marks' look as a decal, no tracers, and no events:
+// what a game's events spawn is its set's (`events`).
 [[nodiscard]] VfxSet defaultVfxSet();
 
 // The `.vfx.json` format as a JSON Schema (`ohao schema vfx-set`).

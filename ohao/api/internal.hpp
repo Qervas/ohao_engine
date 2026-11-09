@@ -128,8 +128,6 @@ bool methodPlayerTeleport(Session::Impl& s, const JsonDocument& doc, const JsonN
 // Combat (sub-project 7, step 5; combat.cpp).
 bool methodCombatInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                       JsonWriter& out);
-bool methodCombatEvents(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                        JsonWriter& out);
 bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                         JsonWriter& out);
 // Animation (sub-project 10, step 1; animation.cpp).

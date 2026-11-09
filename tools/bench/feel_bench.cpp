@@ -159,11 +159,15 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
         if (fire != firing) events.push_back(action("fire", firing = fire));
         h.feedEvents(events);
     };
+    uint64_t cursor = 0;   // the slice's events read so far (the World's log)
     hooks.fixedUpdate = [&](LiveHost& h, float) {
-        for (const ecs::CombatEvent& e : ecs::combatEvents(h.world()))
-            if (e.kind != ecs::CombatEvent::Kind::Shot && e.kind != ecs::CombatEvent::Kind::Hit &&
-                e.kind != ecs::CombatEvent::Kind::Damage)
-                r.events.emplace_back(Clock::now(), ecs::combatEventKindName(e.kind));
+        cursor = h.world().events().visit(cursor, SIZE_MAX, [&](const ecs::EventChannelBase& c, std::size_t) {
+            const std::string& name = c.name();
+            if (name.rfind("slice.", 0) != 0 || name == ecs::slice_events::kShot || name == ecs::slice_events::kHit ||
+                name == ecs::slice_events::kDamage)
+                return;
+            r.events.emplace_back(Clock::now(), name.substr(6));   // reload, death, round_start, ...
+        });
     };
     (void)host.run(hooks);
     if (loadStarted) {

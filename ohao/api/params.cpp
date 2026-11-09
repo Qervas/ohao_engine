@@ -286,10 +286,6 @@ void registerParams(reflect::TypeRegistry& r) {
             .min(-360.0).max(360.0);
 
     r.type<CombatInfoParams>("CombatInfoParams").doc("combat.info params");
-    r.type<CombatEventsParams>("CombatEventsParams").doc("combat.events params")
-        .field("since", &CombatEventsParams::since)
-            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &CombatEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
     r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
         .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator");
     r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params");

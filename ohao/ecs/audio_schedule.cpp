@@ -5,7 +5,6 @@
 #include "core/log.hpp"
 #include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
-#include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/snapshot_hook.hpp"
@@ -173,26 +172,6 @@ std::string listenerZone(const World& world, glm::vec3 listener) {
 
 // ---- the rules -----------------------------------------------------------------------------------
 
-std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerId) {
-    using K = CombatEvent::Kind;
-    const bool byPlayer = playerId != 0 && e.sourceId == playerId;
-    switch (e.kind) {
-        case K::Shot: return {byPlayer ? "fire" : "enemy_fire"};
-        case K::Hit: return {"impact_" + (e.surface.empty() ? std::string("default") : e.surface)};
-        case K::Death: return {"death"};
-        case K::Explode: return {"explode"};
-        case K::Reload:
-            if (!byPlayer) return {};
-            if (e.amount == 0.0f) return {"empty", "reload"};
-            return {"reload"};
-        default: return {};
-    }
-}
-
-bool combatSoundAtEar(std::string_view name) noexcept {
-    return name == "fire" || name == "reload" || name == "empty";
-}
-
 std::vector<std::string> animSoundNames(const ClipEvent& e) {
     if (e.name == "mag_out" || e.name == "mag_in" || e.name == "bolt" || e.name == "body_fall") return {e.name};
     if (e.name == "foot_l" || e.name == "foot_r") return {"footstep"};
@@ -300,6 +279,10 @@ struct AudioSchedule::Impl {
     } out;
     EventReader<FootEvent> footsteps, landings;
     EventReader<ClipEvent> clips;
+    // A game's channels the bank binds (its `events`), by channel index: the bindings in the bank's order.
+    std::vector<std::vector<const EventSound*>> bound;
+    uint64_t boundVersion{~0ull};
+    std::size_t boundChannels{0};
 
     std::vector<AudioWarning> warnings;
     std::set<std::pair<entt::entity, std::string>> warned;
@@ -595,13 +578,10 @@ struct AudioSchedule::Impl {
 
     // ---- the step ---------------------------------------------------------------------------
 
+    // The snapshot the game asks for (requestMixSnapshot), if the bank has it, else the default.
     std::string snapshotTarget() const {
-        std::string want = "default";
-        if (const CombatSystem* combat = combatSystem(world)) {
-            const RoundInfo round = combat->round();
-            if (round.phase == RoundPhase::Dead) want = "dead";
-            else if (round.phase == RoundPhase::Won) want = "won";
-        }
+        const auto* request = world.registry().ctx().find<MixRequest>();
+        const std::string want = request ? request->snapshot : std::string("default");
         const auto has = [&](const std::string& n) {
             return std::any_of(bank.snapshots.begin(), bank.snapshots.end(), [&](const SnapshotDesc& d) { return d.name == n; });
         };
@@ -654,23 +634,53 @@ struct AudioSchedule::Impl {
         }
     }
 
+    // The bank's event bindings by channel index (again when the bank or the channels change).
+    void bindEvents() {
+        const EventLog& log = world.events();
+        if (boundVersion == bankVersion && boundChannels == log.channels().size()) return;
+        boundVersion = bankVersion;
+        boundChannels = log.channels().size();
+        bound.assign(boundChannels, {});
+        for (const EventSound& d : bank.events)
+            if (const EventChannelBase* c = log.find(d.on)) {
+                bound[c->index()].push_back(&d);
+                world.events().addReader(d.on, "audio_schedule");
+            }
+    }
+
+    // A game's events, in the order they happened: the first binding each matches plays its sounds.
+    void playBound(uint64_t playerId) {
+        bindEvents();
+        world.events().visitWindow([&](const EventChannelBase& c, std::size_t i) {
+            if (c.index() >= bound.size() || bound[c.index()].empty()) return;
+            Cue cue;
+            if (!c.cue(i, cue)) return;
+            const bool byPlayer = playerId != 0 && cue.source == playerId;
+            for (const EventSound* d : bound[c.index()]) {
+                if (d->by == EventSound::By::Player && !byPlayer) continue;
+                if (d->by == EventSound::By::Other && byPlayer) continue;
+                if (d->tag && *d->tag != cue.tag) continue;
+                for (std::string name : d->play) {
+                    if (const auto at = name.find("{tag}"); at != std::string::npos)
+                        name.replace(at, 5, cue.tag.empty() ? std::string_view("default") : cue.tag);
+                    if (bank.sound(name) < 0 && !d->fallback.empty()) name = d->fallback;
+                    playRequest({name, d->world ? 0 : cue.source, cue.at, d->ear});
+                }
+                return;
+            }
+        });
+    }
+
     void step() {
         ++s.steps;
         raysThisStep = 0;
         refreshBank();
         ears = listenerAtStep(world);
-        const CombatSystem* combat = combatSystem(world);
-        const std::span<const CombatEvent> combatEvents = combat ? combat->stepEvents() : std::span<const CombatEvent>{};
-        // A round restart in this step: what came before it was undone (the restore that put this
-        // state back happened inside the combat step).
-        std::size_t afterRestart = 0;
-        bool restart = false;
-        for (std::size_t i = 0; i < combatEvents.size(); ++i)
-            if (combatEvents[i].kind == CombatEvent::Kind::Restart) afterRestart = i + 1, restart = true;
 
-        // 1. The restart, or any restore: the device's world voices fade; the restored mix is resent.
-        if (restart || restored) out.stopWorld.emit(AudioStopWorld{kStopWorldSteps, !restart});
+        // 1. Any restore since the last step (a round's restart too): the device's world voices fade; the
+        // restored mix is resent.
         if (restored) {
+            out.stopWorld.emit(AudioStopWorld{kStopWorldSteps});
             resync();
             restored = false;
         }
@@ -710,15 +720,7 @@ struct AudioSchedule::Impl {
                 if (!sound.empty()) playRequest({sound, e.player, e.point, false, footstepScale(land, e.speed)});
             }
         }
-        for (std::size_t i = afterRestart; i < combatEvents.size(); ++i) {
-            const CombatEvent& e = combatEvents[i];
-            // A grenade is a world source, not the thrower's own sound: occluded like an enemy's.
-            const uint64_t owner = e.kind == CombatEvent::Kind::Explode ? 0 : e.sourceId;
-            for (std::string name : combatSoundNames(e, playerId)) {
-                if (name.rfind("impact_", 0) == 0 && bank.sound(name) < 0) name = "impact_default";
-                playRequest({name, owner, e.point, combatSoundAtEar(name)});
-            }
-        }
+        playBound(playerId);
         for (const auto& [meta, e] : clips.read())
                 for (const std::string& name : animSoundNames(e)) {
                     const entt::entity who = world.findById(e.entity);
@@ -862,6 +864,19 @@ AudioSchedule* audioSchedule(World& world) {
 const AudioSchedule* audioSchedule(const World& world) {
     const auto* installed = world.registry().ctx().find<AudioInstalled>();
     return installed ? installed->system : nullptr;
+}
+
+} // namespace ohao::ecs
+
+namespace ohao::ecs {
+
+void requestMixSnapshot(World& world, std::string_view snapshot) {
+    auto& ctx = world.registry().ctx();
+    if (auto* r = ctx.find<MixRequest>()) {
+        if (r->snapshot != snapshot) r->snapshot = snapshot;
+    } else {
+        ctx.emplace<MixRequest>(MixRequest{std::string(snapshot)});
+    }
 }
 
 } // namespace ohao::ecs

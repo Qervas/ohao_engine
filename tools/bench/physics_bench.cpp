@@ -32,6 +32,7 @@
 #include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/combat.hpp"
+#include "ecs/slice.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
@@ -359,13 +360,14 @@ int main(int argc, char** argv) {
         fire[0].name = "fire";
         for (int i = 0; i < 210; ++i) {
             b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+            const uint64_t before = b.world.events().nextSeq() - 1;
             b.world.simulate(kDt);
             b.world.sync();
-            bool shot = false;
-            for (const ecs::CombatEvent& e : combat.stepEvents()) {
-                shot |= e.kind == ecs::CombatEvent::Kind::Shot;
-                if (r > 0 && i >= 10 && e.kind == ecs::CombatEvent::Kind::Damage) ++damaged;
-            }
+            const auto& log = b.world.events();
+            const auto* shots = log.find<ecs::ShotEvent>(ecs::slice_events::kShot);
+            const auto* damage = log.find<ecs::DamageEvent>(ecs::slice_events::kDamage);
+            const bool shot = shots && !shots->since(before).empty();
+            if (r > 0 && i >= 10 && damage) damaged += damage->since(before).size();
             if (r > 0 && i >= 10 && shot) shotMs.push_back(combat.lastStepMs());
         }
     }
@@ -420,11 +422,13 @@ int main(int argc, char** argv) {
         fire[0].name = "fire";
         for (int i = 0; i < 240; ++i) {
             b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+            const uint64_t before = b.world.events().nextSeq() - 1;
             b.world.simulate(kDt);
             b.world.sync();
             if (r > 0 && i >= 40) combatMs.push_back(combat.lastStepMs());
-            for (const ecs::CombatEvent& e : combat.stepEvents())
-                if (r > 0 && e.kind == ecs::CombatEvent::Kind::Shot && (e.sourceId == 0xe1 || e.sourceId == 0xe2)) ++enemyRounds;
+            if (const auto* shots = b.world.events().find<ecs::ShotEvent>(ecs::slice_events::kShot); shots && r > 0)
+                for (const auto& [meta, e] : shots->since(before))
+                    if (e.shooter == 0xe1 || e.shooter == 0xe2) ++enemyRounds;
         }
     }
     for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
@@ -580,9 +584,9 @@ int main(int argc, char** argv) {
         w.seedIds(7);
         level::installLevels(w, files, engineTypes());
         ecs::installPhysics(w, files);
-        ecs::installCombat(w);
         ecs::installRoundHook(w, engineTypes());
         ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
+        ecs::installSlice(w);   // combat and the animation drivers
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("play scene: blockout_play.scene.json did not load");
@@ -619,11 +623,11 @@ int main(int argc, char** argv) {
         w.seedIds(7);
         level::installLevels(w, files, engineTypes());
         ecs::installPhysics(w, files);
-        ecs::installCombat(w);
         ecs::installRoundHook(w, engineTypes());
         ecs::installAnimation(w, files);
         ecs::installAudio(w, files);
         ecs::VfxSystem& vfx = ecs::installVfx(w, files);
+        ecs::installSlice(w);   // combat and the animation drivers
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("vfx: blockout_play.scene.json did not load");
@@ -647,9 +651,11 @@ int main(int argc, char** argv) {
             if (step == 20) in.push_back(action("grenade", true));
             if (step == 21) in.push_back(action("grenade", false));
             w.stepInput(in);
+            const uint64_t before = w.events().nextSeq() - 1;
             w.simulate(kDt);
             w.sync();
-            for (const auto& e : ecs::combatEvents(w)) vfxExploded |= e.kind == ecs::CombatEvent::Kind::Explode;
+            if (const auto* booms = w.events().find<ecs::ExplodeEvent>(ecs::slice_events::kExplode))
+                vfxExploded |= !booms->since(before).empty();
             if (r > 0) vfxMs.push_back(vfx.lastStepMs());
             const auto s0 = std::chrono::steady_clock::now();
             const render::VfxFrame drawn = ecs::vfxFrameOf(w, drawnSet, {});

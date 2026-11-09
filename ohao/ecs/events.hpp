@@ -23,12 +23,19 @@
 // Payloads are plain structs, reflected (TypeRole::Event) where the API writes them and world.hash hashes them;
 // they hold entities by EntityId, since an event outlives what it names. No reflection here: an emit is two
 // appends, a read a span.
+//
+// The engine/game boundary: the engine reads its own channels by type, and a game's only as a Cue, which the
+// game's projection (EventChannel::setCue) makes from its payload; the engine's data binds cues by channel name
+// (an audio bank's and a vfx set's `events`). No engine system includes a game's payload type.
 #include "core/type_key.hpp"
+
+#include <glm/glm.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -48,6 +55,18 @@ template <class T>
 struct Event {
     EventMeta meta;
     T value;
+};
+
+// An event as the engine's data binds it: what its channel's projection makes of its payload. Fields the
+// projection leaves are zero (the tag empty).
+struct Cue {
+    glm::vec3 at{0.0f};               // where it happened
+    std::optional<glm::vec3> to;      // where it ended (a round's stop), when it did
+    glm::vec3 dir{0.0f};              // its motion's direction (a round's), or zero
+    glm::vec3 normal{0.0f};           // the surface's normal, or zero
+    uint64_t source{0}, target{0};    // entity ids: who caused it, what it reached
+    std::string_view tag;             // a name a binding matches or puts in for {tag} (a surface, "empty")
+    uint32_t n{0};                    // a count its emitter keeps (a weapon's rounds)
 };
 
 class EventLog;
@@ -73,6 +92,8 @@ public:
     [[nodiscard]] std::size_t windowBegin() const noexcept { return m_windowBegin; }
     // The first held event with seq > since (size() when none).
     [[nodiscard]] std::size_t after(uint64_t since) const noexcept;
+    // The event's cue (false: the channel has no projection).
+    [[nodiscard]] virtual bool cue(std::size_t i, Cue& out) const = 0;
 
 protected:
     EventChannelBase(EventLog& log, std::string name, TypeKey type, uint32_t index)
@@ -99,6 +120,14 @@ public:
         : EventChannelBase(log, std::move(name), typeKey<T>(), index) {}
 
     uint64_t emit(T value);   // its seq
+    // The projection the engine's data binds to (a game's channels; engine channels need none).
+    using CueFn = Cue (*)(const T&);
+    void setCue(CueFn fn) noexcept { m_cue = fn; }
+    [[nodiscard]] bool cue(std::size_t i, Cue& out) const override {
+        if (!m_cue) return false;
+        out = m_cue(at(i).value);
+        return true;
+    }
 
     // This step's events (between steps: the next step's so far).
     [[nodiscard]] std::span<const Event<T>> window() const noexcept {
@@ -135,6 +164,7 @@ private:
 
     std::vector<Event<T>> m_held;
     std::size_t m_front{0};
+    CueFn m_cue{nullptr};
 };
 
 // What a system emits into. Empty (false) when default-constructed.
@@ -188,6 +218,13 @@ public:
         EventChannel<T>& c = channel<T>(name);
         addName(c.m_readers, system);
         return EventReader<T>(&c);
+    }
+    // A system that reads a channel through its cues (an engine system bound by data): named among its readers.
+    // False when no such channel exists yet.
+    bool addReader(std::string_view name, std::string_view system) {
+        const EventChannelBase* c = find(name);
+        if (c) addName(const_cast<EventChannelBase*>(c)->m_readers, system);
+        return c != nullptr;
     }
     // The channel, or null (none of that name, or another payload type).
     template <class T>

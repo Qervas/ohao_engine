@@ -82,7 +82,7 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     and the players' footsteps and landings (with the
                     ground's Collider.surface) into the World's event log
                     (physics.*)
-    combat          first the enemy AI (every Enemy in id order: sight   installed by installCombat
+    combat          first the enemy AI (every Enemy in id order: sight   the slice's: installSlice
                     ray, Idle/Chase/Attack/Dead, MoveIntent for the next
                     step, WeaponTrigger for this one); then
                     every Weapon in id order: trigger (a player's input
@@ -92,7 +92,7 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     shooter, not triggers) -> Health of what it hit or
                     its ancestor; recoil -> PhysicsScene::turnPlayer;
                     WeaponState written; shot/hit/damage/death/reload
-                    events (combatEvents(world), a log of 1,024); last
+                    events (slice.*, each with its cue); last
                     the round (a world with Round and the RoundHook       RoundHook: api::Session
                     api::Session installs): round_start and a snapshot   (ecs::installRoundHook)
                     at its first step's end; the player dead for
@@ -102,8 +102,8 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     weapon, a round lights its Muzzle light for
                     Muzzle.time (WeaponState.flash), then intensity 0
     animation       every Animator in id order: its graph's driver        installed by installAnimation
-                    (enemy, arms) writes AnimParams from saved state and  (after installCombat)
-                    the step's combat events after its last restart;
+                    (enemy, arms: the slice's) writes AnimParams from     (installEngine)
+                    saved state and the step's slice events;
                     each layer takes its first holding transition (a
                     parameter, an event, its clip's end), advances its
                     integer steps and fade, and emits the clip events it
@@ -148,7 +148,7 @@ World::sync()
                   subtree turned by World::pendingLook through
                   applyLook (the newest step's turn plus the lead,
                   never interpolated; nothing in lockstep)
-  view_model      a ViewModel's subtree (the first-person gun) ->      installed by installCombat
+  view_model      a ViewModel's subtree (the first-person gun) ->      the slice's: installSlice
                   RenderPose in the drawn view: viewModelRemap (within
                   depthScale of the eye, on screen as through fovDeg),
                   sway, bob and kick at World::presentationDt (0: the
@@ -579,7 +579,7 @@ renders it, so a sound is tested on the schedule, without a device.
    `send` (to the reverb return) and `occlude`. Every error names its JSON pointer; `ohao
    schema audio-bank [-o FILE]` writes the schema. Files are decoded when the bank loads, never on a play.
 3. **The event:** the schedule (`ecs/audio_schedule.cpp`) names the sound for a step's event:
-   `combatSoundNames` for the combat log, `animSoundNames` for `anim.clip_event`,
+   the bank's `events` for a game's channels (`{"on": "slice.hit", "play": "impact_{tag}"}`), `animSoundNames` for `anim.clip_event`,
    `footstepSound` for `physics.footstep` and `physics.land` by surface. A clip event of a new name
    needs a line there; a new surface needs only its `footstep_<surface>` sound.
 4. **Check it on the schedule:** in a session, `events.read {names: ["audio.*"]}` lists the step's
@@ -605,8 +605,8 @@ kind of record.
    `speed`, `size`, colour and alpha curves, `blend`, `lit`, `texture`, `frames`), and optionally a
    `light` (a flash that fades over its `time`) and a `proxy` (smoke spheres for RT direct light and GI).
    Every error names its JSON pointer; `ohao schema vfx-set` writes the schema.
-3. **The binding:** the set's `events` name it: `shot` (the muzzle), `hit` (per surface, with a
-   `fallback`), `explode` (the boom, smoke and scorch). A level node takes an emitter with the `vfx`
+3. **The binding:** the set's `events` name it by channel: `slice.shot` (the muzzle, `ahead` of the eye),
+   `slice.hit` (per surface through `{tag}`, with a `fallback`), `slice.explode` (the boom, smoke and scorch). A level node takes an emitter with the `vfx`
    hint (`extras.vfx = "smoke_cloud"`); a scene places one with a `VfxEmitter`.
 4. **Check it on the step:** `vfx.info` lists the records a fight writes in a session; capture a
    frame to see it.

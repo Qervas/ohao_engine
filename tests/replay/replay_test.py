@@ -210,9 +210,9 @@ def main():
         after_throw(r)
         end_pos = s.tool("player_info")["pos"]
         kinds, since = [], 0
-        while True:   # the log in pages of 64
-            page = s.tool("combat_events", {"since": since, "max": 64})
-            kinds += [e["kind"] for e in page["events"]]
+        while True:   # the slice's events in pages of 64
+            page = s.tool("events_read", {"since": since, "max": 64, "names": ["slice.*"]})
+            kinds += [e["event"][len("slice."):] for e in page["events"]]
             if not page["events"] or page["next"] == since:
                 break
             since = page["next"]

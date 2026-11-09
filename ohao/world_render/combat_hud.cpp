@@ -37,29 +37,27 @@ constexpr float kTimeEps = 1e-5f;
 } // namespace
 
 void CombatHud::observe(const World& world) {
-    const CombatSystem* combat = combatSystem(world);
-    if (!combat) return;
+    const EventLog& log = world.events();
+    const auto* restarts = log.find<RoundEvent>(slice_events::kRestart);
+    const auto* damage = log.find<DamageEvent>(slice_events::kDamage);
+    if (!restarts || !damage) return;
     const entt::entity player = playerOf(world);
     const uint64_t playerId = player != entt::null ? world.idOf(player) : 0;
-    for (;;) {
-        uint64_t dropped = 0;
-        const auto events = combat->eventsSince(m_cursor, 256, dropped);
-        if (events.empty()) break;
-        for (const CombatEvent& e : events) {
-            m_cursor = e.seq + 1;
-            if (e.kind == CombatEvent::Kind::Restart) {
-                m_hitStep = m_hurtStep = 0;
-                m_hurtAmount = 0.0f;
-            } else if (e.kind == CombatEvent::Kind::Damage && playerId != 0 && e.amount > 0.0f) {
-                if (e.targetId == playerId) {
-                    m_hurtStep = e.step;
-                    m_hurtAmount = e.amount;
-                } else if (e.sourceId == playerId) {
-                    m_hitStep = e.step;
-                }
+    m_cursor = log.visit(m_cursor, SIZE_MAX, [&](const EventChannelBase& c, std::size_t i) {
+        if (&c == restarts) {
+            m_hitStep = m_hurtStep = 0;
+            m_hurtAmount = 0.0f;
+        } else if (&c == damage) {
+            const Event<DamageEvent>& e = damage->at(i);
+            if (playerId == 0 || !(e.value.amount > 0.0f)) return;
+            if (e.value.target == playerId) {
+                m_hurtStep = e.meta.step;
+                m_hurtAmount = e.value.amount;
+            } else if (e.value.source == playerId) {
+                m_hitStep = e.meta.step;
             }
         }
-    }
+    });
 }
 
 HudState CombatHud::state(const World& world, uint32_t width, uint32_t height) const {
@@ -89,7 +87,7 @@ HudState CombatHud::state(const World& world, uint32_t width, uint32_t height) c
 
     if (const CombatSystem* combat = combatSystem(world)) {
         const float dt = combat->stepSeconds();
-        const uint64_t now = combat->steps();
+        const uint64_t now = world.steps();
         const auto since = [&](uint64_t step) { return static_cast<float>(now - std::min(now, step)) * dt; };
         s.hitMarker = m_hitStep != 0 && since(m_hitStep) < kHitMarkerTime - kTimeEps;
         if (m_hurtStep != 0) {

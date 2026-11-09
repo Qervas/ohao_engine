@@ -40,6 +40,15 @@
     "bed_outdoor":       {"files": "ambience/outdoor", "bus": "ambience", "priority": 60, "shape": "ear", "holdMs": 8000, "volume": 0.5},
     "bed_room":          {"files": "ambience/room", "bus": "ambience", "priority": 60, "shape": "ear", "holdMs": 8000, "volume": 0.4}
   },
+  "events": [
+    {"on": "slice.shot", "by": "player", "play": "fire", "at": "ear"},
+    {"on": "slice.shot", "play": "enemy_fire"},
+    {"on": "slice.hit", "play": "impact_{tag}", "fallback": "impact_default"},
+    {"on": "slice.death", "play": "death"},
+    {"on": "slice.explode", "play": "explode", "owner": "none"},
+    {"on": "slice.reload", "by": "player", "tag": "empty", "play": ["empty", "reload"], "at": "ear"},
+    {"on": "slice.reload", "by": "player", "play": "reload", "at": "ear"}
+  ],
   "ducks": [
     {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
     {"on": "fire", "bus": "foley", "db": -3, "attackSteps": 1, "releaseSteps": 15}

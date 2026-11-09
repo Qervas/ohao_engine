@@ -148,8 +148,9 @@ step 2h, 2026-11-09), unchanged.
     window's `AudioPlayer` plays them from git-ignored `assets/local/audio/footsteps/` (staged
     for local listening only, never committed) else `assets/audio/footsteps/` (ours,
     `tools/audio/make_footsteps.py`).
-- **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`). `ecs::installCombat`
-  (the CLI context and `LiveHost` call it after `installPhysics`) adds a `combat` simulate system
+- **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`), the slice's: `ecs::installSlice`
+  (`ecs/slice.hpp`; the CLI context and `LiveHost` call it after `installEngine`, unless `--game none`) installs
+  it with the view model and the animation drivers. `installCombat` adds a `combat` simulate system
   after `physics`: every `Weapon`, in id order, reads its trigger (a player's from the World's
   input, `fire`/`reload`; anything else's from `WeaponTrigger`), advances cooldown, reload, bloom
   and recoil, and fires at most one round a step. A round is one ray from the eye (a character:
@@ -165,8 +166,10 @@ step 2h, 2026-11-09), unchanged.
     without a round (else sustained fire would never bloom).
   - Recoil turns the view through `PhysicsScene::turnPlayer`: the step's own write of the
     player's yaw and the head's pitch (not a placement), kept inside this step's interpolated
-    move. Events (`combatEvents(world)`, the step's; `CombatSystem::eventsSince`, a log of
-    1,024): `shot`, `hit`, `damage`, `death`, `reload`, `reloaded`, `explode`.
+    move. Events: the slice's channels (`slice.shot`, `slice.hit`, `slice.damage`, `slice.death`,
+    `slice.reload`, `slice.reloaded`, `slice.round_start`, `slice.restart`, `slice.win`, `slice.explode`),
+    each with its cue (`combat.cpp`): what the engine's audio bank and vfx set bind by name. A shot carries
+    where its round stopped. The round asks for its mix (`requestMixSnapshot`: `dead`, `won`).
   - **The test grenade** (audio spec ruling 23, `combat::kGrenade*`): `grenade` (G in the play
     scene) throws from the eye along the look; it flies in the combat step after the weapons,
     sticks where a ray along its move first meets something, and 2.5 s after the throw writes
@@ -209,7 +212,7 @@ step 2h, 2026-11-09), unchanged.
     once the round is won. Its sounds (`assets/audio/weapons/`, ours:
     `tools/audio/make_weapons.py`) are the voice schedule's plays ("Audio", below).
   - Agents (step 5) fight through `combat.info` (the round and every combatant: health, `pos`,
-    weapon, enemy state), `combat.events` (the log, read by cursor as `events.read`) and `combat.damage`
+    weapon, enemy state), `events.read`'s `slice.*` and `combat.damage`
     (hit points off an entity's `Health` or an ancestor's, as a round does), all in
     `ohao/api/combat.cpp`; firing is `input.inject` (`fire`), as in a window. Aim by
     `player.teleport` to where the player stands with the yaw toward a combatant's `pos`.
@@ -249,7 +252,7 @@ step 2h, 2026-11-09), unchanged.
     counts them (`stalls`).
   - **The first-person gun** (step 3, `ecs/view_model.hpp`): an entity with `ViewModel` (saved; the
     play scene's Gun) and its subtree are drawn by the `view_model` sync system (after
-    `interpolate`; `installCombat` installs it): placed in the view by `viewModelRemap` (S =
+    `interpolate`; `installCombat` installs it, for the slice): placed in the view by `viewModelRemap` (S =
     diag(d, d, d/k), k = tan(scene/2) / tan(fov/2): every point stays within `depthScale` of its
     distance, so it never reaches into a wall it stands against, and lands on screen where it would
     through `fovDeg`), swayed by the drawn turn, bobbed by ground speed, kicked by the owner's
@@ -267,8 +270,8 @@ step 2h, 2026-11-09), unchanged.
 - **Animation** (sub-project 10, `docs/specs/2026-10-28-animation-design.md`). `ohao/anim` (no ECS,
   no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
   import is not used), binds clips to skeletons by joint name, and parses and validates
-  `.animgraph.json` (every error with its JSON pointer). `installAnimation(world, assets)` (the CLI
-  context and `LiveHost` call it after `installCombat`) adds the `animation` simulate system and the
+  `.animgraph.json` (every error with its JSON pointer). `installAnimation(world, assets)` (`installEngine`;
+  a game registers its drivers, the slice's `arms` and `enemy` in `installSlice`) adds the `animation` simulate system and the
   `pose` sync system (before `render_extract`).
   - **A pose is presentation; animator state is saved integers.** The saved `Animator` holds
     integers only: each layer's state, its steps, the state faded from and
@@ -293,12 +296,11 @@ step 2h, 2026-11-09), unchanged.
   - **The enemy** (step 2): `assets/characters/toon_enemy/` (Quaternius, CC0, rebuilt by
     `tools/anim/make_enemy.py`, pure Python, from the staged upstream file; `README.upstream.md` says
     what it changed) and `assets/anim/enemy.animgraph.json` (body `move`/`combat`/`death`/`dead`;
-    additive `aim`, `fire`, `reload`, `hit`). Its driver `enemy` (`ecs/enemy_anim.cpp`) reads saved
-    state and the step's combat events **after the step's last `restart`**: a restart restores the
-    round's start inside the combat step, before the animation step, so a restart step must step the
-    restored Animators exactly as the round's first step did. Damage dealt between steps
-    (`combat.damage`) lands in the previous step's events and flinches nothing; death still follows
-    `Health`.
+    additive `aim`, `fire`, `reload`, `hit`). Its driver `enemy` (`ecs/enemy_anim.cpp`, the slice's,
+    registered by `installSlice`) reads saved state and the step's slice events. A restart restores the
+    round's start inside the combat step (until step 3d), which ends the step's events (ecs/events.hpp), so
+    a restart step steps the restored Animators exactly as the round's first step did. Damage dealt
+    between steps (`combat.damage`) is the next step's: it flinches and kills as a round's does.
   - Additive clips are authored as rest × delta (the layer adds rest⁻¹ × clip): a pack clip used
     additively is re-referenced to its own first frame by the tool, never added raw.
   - `JointAttach` poses the attached entity's whole subtree (the rifle's muzzle light follows the
@@ -308,7 +310,7 @@ step 2h, 2026-11-09), unchanged.
   - **The player's arms** (step 3): the play scene's `Gun` is the `ViewModel` root at the eye; its
     child `Arms` (`assets/characters/fps_arms/`, ours, `tools/anim/make_fps_arms.py` in Blender 5.2.2)
     is skinned and driven by `arms` (`ecs/arms_anim.cpp`, from the owning player's saved state and
-    the step's combat events); the `Muzzle` is a `JointAttach` on its `gun` joint. `view_model` places
+    the step's slice events); the `Muzzle` is a `JointAttach` on its `gun` joint. `view_model` places
     the root and skips `JointAttach` children (the pose system draws them after it). A view-model rig
     is drawn as through `ViewModel.fovDeg` and pulled to 0.41 of its depth: author what should show
     at least 0.25 m from the eye and within 30° of the eye line, or the near clip and the screen's
@@ -355,7 +357,9 @@ step 2h, 2026-11-09), unchanged.
     step: past them a new voice counts as unoccluded, a re-cast keeps its answer, both counted. The
     listener is the input-driven player's head, else the first active camera.
   - **The schedule decides every sound in the step** (step 3): footsteps and landings from
-    `physics.footstep` and `physics.land`, combat sounds from the combat log after the step's last `restart`,
+    `physics.footstep` and `physics.land`, a game's events by the bank's `events` (the slice's: `fire` or
+    `enemy_fire` by who fired, `impact_{tag}` by surface, `death`, `explode` as a world source, `empty` and
+    `reload` for the player),
     `mag_out`, `mag_in`, `bolt`, `body_fall` and `foot_l`/`foot_r` from `anim.clip_event` (a character whose
     graph has foot events steps from its clips, never from the physics footstep). Each `play` has
     a voice id, a variant (round robin per sound), its occlusion and an outcome: over a bus's cap or
@@ -393,8 +397,10 @@ step 2h, 2026-11-09), unchanged.
   vfx-set`), named by the saved singleton `VfxSet`; without one, the default set. `installVfx` (the
   CLI context and `LiveHost`, after `installAudio`) adds the `vfx` simulate system before
   `audio_schedule`: it writes **spawn records** (effect, tracer, decal, light) from the step's
-  `shot`/`hit`/`explode` after its last `restart` and from placed `VfxEmitter`s by step count,
-  seeded from the vfx step and the event's index, capped by kind (the oldest dropped, counted).
+  events of the channels its set binds (`events`, by name: the slice's `slice.shot` with `ahead` 0.5 m to the
+  muzzle and a tracer to where the round stopped, `slice.hit` with `{tag}` its surface, `slice.explode`), read as
+  cues in the order they happened, and from placed `VfxEmitter`s by step count, seeded from the event's identity
+  (step, channel, place among its channel's events of the step), capped by kind (the oldest dropped, counted).
   **Records are runtime: never saved to a file**; snapshots carry them and `world.hash` covers them (its `SnapshotHook` chains in
   front of the schedule's) and a restart puts back the round start's. Particles are a closed form
   of (record, index, age) (`vfx/particle_math.hpp`), never integrated. Agents read them through

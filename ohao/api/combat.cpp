@@ -1,4 +1,4 @@
-// combat.info, combat.events and combat.damage (sub-project 7, step 5;
+// combat.info and combat.damage (sub-project 7, step 5; the slice's events are events.read's slice.*, step 3c;
 // docs/specs/2026-10-27-combat-design.md, "The agent-facing surface").
 //
 // The session reaches the fight through what installCombat left on the World (ecs::combatSystem); a
@@ -129,50 +129,6 @@ void writeCombatant(Session::Impl& s, entt::entity e, JsonWriter& out) {
     out.endObject();
 }
 
-void writeEvent(Session::Impl& s, const ecs::CombatEvent& e, JsonWriter& out) {
-    using Kind = ecs::CombatEvent::Kind;
-    out.beginObject();
-    out.key("seq"); out.uint64(e.seq + 1);   // from 1, as physics.events
-    out.key("step"); out.uint64(e.step);
-    out.key("kind"); out.string(ecs::combatEventKindName(e.kind));
-    const bool round = e.kind == Kind::RoundStart || e.kind == Kind::Restart || e.kind == Kind::Win;
-    if (!round && e.sourceId) {
-        out.key("source"); out.string(hex16(e.sourceId));
-        out.key("sn"); out.string(nameOf(s, e.source));
-    }
-    if ((e.kind == Kind::Hit || e.kind == Kind::Damage || e.kind == Kind::Death) && e.targetId) {
-        out.key("target"); out.string(hex16(e.targetId));
-        out.key("tn"); out.string(nameOf(s, e.target));
-    }
-    switch (e.kind) {
-        case Kind::Shot:
-            out.key("point"); writeVec3(out, e.point, 1e3f);
-            out.key("dir"); writeVec3(out, e.normal, 1e3f);
-            out.key("coneDeg"); out.float32(r2(e.amount));
-            break;
-        case Kind::Hit:
-            out.key("point"); writeVec3(out, e.point, 1e3f);
-            out.key("normal"); writeVec3(out, e.normal, 1e3f);
-            out.key("dist"); out.float32(r2(e.amount));
-            out.key("surface"); out.string(utf8Prefix(e.surface, 32));
-            break;
-        case Kind::Damage:
-            out.key("amount"); out.float32(r2(e.amount));
-            out.key("health"); out.float32(r2(e.health));
-            break;
-        case Kind::Reload:
-        case Kind::Reloaded:
-            out.key("ammo"); out.uint64(static_cast<uint64_t>(std::max(0.0f, e.amount)));
-            break;
-        case Kind::Explode:
-            out.key("point"); writeVec3(out, e.point, 1e3f);
-            break;
-        default:
-            break;
-    }
-    out.endObject();
-}
-
 } // namespace
 
 bool methodCombatInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
@@ -209,29 +165,6 @@ bool methodCombatInfo(Session::Impl& s, const JsonDocument&, const JsonNode& par
     for (std::size_t i = 0; i < combatants.size() && i < kMaxCombatants; ++i) writeCombatant(s, combatants[i].second, out);
     out.endArray();
     if (combatants.size() > kMaxCombatants) { out.key("more"); out.uint64(combatants.size() - kMaxCombatants); }
-    out.endObject();
-    return true;
-}
-
-// The log after a cursor, as physics.events. Reading changes nothing, so it does not sync.
-bool methodCombatEvents(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
-                        JsonWriter& out) {
-    CombatEventsParams p;
-    if (!decodeParams(s, params, ctx, p)) return false;
-    ecs::CombatSystem* combat = needCombat(s, params, ctx);
-    if (!combat) return false;
-    // The reply numbers events from 1 (the log's seq + 1), so "after since" is the log's seq >= since.
-    const auto since = static_cast<uint64_t>(p.since);
-    uint64_t dropped = 0;
-    const std::vector<ecs::CombatEvent> events = combat->eventsSince(since, static_cast<std::size_t>(p.max), dropped);
-    out.beginObject();
-    out.key("events");
-    out.beginArray();
-    for (const ecs::CombatEvent& e : events) writeEvent(s, e, out);
-    out.endArray();
-    // The cursor for the next call: the last event returned, else where the caller is (never past the log).
-    out.key("next"); out.uint64(events.empty() ? std::min(since, combat->nextEventSeq()) : events.back().seq + 1);
-    if (dropped) { out.key("dropped"); out.uint64(dropped); }
     out.endObject();
     return true;
 }

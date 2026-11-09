@@ -5,11 +5,13 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 namespace ohao::ecs {
 
 void driveEnemyAnim(const World& world, entt::entity e, const EnemyState* state, const PlayerState* body,
-                    const MoveIntent* intent, std::span<const CombatEvent> stepEvents, AnimParams& out) {
+                    const MoveIntent* intent, const DriverEvents& events, AnimParams& out) {
     const auto& reg = world.registry();
     const auto* health = reg.try_get<Health>(e);
     const EnemyMode mode = state ? state->mode : EnemyMode::Idle;
@@ -21,36 +23,27 @@ void driveEnemyAnim(const World& world, entt::entity e, const EnemyState* state,
     out.set("mode", static_cast<float>(mode));
     out.set("alive", alive ? 1.0f : 0.0f);
 
-    std::size_t first = 0;   // after the step's last restart: what came before it was undone
-    for (std::size_t i = 0; i < stepEvents.size(); ++i)
-        if (stepEvents[i].kind == CombatEvent::Kind::Restart) first = i + 1;
+    // Its rounds, the damage it took and lived, its reloads and its death, in the order they happened.
     const uint64_t id = world.idOf(e);
-    for (std::size_t i = first; i < stepEvents.size(); ++i) {
-        const CombatEvent& c = stepEvents[i];
-        switch (c.kind) {
-        case CombatEvent::Kind::Shot:
-            if (c.sourceId == id) out.events.emplace_back("shot");
-            break;
-        case CombatEvent::Kind::Damage:
-            if (c.targetId == id && alive) out.events.emplace_back("hit");
-            break;
-        case CombatEvent::Kind::Reload:
-            if (c.sourceId == id) out.events.emplace_back("reload");
-            break;
-        case CombatEvent::Kind::Death:
-            if (c.targetId == id) out.events.emplace_back("death");
-            break;
-        default:
-            break;
-        }
-    }
+    thread_local std::vector<std::pair<uint64_t, const char*>> mine;
+    mine.clear();
+    for (const auto& [meta, v] : events.shots)
+        if (v.shooter == id) mine.emplace_back(meta.seq, "shot");
+    for (const auto& [meta, v] : events.damage)
+        if (v.target == id && alive) mine.emplace_back(meta.seq, "hit");
+    for (const auto& [meta, v] : events.reloads)
+        if (v.holder == id) mine.emplace_back(meta.seq, "reload");
+    for (const auto& [meta, v] : events.deaths)
+        if (v.target == id) mine.emplace_back(meta.seq, "death");
+    std::sort(mine.begin(), mine.end());
+    for (const auto& [seq, name] : mine) out.events.emplace_back(name);
 }
 
-void registerEnemyDriver(AnimationSystem& animation) {
-    animation.setDriver("enemy", [](const World& world, entt::entity e, AnimParams& params) {
+void registerEnemyDriver(AnimationSystem& animation, EventLog& log) {
+    animation.setDriver("enemy", [readers = DriverReaders(log)](const World& world, entt::entity e, AnimParams& params) {
         const auto& reg = world.registry();
         driveEnemyAnim(world, e, reg.try_get<EnemyState>(e), reg.try_get<PlayerState>(e), reg.try_get<MoveIntent>(e),
-                       combatEvents(world), params);
+                       readers.read(), params);
     });
 }
 

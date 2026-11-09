@@ -118,7 +118,7 @@ Result<AudioBank, std::vector<BankError>> parseAudioBank(std::string_view json) 
     if (root.get_object().get(doc) != simdjson::SUCCESS) return R::err({{"", "the bank is not an object"}});
     Parser p;
     AudioBank b;
-    p.keys(doc, {"folders", "buses", "voices", "shapes", "sounds", "ducks", "snapshots", "reverb", "defaultZone"}, "");
+    p.keys(doc, {"folders", "buses", "voices", "shapes", "sounds", "ducks", "events", "snapshots", "reverb", "defaultZone"}, "");
 
     if (element e; doc["folders"].get(e) == simdjson::SUCCESS) {
         array a;
@@ -277,6 +277,71 @@ Result<AudioBank, std::vector<BankError>> parseAudioBank(std::string_view json) 
         p.fail("/ducks", "not an array of ducks");
     }
 
+    // What a game's events play: channels by name, their cues matched in order (step 3c).
+    if (array events; doc["events"].get_array().get(events) == simdjson::SUCCESS) {
+        std::size_t i = 0;
+        for (element value : events) {
+            const std::string path = "/events/" + std::to_string(i++);
+            EventSound d;
+            object o;
+            if (value.get_object().get(o) != simdjson::SUCCESS) { p.fail(path, "not an object"); continue; }
+            p.keys(o, {"on", "by", "tag", "play", "fallback", "at", "owner"}, path);
+            if (element e; o["on"].get(e) != simdjson::SUCCESS) p.fail(path + "/on", "missing: the event channel");
+            else if (p.str(e, d.on, path + "/on") && d.on.empty()) p.fail(path + "/on", "empty");
+            if (element e; o["by"].get(e) == simdjson::SUCCESS) {
+                std::string by;
+                if (p.str(e, by, path + "/by")) {
+                    if (by == "player") d.by = EventSound::By::Player;
+                    else if (by == "other") d.by = EventSound::By::Other;
+                    else p.fail(path + "/by", "'player' or 'other'");
+                }
+            }
+            if (element e; o["tag"].get(e) == simdjson::SUCCESS) {
+                std::string tag;
+                if (p.str(e, tag, path + "/tag")) d.tag = std::move(tag);
+            }
+            const auto known = [&](const std::string& name) {   // "{tag}" is resolved per event
+                return name.find("{tag}") != std::string::npos || b.sound(name) >= 0;
+            };
+            if (element e; o["play"].get(e) != simdjson::SUCCESS) {
+                p.fail(path + "/play", "missing: the sound, or sounds in order");
+            } else if (array a; e.get_array().get(a) == simdjson::SUCCESS) {
+                std::size_t k = 0;
+                for (element n : a) {
+                    std::string name;
+                    const std::string at = path + "/play/" + std::to_string(k++);
+                    if (p.str(n, name, at)) {
+                        if (!known(name)) p.fail(at, "no sound named '" + name + "'");
+                        d.play.push_back(std::move(name));
+                    }
+                }
+            } else if (std::string name; p.str(e, name, path + "/play")) {
+                if (!known(name)) p.fail(path + "/play", "no sound named '" + name + "'");
+                d.play.push_back(std::move(name));
+            }
+            if (element e; o["fallback"].get(e) == simdjson::SUCCESS)
+                if (p.str(e, d.fallback, path + "/fallback") && b.sound(d.fallback) < 0)
+                    p.fail(path + "/fallback", "no sound named '" + d.fallback + "'");
+            if (element e; o["at"].get(e) == simdjson::SUCCESS) {
+                std::string at;
+                if (p.str(e, at, path + "/at")) {
+                    if (at == "ear") d.ear = true;
+                    else if (at != "event") p.fail(path + "/at", "'ear' or 'event'");
+                }
+            }
+            if (element e; o["owner"].get(e) == simdjson::SUCCESS) {
+                std::string owner;
+                if (p.str(e, owner, path + "/owner")) {
+                    if (owner == "none") d.world = true;
+                    else if (owner != "source") p.fail(path + "/owner", "'source' or 'none'");
+                }
+            }
+            b.events.push_back(std::move(d));
+        }
+    } else if (element e; doc["events"].get(e) == simdjson::SUCCESS) {
+        p.fail("/events", "not an array of event bindings");
+    }
+
     if (object snaps; doc["snapshots"].get_object().get(snaps) == simdjson::SUCCESS) {
         for (auto [name, value] : snaps) {
             const std::string path = "/snapshots/" + esc(name);
@@ -401,6 +466,17 @@ std::string audioBankJsonSchema() {
       "type": "object", "additionalProperties": false, "required": ["on", "bus", "db"],
       "properties": {"on": {"type": "string"}, "bus": {"type": "string"}, "db": {"type": "number", "minimum": -96, "maximum": 0},
                      "attackSteps": {"type": "integer", "minimum": 0}, "releaseSteps": {"type": "integer", "minimum": 0}}}},
+    "events": {"type": "array", "description": "What a game's events play: the first binding of a channel whose by and tag hold", "items": {
+      "type": "object", "additionalProperties": false, "required": ["on", "play"],
+      "properties": {
+        "on": {"type": "string", "description": "An event channel (events.read's names), e.g. slice.shot"},
+        "by": {"enum": ["player", "other"], "description": "The event's source is the listener's player, or not"},
+        "tag": {"type": "string", "description": "The event's tag must be this (a surface, empty)"},
+        "play": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                 "description": "The sound or sounds, in order; {tag} is the event's tag (default when empty)"},
+        "fallback": {"type": "string", "description": "In place of a sound the bank lacks"},
+        "at": {"enum": ["ear", "event"], "description": "At the listener, or at the event's place (the default)"},
+        "owner": {"enum": ["source", "none"], "description": "Whose sound: the event's source (the default), or nobody's"}}}},
     "snapshots": {"type": "object", "additionalProperties": {
       "type": "object", "additionalProperties": false,
       "properties": {

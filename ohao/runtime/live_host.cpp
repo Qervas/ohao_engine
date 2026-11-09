@@ -1,4 +1,5 @@
 #include "runtime/live_host.hpp"
+#include "ecs/slice.hpp"
 #include "engine/install.hpp"
 #include "runtime/sleep_until.hpp"
 
@@ -88,6 +89,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
     engine::installEngine(*m_world, {*m_assets, types});
+    if (cfg.slice) ecs::installSlice(*m_world);
     engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());

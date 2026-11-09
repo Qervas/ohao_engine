@@ -37,8 +37,8 @@ public:
     static constexpr float kHurtTime = 0.3f;         // s
     static constexpr float kHurtMaxAlpha = 0.55f;
 
-    // Reads the combat log since the last call: the player's last damaging round and the last
-    // damage it took (a restart forgets both).
+    // Reads the slice's events since the last call (the World's log): the player's last damaging round and the
+    // last damage it took (a restart forgets both).
     void observe(const World& world);
     // The HUD's content for a width x height frame, the world as it is now.
     [[nodiscard]] HudState state(const World& world, uint32_t width, uint32_t height) const;
@@ -46,8 +46,8 @@ public:
     [[nodiscard]] static render::HudList layout(const HudState& s, uint32_t width, uint32_t height);
 
 private:
-    uint64_t m_cursor{0};   // 0: the first observe reads the log from its oldest event
-    uint64_t m_hitStep{0}, m_hurtStep{0};   // combat steps (1 = the first); 0: none
+    uint64_t m_cursor{0};   // the last seq read; 0: the first observe reads the history from its oldest event
+    uint64_t m_hitStep{0}, m_hurtStep{0};   // World steps (1 = the first); 0: none
     float m_hurtAmount{0.0f};
 };
 

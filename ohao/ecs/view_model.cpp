@@ -38,12 +38,12 @@ struct Gun {
     float drawnAim{0.0f};   // WeaponState.aim followed at render rate
 };
 
-// The holder in the registry's context: each gun's motion, the combat log's cursor, and what this
+// The holder in the registry's context: each gun's motion, the event history's cursor, and what this
 // system drew last frame (its RenderPose, so the next frame's prevWorld is it).
 struct ViewModelState {
     std::unordered_map<entt::entity, Gun> guns;
     std::unordered_map<entt::entity, glm::mat4> drawn;   // last frame's drawn world, per entity
-    uint64_t combatCursor{0};
+    uint64_t cursor{0};   // the last seq read
     bool cursorSet{false};
 };
 
@@ -88,27 +88,25 @@ public:
         const float dt = world.presentationDt();
         const bool live = dt > 0.0f;
 
-        // The rounds (and restarts) since the last frame, from the combat log.
+        // The rounds (and restarts) since the last frame, from the slice's events (the World's log).
         m_shots.clear();
         bool restarted = false;
-        if (const CombatSystem* combat = combatSystem(world)) {
-            const uint64_t next = combat->nextEventSeq();
+        {
+            const EventLog& log = world.events();
             if (!st.cursorSet) {
-                st.combatCursor = next;
+                st.cursor = log.nextSeq() - 1;
                 st.cursorSet = true;
             }
-            if (next > st.combatCursor) {
-                uint64_t dropped = 0;
-                for (const CombatEvent& e : combat->eventsSince(st.combatCursor, next - st.combatCursor, dropped)) {
-                    if (e.kind == CombatEvent::Kind::Restart) {
-                        restarted = true;
-                        m_shots.clear();   // rounds before the restart belong to the round that ended
-                    } else if (e.kind == CombatEvent::Kind::Shot) {
-                        m_shots.push_back(e.source);
-                    }
+            const auto* shots = log.find<ShotEvent>(slice_events::kShot);
+            const auto* restarts = log.find<RoundEvent>(slice_events::kRestart);
+            st.cursor = log.visit(st.cursor, SIZE_MAX, [&](const EventChannelBase& c, std::size_t i) {
+                if (restarts && &c == restarts) {
+                    restarted = true;
+                    m_shots.clear();   // rounds before the restart belong to the round that ended
+                } else if (shots && &c == shots) {
+                    m_shots.push_back(world.findById(shots->at(i).value.shooter));
                 }
-            }
-            st.combatCursor = next;
+            });
         }
 
         m_seen.clear();

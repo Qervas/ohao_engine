@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -56,6 +57,19 @@ struct DuckDesc {
     uint32_t releaseSteps{15};
 };
 
+// What a game's event plays (the bank's `events`; step 3c). A binding names a channel of the World's event log
+// and reads its events' cues (ecs/events.hpp): the first binding of the channel whose `by` and `tag` hold plays.
+struct EventSound {
+    enum class By : uint8_t { Any, Player, Other };
+    std::string on;                  // the channel (slice.shot)
+    By by{By::Any};                  // the cue's source: the listener's player, someone else, or either
+    std::optional<std::string> tag;  // the cue's tag must be this
+    std::vector<std::string> play;   // the sounds, in order; "{tag}" is the cue's tag ("default" when empty)
+    std::string fallback;            // in place of a sound the bank lacks
+    bool ear{false};                 // at the listener (`"at": "ear"`); else at the cue's place
+    bool world{false};               // a world source (`"owner": "none"`): nobody's own, occluded like any
+};
+
 struct SnapshotBus {
     float db{0.0f};
     double lowPassHz{0.0};   // 0: none
@@ -88,6 +102,7 @@ struct AudioBank {
     std::vector<ShapeDesc> shapes;
     std::vector<SoundDesc> sounds;
     std::vector<DuckDesc> ducks;
+    std::vector<EventSound> events;
     std::vector<SnapshotDesc> snapshots;
     std::vector<ReverbDesc> reverb;
     std::string defaultZone;

@@ -62,9 +62,9 @@
               "everyPlayer": 3, "everyEnemy": 1, "minDistance": 4}
   },
   "events": {
-    "shot":    {"effect": "muzzle", "tracer": "rifle"},
-    "hit":     {"effect": "impact_{surface}", "decal": "bullet_{surface}", "fallback": "default"},
-    "explode": {"effect": ["grenade_boom", "smoke_cloud"], "decal": "scorch"}
+    "slice.shot":    {"effect": "muzzle", "tracer": "rifle", "ahead": 0.5},
+    "slice.hit":     {"effect": "impact_{tag}", "decal": "bullet_{tag}", "fallback": "default"},
+    "slice.explode": {"effect": ["grenade_boom", "smoke_cloud"], "decal": "scorch"}
   },
   "caps": {"records": 256, "particles": 16384, "decals": 256, "tracers": 64, "proxies": 32}
 }

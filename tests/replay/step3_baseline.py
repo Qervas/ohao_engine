@@ -70,7 +70,6 @@ class Rec(rt.Recorder):
             "hash": self.hashes[-1],
             "scene": s.tool("scene_save", {})["scene"],
             "player": s.tool("player_info"),
-            "combat": pages(s, "combat_events", "events"),
             "events": events(s),
             "vfx": pages(s, "vfx_info", "records", 16),
         })
@@ -108,6 +107,50 @@ def physics_of(point):
                 ("joint", "other") if kind == "joint_break" else ("player", "ground"))
         out.append((e["step"], kind, e.get(a, ZERO), e.get(b, ZERO), e["point"], e.get("normal", [0, 0, 0]),
                     e.get("speed", 0), e.get("surface")))
+    return out
+
+
+def combat_of(point):
+    """(step, kind, fields) per combat event, from combat.events or the event log's slice.*."""
+    out = []
+    if "combat" in point:
+        for e in point["combat"]:
+            k = e["kind"]
+            if k == "shot":
+                f = (e.get("source"), e["point"], e["dir"], e["coneDeg"])
+            elif k == "hit":
+                f = (e.get("source"), e.get("target"), e["point"], e["normal"], e["dist"], e["surface"])
+            elif k == "damage":
+                f = (e.get("source"), e.get("target"), e["amount"], e["health"])
+            elif k == "death":
+                f = (e.get("source"), e.get("target"))
+            elif k in ("reload", "reloaded"):
+                f = (e.get("source"), e["ammo"])
+            elif k == "explode":
+                f = (e.get("source"), e["point"])
+            else:
+                f = ()
+            out.append((e["step"], k, f))
+        return out
+    for e in point["events"]:
+        if not e["event"].startswith("slice."):
+            continue
+        k = e["event"][len("slice."):]
+        if k == "shot":
+            f = (e.get("shooter"), e["eye"], e["dir"], e["coneDeg"])
+        elif k == "hit":
+            f = (e.get("shooter"), e.get("body"), e["point"], e["normal"], e["dist"], e["surface"])
+        elif k == "damage":
+            f = (e.get("source"), e.get("target"), e["amount"], e["health"])
+        elif k == "death":
+            f = (e.get("killer"), e.get("target"))
+        elif k in ("reload", "reloaded"):
+            f = (e.get("holder"), e["ammo"])
+        elif k == "explode":
+            f = (e.get("thrower"), e["point"])
+        else:
+            f = ()
+        out.append((e["step"], k, f))
     return out
 
 
@@ -182,11 +225,15 @@ def compare(a, b):
     bad = 0
     for i, (p, q) in enumerate(zip(A["points"], B["points"])):
         for k in sorted(set(p) | set(q)):
-            if k in ("physics", "audio", "events"):
+            if k in ("physics", "audio", "combat", "events"):
                 continue
             if p.get(k) != q.get(k):
                 bad += 1
                 print("checkpoint %d: %s differs" % (i, k))
+        why = same_logs(combat_of(p), combat_of(q), 0.006)
+        if why:
+            bad += 1
+            print("checkpoint %d: combat: %s" % (i, why))
         why = same_logs(physics_of(p), physics_of(q), 0.002)
         if why:
             bad += 1

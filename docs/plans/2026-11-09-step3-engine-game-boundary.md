@@ -346,6 +346,56 @@ Two commits, each through the hook:
 - **Sizes**, the play scene mid-fight: `events.read` of its last 16 events is 1,832 bytes; `audio.info` is 465.
   `serve_bench` (Windows only) measures both; `events_read_bytes` is reported, not gated, until Frank rules.
 
+*As built, commit 2 (2026-11-09):*
+- **Cues.** `ecs::Cue` (`at`, `to`, `dir`, `normal`, `source`, `target`, `tag`, `n`) is what a channel's
+  projection (`EventChannel::setCue`, a function pointer the game registers) makes of a payload. `dir`, a
+  round's direction, joined the plan's fields: vfx needs it for a decal on a character. An engine reader takes
+  a channel by name (`EventLog::addReader`, so the catalogue names it) and walks the step's events of every
+  bound channel in seq order (`visitWindow`), so sounds and records keep the order the events happened in.
+- **The slice's ten channels** carry typed payloads (`ShotEvent` with `round` and the `hit` where it
+  stopped, `HitEvent` with `dir`, ...); their reflection is in `ecs/event_types.cpp` until 3i moves them.
+- **The bank's `events`** (`audio/audio_bank.hpp`, `EventSound`): `on`, `by` (`player`/`other`), `tag`,
+  `play` (one or a list, `{tag}`), `fallback`, `at` (`ear`/`event`), `owner` (`source`/`none`). The first
+  binding that holds plays. `slice.audio.json` gains the seven bindings that were `combatSoundNames` and
+  `combatSoundAtEar`, both deleted.
+- **The set's `events`** are keyed by channel name. `{surface}` became `{tag}`, and `kMuzzleAhead` became the
+  binding's `ahead` (`slice.vfx.json`'s shot: 0.5). The default set binds nothing. One spawn path from a cue
+  replaces `onShot`, `onHit` and `onExplode`. The tracer cadence counts on the cue's `n` instead of reading
+  `WeaponState`. Seeds come from the event's identity.
+- **The mix.** Combat calls `requestMixSnapshot` each step; the schedule reads a `MixRequest`, no longer
+  `Round`. The schedule's restart test went: any restore (a restart's too) writes `stop_world`, whose
+  `resync` flag went with the test (the player never read it).
+- **`installSlice`** (`ecs/slice.hpp`): combat, the view model and the two drivers (moved out of
+  `installAnimation`). `installEngine` installs no game system. `ohao serve` and `ohao run` take
+  `--game slice|none`; `LiveConfig::slice`.
+- **Deleted:** `CombatEvent` and combat's log, `combatEvents()`, `combatEventKindName`, `combat.events` and its
+  params, the drivers', vfx's and the schedule's restart rules.
+- **The baseline.** Every log reads the same as the recording made before step 3: combat 106 events at the
+  last checkpoint, the audio commands 94 (now from the bank's bindings), the vfx records 12 (from cues),
+  physics, scenes and the player. Only the hashes differ. Planted, the bank's `by` ignored: 94 audio commands
+  become 107, and every checkpoint differs.
+- **The temporary checks**, deleted after:
+  - `combat.damage` at step 30 makes step 31's events, and that step's schedule plays `death`. A snapshot,
+    the step, and the restore reach the same `world.hash`, before and after the step.
+  - `ohao serve --game none` loads Cornell and the play scene, steps 60 and hashes. Its catalogue lists 15
+    channels, none `slice.*`, and `combat.info` is `E_STATE`.
+- **Left for 3i:** the audio schedule's `characterOf` still tests `Enemy`, a game component. It is the one game
+  name left in `audio_schedule`, `vfx` and `vfx_set`. A dead enemy loses its `PlayerController` (`die()` in
+  `enemy_ai.cpp`), so `Enemy` is what still marks its body for occlusion rays and foot sounds. 3i's control flag
+  on `PlayerController` replaces it.
+- **Found:** a restore whose bodies changed since the snapshot, while bodies still move, is not exact.
+  - The case: the kill above at step 1, when the crates are still settling. The dead enemy loses its
+    character in the next step; on restore, physics takes its components' path (teleports at rest,
+    `BodyMotion`), and the crates come out micrometres off.
+  - It is the same on 3c.1, where the kill's events were not yet in the log. A snapshot with the bodies
+    asleep (step 30) replays exactly.
+  - It belongs to 3d's physics restore work.
+- **Cost** (median, ms; pre-3c, 3c.1, 3c.2): combat step 0.0021, 0.0021, 0.0022; vfx step 0.0002 in all three;
+  the audio schedule 0.0005 in all three.
+  - The physics-only measures moved about 5% with no physics change in this commit: the 1,000-contact step
+    0.1186, 0.1197, then 0.122 to 0.129 over four runs; the blockout step 0.0084, 0.0085, 0.0089 to 0.0091.
+  - The calibration loop stayed at 26.3 to 26.6 ms throughout.
+
 ## 3d. The round restart as a request
 
 - **A request, carried out between steps.**
@@ -423,7 +473,9 @@ order runs the baseline unchanged; where it differs from today's list, the plan 
   - the HUD, the view model, the 9 components and the 5 methods.
 - **Linked statically** in this part. Each host's `installSlice` call (3c) becomes the module's registration.
 - **The leaks, replaced:**
-  - The player controller's `Health` check becomes a `PlayerController` control flag that the game sets.
+  - The player controller's `Health` check becomes a `PlayerController` control flag that the game sets. A dead
+    enemy keeps its `PlayerController`, with control off, so the audio schedule's `characterOf` needs no
+    `Enemy` (3c left it).
   - The ViewModel render flag becomes an engine `FirstPerson` component.
   - The `combatHud` calls become the hosts drawing the registered HUDs.
   - The grenade spheres become presented shapes.

@@ -4,8 +4,6 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
-#include "ecs/arms_anim.hpp"
-#include "ecs/enemy_anim.hpp"
 #include "asset/model.hpp"
 
 #include <algorithm>
@@ -311,8 +309,6 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     auto system = std::make_shared<AnimationSystem>(assets);
     reg.ctx().emplace<AnimationInstalled>(AnimationInstalled{system.get()});
     system->setEvents(world.events());
-    registerEnemyDriver(*system);
-    registerArmsDriver(*system);
     // Animator writes from outside the step are placements (the step writes through get<>()).
     struct Placed {
         AnimationSystem* s;

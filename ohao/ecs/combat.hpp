@@ -4,8 +4,10 @@
 // (a player's from the World's input, anyone else's from its WeaponTrigger), advances cooldown,
 // reload, bloom and recoil, and fires at most one round: one ray from the eye within the spread
 // cone, ignoring the shooter and triggers; what it hits takes damage if it or an ancestor has
-// Health. Shots, hits, damage, deaths and reloads are events: the step's list and a log of 1,024.
+// Health. Shots, hits, damage, deaths, reloads, the round's and the grenade's are the slice's events: channels of
+// the World's log (ecs/events.hpp), each with the cue the engine's data binds to.
 
+#include "ecs/events.hpp"
 #include "ecs/snapshot_hook.hpp"
 
 #include <glm/glm.hpp>
@@ -14,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -22,21 +25,82 @@ namespace ohao::ecs {
 
 class World;
 
-struct CombatEvent {
-    // RoundStart, Restart and Win (step 3) name no source or target. Explode: a grenade went off at
-    // `point`, `source` the thrower.
-    enum class Kind : uint8_t { Shot, Hit, Damage, Death, Reload, Reloaded, RoundStart, Restart, Win, Explode };
-    Kind kind{Kind::Shot};
-    uint64_t step{0};                 // the combat step it happened in (1 = the first)
-    uint64_t seq{0};                  // position in the log
-    entt::entity source{entt::null};  // the shooter (Shot, Hit, Damage, Death: the killer; Reload*: the weapon's entity)
-    entt::entity target{entt::null};  // Hit: the body hit; Damage, Death: the entity with Health
-    uint64_t sourceId{0}, targetId{0};
-    glm::vec3 point{0.0f};            // Shot: the eye; Hit, Damage: where it hit
-    glm::vec3 normal{0.0f};           // Shot: the round's direction; Hit: the surface's normal
-    float amount{0.0f};               // Shot: the cone's half angle (deg); Hit: the distance (m); Damage: hp taken
-    float health{0.0f};               // Damage, Death: the target's health after
-    std::string surface;              // Hit: the body's Collider.surface ("default" if none)
+// The slice's channels (the game's namespace; they move with it in step 3i). Entities by EntityId.
+namespace slice_events {
+inline constexpr const char* kShot = "slice.shot";               // ShotEvent
+inline constexpr const char* kHit = "slice.hit";                 // HitEvent
+inline constexpr const char* kDamage = "slice.damage";           // DamageEvent
+inline constexpr const char* kDeath = "slice.death";             // DeathEvent
+inline constexpr const char* kReload = "slice.reload";           // ReloadEvent
+inline constexpr const char* kReloaded = "slice.reloaded";       // ReloadEvent
+inline constexpr const char* kRoundStart = "slice.round_start";  // RoundEvent
+inline constexpr const char* kRestart = "slice.restart";         // RoundEvent
+inline constexpr const char* kWin = "slice.win";                 // RoundEvent
+inline constexpr const char* kExplode = "slice.explode";         // ExplodeEvent
+} // namespace slice_events
+
+// A round left a weapon. Cue: at the eye, dir the round's, to where it stopped, source the shooter, n its round.
+struct ShotEvent {
+    uint64_t shooter{0};
+    glm::vec3 eye{0.0f};              // where the round left from
+    glm::vec3 dir{0.0f};              // its direction, within the cone
+    float coneDeg{0.0f};              // the cone's half angle
+    uint32_t round{0};                // the weapon's rounds fired so far, this one included
+    std::optional<glm::vec3> hit;     // where it stopped; none: it hit nothing within range
+};
+// A round met a body. Cue: at the point, normal the surface's, dir the round's, source the shooter, target the
+// body, tag its surface.
+struct HitEvent {
+    uint64_t shooter{0}, body{0};
+    glm::vec3 point{0.0f}, normal{0.0f}, dir{0.0f};
+    float dist{0.0f};                 // from the eye
+    std::string surface;              // the body's Collider.surface ("default" if none)
+};
+// Health taken. Cue: at the point, source, target.
+struct DamageEvent {
+    uint64_t source{0}, target{0};    // target: the entity with the Health
+    glm::vec3 point{0.0f};
+    float amount{0.0f};               // hp taken
+    float health{0.0f};               // after
+};
+// Health reached 0. Cue: at the point, source the killer, target.
+struct DeathEvent {
+    uint64_t killer{0}, target{0};
+    glm::vec3 point{0.0f};
+};
+// A reload started (slice.reload: ammo the rounds left, 0 from empty) or ended (slice.reloaded: ammo the
+// magazine). Cue: source the holder, tag "empty" for a reload from empty.
+struct ReloadEvent {
+    uint64_t holder{0};
+    uint32_t ammo{0};
+};
+// The round started, restarted or was won (slice.round_start, slice.restart, slice.win).
+struct RoundEvent {};
+// A grenade went off. Cue: at its place, source the thrower.
+struct ExplodeEvent {
+    uint64_t thrower{0};
+    glm::vec3 point{0.0f};
+};
+
+// The step's events the slice's animation drivers read (ecs/arms_anim.hpp, ecs/enemy_anim.hpp).
+struct DriverEvents {
+    std::span<const Event<ShotEvent>> shots;
+    std::span<const Event<DamageEvent>> damage;
+    std::span<const Event<ReloadEvent>> reloads;
+    std::span<const Event<DeathEvent>> deaths;
+};
+// The readers they come from, taken for the `animation` system.
+struct DriverReaders {
+    EventReader<ShotEvent> shots;
+    EventReader<DamageEvent> damage;
+    EventReader<ReloadEvent> reloads;
+    EventReader<DeathEvent> deaths;
+    explicit DriverReaders(EventLog& log)
+        : shots(log.reader<ShotEvent>(slice_events::kShot, "animation")),
+          damage(log.reader<DamageEvent>(slice_events::kDamage, "animation")),
+          reloads(log.reader<ReloadEvent>(slice_events::kReload, "animation")),
+          deaths(log.reader<DeathEvent>(slice_events::kDeath, "animation")) {}
+    [[nodiscard]] DriverEvents read() const { return {shots.read(), damage.read(), reloads.read(), deaths.read()}; }
 };
 
 enum class RoundPhase : uint8_t { Playing, Dead, Won };
@@ -70,14 +134,9 @@ public:
     void hashState(StateHash& h) const;
     // Takes `amount` hp from `target` (or the nearest ancestor with Health); returns its health
     // after (the current health for a target without Health, a dead one, or an amount not > 0).
-    // A damage event, and a death event when it reaches 0.
+    // A damage event, and a death event when it reaches 0 (between steps: the next step's).
     float damage(entt::entity target, float amount, entt::entity source, glm::vec3 point);
 
-    [[nodiscard]] std::span<const CombatEvent> stepEvents() const noexcept;
-    // Events with seq >= since, oldest first, at most max; `dropped`: how many of them the log
-    // no longer holds.
-    [[nodiscard]] std::vector<CombatEvent> eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const;
-    [[nodiscard]] uint64_t nextEventSeq() const noexcept;
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;   // the last step's time in this system
     [[nodiscard]] float stepSeconds() const noexcept;   // the last step's dt (s); 1/60 before any step
@@ -91,15 +150,11 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `combat` simulate system (after `physics`, which must be installed first). Returns
-// the installed system if there is one.
+// Installs the `combat` simulate system (after `physics`, which must be installed first) and its channels.
+// Returns the installed system if there is one. installSlice (ecs/slice.hpp) calls it.
 CombatSystem& installCombat(World& world);
 [[nodiscard]] CombatSystem* combatSystem(World& world);
 [[nodiscard]] const CombatSystem* combatSystem(const World& world);
-// The latest step's events (empty without combat).
-[[nodiscard]] std::span<const CombatEvent> combatEvents(const World& world);
-// shot, hit, damage, death, reload, reloaded, round_start, restart, win, explode.
-[[nodiscard]] const char* combatEventKindName(CombatEvent::Kind kind) noexcept;
 
 namespace combat {
 // The test grenade (Frank's hand test, audio spec ruling 23): a sound source a player can place.
