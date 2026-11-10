@@ -18,8 +18,11 @@ using HudFn = std::function<void(World&, render::HudList&, uint32_t width, uint3
 // Appends the spheres the frame draws, placed at the World's render alpha (the slice's grenades in flight).
 using SpheresFn = std::function<void(const World&, std::vector<render::RenderScene::PresentedSphere>&)>;
 
-void addHud(World& world, HudFn fn);
-void addSpheres(World& world, SpheresFn fn);
+// Each returns the presenter's id (removePresenter).
+uint32_t addHud(World& world, HudFn fn);
+uint32_t addSpheres(World& world, SpheresFn fn);
+void removePresenter(World& world, uint32_t id);
+[[nodiscard]] std::vector<uint32_t> presenterIds(const World& world);
 
 // Every registered HUD's items, in registration order.
 [[nodiscard]] render::HudList drawHuds(World& world, uint32_t width, uint32_t height);

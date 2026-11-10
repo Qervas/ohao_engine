@@ -115,6 +115,8 @@ private:
     TypeKey m_type;
     uint32_t m_index;
     std::vector<std::string> m_writers, m_readers, m_cueReaders;
+    std::string m_cueBy;   // the system whose writer gave the cue
+    virtual void clearCue() noexcept = 0;
 };
 
 template <class T>
@@ -133,6 +135,7 @@ public:
         return true;
     }
     [[nodiscard]] bool hasCue() const noexcept override { return m_cue != nullptr; }
+    void clearCue() noexcept override { m_cue = nullptr; }
 
     // This step's events (between steps: the next step's so far).
     [[nodiscard]] std::span<const Event<T>> window() const noexcept {
@@ -222,6 +225,7 @@ public:
         if (cue && cue != c.m_cue) {
             if (c.m_cue) throw std::logic_error("event channel '" + std::string(name) + "' has another cue");
             c.m_cue = cue;
+            c.m_cueBy = system;
             ++m_topology;
         }
         return EventWriter<T>(&c);
@@ -249,6 +253,10 @@ public:
     [[nodiscard]] std::span<const std::unique_ptr<EventChannelBase>> channels() const noexcept { return m_channels; }
 
     [[nodiscard]] uint64_t nextSeq() const noexcept { return m_nextSeq; }   // the seq the next event gets
+    // A system removed (World::removeSimulate, removeSync): no longer any channel's writer, reader or cue reader, and
+    // a cue its writer gave is gone, so the system's next install (a game's reload) takes its handles anew. Channels
+    // and their events stay.
+    void forgetSystem(std::string_view system);
     // Changes whenever a system is first named a channel's writer or typed reader, or a channel gets its cue: the
     // World's simulate order is computed from them (World::simulate).
     [[nodiscard]] uint64_t topology() const noexcept { return m_topology; }

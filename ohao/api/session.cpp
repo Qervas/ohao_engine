@@ -1,4 +1,5 @@
 #include "api/internal.hpp"
+#include "game/loader.hpp"
 #include "game/module.hpp"
 
 #include "core/log.hpp"
@@ -934,6 +935,11 @@ const std::vector<Method>& methodTable() {
         {{"vfx.info", p.find<VfxInfoParams>(),
            "{set, steps, caps, live, dropped?, particles, records: [{seq, step, effect|tracer|decal|light, at, on?}], next}",
            "Effect spawn records the step wrote, after since; particles null headless."}, methodVfxInfo},
+        {{"game.reload", p.find<GameReloadParams>(), "{game, path, loadMs, swapMs, carried: [hook], fresh?: [hook]}",
+           "Loads the game's module again from its file (build it first: cmake --build build --target ohao_slice) and "
+           "swaps it in between steps, the world kept: world.hash is unchanged. E_RELOAD, the old build kept, when a "
+           "type or a snapshot hook's state changed layout (a new session takes it). Reflected docs and limits stay "
+           "the old build's."}, methodGameReload, true},
         };
     }();
     return table;
@@ -1133,12 +1139,15 @@ void writeComponents(Session::Impl& s, JsonWriter& w, entt::entity e, bool inclu
 
 // ---- Session --------------------------------------------------------------------------
 
-Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t, const game::Module* game) : world(w), types(t) {
+void Session::Impl::setGame(std::shared_ptr<const game::LoadedModule> loaded) {
+    game = std::move(loaded);
     methods = methodTable();
-    if (game)
-        for (const game::Method& g : game->methods()) {
+    docs.clear();
+    const game::Module* module = game ? game->module : nullptr;
+    if (module)
+        for (const game::Method& g : module->methods()) {
             if (findMethod(*this, g.doc.name))
-                throw std::logic_error("game " + std::string(game->name()) + "'s method " + std::string(g.doc.name) +
+                throw std::logic_error("game " + std::string(module->name()) + "'s method " + std::string(g.doc.name) +
                                        " has an engine method's name");
             methods.push_back({g.doc,
                                [fn = g.fn](Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
@@ -1151,6 +1160,12 @@ Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t, const game::M
                                g.mutates});
         }
     for (const Method& m : methods) docs.push_back(m.doc);
+    catalogue.clear();
+    schemaHash = reflect::schemaHash(types, docs, channels);
+}
+
+Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t, std::shared_ptr<const game::LoadedModule> game)
+    : world(w), types(t) {
     for (const TypeInfo* ti : t.types()) {
         if (ti->role != reflect::TypeRole::Component || !ecs::componentOps(*ti)) continue;
         byName.emplace(ti->name, ti);
@@ -1164,7 +1179,7 @@ Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t, const game::M
     tTransform = t.find<ecs::Transform>();
     tParent = t.find<ecs::Parent>();
     channels = channelDocs(w, t);
-    schemaHash = reflect::schemaHash(t, docs, channels);
+    setGame(std::move(game));
 }
 
 std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const reflect::TypeRegistry& types) {
@@ -1178,8 +1193,8 @@ std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const refl
     return out;
 }
 
-Session::Session(ecs::World& world, const reflect::TypeRegistry& types, const game::Module* game)
-    : m(std::make_unique<Impl>(world, types, game)) {
+Session::Session(ecs::World& world, const reflect::TypeRegistry& types, std::shared_ptr<const game::LoadedModule> game)
+    : m(std::make_unique<Impl>(world, types, std::move(game))) {
     // A system keeps the whole world and goes back to it through these types (WorldSnapshots: the slice's round
     // start; ECS system code has no reflection of its own).
     ecs::installWorldSnapshots(world, types);
@@ -1237,6 +1252,7 @@ CallStatus run(Session::Impl& m, const Method& method, const JsonDocument& doc, 
     const bool ok = method.fn(m, doc, params, ctx, out) && ctx.errors.empty();
     out.entityIds = nullptr;
     m.control = nullptr;
+    if (m.pendingGame) m.setGame(std::exchange(m.pendingGame, nullptr));   // game.reload's rows, now no row runs
     if (m.cancelled) return CallStatus::Cancelled;
     if (!ok) return m.paramsFailed ? CallStatus::BadParams : CallStatus::Failed;
     return CallStatus::Ok;

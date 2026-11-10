@@ -28,6 +28,11 @@ public:
         }
         installSlicePresentation(world);
     }
+    void uninstall(World& world) const override {
+        forgetHud(world);
+        uninstallCombat(world);
+        world.registry().ctx().erase<SliceInstalled>();
+    }
     [[nodiscard]] std::span<const game::Method> methods() const override { return sliceMethods(); }
 };
 

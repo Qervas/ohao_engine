@@ -26,6 +26,7 @@
 
 namespace ohao::game {
 class Module;
+struct LoadedModule;
 }
 
 namespace ohao::api {
@@ -255,9 +256,10 @@ public:
 
 class Session {
 public:
-    // `game`: the game the world plays (game/module.hpp), whose methods follow the engine's; null: none. `types`
-    // holds the game's types too (game::Module::registerTypes).
-    Session(ecs::World& world, const reflect::TypeRegistry& types, const game::Module* game = nullptr);
+    // `game`: the game the world plays (game/loader.hpp; installed with game::installGame), whose methods follow the
+    // engine's, and which game.reload loads again from its file; null: none. `types` holds the game's types too.
+    Session(ecs::World& world, const reflect::TypeRegistry& types,
+            std::shared_ptr<const game::LoadedModule> game = nullptr);
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;

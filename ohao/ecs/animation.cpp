@@ -107,6 +107,16 @@ void AnimationSystem::setDriver(std::string name, AnimDriver fn) {
     m_drivers.emplace_back(std::move(name), std::move(fn));
 }
 
+void AnimationSystem::removeDriver(std::string_view name) {
+    std::erase_if(m_drivers, [&](const auto& d) { return d.first == name; });
+}
+
+std::vector<std::string> AnimationSystem::driverNames() const {
+    std::vector<std::string> out;
+    for (const auto& [n, f] : m_drivers) out.push_back(n);
+    return out;
+}
+
 void AnimationSystem::setEvents(EventLog& log) { m_clipEvents = log.writer<ClipEvent>(kClipEventChannel, "animation"); }
 
 void AnimationSystem::step(World& world) {

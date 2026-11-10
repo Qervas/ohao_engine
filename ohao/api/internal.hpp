@@ -45,7 +45,8 @@ struct Method {
 };
 
 struct Session::Impl {
-    Impl(ecs::World& w, const reflect::TypeRegistry& t, const game::Module* game);
+    Impl(ecs::World& w, const reflect::TypeRegistry& t, std::shared_ptr<const game::LoadedModule> game);
+    void setGame(std::shared_ptr<const game::LoadedModule> game);   // its method rows after the engine's
 
     ecs::World& world;
     const reflect::TypeRegistry& types;
@@ -55,6 +56,9 @@ struct Session::Impl {
     uint64_t schemaHash{0};
     std::vector<Method> methods;              // the engine's rows, then the game's
     std::vector<reflect::MethodDoc> docs;     // their docs, in that order
+    std::shared_ptr<const game::LoadedModule> game;
+    // game.reload's new build: its rows replace the old build's after the call (never while a row runs).
+    std::shared_ptr<const game::LoadedModule> pendingGame;
     std::vector<reflect::ChannelDoc> channels;   // the world's event channels, at the session's start
     std::string catalogue;            // built on the first schema.get
     ecs::JsonParser paramsParser;     // the request's params
@@ -137,6 +141,9 @@ bool methodPlayerInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode&
                       JsonWriter& out);
 bool methodPlayerTeleport(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                           JsonWriter& out);
+// The game module (step 3j; game.cpp).
+bool methodGameReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                      JsonWriter& out);
 // Animation (sub-project 10, step 1; animation.cpp).
 bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                          JsonWriter& out);

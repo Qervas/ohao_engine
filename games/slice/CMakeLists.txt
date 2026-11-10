@@ -12,6 +12,10 @@ target_compile_features(ohao_slice_objects PUBLIC cxx_std_20)
 # The engine's headers and definitions, never its code (COMPILE_ONLY links nothing).
 target_link_libraries(ohao_slice_objects PUBLIC $<COMPILE_ONLY:ohao_game_api> $<COMPILE_ONLY:ohao_ecs>
     $<COMPILE_ONLY:ohao_world_render> $<COMPILE_ONLY:ohao_reflect>)
+# The engine headers every slice file parses, precompiled once: an edit's rebuild (step 3j's reload) parses only the
+# file's own code. Code generation is unchanged.
+target_precompile_headers(ohao_slice_objects PRIVATE <entt/entt.hpp> <glm/glm.hpp> <ecs/world.hpp>
+    <ecs/components.hpp> <ecs/physics_scene.hpp> <ecs/events.hpp> <functional> <memory> <string> <vector>)
 
 add_library(ohao_slice MODULE $<TARGET_OBJECTS:ohao_slice_objects>)
 

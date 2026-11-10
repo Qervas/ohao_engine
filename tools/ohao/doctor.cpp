@@ -5,6 +5,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
+#include "game/module.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "reflect/json_writer.hpp"
 
@@ -267,6 +268,20 @@ void shaderChecks(const Options& o, std::vector<Check>& out) {
 
 // ---- assets, tools ------------------------------------------------------------------------
 
+// Every reflected type registers without a mistake (a unit on a non-numeric field, a name taken twice, ...): the
+// registry records them and nothing else reads them, and a game's reload refuses a build whose types do not register.
+void typesCheck(const Options& o, std::vector<Check>& out) {
+    reflect::TypeRegistry types;
+    ecs::registerSceneTypes(types);
+    if (o.game) o.game->registerTypes(types);
+    const std::string which = o.game ? "the engine's and " + std::string(o.game->name()) + "'s" : "the engine's";
+    if (types.errors().empty())
+        out.push_back(pass("types.register", "error", std::to_string(types.types().size()) + " types (" + which + ")"));
+    else
+        out.push_back(fail("types.register", "error", listCapped(types.errors()),
+                           "fix the registration (ecs/scene_types.cpp, ecs/event_types.cpp, a game's registerTypes)"));
+}
+
 void assetCheck(const Options& o, std::vector<Check>& out) {
     const fs::path scenes = o.root / "assets" / "scenes";
     std::error_code ec;
@@ -516,6 +531,7 @@ std::vector<Check> run(const Options& options) {
     std::vector<Check> out;
     if (!o.cpuOnly) vulkanChecks(out);
     shaderChecks(o, out);
+    typesCheck(o, out);
     assetCheck(o, out);
     toolChecks(o, out);
     if (!o.cpuOnly) gpuCheck(out);

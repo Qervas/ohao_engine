@@ -25,6 +25,9 @@ struct LoadedModule {
 // the executable does not export).
 [[nodiscard]] std::shared_ptr<const LoadedModule> loadModule(const std::filesystem::path& path, std::string& error);
 
+// A module linked into the executable (the benches link the slice statically): no file, so never reloaded.
+[[nodiscard]] std::shared_ptr<const LoadedModule> linkedModule(const Module& module);
+
 // The directory of the running executable (the default modules sit beside it).
 [[nodiscard]] std::filesystem::path executableDir();
 

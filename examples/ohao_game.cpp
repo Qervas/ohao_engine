@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
     }
     LiveConfig cfg;
     cfg.window.title = "OHAO";
-    cfg.game = g_slice->module;
+    cfg.game = g_slice;
     if (argFlag(argc, argv, "--vsync")) cfg.present = PresentMode::Fifo;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--present") != 0) continue;

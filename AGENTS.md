@@ -200,7 +200,10 @@ What every change must respect. The build checks some of these; the rest are her
   declares what it must follow and precede; a game's names the engine's, never the reverse. The
   engine names no game event or component: it reads a game's events only as cues its data binds by channel name
   (an audio bank's and a vfx set's `events`). A system with state a later step reads registers `ecs::addSnapshotHook`
-  under its name, with save, restore and hash: the snapshot and `world.hash` cover it. What a system tells
+  under its name, with save, restore and hash: the snapshot and `world.hash` cover it; a game's hook also declares its
+  state's `layout` (`layoutKey<State>()`), which `game.reload` checks before the state crosses to a new build. A game
+  is installed with `game::installGame`, which records what it adds and removes it again; its `Module::uninstall`
+  undoes only what the engine cannot see (its context entries, its registry signals). What a system tells
   others is an event in the World's log (`ecs/events.hpp`): a channel it writes, read by the systems after it in the
   step, never a log of its own; an event's `seq` is history, never state.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or

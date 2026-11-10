@@ -22,5 +22,6 @@ namespace ohao::slice {
 void registerSliceTypes(reflect::TypeRegistry& types);   // types.cpp
 [[nodiscard]] std::span<const game::Method> sliceMethods();   // methods.cpp
 void installSlicePresentation(ecs::World& world);       // hud.cpp: its HUD and the grenades in flight
+void forgetHud(ecs::World& world);                      // hud.cpp: the HUD's state (its cursor into the log)
 
 } // namespace ohao::slice

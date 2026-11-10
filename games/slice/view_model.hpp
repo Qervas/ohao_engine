@@ -36,6 +36,7 @@ struct ViewModelMotion {
 // Installs the `view_model` sync system: after `interpolate` (or `transform` without physics), before
 // `render_extract` when it is installed. Idempotent. installCombat calls it.
 void installViewModel(World& world);
+void uninstallViewModel(World& world);   // its signals and context entry (the engine removes its system)
 // The motion of a ViewModel entity after the last sync (nullptr if it has none yet).
 [[nodiscard]] const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun);
 

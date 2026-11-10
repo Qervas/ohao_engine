@@ -27,6 +27,20 @@ bool EventLog::addName(std::vector<std::string>& names, std::string_view name) {
     return true;
 }
 
+void EventLog::forgetSystem(std::string_view system) {
+    const auto drop = [&](std::vector<std::string>& names) { std::erase(names, system); };
+    for (const auto& c : m_channels) {
+        drop(c->m_writers);
+        drop(c->m_readers);
+        drop(c->m_cueReaders);
+        if (c->m_cueBy == system) {
+            c->clearCue();
+            c->m_cueBy.clear();
+        }
+    }
+    ++m_topology;
+}
+
 void EventLog::endWindow() {
     for (const auto& c : m_channels) c->m_windowBegin = c->size();
     m_windowSeq = m_nextSeq;

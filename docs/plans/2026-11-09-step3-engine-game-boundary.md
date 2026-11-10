@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3i built (3g merged into 3c); 3j-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3j built (3g merged into 3c); 3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -817,6 +817,66 @@ passes with the slice loaded as a shared library.
   - **Cost:** a 1-step run of the play scene is 21.5 ms with the module, 19.1 ms without (medians of 7; spread 6 to
     9 ms). The load and install are inside the noise.
   - **Benches:** physics_bench and audio_bench are within budget.
+
+*As built, commit 2 (2026-11-10): game.reload.*
+- **What crosses, and what is rebuilt.**
+  - The old build stays loaded, because its pools run its code. The new build reads in place what the engine holds of
+    the game: its components (the pools), its channels and their events, and its snapshot hooks' states, handed from
+    the old hooks to the new.
+  - Everything else is the new build's own install: systems, drivers, presenters, the control rule, the session's
+    method rows.
+  - The plan's route cannot run, because EnTT cannot remove a pool. That route was: save the world to its canonical
+    form through reflection, unload the module, load the new one, restore. So data whose layout is unchanged crosses
+    in place, and a changed layout is refused (below).
+  - A reload that rebuilt the World from a snapshot was refuted too: by its own contract, physics' state restores
+    exactly only into the same bodies (`restoreSimulation`'s `savedPending`), and a new World has new ones.
+- **The install is recorded** (`game/install.hpp`).
+  - `installGame` diffs what the World holds before and after `Module::install`: systems, snapshot hooks, animation
+    drivers, presenters, the physics control rule. `uninstallGame` removes exactly that.
+  - The module's own `uninstall` undoes what the engine cannot see: its context entries (EnTT cannot list them) and
+    its registry signals. For the slice that is four context entries and the view model's two signals.
+  - Removal APIs came with it: `World::removeSimulate` and `removeSync` (the event log forgets the system as a
+    writer, reader or cue giver: `EventLog::forgetSystem`), `removeSnapshotHook`, `AnimationSystem::removeDriver`,
+    presenters by id, `PhysicsScene::hasInputControl`.
+  - The alternative, each game writing an uninstall for everything it registered, was refuted: a game developer (an
+    agent) would forget a registration, and the reload would then fail on "installed twice".
+- **Layouts, checked before anything crosses.**
+  - `core/layout_key.hpp`: a compile-time 64-bit key of a type's layout. For an aggregate it covers its members' keys
+    in order, found by structured bindings over a brace-initialization field count (boost.pfr's technique); for
+    containers, their element's.
+  - `TypeInfo::layout` carries it for every reflected type. `SnapshotHook::layout` is declared by a game's hook (the
+    slice's: `layoutKey<CombatSystem::Impl::State>()`).
+  - Before the swap, the new build's types are registered beside the engine's in a scratch registry and compared
+    with the live one: names, layouts, enum values. After the new install, each hook's declared layout is compared
+    with the old one's, and a mismatch rolls back.
+  - Refused, the old build is installed again with its state.
+- **`game.reload {}`** reloads from the file the game was loaded from. A path parameter was cut: it would let any API
+  caller load a library into the process. It runs between steps, and its method rows change after the call
+  (`Session::Impl::pendingGame`), never while one runs. `E_RELOAD` is new.
+- **A bug the reload found.** `RestoreEvent.step` (3d) was registered `unitless`, which the registry records as a
+  mistake for a 64-bit field and nothing ever read. The scratch registry refused it. Fixed, and `ohao doctor` now
+  fails on any registration error (`types.register`, the engine's types and the game's); planted again, it fails.
+- **The edit loop.** A precompiled header of the slice's engine includes (EnTT, glm, the World, components, physics,
+  events) cut `combat.cpp`'s rebuild from 4.85 to 4.24 s. Code generation is 66% of it (`-ftime-report`).
+- **Results:**
+  - **Edit to playing** (`combat.cpp`'s damage doubled under a running server, the module built, `game.reload`):
+    4.87 s before the precompiled header, about 4.25 s after (the build 4.24 s, three runs alike; the reload 4 ms:
+    load 3.6 ms, swap 0.4 ms). The new code played at once: a hit of 10 took 10 before, 20 after, and `world.hash`
+    was unchanged by the reload. Other slice files rebuild in 1.3 to 2.9 s.
+  - **Mid-fight, the same build reloaded with a grenade in flight:** `world.hash` unchanged, and the 200 steps after
+    it equal to a run without the reload.
+  - **Refused, the old build kept playing, `world.hash` unchanged:** a field added to `Health` ("Health's layout
+    changed"), and a member added to combat's hook state (rolled back after the new install).
+  - **replay_test now reloads** before its midway restore: `world.hash` unchanged, the snapshot taken under the old
+    build restored under the new, the fight after it the same (12 of 12).
+    - Planted, a reload that reports combat's state carried but drops it: replay_test fails.
+  - **Gates:** `check.py --changed` 6 of 6. **The baseline:** equal to commit 1's, `world.hash` included.
+    physics_bench and audio_bench are within budget.
+- **Known gaps:**
+  - A layout change needs a new session: reinstancing through reflection (new types per build, each value carried
+    by its fields) is not built.
+  - Reflected docs and limits keep the old build's until then.
+  - Each reload maps another copy of the module, about 1.5 MB.
 
 ## 3k. A second game, and the game developers' docs
 

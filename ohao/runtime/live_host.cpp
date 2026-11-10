@@ -1,5 +1,6 @@
 #include "runtime/live_host.hpp"
-#include "game/module.hpp"
+#include "game/install.hpp"
+#include "game/loader.hpp"
 #include "engine/install.hpp"
 #include "runtime/sleep_until.hpp"
 
@@ -88,7 +89,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
     engine::installEngine(*m_world, {*m_assets, types});
-    if (cfg.game) cfg.game->install(*m_world);
+    if (cfg.game) game::installGame(*m_world, *cfg.game->module);
     engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types, cfg.game);
     m_session->setAssetResolver(m_assets.get());

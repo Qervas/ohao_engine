@@ -38,6 +38,9 @@ struct SnapshotHook {
     std::function<std::shared_ptr<const void>()> save;
     std::function<void(const std::shared_ptr<const void>&)> restore;
     std::function<void(StateHash&)> hash;
+    // The saved state's layout (core/layout_key.hpp: layoutKey<State>()). A game's hook needs it: its state crosses a
+    // reload in place (game/reload.hpp) only when the new build's hook declares the same; 0: undeclared (never carried).
+    uint64_t layout{0};
 };
 
 // The registry's hooks, by name.
@@ -47,6 +50,10 @@ struct SnapshotHooks {
 
 // Registers `hook` in the registry's context, at its name's place; a name registered twice throws.
 void addSnapshotHook(entt::registry& registry, SnapshotHook hook);
+void removeSnapshotHook(entt::registry& registry, std::string_view name);
+// The hook of that name, or null.
+[[nodiscard]] const SnapshotHook* findSnapshotHook(const entt::registry& registry, std::string_view name);
+[[nodiscard]] std::vector<std::string_view> snapshotHookNames(const entt::registry& registry);
 
 // What every hook saved, by name (Snapshot::systems). A hook with nothing saved is restored with null.
 struct SystemStates {

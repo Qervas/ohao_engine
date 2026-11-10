@@ -47,6 +47,7 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
+#include "game/install.hpp"
 #include "game/loader.hpp"
 #include "game/module.hpp"
 #include "engine/install.hpp"
@@ -319,12 +320,13 @@ struct Context {
     std::unique_ptr<api::Session> session;
 
     // `game`: the game installed after the engine (--game's); null: an engine-only world.
-    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli, const game::Module* game = g_game) {
+    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli,
+                     std::shared_ptr<const game::LoadedModule> game = g_module) {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
         engine::installEngine(*world, {*assets, engineTypes()});
-        if (game) game->install(*world);
+        if (game) game::installGame(*world, *game->module);
         session = std::make_unique<api::Session>(*world, engineTypes(), game);
         session->setAssetResolver(assets.get());
         render->bind(*world);
@@ -399,8 +401,8 @@ int cmdSchema(const Args& a) {
     ecs::FileAssetResolver resolver{"."};
     ecs::World world;
     engine::installEngine(world, {resolver, engineTypes()});
-    if (g_game) g_game->install(world);
-    const api::Session session(world, engineTypes(), g_game);
+    if (g_game) game::installGame(world, *g_game);
+    const api::Session session(world, engineTypes(), g_module);
     const std::vector<reflect::ChannelDoc> channels = api::channelDocs(world, engineTypes());
     const auto catalogue = reflect::exportCatalogue(engineTypes(), {session.methods(), channels, reflect::JsonLayout::Pretty});
     const auto schema = reflect::exportSceneJsonSchema(engineTypes());
@@ -634,7 +636,7 @@ int cmdRun(const Args& a) {
         }
     }
 
-    Context c(opt(a, "--root", "."), api::HostKind::Cli, g_game);
+    Context c(opt(a, "--root", "."), api::HostKind::Cli, g_module);
     const bool lines = script.has_value();
     int worst = kOk;
     std::string combined;   // without a script: {"result": {method: result, ...}}
@@ -731,6 +733,7 @@ int cmdDoctor(const Args& a) {
     o.root = opt(a, "--root", ".");
     if (has(a, "--shader-dir")) o.shaderDir = opt(a, "--shader-dir");
     if (has(a, "--spirv-dir")) o.spirvDir = opt(a, "--spirv-dir");
+    o.game = g_game;
     const auto checks = doctor::run(o);
     emit("{\"result\":" + doctor::toJson(checks, o.cpuOnly) + "}");
     return doctor::passed(checks) ? kOk : kInput;
@@ -759,7 +762,7 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     if (has(a, "--present")) cfg.present = *presentModeFromName(opt(a, "--present"));   // checked by cmdServe
     cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
     cfg.sound = has(a, "--sound");  // the voice schedule played on the default device
-    cfg.game = g_game;
+    cfg.game = g_module;
     cfg.root = opt(a, "--root", ".");
     const std::string mode = opt(a, "--mode", "deferred");
     cfg.mode = mode == "rt_realtime" ? RenderMode::RTRealtime : mode == "rt_offline" ? RenderMode::RTOffline : RenderMode::Deferred;
@@ -844,7 +847,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     }
     if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage), *transport);
     const std::string root = opt(a, "--root", ".");
-    Context c(root, api::HostKind::Headless, g_game);
+    Context c(root, api::HostKind::Headless, g_module);
     api::PathPolicy policy;
     policy.root = root;
     policy.out = opt(a, "--out");

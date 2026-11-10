@@ -15,6 +15,26 @@ void addSnapshotHook(entt::registry& registry, SnapshotHook hook) {
     hooks.insert(at, std::move(hook));
 }
 
+void removeSnapshotHook(entt::registry& registry, std::string_view name) {
+    if (auto* hooks = registry.ctx().find<SnapshotHooks>())
+        std::erase_if(hooks->hooks, [&](const SnapshotHook& h) { return h.name == name; });
+}
+
+const SnapshotHook* findSnapshotHook(const entt::registry& registry, std::string_view name) {
+    const auto* hooks = registry.ctx().find<SnapshotHooks>();
+    if (!hooks) return nullptr;
+    for (const SnapshotHook& h : hooks->hooks)
+        if (h.name == name) return &h;
+    return nullptr;
+}
+
+std::vector<std::string_view> snapshotHookNames(const entt::registry& registry) {
+    std::vector<std::string_view> out;
+    if (const auto* hooks = registry.ctx().find<SnapshotHooks>())
+        for (const SnapshotHook& h : hooks->hooks) out.push_back(h.name);
+    return out;
+}
+
 std::shared_ptr<const void> saveSystems(const entt::registry& registry) {
     const auto* hooks = registry.ctx().find<SnapshotHooks>();
     if (!hooks || hooks->hooks.empty()) return nullptr;

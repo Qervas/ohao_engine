@@ -20,6 +20,7 @@
 #include "common/harness.hpp"
 #include "slice/combat.hpp"
 #include "slice/module.hpp"
+#include "game/loader.hpp"
 #include "ecs/scene_types.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_log.hpp"
@@ -93,7 +94,7 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
     ModeRun r;
     r.want = mode;
     LiveConfig cfg;
-    cfg.game = &slice::module();
+    cfg.game = game::linkedModule(slice::module());
     cfg.window.title = "OHAO feel_bench";
     cfg.window.width = 1920;
     cfg.window.height = 1080;

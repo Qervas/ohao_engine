@@ -184,6 +184,8 @@ render::HudList combatHud(World& world, uint32_t width, uint32_t height) {
     return CombatHud::layout(hud.state(world, width, height), width, height);
 }
 
+void forgetHud(World& world) { world.registry().ctx().erase<CombatHudHolder>(); }
+
 // What the slice presents (world_render/present.hpp): this HUD and the grenades in flight.
 void installSlicePresentation(World& world) {
     addHud(world, [](World& w, render::HudList& out, uint32_t width, uint32_t height) {

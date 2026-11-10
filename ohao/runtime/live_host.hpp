@@ -44,7 +44,7 @@
 #include <vector>
 
 namespace ohao::game {
-class Module;
+struct LoadedModule;
 }
 
 namespace ohao::runtime {
@@ -91,9 +91,9 @@ struct LiveConfig {
     // footsteps, combat, handling, the mix). ohao_game turns it on (--mute off: the schedule is still
     // built, no device is made); a server's window stays silent.
     bool sound{false};
-    // The game installed after the engine (game/module.hpp; ohao_game plays the slice), or none: an engine-only
+    // The game installed after the engine (game/loader.hpp; ohao_game plays the slice), or none: an engine-only
     // world. `types` (initialize) holds its types.
-    const game::Module* game{nullptr};
+    std::shared_ptr<const game::LoadedModule> game;
     // Draws the measured latency and frame time top left (ohao_game --latency; sub-project 9).
     bool latencyReadout{false};
     // The window's camera meters its deferred frames (render.settings autoExposure; frontier F2 T2).

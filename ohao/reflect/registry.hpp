@@ -13,6 +13,7 @@
 // when no field has been added yet. Mistakes (unregistered nested types, limits on a
 // string, a default outside its limits, duplicate names) are recorded in errors() rather
 // than thrown; lint() reports them together with missing docs and units.
+#include "core/layout_key.hpp"
 #include "core/type_key.hpp"
 #include "reflect/codec.hpp"
 #include "reflect/type_info.hpp"
@@ -198,6 +199,7 @@ TypeBuilder<T> TypeRegistry::type(std::string_view name, uint32_t version) {
     t.version = version == 0 ? 1 : version;
     t.size = sizeof(T);
     t.align = alignof(T);
+    t.layout = layoutKey<T>();
     t.triviallyCopyable = std::is_trivially_copyable_v<T>;
     t.construct = [](void* at) { new (at) T(); };
     t.destroy = [](void* at) { static_cast<T*>(at)->~T(); };

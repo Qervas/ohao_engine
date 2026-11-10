@@ -1,5 +1,7 @@
 #include "slice/combat.hpp"
 
+#include "core/layout_key.hpp"
+
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/audio_schedule.hpp"
@@ -572,10 +574,15 @@ CombatSystem& installCombat(World& world) {
     CombatSystem* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"combat", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreState(s); },
-                                      [raw](StateHash& h) { raw->hashState(h); }});
+                                      [raw](StateHash& h) { raw->hashState(h); }, layoutKey<CombatSystem::Impl::State>()});
     // The first-person gun's placement and motion (presentation, render rate).
     installViewModel(world);
     return *system;
+}
+
+void uninstallCombat(World& world) {
+    world.registry().ctx().erase<CombatInstalled>();
+    uninstallViewModel(world);
 }
 
 CombatSystem* combatSystem(World& world) {

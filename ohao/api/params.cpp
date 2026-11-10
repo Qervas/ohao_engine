@@ -115,6 +115,7 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("fixedDt", &TimeSetParams::fixedDt).doc("Fixed step length, in (0, 1]").unit("s").min(0.0).max(1.0);
 
     r.type<WorldHashParams>("WorldHashParams").doc("world.hash params");
+    r.type<GameReloadParams>("GameReloadParams").doc("game.reload params");
 
     ecs::registerKeyEnum(r);
     r.type<InjectEvent>("InjectEvent").doc("One input event; exactly one of action, axis, key, mouse, focusLost")

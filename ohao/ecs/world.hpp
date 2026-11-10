@@ -105,6 +105,12 @@ public:
     // cycle, or a simulate system added inside a step throws std::logic_error and installs nothing.
     void addSimulate(std::string name, SimulateSystem fn, SystemOrder order = {});
     void addSync(std::string name, SyncSystem fn, SystemOrder order = {});
+    // Removes a system (a game's, before its next build installs: game/reload.hpp); a simulate system also leaves the
+    // event log (EventLog::forgetSystem). Between steps; a name not installed does nothing.
+    void removeSimulate(std::string_view name);
+    void removeSync(std::string_view name);
+    [[nodiscard]] std::vector<std::string> simulateNames() const;   // in their order
+    [[nodiscard]] std::vector<std::string> syncNames() const;
     // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp),
     // then what the step deferred runs. When systems took new event handles since the last step, the order is
     // computed again first; a cycle then throws std::logic_error, before the step.

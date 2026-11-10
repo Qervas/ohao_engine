@@ -108,6 +108,7 @@ struct TimeSetParams {
 };
 
 struct WorldHashParams {};
+struct GameReloadParams {};   // step 3j: the game is reloaded from the file it was loaded from
 
 using ohao::Key;
 

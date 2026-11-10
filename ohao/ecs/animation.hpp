@@ -74,7 +74,9 @@ public:
     [[nodiscard]] std::shared_ptr<const anim::BoundGraph> graph(const std::string& path);
     [[nodiscard]] anim::AnimCache& cache() noexcept { return m_cache; }
 
-    void setDriver(std::string name, AnimDriver fn);
+    void setDriver(std::string name, AnimDriver fn);   // replaces a driver of that name
+    void removeDriver(std::string_view name);
+    [[nodiscard]] std::vector<std::string> driverNames() const;
 
     void step(World& world);      // the simulate system
     void pose(World& world);      // the sync system

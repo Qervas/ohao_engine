@@ -144,14 +144,18 @@ public:
     // and where this one did (the presentation draws between the two, sub-project 12).
     [[nodiscard]] std::vector<CombatGrenade> grenadesInFlight() const;
 
+    struct Impl;   // public for its State's layout (the snapshot hook's: core/layout_key.hpp)
+
 private:
-    struct Impl;
     std::unique_ptr<Impl> m;
 };
 
 // Installs the `combat` simulate system (after `physics`, which must be installed first) and its channels.
 // Returns the installed system if there is one. The slice's module installs it (slice/module.hpp).
 CombatSystem& installCombat(World& world);
+// What installCombat made that the engine does not remove itself (game::uninstallGame): its context entry, the view
+// model's.
+void uninstallCombat(World& world);
 [[nodiscard]] CombatSystem* combatSystem(World& world);
 [[nodiscard]] const CombatSystem* combatSystem(const World& world);
 

@@ -385,6 +385,29 @@ void World::addSimulate(std::string name, SimulateSystem fn, SystemOrder order) 
     }
 }
 
+void World::removeSimulate(std::string_view name) {
+    if (m_events.inStep()) throw std::logic_error("simulate system '" + std::string(name) + "' removed inside a step");
+    std::erase_if(m_simulate, [&](const auto& s) { return s.name == name; });
+    m_events.forgetSystem(name);   // the order is computed again before the next step
+}
+
+void World::removeSync(std::string_view name) {
+    std::erase_if(m_sync, [&](const auto& s) { return s.name == name; });
+    permute(m_sync, orderSystems(m_sync, {}, "sync"));
+}
+
+std::vector<std::string> World::simulateNames() const {
+    std::vector<std::string> out;
+    for (const auto& s : m_simulate) out.push_back(s.name);
+    return out;
+}
+
+std::vector<std::string> World::syncNames() const {
+    std::vector<std::string> out;
+    for (const auto& s : m_sync) out.push_back(s.name);
+    return out;
+}
+
 void World::addSync(std::string name, SyncSystem fn, SystemOrder order) {
     if (installed(m_sync, name)) throw std::logic_error("sync system '" + name + "' installed twice");
     m_sync.push_back({name, std::move(fn), std::move(order)});

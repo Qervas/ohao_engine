@@ -40,7 +40,11 @@ load at start (`game/loader.hpp`: read into a memfd, `dlopen` RTLD_NOW and RTLD_
 library, its references to the engine resolving against the host executable, which exports its symbols
 (`ENABLE_EXPORTS`), so the process holds one engine; and `ohao_slice_static`, for the benches that measure its
 internals. A loaded module is never unloaded: EnTT keeps a pool for each component type, with no removal, and a
-module's pools run its code. Type identities are names, not addresses (`core/type_key.hpp`, EnTT's `type_hash`), so
+module's pools run its code. `game/install.hpp` is a game's life on a World: `installGame` records what an install
+added (systems, snapshot hooks, drivers, presenters, the physics control rule) and `uninstallGame` removes it, then
+the module's `uninstall` its own; `reloadGame` (`game.reload`) swaps in a newer build of the game, the world kept: the
+new build reads the components, channels and hook states in place, so their layouts must not change
+(`core/layout_key.hpp`: TypeInfo::layout, SnapshotHook::layout), or the reload is refused and the old build kept. Type identities are names, not addresses (`core/type_key.hpp`, EnTT's `type_hash`), so
 the executable, the module and a later build of it agree on every type.
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,

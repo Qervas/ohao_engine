@@ -146,6 +146,7 @@ struct TypeInfo {
 
     std::size_t size{0};
     std::size_t align{0};
+    uint64_t layout{0};       // core/layout_key.hpp: equal in two builds when their values are interchangeable
     bool triviallyCopyable{false};
     void (*construct)(void* at){nullptr};
     void (*destroy)(void* at){nullptr};

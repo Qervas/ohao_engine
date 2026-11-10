@@ -76,6 +76,12 @@ std::shared_ptr<const LoadedModule> loadModule(const std::filesystem::path& path
     return out;
 }
 
+std::shared_ptr<const LoadedModule> linkedModule(const Module& module) {
+    auto out = std::make_shared<LoadedModule>();
+    out->module = &module;
+    return out;
+}
+
 std::filesystem::path executableDir() {
     std::error_code ec;
     const auto exe = std::filesystem::read_symlink("/proc/self/exe", ec);

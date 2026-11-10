@@ -7,8 +7,9 @@ namespace ohao::ecs {
 namespace {
 
 struct Presenters {
-    std::vector<HudFn> huds;
-    std::vector<SpheresFn> spheres;
+    std::vector<std::pair<uint32_t, HudFn>> huds;
+    std::vector<std::pair<uint32_t, SpheresFn>> spheres;
+    uint32_t next{1};
 };
 
 Presenters& presentersOf(World& world) {
@@ -19,21 +20,44 @@ Presenters& presentersOf(World& world) {
 
 } // namespace
 
-void addHud(World& world, HudFn fn) { presentersOf(world).huds.push_back(std::move(fn)); }
+uint32_t addHud(World& world, HudFn fn) {
+    Presenters& p = presentersOf(world);
+    p.huds.emplace_back(p.next, std::move(fn));
+    return p.next++;
+}
 
-void addSpheres(World& world, SpheresFn fn) { presentersOf(world).spheres.push_back(std::move(fn)); }
+uint32_t addSpheres(World& world, SpheresFn fn) {
+    Presenters& p = presentersOf(world);
+    p.spheres.emplace_back(p.next, std::move(fn));
+    return p.next++;
+}
+
+void removePresenter(World& world, uint32_t id) {
+    Presenters& p = presentersOf(world);
+    std::erase_if(p.huds, [&](const auto& h) { return h.first == id; });
+    std::erase_if(p.spheres, [&](const auto& s) { return s.first == id; });
+}
+
+std::vector<uint32_t> presenterIds(const World& world) {
+    std::vector<uint32_t> out;
+    if (const auto* p = world.registry().ctx().find<Presenters>()) {
+        for (const auto& h : p->huds) out.push_back(h.first);
+        for (const auto& s : p->spheres) out.push_back(s.first);
+    }
+    return out;
+}
 
 render::HudList drawHuds(World& world, uint32_t width, uint32_t height) {
     render::HudList out;
     if (const auto* p = world.registry().ctx().find<Presenters>())
-        for (const HudFn& fn : p->huds) fn(world, out, width, height);
+        for (const auto& [id, fn] : p->huds) fn(world, out, width, height);
     return out;
 }
 
 std::vector<render::RenderScene::PresentedSphere> presentedSpheres(const World& world) {
     std::vector<render::RenderScene::PresentedSphere> out;
     if (const auto* p = world.registry().ctx().find<Presenters>())
-        for (const SpheresFn& fn : p->spheres) fn(world, out);
+        for (const auto& [id, fn] : p->spheres) fn(world, out);
     return out;
 }
 

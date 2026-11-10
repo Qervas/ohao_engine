@@ -65,8 +65,14 @@ public:
     // (ecs::registerSceneTypes) and before any scene loads.
     virtual void registerTypes(reflect::TypeRegistry& types) const = 0;
     // Its systems, channels, drivers, rules, snapshot hooks and presentation, on a World the engine's systems are
-    // installed on (engine::installEngine). A second call on one World does nothing.
+    // installed on (engine::installEngine). A second call on one World does nothing. Hosts call game::installGame
+    // (game/install.hpp), which records what it added.
     virtual void install(ecs::World& world) const = 0;
+    // What install made that the engine cannot see: its context entries, its registry signals. The engine removes
+    // the rest itself (game::uninstallGame): systems, snapshot hooks, drivers, presenters, the control rule. After it
+    // the World holds none of the module's objects but its components' data and its channels' events, which the
+    // next build of it reads in place (a reload).
+    virtual void uninstall(ecs::World& world) const { (void)world; }
     // Its API methods, after the engine's in the catalogue.
     [[nodiscard]] virtual std::span<const Method> methods() const = 0;
 };

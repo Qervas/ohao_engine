@@ -4,7 +4,8 @@
 One headless `ohao serve` (no window, no GPU) plays the play scene: a walk, a turn, rounds fired at
 an enemy, a reload, a grenade thrown and left to explode. Every command is recorded. Then:
 
-  1. replay: restore the snapshot taken midway (a grenade in flight, a strafe and the aim held: state the
+  1. replay: reload the game (game.reload, step 3j: a new copy of its module swapped in; world.hash unchanged),
+     restore the snapshot taken midway under the old copy (a grenade in flight, a strafe and the aim held: state the
      components do not hold, step 3b) and re-issue the commands after it: the world reaches the same
      world.hash, at every checkpoint;
   2. fresh: a new `ohao serve` process loads the scene and re-issues every command: the same hashes from
@@ -225,7 +226,12 @@ def main():
         check(len(set([start_hash] + r.hashes)) == len(r.hashes) + 1,
               "world.hash changed at every checkpoint (%d distinct)" % len(set([start_hash] + r.hashes)))
 
-        # 1. Replay from the midway snapshot (taken right after the fourth checkpoint).
+        # 1. The game reloaded (step 3j: a new copy of its module swapped in, the world kept), then a replay from the
+        #    midway snapshot taken under the old copy (right after the fourth checkpoint).
+        before = hash_of(s)
+        reload = s.tool("game_reload")
+        check(hash_of(s) == before and reload["carried"] == ["combat"],
+              "game.reload keeps world.hash and carries combat's state (%s)" % reload)
         s.tool("world_restore", {"name": "mid"})
         check(hash_of(s) == r.hashes[3], "the restore puts back the midway world.hash")
         again = replay(s, r.commands[mid:])

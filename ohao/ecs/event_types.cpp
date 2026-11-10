@@ -44,7 +44,7 @@ void registerEventTypes(reflect::TypeRegistry& r) {
     r.type<RestoreEvent>("RestoreEvent").event()
         .doc("world.restore: a restore (world.restore, a round's restart) put the world back to another moment; in "
              "the history only, before the restored next-step events")
-        .field("step", &RestoreEvent::step).doc("The World's step the world went back to").unitless();
+        .field("step", &RestoreEvent::step).doc("The World's step the world went back to");
 
     // ---- animation ----------------------------------------------------------------------------
     r.type<ClipEvent>("ClipEvent").event()

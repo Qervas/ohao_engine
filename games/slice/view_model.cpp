@@ -274,6 +274,13 @@ void installViewModel(World& world) {
     world.addSync("view_model", [system](World& w) { system->run(w); }, {.after = {"interpolate"}, .before = {"pose"}});
 }
 
+void uninstallViewModel(World& world) {
+    auto& reg = world.registry();
+    reg.on_construct<ViewModel>().disconnect<&addFirstPerson>();
+    reg.on_destroy<ViewModel>().disconnect<&removeFirstPerson>();
+    reg.ctx().erase<ViewModelInstalled>();
+}
+
 const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun) {
     const auto* installed = world.registry().ctx().find<ViewModelInstalled>();
     if (!installed) return nullptr;

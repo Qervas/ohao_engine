@@ -219,7 +219,8 @@ public:
     // window's look lead turns it; out of control it stands, or falls, where it is. A game's rule (the slice's: not
     // with Health 0); without one every character is in control.
     using InputControl = std::function<bool(const entt::registry&, entt::entity)>;
-    void setInputControl(InputControl fn);
+    void setInputControl(InputControl fn);   // empty: every character in control
+    [[nodiscard]] bool hasInputControl() const noexcept;
     [[nodiscard]] uint64_t steps() const noexcept;
     // Jolt updates the last step ran (its substeps).
     [[nodiscard]] int lastSubsteps() const noexcept;
