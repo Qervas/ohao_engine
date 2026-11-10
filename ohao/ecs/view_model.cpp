@@ -261,7 +261,8 @@ void installViewModel(World& world) {
     auto state = std::make_shared<ViewModelState>();
     reg.ctx().emplace<ViewModelInstalled>(ViewModelInstalled{state});
     auto system = std::make_shared<ViewModelSystem>(state);
-    world.addSync("view_model", [system](World& w) { system->run(w); });
+    // The gun follows the drawn camera, and the arms' pose follows the gun.
+    world.addSync("view_model", [system](World& w) { system->run(w); }, {.after = {"interpolate"}, .before = {"pose"}});
 }
 
 const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun) {

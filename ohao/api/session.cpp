@@ -1185,7 +1185,9 @@ std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const refl
     std::vector<reflect::ChannelDoc> out;
     for (const auto& c : world.events().channels()) {
         const TypeInfo* t = types.find(c->type());
-        out.push_back({c->name(), t ? t->name : std::string(), c->writers(), c->readers()});
+        std::vector<std::string> readers = c->readers();
+        readers.insert(readers.end(), c->cueReaders().begin(), c->cueReaders().end());
+        out.push_back({c->name(), t ? t->name : std::string(), c->writers(), std::move(readers)});
     }
     return out;
 }

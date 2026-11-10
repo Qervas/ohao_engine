@@ -2,13 +2,13 @@
 // The World's events (step 3c; docs/plans/2026-11-09-step3-engine-game-boundary.md, "3c").
 //
 // A channel is a name and a payload type: `world.events().writer<FootEvent>("physics.footstep", "physics")`. A
-// system holds the writers and readers it takes at install; each names the system, so the scheduler (step 3h)
+// system holds the writers and readers it takes at install; each names the system, so the World's scheduler
 // learns what a system emits and reads from what it holds. A name taken with a second payload type throws.
 //
 //   - What a step reads: a reader's read() is its channel's events for this step, oldest first. An event emitted
 //     between steps (an API call, a body removed in a sync) belongs to the next step. A channel's writers run
-//     before its readers (ecs/system_order.hpp), so a step's events are read in that step and a reader keeps no
-//     state.
+//     before its typed readers and, when it has a cue, before every system that reads cues (the World orders them
+//     so), so a step's events are read in that step and a reader keeps no state.
 //   - State: the events the next step will read. A snapshot carries them (saveWindow), and world.hash covers them;
 //     a restore drops the next step's events and puts the snapshot's back. Snapshots and restores happen between
 //     steps only (World::defer): a step's events are always the step's.
@@ -24,8 +24,8 @@
 // appends, a read a span.
 //
 // The engine/game boundary: the engine reads its own channels by type, and a game's only as a Cue, which the
-// game's projection (EventChannel::setCue) makes from its payload; the engine's data binds cues by channel name
-// (an audio bank's and a vfx set's `events`). No engine system includes a game's payload type.
+// projection its writer declares (EventLog::writer's cue) makes from its payload; the engine's data binds cues by
+// channel name (an audio bank's and a vfx set's `events`). No engine system includes a game's payload type.
 #include "core/type_key.hpp"
 
 #include <glm/glm.hpp>
@@ -81,7 +81,10 @@ public:
     [[nodiscard]] TypeKey type() const noexcept { return m_type; }   // the payload's (reflect::TypeRegistry::find)
     [[nodiscard]] uint32_t index() const noexcept { return m_index; }   // in the log's channels()
     [[nodiscard]] const std::vector<std::string>& writers() const noexcept { return m_writers; }   // systems
-    [[nodiscard]] const std::vector<std::string>& readers() const noexcept { return m_readers; }
+    [[nodiscard]] const std::vector<std::string>& readers() const noexcept { return m_readers; }   // typed: they order
+    // Systems that read it through its cues, bound by their data at run time (EventLog::addReader). The order never
+    // follows data: every system that reads cues runs after the writers of every channel with a cue.
+    [[nodiscard]] const std::vector<std::string>& cueReaders() const noexcept { return m_cueReaders; }
 
     // The events held, oldest first: the history's and the next (or running) step's.
     [[nodiscard]] virtual std::size_t size() const noexcept = 0;
@@ -93,6 +96,8 @@ public:
     [[nodiscard]] std::size_t after(uint64_t since) const noexcept;
     // The event's cue (false: the channel has no projection).
     [[nodiscard]] virtual bool cue(std::size_t i, Cue& out) const = 0;
+    // Whether it has one: its writers then run before every system that reads cues (SystemOrder::readsCues).
+    [[nodiscard]] virtual bool hasCue() const noexcept = 0;
 
 protected:
     EventChannelBase(EventLog& log, std::string name, TypeKey type, uint32_t index)
@@ -109,8 +114,11 @@ private:
     std::string m_name;
     TypeKey m_type;
     uint32_t m_index;
-    std::vector<std::string> m_writers, m_readers;
+    std::vector<std::string> m_writers, m_readers, m_cueReaders;
 };
+
+template <class T>
+using CueFn = Cue (*)(const T&);
 
 template <class T>
 class EventChannel final : public EventChannelBase {
@@ -119,14 +127,12 @@ public:
         : EventChannelBase(log, std::move(name), typeKey<T>(), index) {}
 
     uint64_t emit(T value);   // its seq
-    // The projection the engine's data binds to (a game's channels; engine channels need none).
-    using CueFn = Cue (*)(const T&);
-    void setCue(CueFn fn) noexcept { m_cue = fn; }
     [[nodiscard]] bool cue(std::size_t i, Cue& out) const override {
         if (!m_cue) return false;
         out = m_cue(at(i).value);
         return true;
     }
+    [[nodiscard]] bool hasCue() const noexcept override { return m_cue != nullptr; }
 
     // This step's events (between steps: the next step's so far).
     [[nodiscard]] std::span<const Event<T>> window() const noexcept {
@@ -161,9 +167,10 @@ private:
         emit(static_cast<const std::vector<T>*>(saved)->at(i));
     }
 
+    friend class EventLog;
     std::vector<Event<T>> m_held;
     std::size_t m_front{0};
-    CueFn m_cue{nullptr};
+    CueFn<T> m_cue{nullptr};   // the projection the engine's data binds to (a game's channels)
 };
 
 // What a system emits into. Empty (false) when default-constructed.
@@ -206,23 +213,30 @@ public:
     // The channel `name` (made on first use). Throws std::logic_error when it carries another payload type.
     template <class T>
     EventChannel<T>& channel(std::string_view name);
+    // `cue`: the channel's projection to a Cue, for the engine's data to bind (a game's channel; an engine channel
+    // is read by type and has none). One per channel: another throws std::logic_error.
     template <class T>
-    EventWriter<T> writer(std::string_view name, std::string_view system) {
+    EventWriter<T> writer(std::string_view name, std::string_view system, CueFn<T> cue = nullptr) {
         EventChannel<T>& c = channel<T>(name);
-        addName(c.m_writers, system);
+        if (addName(c.m_writers, system)) ++m_topology;
+        if (cue && cue != c.m_cue) {
+            if (c.m_cue) throw std::logic_error("event channel '" + std::string(name) + "' has another cue");
+            c.m_cue = cue;
+            ++m_topology;
+        }
         return EventWriter<T>(&c);
     }
     template <class T>
     EventReader<T> reader(std::string_view name, std::string_view system) {
         EventChannel<T>& c = channel<T>(name);
-        addName(c.m_readers, system);
+        if (addName(c.m_readers, system)) ++m_topology;
         return EventReader<T>(&c);
     }
-    // A system that reads a channel through its cues (an engine system bound by data): named among its readers.
-    // False when no such channel exists yet.
+    // A system that reads a channel through its cues (an engine system bound by data): named among its cue readers,
+    // for the catalogue. False when no such channel exists yet.
     bool addReader(std::string_view name, std::string_view system) {
         const EventChannelBase* c = find(name);
-        if (c) addName(const_cast<EventChannelBase*>(c)->m_readers, system);
+        if (c) addName(const_cast<EventChannelBase*>(c)->m_cueReaders, system);
         return c != nullptr;
     }
     // The channel, or null (none of that name, or another payload type).
@@ -235,6 +249,9 @@ public:
     [[nodiscard]] std::span<const std::unique_ptr<EventChannelBase>> channels() const noexcept { return m_channels; }
 
     [[nodiscard]] uint64_t nextSeq() const noexcept { return m_nextSeq; }   // the seq the next event gets
+    // Changes whenever a system is first named a channel's writer or typed reader, or a channel gets its cue: the
+    // World's simulate order is computed from them (World::simulate).
+    [[nodiscard]] uint64_t topology() const noexcept { return m_topology; }
     [[nodiscard]] uint64_t oldestSeq() const noexcept { return m_nextSeq - m_order.size(); }   // nextSeq when empty
     // Every held event with seq > since, in seq order, at most max: f(const EventChannelBase&, std::size_t i), which
     // may return false to stop before that event. Returns the cursor to pass next: the last seq visited, else since
@@ -263,7 +280,7 @@ public:
 private:
     template <class T>
     friend class EventChannel;
-    static void addName(std::vector<std::string>& names, std::string_view name);
+    static bool addName(std::vector<std::string>& names, std::string_view name);   // false: already there
     void endWindow();
     EventMeta stamp(uint32_t channel) {
         m_order.push_back(channel);
@@ -278,6 +295,7 @@ private:
     uint64_t m_windowSeq{1};        // the step's first event
     uint64_t m_step{0};
     bool m_inStep{false};
+    uint64_t m_topology{0};
 };
 
 template <class T>

@@ -847,8 +847,9 @@ AudioSchedule& installAudio(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<AudioInstalled>()) return *installed->system;
     auto system = std::make_shared<AudioSchedule>(world, assets);
     reg.ctx().emplace<AudioInstalled>(AudioInstalled{system.get()});
-    world.addSimulate("audio_schedule", [system](World&, float) { system->step(); });
-    // Snapshots carry the schedule's state (restored after physics', ecs::kSnapshotOrder).
+    // Its typed readers order it after physics and animation; it plays the cues its bank binds.
+    world.addSimulate("audio_schedule", [system](World&, float) { system->step(); }, {.readsCues = true});
+    // Snapshots carry the schedule's state.
     AudioSchedule* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"audio_schedule", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) {

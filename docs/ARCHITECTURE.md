@@ -58,8 +58,11 @@ Dependency rules:
 ## One frame
 
 The same `World` runs headless (CLI, tests, examples) and windowed (`ohao_game`). Its
-systems come in two phases, each a fixed list run in order, never discovered or sorted
-(`World::simulateNames()`, `syncNames()`):
+systems come in two phases. Each phase's order is computed (`World::addSimulate`/`addSync`, step 3h) from what its
+systems declare (`ecs::SystemOrder`: `after`, `before`, `readsCues`) and, in simulate, the event handles they hold:
+a channel's writers before its typed readers, a channel with a cue before every system that reads cues. Ties go to
+the lesser name (Kahn's algorithm), so the order is a function of the systems installed, not of the host; a cycle
+throws at install, naming it. `OHAO_LOG_LEVEL=debug` logs each phase's order. Below, the play scene's:
 
 ```
 the timeline (core/timeline.hpp) decides the steps: lockstep, on request (world.step);
@@ -68,8 +71,8 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
   World::stepInput(events)   device events since the last step, then injected ones
                              (InputActions rebinds the map first)
   World::simulate(fixedDt)
-    spin            engine-provided: Spin -> Transform (patch)        every World
-    fly_controller  engine-provided: input + FlyController -> Transform   every World
+    fly_controller  engine-provided: input + FlyController -> Transform   every World (before physics)
+    spin            engine-provided: Spin -> Transform (patch)        every World (before physics)
     physics         propagateTransforms (dirty subtrees; prevWorld kept   installed with the physics
                     at the frame's start), PhysicsScene::sync (bodies     scene (installPhysics);
                     for changed colliders, moved entities move bodies,    nothing for a world
@@ -109,13 +112,16 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     parameter, an event, its clip's end), advances its
                     integer steps and fade, and emits the clip events it
                     crossed (anim.clip_event)
-    audio_schedule  last: the step's physics, combat and animation        installed by installAudio
-                    events -> audio.* events (play with a voice, variant, (after installAnimation)
-                    occlusion and outcome; stop for a stolen voice; bus
-                    ducks; the round's snapshot; the listener's zone and
+    audio_schedule  the step's physics, combat and animation events      installed by installAudio
+                    -> audio.* events (play with a voice, variant,       (after its typed readers'
+                    occlusion and outcome; stop for a stolen voice; bus  writers and every cue
+                    ducks; the round's snapshot; the listener's zone and channel's: readsCues)
                     bed; occlusion re-casts; stop_world on a restart or
                     restore), by the bank's priorities, caps and holdMs;
                     its state rides the World's snapshot and world.hash
+    vfx             the step's cues the vfx set binds (tracers, impacts,  installed by installVfx
+                    decals) and VfxEmitters -> effect records; its state  (after animation; readsCues)
+                    rides the World's snapshot and world.hash
     then the step's events become history (ecs/events.hpp): each system reads its channels'
     events for the step (EventReader::read); one emitted between steps (an API call, a body
     removed in a sync) is the next step's, carried by a snapshot and hashed until it runs;
@@ -133,18 +139,20 @@ after the frame's steps (LiveHost):
                       never the world, the schedule or a snapshot)
 once per batch of steps and before each render:
 World::sync()
+  level           Level components -> the entities they expand         installed by installLevels
+                                                                       (before transform)
   instantiate     MeshSource/Material -> MeshRenderer,        installed by a host with
-                  meshes and materials registered in the RenderScene   a renderer (addSyncBefore)
+                  meshes and materials registered in the RenderScene   a renderer (after level)
   player_spawn    new or changed PlayerControllers -> characters, at  installed by installPhysics
-                  the player spawn (so a play scene's first frame is
-                  the spawn's view)
+                  the player spawn (so a play scene's first frame is   (after level, before
+                  the spawn's view)                                    transform)
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
   physics         dirty colliders -> Jolt bodies; moved entities move     installed by installPhysics
-                  their bodies (no step: that is the simulate system);
+                  their bodies (no step: that is the simulate system);    (after transform)
                   after a restore, the snapshot's simulation back in
                   place (Jolt's state, characters, players)
   interpolate     World::renderAlpha < 1: what the last step moved    installed by installPhysics
-                  (players, heads, dynamic bodies) and its subtree ->
+                  (players, heads, dynamic bodies) and its subtree ->  (after physics)
                   RenderPose between its last two step poses; at 1
                   none (Transform, the hash, saved files untouched);
                   then the look lead: the input-driven player and its
@@ -152,19 +160,20 @@ World::sync()
                   applyLook (the newest step's turn plus the lead,
                   never interpolated; nothing in lockstep)
   view_model      a ViewModel's subtree (the first-person gun) ->      the slice's: installSlice
-                  RenderPose in the drawn view: viewModelRemap (within
+                  RenderPose in the drawn view: viewModelRemap (within (after interpolate, before pose)
                   depthScale of the eye, on screen as through fovDeg),
                   sway, bob and kick at World::presentationDt (0: the
                   rest pose); drawn as kDrawViewModel (no CSM cascade,
                   TLAS mask 4: camera rays only); aiming, in realtime
                   frames only, a DrawnFov on the camera (75 -> 55)
   pose            every Animator: layers sampled at (steps - 1 +        installed by installAnimation
-                  alpha), blended by mask and mode -> AnimPose (runtime:
+                  alpha), blended by mask and mode -> AnimPose (runtime: (after interpolate)
                   model matrices, the palette and last sync's palette,
                   a posed box); JointAttach children -> RenderPose at
                   their joint, subtree included
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
-                  (at RenderPose when there is one)                    a renderer (addSyncAfter)
+                  (at RenderPose when there is one)                    a renderer (after transform,
+                                                                       interpolate, pose, instantiate)
                   and the light list; a SkinnedMesh entity first gets
                   its own mesh (registerSkinnedInstance), then each
                   frame its palette; setLights gives each point,
@@ -172,6 +181,8 @@ World::sync()
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
                   setViewerPosition)
+  vfx_draw        the effect records -> the frame's particles,         installed by a host with
+                  tracers and decals                                   a renderer (after render_extract)
 host: applySceneView (the first active Camera, at its RenderPose if  runtime/scene_view_apply.hpp
       any; Environment -> renderer camera, HDRI)
 VulkanRenderer::render()
@@ -323,7 +334,8 @@ Followed for the spin system.
      `void update<Name>(entt::registry&, float dt)`. Iterate a view; write components
      through `patch`/`replace` so the sync systems see the change. Read time only from
      `dt` (it runs once per fixed step); do nothing when `dt` is 0.
-  2. Install it in `World::World()` (`ohao/ecs/world.cpp`) with `addSimulate`.
+  2. Install it in `World::World()` (`ohao/ecs/world.cpp`) with `addSimulate(name, fn, {.after, .before})`,
+     naming the systems whose results it reads and those that read its own (its events order themselves).
   3. Its files include nothing from `reflect/` or `api/`. What it tells other systems or agents is an event:
      a payload struct registered in `ecs/event_types.cpp` (`.event()`, entities by id with `.entity()`), a
      writer taken at install (`world.events().writer<T>("<system>.<what>", "<system>")`), and readers taking
@@ -331,7 +343,7 @@ Followed for the spin system.
   4. Check it by hand through the API (`world.step`, then the entities' values; still entities
      untouched); `replay_test` holds its determinism if the play scene runs it.
 - **Host system** (needs a renderer; a sync system, no dt): an `install<Name>(World&, …)`
-  that adds it with `addSyncBefore("transform", …)` or `addSyncAfter("transform", …)`, guarded against a
+  that adds it with `addSync(name, fn, {.after = {…}, .before = {…}})`, guarded against a
   second install (see `installInstantiate`). It must pick up entities that existed
   before it was installed.
 

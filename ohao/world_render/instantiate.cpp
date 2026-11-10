@@ -303,7 +303,8 @@ void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backen
     }
     reg.ctx().emplace<InstantiateInstalled>();
     auto state = std::make_shared<InstantiateState>(world, std::move(backend), assets);
-    world.addSync("instantiate", [state](World&) { state->run(); });
+    // A level's MeshSources, once it expanded them.
+    world.addSync("instantiate", [state](World&) { state->run(); }, {.after = {"level"}});
 }
 
 void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,

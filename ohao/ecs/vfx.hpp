@@ -108,8 +108,8 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `vfx` simulate system (its place: ecs::kSimulateOrder) and its snapshot hook. Returns the
-// installed system if there is one.
+// Installs the `vfx` simulate system (after animation and the writers of what it binds) and its snapshot hook.
+// Returns the installed system if there is one.
 VfxSystem& installVfx(World& world, AssetResolver& assets);
 [[nodiscard]] VfxSystem* vfxSystem(World& world);
 [[nodiscard]] const VfxSystem* vfxSystem(const World& world);

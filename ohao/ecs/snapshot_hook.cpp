@@ -1,28 +1,15 @@
 #include "ecs/snapshot_hook.hpp"
 
-#include "ecs/system_order.hpp"
-
 #include <algorithm>
 #include <stdexcept>
 #include <string>
 
 namespace ohao::ecs {
-namespace {
-
-std::size_t rank(std::string_view name) {
-    const auto it = std::find(kSnapshotOrder.begin(), kSnapshotOrder.end(), name);
-    if (it == kSnapshotOrder.end())
-        throw std::logic_error("snapshot hook '" + std::string(name) + "' is not in ecs::kSnapshotOrder");
-    return static_cast<std::size_t>(it - kSnapshotOrder.begin());
-}
-
-} // namespace
 
 void addSnapshotHook(entt::registry& registry, SnapshotHook hook) {
-    const std::size_t r = rank(hook.name);
     auto& hooks = registry.ctx().contains<SnapshotHooks>() ? registry.ctx().get<SnapshotHooks>().hooks
                                                            : registry.ctx().emplace<SnapshotHooks>().hooks;
-    const auto at = std::find_if(hooks.begin(), hooks.end(), [&](const SnapshotHook& h) { return rank(h.name) >= r; });
+    const auto at = std::find_if(hooks.begin(), hooks.end(), [&](const SnapshotHook& h) { return h.name >= hook.name; });
     if (at != hooks.end() && at->name == hook.name)
         throw std::logic_error("snapshot hook '" + std::string(hook.name) + "' registered twice");
     hooks.insert(at, std::move(hook));

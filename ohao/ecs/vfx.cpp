@@ -521,8 +521,8 @@ VfxSystem& installVfx(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<VfxInstalled>()) return *installed->system;
     auto system = std::make_shared<VfxSystem>(world, assets);
     reg.ctx().emplace<VfxInstalled>(VfxInstalled{system.get()});
-    // After combat and the animation step; before the audio schedule (the step's last).
-    world.addSimulate("vfx", [system](World&, float dt) { system->step(dt); });
+    // Effects ride the poses the step's animation left, and spawn from the cues its set binds.
+    world.addSimulate("vfx", [system](World&, float dt) { system->step(dt); }, {.after = {"animation"}, .readsCues = true});
     VfxSystem* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"vfx", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) {

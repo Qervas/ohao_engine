@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3f built (3g merged into 3c); 3h-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3h built (3g merged into 3c); 3i-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -575,6 +575,80 @@ services in `ohao/game`.
 *Done when* every engine system declares itself, and a planted pair of unordered writers fails install. The computed
 order runs the baseline unchanged; where it differs from today's list, the plan says why.
 
+*As built (2026-11-10):*
+- **What orders a system.**
+  - `ecs::SystemOrder {after, before, readsCues}`, given to `addSimulate`/`addSync`.
+  - In simulate, also the event handles: a channel's writers run before its typed readers (`EventLog::writer` and
+    `reader` name their system), and a channel with a cue runs before every system with `readsCues`.
+  - A name not installed is no constraint. Hosts install different sets: headless installs rendering at its first
+    capture.
+- **Ties go to the lesser name** (Kahn's algorithm), not to install order. The order is then a function of the set
+  installed: the window host (rendering at once) and the headless one (rendering at the first capture) agree, and
+  3j's reload, which adds a module's systems again, cannot move them. Refuted: install order reproduced 2b's list
+  with fewer declarations, but made the order a function of the host's history.
+- **Recomputed** at each install and, in simulate, before a step whenever the log's topology changed since the last.
+  The topology changes when a system is first named a channel's writer or typed reader, or a channel gets its cue.
+  - A cycle throws `std::logic_error` naming it (`spin -> physics -> combat -> spin`) and installs nothing.
+  - A simulate system added inside a step throws.
+- **Cues order by code, never by data.**
+  - A cue is declared with its writer: `EventLog::writer(name, system, cue)` replaces `setCue`.
+  - The audio schedule and vfx declare `readsCues`.
+  - First built as a check when a bank or set binds a channel: a cue reader before the writer threw. Replaced,
+    because the error's advice would have the engine name the game's system, and an edge makes the case
+    impossible.
+  - Which channels a system binds stays in the catalogue (`addReader`).
+- **The declarations**, each with its reason at the install:
+  - simulate: spin and fly_controller before physics; combat after physics; animation after physics; vfx after
+    animation, with readsCues; audio_schedule with readsCues.
+  - sync: level before transform; instantiate after level; player_spawn after level and before transform; physics
+    after transform; interpolate after physics; view_model after interpolate and before pose; pose after
+    interpolate; render_extract after transform, interpolate, pose and instantiate; vfx_draw after render_extract.
+  - The engine names no game system. The slice's view model declares itself before `pose`, and its drivers'
+    readers put combat before animation.
+- **Snapshot hooks run in name order.** `kSnapshotOrder` is gone with `ecs/system_order.hpp`. Each hook restores
+  only its own system's state (physics' Jolt state, combat's grenades and round, the audio schedule's voices, vfx's
+  records), so their order changes only how the hash is composed.
+- **Deleted:** `World::simulateNames` and `syncNames`, which had no caller. `OHAO_LOG_LEVEL=debug` logs each order.
+- **The order against 2b's list:**
+  - Simulate: fly_controller, spin, physics, combat, animation, audio_schedule, vfx (2b: spin before
+    fly_controller, vfx before audio_schedule). With `--game none`: the same without combat.
+  - Sync: level, instantiate, player_spawn, transform, physics, interpolate, view_model, pose, render_extract,
+    vfx_draw (2b: player_spawn before instantiate).
+  - Why each swapped pair is free:
+    - spin moves `Spin` entities, the fly controller `FlyController` ones;
+    - vfx writes effect records and the audio schedule audio commands, and neither reads the other;
+    - instantiate writes `MeshRenderer`, player_spawn characters and their transforms.
+- **Results:**
+  - **The baseline.** With the hooks still in 2b's order, equal to 3f's at all 5 checkpoints, `world.hash`
+    included: `3h_a`, then `3h_b` with the cue edges. With the hooks in name order (`3h`), everything is equal but
+    the hash, at every checkpoint.
+  - **Planted bugs:**
+    - A cycle (combat before spin) fails install: "the simulate systems' order has a cycle: spin -> physics ->
+      combat -> spin".
+    - Without combat's `after physics`, combat runs first, and the baseline differs at 20 points from checkpoint 3
+      (an impact's place, then the round's events).
+    - Without `readsCues`, with the drivers' edge taken away and combat renamed to sort last, combat runs after
+      the audio schedule and vfx. With it, combat runs before them.
+  - **Gates:** `check.py --changed` 6 of 6, no GPU fault. physics_bench and audio_bench are within budget.
+  - **feel_bench**, run by mistake: it opens a window for 3 minutes.
+    - `look_latency_ms` was 67.4 against 15, almost all of it submit to present (57 ms): the play scene renders at
+      20 ms a frame on this laptop. The CPU stages were 0.2 and 1.5 ms.
+    - `frame_p99_over_median` 1.22 passes.
+    - The first feel_bench on this laptop (its last pass, 9.27 ms, was on Windows with the RTX 5070). Not this
+      step's: 3h changes only the CPU order.
+- **Not built, by the standard:**
+  - **Component and resource accesses, their check (two unordered writers fail install), and waves:** to step 4b,
+    with the jobs.
+    - Run serially, a declared access changes nothing: the order is already total and deterministic.
+    - Nothing here could hold a declaration to the code: systems reach the registry directly, deep in their
+      implementations, and an unenforced list drifts from the code, which 3c refused for events.
+    - In 4b a wrong declaration is a race, so the declarations come with what enforces them, written once.
+      `SystemOrder` gains fields; nothing is rewritten.
+    - The spec is corrected.
+  - **Removing a module's systems:** to 3j, which needs it and can test it with an unload.
+- **Known gap.** A system with an undeclared dependency on an unordered one could move if renamed, since ties go
+  by name. 4b's accesses close it.
+
 ## 3i. The game API and `games/slice`
 
 - **The game API** is the library `ohao/game`: a `GameModule` with `registerTypes`, `registerEvents`,
@@ -639,6 +713,10 @@ spec's step 3 "done when" holds. The baseline tool is then deleted.
 - Section 3's "combat's runtime state is in no snapshot" understates the gap. Physics', animation's and audio's
   counters and the World's input are missing too, and snapshot columns hold raw entity handles. 3b covers all of
   them.
+- **4.3, the scheduler (3h).** Step 3 orders by the declared `after`/`before` and the event handles, serially, as one
+  total order. The component and resource accesses, the check of two unordered writers, and the waves come with
+  4b's jobs, where a wrong access is a race and is enforced. A name not installed is no failure but no constraint,
+  since hosts install different sets.
 - **4.3, events (3c).**
   - Events are not double-buffered. A step reads its own events, and the schedule puts each writer before its
     readers. A buffer that waits a step is only for a reader that runs before its writer, and none does.

@@ -2,8 +2,8 @@
 // State a system keeps outside the components that a snapshot must carry to replay exactly (the physics scene's
 // simulation, the audio schedule's and the vfx system's state). A system registers one hook under its name
 // (addSnapshotHook); takeSnapshot (ecs/snapshot.hpp) keeps what each save returns, restoreSnapshot hands each back
-// after the components, in kSnapshotOrder whatever the install order. A separate header so systems can register
-// without the reflection layer.
+// after the components, in name order whatever the install order: a hook restores its own system's state only, so
+// the hooks are independent. A separate header so systems can register without the reflection layer.
 #include <entt/entity/registry.hpp>
 #include <glm/glm.hpp>
 
@@ -34,18 +34,18 @@ public:
 // world.hash: a state that changes what later steps do is saved and hashed, whatever else it is. A log's seq is
 // history, not state: a restore never rewinds a log, so neither its counter nor a reference into it is hashed.
 struct SnapshotHook {
-    std::string_view name;   // a kSnapshotOrder entry
+    std::string_view name;   // its system's
     std::function<std::shared_ptr<const void>()> save;
     std::function<void(const std::shared_ptr<const void>&)> restore;
     std::function<void(StateHash&)> hash;
 };
 
-// The registry's hooks, in kSnapshotOrder.
+// The registry's hooks, by name.
 struct SnapshotHooks {
     std::vector<SnapshotHook> hooks;
 };
 
-// Registers `hook` in the registry's context at its place in kSnapshotOrder; a name not listed throws.
+// Registers `hook` in the registry's context, at its name's place; a name registered twice throws.
 void addSnapshotHook(entt::registry& registry, SnapshotHook hook);
 
 // What every hook saved, by name (Snapshot::systems). A hook with nothing saved is restored with null.
@@ -54,7 +54,7 @@ struct SystemStates {
 };
 [[nodiscard]] std::shared_ptr<const void> saveSystems(const entt::registry& registry);
 void restoreSystems(const entt::registry& registry, const std::shared_ptr<const void>& saved);
-// Every hook's live state, in kSnapshotOrder, each after its name (world.hash).
+// Every hook's live state, by name, each after its name (world.hash).
 void hashSystems(const entt::registry& registry, StateHash& h);
 
 } // namespace ohao::ecs

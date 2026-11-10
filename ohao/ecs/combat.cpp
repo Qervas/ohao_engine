@@ -130,20 +130,16 @@ struct CombatSystem::Impl {
     explicit Impl(World& w) : world(w), reg(w.registry()) {
         namespace se = slice_events;
         EventLog& log = w.events();
-        const auto with = [](auto writer, auto cue) {
-            writer.channel()->setCue(cue);
-            return writer;
-        };
-        out.shot = with(log.writer<ShotEvent>(se::kShot, "combat"), &shotCue);
-        out.hit = with(log.writer<HitEvent>(se::kHit, "combat"), &hitCue);
-        out.damage = with(log.writer<DamageEvent>(se::kDamage, "combat"), &damageCue);
-        out.death = with(log.writer<DeathEvent>(se::kDeath, "combat"), &deathCue);
-        out.reload = with(log.writer<ReloadEvent>(se::kReload, "combat"), &reloadCue);
-        out.reloaded = with(log.writer<ReloadEvent>(se::kReloaded, "combat"), &reloadCue);
-        out.roundStart = with(log.writer<RoundEvent>(se::kRoundStart, "combat"), &roundCue);
-        out.restart = with(log.writer<RoundEvent>(se::kRestart, "combat"), &roundCue);
-        out.win = with(log.writer<RoundEvent>(se::kWin, "combat"), &roundCue);
-        out.explode = with(log.writer<ExplodeEvent>(se::kExplode, "combat"), &explodeCue);
+        out.shot = log.writer<ShotEvent>(se::kShot, "combat", &shotCue);
+        out.hit = log.writer<HitEvent>(se::kHit, "combat", &hitCue);
+        out.damage = log.writer<DamageEvent>(se::kDamage, "combat", &damageCue);
+        out.death = log.writer<DeathEvent>(se::kDeath, "combat", &deathCue);
+        out.reload = log.writer<ReloadEvent>(se::kReload, "combat", &reloadCue);
+        out.reloaded = log.writer<ReloadEvent>(se::kReloaded, "combat", &reloadCue);
+        out.roundStart = log.writer<RoundEvent>(se::kRoundStart, "combat", &roundCue);
+        out.restart = log.writer<RoundEvent>(se::kRestart, "combat", &roundCue);
+        out.win = log.writer<RoundEvent>(se::kWin, "combat", &roundCue);
+        out.explode = log.writer<ExplodeEvent>(se::kExplode, "combat", &explodeCue);
     }
 
     [[nodiscard]] uint64_t idOf(entt::entity e) const { return e != entt::null && reg.valid(e) ? world.idOf(e) : 0; }
@@ -565,7 +561,8 @@ CombatSystem& installCombat(World& world) {
     // The system owns the combat state: it goes with the World's systems.
     auto system = std::make_shared<CombatSystem>(world);
     reg.ctx().emplace<CombatInstalled>(CombatInstalled{system.get()});
-    world.addSimulate("combat", [system](World&, float dt) { system->step(dt); });
+    // Rounds and grenades meet the world as the step's physics left it.
+    world.addSimulate("combat", [system](World&, float dt) { system->step(dt); }, {.after = {"physics"}});
     CombatSystem* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"combat", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreState(s); },

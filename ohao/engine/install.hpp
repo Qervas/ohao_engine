@@ -1,8 +1,8 @@
 #pragma once
 // The one install of a World's systems (system design 4.2, step 2b). Every host (the window, the CLI, ohao serve,
 // the benches) calls installEngine, and installRendering once a renderer exists (at once in a window, at the first
-// capture headless). Where each system runs is ecs/system_order.hpp's, not the call order, so hosts differ only by
-// what they install.
+// capture headless). Where each system runs is computed from what the systems declare (ecs::SystemOrder), not the
+// call order, so hosts differ only by what they install.
 namespace ohao {
 class BindlessTextureManager;
 namespace reflect { class TypeRegistry; }

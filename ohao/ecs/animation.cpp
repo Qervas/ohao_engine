@@ -316,11 +316,11 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     auto placed = std::make_shared<Placed>(Placed{system.get()});
     reg.on_construct<Animator>().connect<&Placed::on>(*placed);
     reg.on_update<Animator>().connect<&Placed::on>(*placed);
-    // After physics and combat: it reads what they wrote (ecs::kSimulateOrder).
-    world.addSimulate("animation", [system, placed](World& w, float) { system->step(w); });
-    // The pose: after the drawn poses of what the step moved (interpolate, the gun), before the
-    // render extract reads them (ecs::kSyncOrder).
-    world.addSync("pose", [system](World& w) { system->pose(w); });
+    // It animates what the step moved; a game's drivers' event readers order it after their writers.
+    world.addSimulate("animation", [system, placed](World& w, float) { system->step(w); }, {.after = {"physics"}});
+    // The pose: after the drawn poses of what the step moved (a game's view model declares itself before it); the
+    // render extract declares itself after it.
+    world.addSync("pose", [system](World& w) { system->pose(w); }, {.after = {"interpolate"}});
     return *system;
 }
 

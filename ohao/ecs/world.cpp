@@ -1,5 +1,4 @@
 #include "ecs/world.hpp"
-#include "ecs/system_order.hpp"
 #include "ecs/fly_controller_system.hpp"
 #include "ecs/spin_system.hpp"
 #include "ecs/transform_system.hpp"
@@ -56,10 +55,12 @@ World::World() : m_idGen{randomSeed(), 0} {
     m_registry.on_construct<InputActions>().connect<&World::onInputActionsChanged>(this);
     m_registry.on_update<InputActions>().connect<&World::onInputActionsChanged>(this);
     m_registry.on_destroy<InputActions>().connect<&World::onInputActionsChanged>(this);
-    // Engine-provided behaviour, once per fixed step.
-    addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });
-    addSimulate("fly_controller", [](World& w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); });
-    // Structural: transforms are propagated (the other systems take their places around it).
+    // Engine-provided behaviour, once per fixed step: they move entities, before the physics and the gameplay that
+    // read where entities are.
+    addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); }, {.before = {"physics"}});
+    addSimulate("fly_controller", [](World& w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); },
+                {.before = {"physics"}});
+    // Structural: transforms are propagated (the other systems declare themselves around it).
     addSync("transform", [](World& w) { updateTransforms(w.registry()); });
 }
 
@@ -268,35 +269,139 @@ void World::setTransform(entt::entity e, const Transform& local) {
 }
 
 namespace {
-// Inserts (name, fn) at its place in `order`.
-template <class List, class Fn, std::size_t N>
-void placeSystem(List& list, const std::array<std::string_view, N>& order, std::string name, Fn fn, const char* kind) {
-    const auto rank = [&](std::string_view n) -> std::size_t {
-        const auto it = std::find(order.begin(), order.end(), n);
-        return it == order.end() ? N : static_cast<std::size_t>(it - order.begin());
+
+// The order of a phase's systems: each after what it names in `after` and before what it names in `before` (names
+// not installed are ignored), and after its predecessors in `edges` (from, to: from runs first); among the systems
+// ready at once the lesser name runs first (Kahn's algorithm), so the order depends only on the set. Returns the
+// systems' indices in their order; a cycle throws, naming one.
+template <class S>
+std::vector<std::size_t> orderSystems(const std::vector<S>& systems, std::vector<std::pair<std::size_t, std::size_t>> edges,
+                                      const char* kind) {
+    const std::size_t n = systems.size();
+    const auto indexOf = [&](std::string_view name) {
+        for (std::size_t i = 0; i < n; ++i)
+            if (systems[i].name == name) return i;
+        return n;
     };
-    const std::size_t r = rank(name);
-    if (r == N)
-        throw std::logic_error(std::string(kind) + " system '" + name + "' is not in its order list (ecs/system_order.hpp)");
-    const auto at = std::find_if(list.begin(), list.end(), [&](const auto& s) { return rank(s.first) >= r; });
-    if (at != list.end() && at->first == name)
-        throw std::logic_error(std::string(kind) + " system '" + name + "' installed twice");
-    list.emplace(at, std::move(name), std::move(fn));
+    for (std::size_t i = 0; i < n; ++i) {
+        for (const std::string& a : systems[i].order.after)
+            if (const std::size_t j = indexOf(a); j < n) edges.emplace_back(j, i);
+        for (const std::string& b : systems[i].order.before)
+            if (const std::size_t j = indexOf(b); j < n) edges.emplace_back(i, j);
+    }
+    std::vector<std::vector<std::size_t>> next(n), prev(n);
+    std::vector<std::size_t> waits(n, 0);
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    for (const auto& [from, to] : edges) {
+        if (from == to) continue;
+        next[from].push_back(to);
+        prev[to].push_back(from);
+        ++waits[to];
+    }
+    std::vector<std::size_t> out;
+    std::vector<bool> placed(n, false);
+    while (out.size() < n) {
+        std::size_t pick = n;
+        for (std::size_t i = 0; i < n; ++i)
+            if (!placed[i] && waits[i] == 0 && (pick == n || systems[i].name < systems[pick].name)) pick = i;
+        if (pick == n) {   // every unplaced system waits on an unplaced one: walk back until one repeats
+            std::vector<std::size_t> walk;
+            std::size_t at = 0;
+            while (placed[at]) ++at;
+            while (std::find(walk.begin(), walk.end(), at) == walk.end()) {
+                walk.push_back(at);
+                at = *std::find_if(prev[at].begin(), prev[at].end(), [&](std::size_t p) { return !placed[p]; });
+            }
+            std::string cycle = systems[at].name;   // in run order: each must run before the next
+            for (auto it = walk.rbegin(); *it != at; ++it) cycle += " -> " + systems[*it].name;
+            throw std::logic_error(std::string("the ") + kind + " systems' order has a cycle: " + cycle + " -> " +
+                                   systems[at].name);
+        }
+        placed[pick] = true;
+        out.push_back(pick);
+        for (const std::size_t j : next[pick]) --waits[j];
+    }
+    return out;
 }
+
+template <class S>
+void permute(std::vector<S>& systems, const std::vector<std::size_t>& order) {
+    std::vector<S> out;
+    out.reserve(systems.size());
+    for (const std::size_t i : order) out.push_back(std::move(systems[i]));
+    systems = std::move(out);
+}
+
+template <class S>
+std::string listNames(const std::vector<S>& systems) {
+    std::string out;
+    for (const S& s : systems) out += (out.empty() ? "" : ", ") + s.name;
+    return out;
+}
+
+template <class S>
+bool installed(const std::vector<S>& systems, std::string_view name) {
+    return std::any_of(systems.begin(), systems.end(), [&](const S& s) { return s.name == name; });
+}
+
 } // namespace
 
-void World::addSimulate(std::string name, SimulateSystem fn) {
-    placeSystem(m_simulate, kSimulateOrder, std::move(name), std::move(fn), "simulate");
+// The simulate order, from the declarations and the event edges: a channel's writers before its typed readers and,
+// when it has a cue, before every system that reads cues.
+void World::orderSimulate() {
+    const auto indexOf = [&](std::string_view name) {
+        for (std::size_t i = 0; i < m_simulate.size(); ++i)
+            if (m_simulate[i].name == name) return i;
+        return m_simulate.size();
+    };
+    std::vector<std::pair<std::size_t, std::size_t>> edges;
+    for (const auto& c : m_events.channels())
+        for (const std::string& w : c->writers()) {
+            const std::size_t from = indexOf(w);
+            if (from == m_simulate.size()) continue;
+            for (const std::string& r : c->readers())
+                if (const std::size_t to = indexOf(r); to < m_simulate.size()) edges.emplace_back(from, to);
+            if (c->hasCue())
+                for (std::size_t to = 0; to < m_simulate.size(); ++to)
+                    if (m_simulate[to].order.readsCues) edges.emplace_back(from, to);
+        }
+    permute(m_simulate, orderSystems(m_simulate, std::move(edges), "simulate"));
+    m_simulateTopology = m_events.topology();
+    OHAO_LOG(Debug, ecs, "simulate order: {}", listNames(m_simulate));
 }
 
-void World::addSync(std::string name, SyncSystem fn) {
-    placeSystem(m_sync, kSyncOrder, std::move(name), std::move(fn), "sync");
+void World::addSimulate(std::string name, SimulateSystem fn, SystemOrder order) {
+    if (m_events.inStep()) throw std::logic_error("simulate system '" + name + "' added inside a step");
+    if (installed(m_simulate, name)) throw std::logic_error("simulate system '" + name + "' installed twice");
+    m_simulate.push_back({name, std::move(fn), std::move(order)});
+    try {
+        orderSimulate();
+    } catch (...) {
+        m_simulate.erase(std::find_if(m_simulate.begin(), m_simulate.end(),
+                                      [&](const auto& s) { return s.name == name; }));
+        m_simulateTopology = ~uint64_t{0};   // the next step orders the rest again
+        throw;
+    }
+}
+
+void World::addSync(std::string name, SyncSystem fn, SystemOrder order) {
+    if (installed(m_sync, name)) throw std::logic_error("sync system '" + name + "' installed twice");
+    m_sync.push_back({name, std::move(fn), std::move(order)});
+    try {
+        permute(m_sync, orderSystems(m_sync, {}, "sync"));
+    } catch (...) {
+        m_sync.pop_back();
+        throw;
+    }
+    OHAO_LOG(Debug, ecs, "sync order: {}", listNames(m_sync));
 }
 
 void World::simulate(float dt) {
+    if (m_events.topology() != m_simulateTopology) orderSimulate();   // new event handles since the last step
     m_events.beginStep(m_events.step() + 1);
     if (dt > 0.0f) m_stepDt = dt;
-    for (auto& [name, fn] : m_simulate) fn(*this, dt);
+    for (auto& s : m_simulate) s.fn(*this, dt);
     m_events.endStep();
     m_pendingLook = glm::vec2(0.0f);   // the step took it
     for (std::size_t i = 0; i < m_deferred.size(); ++i) {   // between steps now: an op may defer another (at once)
@@ -324,28 +429,16 @@ void World::sync() {
                      m_transformMismatches);
     }
 #endif
-    for (auto& [name, fn] : m_sync) fn(*this);
+    for (auto& s : m_sync) s.fn(*this);
 }
 
 bool World::runSync(std::string_view name) {
-    for (auto& [n, fn] : m_sync)
-        if (n == name) {
-            fn(*this);
+    for (auto& s : m_sync)
+        if (s.name == name) {
+            s.fn(*this);
             return true;
         }
     return false;
-}
-
-std::vector<std::string> World::simulateNames() const {
-    std::vector<std::string> out;
-    for (const auto& [name, fn] : m_simulate) out.push_back(name);
-    return out;
-}
-
-std::vector<std::string> World::syncNames() const {
-    std::vector<std::string> out;
-    for (const auto& [name, fn] : m_sync) out.push_back(name);
-    return out;
 }
 
 } // namespace ohao::ecs

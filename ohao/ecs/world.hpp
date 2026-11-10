@@ -22,15 +22,26 @@ struct RestoreEvent {
     uint64_t step{0};   // the World's step the world went back to
 };
 
-// The game world: an EnTT registry plus two explicitly ordered lists of systems, one per
-// phase (sub-project 4 spec, "System phases"). Systems run in exactly the order they were
-// added -- no discovery, no sorting.
-//   simulate  behaviour (spin, later physics and gameplay): once per fixed step, with the
-//             fixed dt. simulate(dt) runs them.
-//   sync      derived state (instantiate, transform, the render extract): once before each
-//             render and after each batch of steps, with no dt. sync() runs them.
-// A frame's simulation is then independent of how often it is rendered: a realtime session
-// and a lockstep one that run the same steps reach the same state.
+// Where a system runs among its phase's others (step 3h): it runs after every system it names in `after` and before
+// every one in `before`, when that system is installed (a name not installed is no constraint). In the simulate
+// phase every event writer also runs before the channel's typed readers (EventLog::writer/reader name them) and,
+// when the channel has a cue, before every system that reads cues.
+struct SystemOrder {
+    std::vector<std::string> after;
+    std::vector<std::string> before;
+    // It reads channels by their cues, which its data binds (the audio schedule, vfx): it runs after the writers of
+    // every channel with a cue, whatever its data binds, so loading data never moves a system.
+    bool readsCues{false};
+};
+
+// The game world: an EnTT registry plus the systems of two phases (sub-project 4 spec, "System phases").
+//   simulate  behaviour (spin, physics, gameplay): once per fixed step, with the fixed dt. simulate(dt) runs them.
+//   sync      derived state (instantiate, transform, the render extract): once before each render and after each
+//             batch of steps, with no dt. sync() runs them.
+// A frame's simulation is then independent of how often it is rendered: a realtime session and a lockstep one that
+// run the same steps reach the same state. Each phase's order is computed from what its systems declare
+// (SystemOrder, the event edges), ties going to the lesser name: a function of the systems installed, never of who
+// installed them or when.
 class World {
 public:
     using SimulateSystem = std::function<void(World&, float dt)>;
@@ -90,12 +101,13 @@ public:
     void attach(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
-    // A system goes to its name's place in ecs::kSimulateOrder / kSyncOrder (ecs/system_order.hpp), whoever
-    // installs it and whenever; a name not listed, or one already installed, throws std::logic_error.
-    void addSimulate(std::string name, SimulateSystem fn);
-    void addSync(std::string name, SyncSystem fn);
+    // Installs a system at the place its order and the others' give it. A name already installed, an order with a
+    // cycle, or a simulate system added inside a step throws std::logic_error and installs nothing.
+    void addSimulate(std::string name, SimulateSystem fn, SystemOrder order = {});
+    void addSync(std::string name, SyncSystem fn, SystemOrder order = {});
     // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp),
-    // then what the step deferred runs.
+    // then what the step deferred runs. When systems took new event handles since the last step, the order is
+    // computed again first; a cycle then throws std::logic_error, before the step.
     void simulate(float dt);
     // Work that must happen between steps (a snapshot, a restore: step 3d): asked during a step, it runs after the
     // step's last system, in the order asked, with the step's events already history; asked between steps, at once.
@@ -121,8 +133,6 @@ public:
         simulate(dt);
         sync();
     }
-    [[nodiscard]] std::vector<std::string> simulateNames() const;
-    [[nodiscard]] std::vector<std::string> syncNames() const;
 
     // The world's input (core/input.hpp), read by simulate systems. Hosts step it once per
     // simulation step, before simulate(), with that step's events (stepInput). Its bindings
@@ -177,8 +187,16 @@ private:
     ankerl::unordered_dense::map<uint64_t, entt::entity> m_byId;
     entt::entity* m_claimed{nullptr};   // the slot claim() reserved for the entity being created
     IdGenState m_idGen;
-    std::vector<std::pair<std::string, SimulateSystem>> m_simulate;
-    std::vector<std::pair<std::string, SyncSystem>> m_sync;
+    template <class Fn>
+    struct System {
+        std::string name;
+        Fn fn;
+        SystemOrder order;
+    };
+    void orderSimulate();
+    std::vector<System<SimulateSystem>> m_simulate;   // in their order
+    std::vector<System<SyncSystem>> m_sync;
+    uint64_t m_simulateTopology{~uint64_t{0}};   // the event log's topology m_simulate was ordered with
     std::vector<InputMap> m_inputs = std::vector<InputMap>(1);   // by stream
     EventLog m_events;
     std::vector<std::function<void(World&)>> m_deferred;

@@ -142,10 +142,12 @@ added and removed, 74 tests built and cut to 10).
 
 ![Declare, schedule, complete state](2026-11-08-system-design/3-world.svg)
 
-- A system declares its phase, the components and resources it reads and writes, and the events it emits and reads.
-  The scheduler builds a graph once, at install: a cycle, a missing dependency or two writers of one component
-  without an order fail there. Systems whose accesses do not conflict share a wave; waves run in a fixed order, so the
-  results are identical at any thread count. Step 3 runs the waves serially; step 4 runs them on jobs.
+- A system declares its phase, what it runs after and before, the components and resources it reads and writes,
+  and the events it emits and reads. The scheduler builds a graph at install: a cycle, or two writers of one
+  component without an order, fail there (a name not installed is no constraint: hosts install different sets).
+  Systems whose accesses do not conflict share a wave; waves run in a fixed order, so the results are identical at
+  any thread count. Step 3 orders by the declared order and the events, serially (one total order, ties by name);
+  step 4 adds the accesses, their check and the waves, on jobs, where a wrong access is a race and is enforced.
 - **Complete state.** A system with private state registers it (save, restore, hash). The snapshot and `world.hash`
   cover components, every registered state (grenades in flight, the round timer, Jolt's bodies, the audio schedule,
   vfx records) and the step's events.
@@ -276,7 +278,8 @@ data; the world without the renderer; hot reload of the module.
 **Step 4, the frame (large).**
 - 4a: the frame graph over every pass, VMA everywhere, dynamic rendering, the bindless table and generated parameter
   blocks, the pipeline library with shader hot reload, the transfer queue.
-- 4b: the job system, parallel waves, Jolt on jobs, the frame packet and the render thread.
+- 4b: the job system, the systems' declared accesses and parallel waves, Jolt on jobs, the frame packet and the render
+  thread.
 
 *Done when* no barrier is placed outside the graph, `render_bench` is no slower on any scene, `replay_test` is
 identical at 1 and N threads, and the play scene's CPU frame time drops with more cores (measured).

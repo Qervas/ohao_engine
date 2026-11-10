@@ -21,8 +21,10 @@ const EventChannelBase* EventLog::find(std::string_view name) const {
     return nullptr;
 }
 
-void EventLog::addName(std::vector<std::string>& names, std::string_view name) {
-    if (std::find(names.begin(), names.end(), name) == names.end()) names.emplace_back(name);
+bool EventLog::addName(std::vector<std::string>& names, std::string_view name) {
+    if (std::find(names.begin(), names.end(), name) != names.end()) return false;
+    names.emplace_back(name);
+    return true;
 }
 
 void EventLog::endWindow() {

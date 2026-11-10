@@ -247,8 +247,8 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `audio_schedule` simulate system (the step's last: ecs::kSimulateOrder) and its snapshot
-// hook. Returns the installed one if there is one.
+// Installs the `audio_schedule` simulate system (after the writers of what it reads) and its snapshot hook.
+// Returns the installed one if there is one.
 AudioSchedule& installAudio(World& world, AssetResolver& assets);
 [[nodiscard]] AudioSchedule* audioSchedule(World& world);
 [[nodiscard]] const AudioSchedule* audioSchedule(const World& world);

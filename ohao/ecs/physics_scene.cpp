@@ -861,12 +861,15 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     addSnapshotHook(reg, SnapshotHook{"physics", [raw] { return raw->saveSimulation(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); },
                                       [raw](StateHash& h) { raw->hashSimulation(h); }});
-    // Players spawn before the transform system, so a play scene's first frame is the spawn's.
-    world.addSync("player_spawn", [scene](World&) { scene->spawnPlayers(); });
-    world.addSync("physics", [scene](World& w) { scene->sync(w.registry()); });
-    // Render interpolation, before the render extract reads the poses.
-    world.addSync("interpolate", [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); });
-    // Once per fixed step, after spin and the fly controller.
+    // Players spawn, from the entities a level expanded, before the transform system: a play scene's first frame
+    // is the spawn's.
+    world.addSync("player_spawn", [scene](World&) { scene->spawnPlayers(); }, {.after = {"level"}, .before = {"transform"}});
+    // Bodies follow their entities' world transforms.
+    world.addSync("physics", [scene](World& w) { scene->sync(w.registry()); }, {.after = {"transform"}});
+    // Render interpolation between the last two steps, from the bodies as the sync left them.
+    world.addSync("interpolate", [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); },
+                  {.after = {"physics"}});
+    // Once per fixed step; its events order it before their readers.
     world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w, dt); });
     return *scene;
 }

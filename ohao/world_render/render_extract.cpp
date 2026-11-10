@@ -284,8 +284,10 @@ void installRenderExtract(World& world, render::RenderScene& scene) {
     }
     reg.ctx().emplace<RenderExtractInstalled>();
     auto state = std::make_shared<ExtractState>(reg, scene);
-    // After every drawn pose: transforms, interpolation, the gun, skeletons (ecs::kSyncOrder).
-    world.addSync("render_extract", [state](World&) { state->run(); });
+    // After every drawn pose (transforms, interpolation, skeletons, a game's view model before the pose) and the
+    // meshes.
+    world.addSync("render_extract", [state](World&) { state->run(); },
+                  {.after = {"transform", "interpolate", "pose", "instantiate"}});
 }
 
 } // namespace ohao::ecs
