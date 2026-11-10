@@ -4,6 +4,9 @@
 #include "runtime/window.hpp"
 #include "core/log.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace ohao::runtime {
 
 static Window* self(GLFWwindow* w) { return static_cast<Window*>(glfwGetWindowUserPointer(w)); }
@@ -34,6 +37,10 @@ bool Window::create(const WindowConfig& cfg) {
     glfwSetCursorPosCallback(m_window, onCursor);
     glfwSetWindowFocusCallback(m_window, onFocus);
     glfwSetFramebufferSizeCallback(m_window, onFramebufferSize);
+    // Wayland tells a window its display's scale only once it is on one: fitted again then.
+    glfwSetWindowContentScaleCallback(m_window, onContentScale);
+    m_pixels = {cfg.width, cfg.height};
+    fitPixels();
     return true;
 }
 
@@ -81,8 +88,28 @@ void Window::setCursorCaptured(bool captured) {
 bool Window::focused() const { return glfwGetWindowAttrib(m_window, GLFW_FOCUSED) != 0; }
 
 void Window::setSize(uint32_t w, uint32_t h) {
-    glfwSetWindowSize(m_window, static_cast<int>(w), static_cast<int>(h));
+    m_pixels = {w, h};
+    fitPixels();
 }
+
+// GLFW sizes a window in the desktop's units and scales its framebuffer by the display's scale: a 1920x1080
+// window at 150% would be drawn with 2880x1620 pixels, 2.25 times the frame's cost (measured 2026-11-10: the
+// play scene 8.7 ms at 1080p, 19.9 ms at 2880x1620).
+void Window::fitPixels() {
+    float sx = 1.0f, sy = 1.0f;
+    glfwGetWindowContentScale(m_window, &sx, &sy);
+    if (!(sx > 0.0f) || !(sy > 0.0f)) sx = sy = 1.0f;
+    const int w = std::max(1, static_cast<int>(std::lround(static_cast<float>(m_pixels.width) / sx)));
+    const int h = std::max(1, static_cast<int>(std::lround(static_cast<float>(m_pixels.height) / sy)));
+    int cw = 0, ch = 0;
+    glfwGetWindowSize(m_window, &cw, &ch);
+    if (cw != w || ch != h) glfwSetWindowSize(m_window, w, h);
+    const VkExtent2D fb = framebufferExtent();
+    OHAO_LOG(Info, runtime, "window: {}x{} pixels asked, scale {:.2f}, framebuffer {}x{}", m_pixels.width,
+             m_pixels.height, sx, fb.width, fb.height);
+}
+
+void Window::onContentScale(GLFWwindow* w, float, float) { self(w)->fitPixels(); }
 
 int Window::refreshRate() const {
     GLFWmonitor* m = m_window ? glfwGetWindowMonitor(m_window) : nullptr;

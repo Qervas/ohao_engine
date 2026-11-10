@@ -68,6 +68,14 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
     through the logger, with no abort.
   - A Wayland client cannot learn it was minimized (GLFW_ICONIFIED is always false there) and Hyprland has no minimize:
     a window never reaches the 0x0 drawable the host treats as minimized.
+  - **A window's size is pixels** (`runtime/window.cpp`, `fitPixels`):
+    - GLFW sizes a Wayland window in the desktop's units and scales its framebuffer by the display's scale, so on
+      KDE at 150% a 1920x1080 window was drawn with 2880x1620 pixels.
+    - Measured 2026-11-10 on the 4060: the play scene's GPU frame is 8.7 to 9.3 ms at 1920x1080 and 19.8 to 20.0 ms
+      at 2880x1620 (headless, `ohao run --size`); the window's frame went from 20.4 ms to 9.3 ms, and its look
+      latency from 67 ms to 23 ms (`feel_bench`, immediate).
+    - The window is made smaller in the desktop's units instead, and fitted again when Wayland tells it its
+      display's scale. It logs `window: WxH pixels asked, scale S, framebuffer WxH`.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
   is the one exception: it imports `tools.monograph`, so it runs from `site/`.
