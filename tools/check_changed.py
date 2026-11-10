@@ -29,6 +29,10 @@ RULES: list[tuple[str, list[str]]] = [
     ("assets/*", ["replay_test", "label:gpu", "render_golden"]), ("tests/replay/*", ["replay_test"]),
     # The agent interface and the hosts: replays go through ohao serve; captures through the render host.
     ("ohao/api/*", ["replay_test"]), ("ohao/rpc/*", ["replay_test"]), ("ohao/engine/*", ["replay_test"]),
+    ("ohao/game/*", ["replay_test"]),
+    # A game: the play scene's fight (replay_test), and what it draws there (its view model, under the golden and
+    # the validation layer).
+    ("games/*", ["replay_test", "render_golden", "check_validation"]),
     ("ohao/runtime/*", ["label:gpu", "render_golden"]), ("tools/ohao/*", ["replay_test", "label:gpu", "render_golden"]),
     ("tests/common/*", ["label:gpu", "replay_test"]),
 ]
