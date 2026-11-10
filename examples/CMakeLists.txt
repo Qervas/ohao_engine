@@ -33,4 +33,4 @@ ohao_example(turntable)
 
 # The windowed game: a scene file played by the live host (ohao_runtime).
 ohao_example(ohao_game)
-target_link_libraries(ohao_game PRIVATE ohao_runtime ohao_api)
+target_link_libraries(ohao_game PRIVATE ohao_runtime ohao_api ohao_slice)

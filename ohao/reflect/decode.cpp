@@ -512,6 +512,14 @@ int findField(const TypeInfo& t, std::string_view key, uint32_t position) noexce
     return -1;
 }
 
+bool readParams(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx) {
+    readStruct(obj, t, n, ctx, "_meta");
+    for (const auto& f : t.fields)
+        if (f.attrs.required && n.type == JsonType::Object && !ctx.doc.member(n, f.name))
+            ctx.error("E_COMMAND", n, t.doc + " need \"" + f.name + "\"", f.attrs.doc);
+    return ctx.errors.empty();
+}
+
 void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx, std::string_view ignoredKey) {
     if (n.type != JsonType::Object) {
         ctx.error("E_TYPE", n, t.name + " must be an object", "object", ctx.gotText(n));

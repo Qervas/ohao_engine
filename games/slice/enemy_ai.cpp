@@ -1,6 +1,6 @@
-#include "ecs/enemy_ai.hpp"
+#include "slice/enemy_ai.hpp"
 
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/world.hpp"
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 namespace {
 
@@ -215,4 +215,4 @@ void stepEnemies(World& world, PhysicsScene& physics, float dt) {
     }
 }
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

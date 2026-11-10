@@ -21,7 +21,7 @@ struct EngineConfig {
 };
 
 // Levels, physics, animation, the audio schedule, vfx: the engine's simulation and its snapshot hooks. No game
-// system: a host that plays the slice calls ecs::installSlice (ecs/slice.hpp) after it.
+// system: a host that plays a game installs it after (game::Module::install; the slice: slice/module.hpp).
 void installEngine(ecs::World& world, const EngineConfig& config);
 
 // Instantiate (MeshSources into meshes), the render extract, the effects' draw: what a renderer needs.

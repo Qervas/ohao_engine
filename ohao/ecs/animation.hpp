@@ -105,7 +105,7 @@ private:
 };
 
 // Installs the systems once per World (a second call returns the first); the AssetResolver must
-// outlive the World. A game registers its drivers (the slice's: installSlice).
+// outlive the World. A game registers its drivers when it installs (the slice: slice/arms_anim.hpp, enemy_anim.hpp).
 AnimationSystem& installAnimation(World& world, AssetResolver& assets);
 [[nodiscard]] AnimationSystem* animationSystem(World& world);
 [[nodiscard]] const AnimationSystem* animationSystem(const World& world);

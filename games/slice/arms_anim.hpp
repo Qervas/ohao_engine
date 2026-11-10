@@ -11,15 +11,15 @@
 // and the events `shot` (the owner's round) and `reload`, from the step's slice events, in the order they
 // happened.
 #include "ecs/animation.hpp"
-#include "ecs/combat.hpp"
-#include "ecs/components.hpp"
+#include "slice/combat.hpp"
+#include "slice/components.hpp"
 
 #include <entt/entt.hpp>
 
 #include <cstdint>
 #include <span>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 // Any of the owner's state may be missing (before the first combat step there is no WeaponState): it
 // reads as at rest.
@@ -29,4 +29,4 @@ void driveArmsAnim(uint64_t ownerId, const PlayerController* controller, const P
 // The driver `arms` (installSlice registers it), reading the slice's channels of `log`.
 void registerArmsDriver(AnimationSystem& animation, EventLog& log);
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

@@ -1,10 +1,10 @@
-#include "ecs/arms_anim.hpp"
+#include "slice/arms_anim.hpp"
 
 #include "ecs/world.hpp"
 
 #include <glm/glm.hpp>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 void driveArmsAnim(uint64_t ownerId, const PlayerController* controller, const PlayerState* body, const Health* health,
                    const Weapon* weapon, const WeaponState* state, const DriverEvents& events, AnimParams& out) {
@@ -53,4 +53,4 @@ void registerArmsDriver(AnimationSystem& animation, EventLog& log) {
     });
 }
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

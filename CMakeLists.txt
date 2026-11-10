@@ -120,6 +120,8 @@ add_custom_target(copy_assets ALL
 add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(ohao)
+# The games (step 3i): each a game::Module over the engine's libraries; the hosts link the one they play.
+add_subdirectory(games/slice)
 add_subdirectory(examples)
 
 # OpenPBR's energy-table generator.

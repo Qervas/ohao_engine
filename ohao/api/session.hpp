@@ -24,6 +24,10 @@
 #include <string_view>
 #include <vector>
 
+namespace ohao::game {
+class Module;
+}
+
 namespace ohao::api {
 
 // The engine version engine.info reports (the CMake project version).
@@ -31,9 +35,6 @@ inline constexpr std::string_view kEngineVersion = "0.1.0";
 // OHAO's own protocol version: additive changes keep it.
 inline constexpr int kProtocolVersion = 1;
 
-// Every method Session::call answers; exported in the catalogue (ohao_schema.json). Each
-// one's params are a struct of paramsRegistry() (api/params.hpp).
-[[nodiscard]] std::span<const reflect::MethodDoc> methods();
 // A world's event channels, for the catalogue (its `events`), in the log's order.
 [[nodiscard]] std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const reflect::TypeRegistry& types);
 
@@ -254,7 +255,9 @@ public:
 
 class Session {
 public:
-    Session(ecs::World& world, const reflect::TypeRegistry& types);
+    // `game`: the game the world plays (game/module.hpp), whose methods follow the engine's; null: none. `types`
+    // holds the game's types too (game::Module::registerTypes).
+    Session(ecs::World& world, const reflect::TypeRegistry& types, const game::Module* game = nullptr);
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -294,6 +297,9 @@ public:
     // window's look lead draws them before that step runs.
     void injectedLookDue(glm::vec2& sum, std::vector<std::chrono::steady_clock::time_point>& queuedAt) const;
     [[nodiscard]] uint64_t schemaHash() const noexcept;
+    // Every method call answers, in catalogue order: the engine's (their params are paramsRegistry()'s structs,
+    // api/params.hpp), then the game's.
+    [[nodiscard]] std::span<const reflect::MethodDoc> methods() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;
     // The host render.capture renders through (without one it is E_COMMAND); also sets the

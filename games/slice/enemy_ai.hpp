@@ -6,11 +6,10 @@
 // this step's weapons fire). All its state is in saved components (EnemyState, MoveIntent,
 // WeaponTrigger), so a snapshot replays it.
 
-namespace ohao::ecs {
+#include "slice/components.hpp"
 
-class World;
-class PhysicsScene;
+namespace ohao::slice {
 
 void stepEnemies(World& world, PhysicsScene& physics, float dt);
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

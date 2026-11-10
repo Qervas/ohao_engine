@@ -18,7 +18,8 @@
 // or a run measured nothing; 2: noisy (tools/check.py reruns it).
 
 #include "common/harness.hpp"
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
+#include "slice/module.hpp"
 #include "ecs/scene_types.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_log.hpp"
@@ -48,7 +49,7 @@ using Clock = std::chrono::steady_clock;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -92,6 +93,7 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
     ModeRun r;
     r.want = mode;
     LiveConfig cfg;
+    cfg.game = &slice::module();
     cfg.window.title = "OHAO feel_bench";
     cfg.window.width = 1920;
     cfg.window.height = 1080;
@@ -163,8 +165,8 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
     hooks.fixedUpdate = [&](LiveHost& h, float) {
         cursor = h.world().events().visit(cursor, SIZE_MAX, [&](const ecs::EventChannelBase& c, std::size_t) {
             const std::string& name = c.name();
-            if (name.rfind("slice.", 0) != 0 || name == ecs::slice_events::kShot || name == ecs::slice_events::kHit ||
-                name == ecs::slice_events::kDamage)
+            if (name.rfind("slice.", 0) != 0 || name == slice::slice_events::kShot || name == slice::slice_events::kHit ||
+                name == slice::slice_events::kDamage)
                 return;
             r.events.emplace_back(Clock::now(), name.substr(6));   // reload, death, round_start, ...
         });

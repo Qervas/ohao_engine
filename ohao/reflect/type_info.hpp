@@ -195,6 +195,9 @@ void hashStruct(const void* object, Hasher& h, const TypeInfo& t);
 // their defaults. A member named `ignoredKey` (if given) is skipped, not reported.
 void readStruct(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx,
                 std::string_view ignoredKey = {});
+// A method's params, as the API decodes every method's (a game's too): readStruct with MCP's "_meta" skipped, then
+// each required member present (E_COMMAND). False when anything was reported.
+bool readParams(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx);
 // Decodes one member of `object` (a `t`) from `n` and checks its limits, exactly as
 // readStruct does per member. False when it reported an error.
 bool readField(void* object, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx);

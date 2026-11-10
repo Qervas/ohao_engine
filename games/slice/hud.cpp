@@ -1,4 +1,5 @@
-#include "world_render/combat_hud.hpp"
+#include "slice/hud.hpp"
+#include "slice/module.hpp"
 
 #include "ecs/components.hpp"
 #include "ecs/player.hpp"
@@ -11,7 +12,7 @@
 #include <memory>
 #include <string>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 namespace {
 
@@ -183,14 +184,8 @@ render::HudList combatHud(World& world, uint32_t width, uint32_t height) {
     return CombatHud::layout(hud.state(world, width, height), width, height);
 }
 
-namespace {
-struct CombatPresentationInstalled {};
-} // namespace
-
-void installCombatPresentation(World& world) {
-    auto& ctx = world.registry().ctx();
-    if (ctx.contains<CombatPresentationInstalled>()) return;
-    ctx.emplace<CombatPresentationInstalled>();
+// What the slice presents (world_render/present.hpp): this HUD and the grenades in flight.
+void installSlicePresentation(World& world) {
     addHud(world, [](World& w, render::HudList& out, uint32_t width, uint32_t height) {
         const render::HudList list = combatHud(w, width, height);
         out.items.insert(out.items.end(), list.items.begin(), list.items.end());
@@ -203,4 +198,4 @@ void installCombatPresentation(World& world) {
     });
 }
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

@@ -8,7 +8,7 @@ component, the spin system and `entity.duplicate`; sub-project 4, step
 
 ## Libraries
 
-All under `ohao/`, each a static library with its own `CMakeLists.txt`. Sources are
+All under `ohao/`, each a static library with its own `CMakeLists.txt`, and the games under `games/`. Sources are
 globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 
 | Library | Directory | Depends on | What it owns |
@@ -23,11 +23,18 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
 | `ohao_world_render` | `world_render/` | `ohao_ecs`, `ohao_renderer` | the world into the renderer: instantiate (MeshSources into meshes, `installInstantiate`), the render extract, the effects' draw (`vfx_draw`), in-memory models (`model_spawn`), framing, what a game presents (`present.hpp`: its HUDs, drawn by the hosts, and its presented spheres, by `vfx_draw`). `engine::installRendering` installs it. |
 | `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
-| `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
+| `ohao_game_api` | `game/` | `ohao_reflect` | the game API (step 3i): `game::Module` (`registerTypes`, `install`, `methods`) and a game's method row (`game::Method`, `game::Call`, `decodeParams`). A host plays one module or none. |
+| `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect`, `ohao_game_api` | `Session`: the method table (the engine's rows, then the game's) and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header. |
 | `ohao_runtime` | `runtime/` | `ohao_api`, `ohao_core`, `ohao_ecs`, `ohao_world_render`, `ohao_renderer`, glfw | `LiveHost`, the window host (window, renderer, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); `applySceneView`; frame statistics |
 | `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (`physics/backend`: the `IPhysicsBackend` over Jolt that the ECS's physics scene builds, steps and joins bodies through) and audio (the mixer, the bank and the reverb; what plays is the ECS's voice schedule, played by a window's `runtime::AudioPlayer`) |
 | `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
+
+Games (`games/`, above every engine library: `cmake/ohao_layers.cmake` fails configure when an engine library links
+or includes one): `ohao_slice` (`games/slice`, namespace `ohao::slice`), the game the engine is built with: combat,
+the enemy AI, grenades and rounds, the view model, the arms and enemy drivers, its HUD, its 9 components and 7 event
+payloads (`types.cpp`), and `combat.info` and `combat.damage` (`methods.cpp`, params in its own registry);
+`slice::module()` is its `game::Module`. The CLI, `ohao_game` and the benches that measure it link it.
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
 `env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,
@@ -85,7 +92,7 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     and the players' footsteps and landings (with the
                     ground's Collider.surface) into the World's event log
                     (physics.*)
-    combat          first the enemy AI (every Enemy in id order: sight   the slice's: installSlice
+    combat          first the enemy AI (every Enemy in id order: sight   the slice's (games/slice)
                     ray, Idle/Chase/Attack/Dead, MoveIntent for the next
                     step, WeaponTrigger for this one); then
                     every Weapon in id order: trigger (a player's input
@@ -160,7 +167,7 @@ World::sync()
                   subtree turned by World::pendingLook through
                   applyLook (the newest step's turn plus the lead,
                   never interpolated; nothing in lockstep)
-  view_model      a ViewModel's subtree (the first-person gun) ->      the slice's: installSlice
+  view_model      a ViewModel's subtree (the first-person gun) ->      the slice's (games/slice)
                   RenderPose in the drawn view: viewModelRemap (within (after interpolate, before pose)
                   depthScale of the eye, on screen as through fovDeg),
                   sway, bob and kick at World::presentationDt (0: the
@@ -556,7 +563,7 @@ Followed for the play scene's enemies and the player's arms (sub-project 10, ste
    `mask`, `states`: a clip or a `blend1d` over a parameter, and `transitions` on a
    parameter, an event or `clipEnd`, with a `fade` in seconds; the file is `"version": 2`). Every error names its
    JSON pointer; a one-shot state with no way out is one.
-3. **The driver** (`ecs/<name>_anim.cpp`, the game's, registered by its install: the slice's in `installSlice`): writes the
+3. **The driver** (`<name>_anim.cpp`, the game's, registered by its install: the slice's in `games/slice/module.cpp`): writes the
    graph's parameters and events from **saved** state only, and reads the step's combat
    events after its last `restart` (`driveEnemyAnim`, `driveArmsAnim`). A parameter no
    driver writes reads 0.

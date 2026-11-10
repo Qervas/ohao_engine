@@ -1,4 +1,4 @@
-#include "ecs/enemy_anim.hpp"
+#include "slice/enemy_anim.hpp"
 
 #include "ecs/world.hpp"
 
@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 void driveEnemyAnim(const World& world, entt::entity e, const EnemyState* state, const PlayerState* body,
                     const MoveIntent* intent, const DriverEvents& events, AnimParams& out) {
@@ -47,4 +47,4 @@ void registerEnemyDriver(AnimationSystem& animation, EventLog& log) {
     });
 }
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

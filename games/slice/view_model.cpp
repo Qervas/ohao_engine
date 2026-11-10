@@ -1,6 +1,6 @@
-#include "ecs/view_model.hpp"
+#include "slice/view_model.hpp"
 
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/world.hpp"
 
@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 glm::mat4 viewModelRemap(const glm::mat4& view, float sceneFovDeg, float fovDeg, float depthScale) {
     // Projecting (x, y, z / k) through the scene's lens is projecting (x, y, z) through a lens k times
@@ -281,4 +281,4 @@ const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun) {
     return it != installed->state->guns.end() ? &it->second.motion : nullptr;
 }
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

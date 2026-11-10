@@ -11,9 +11,10 @@ set(OHAO_LAYERS
     ohao_renderer=4
     ohao_ecs=4
     ohao_level_world=5 ohao_world_render=5
-    ohao_engine=6
+    ohao_engine=6 ohao_game_api=6
     ohao_api=7
-    ohao_rpc=8 ohao_runtime=8)
+    ohao_rpc=8 ohao_runtime=8
+    ohao_slice=9)   # a game sits above every engine library: none links it or includes its headers
 
 # "from->to": allowed although it points sideways or up. Each has its end. None today: the world and the renderer
 # share a level so neither reaches the other (step 3a); ohao_world_render joins them.
@@ -68,7 +69,12 @@ function(ohao_check_layers)
                 set(s "${dir}/${s}")
             endif()
             if(s MATCHES "\\.(hpp|h)$")
-                file(RELATIVE_PATH rel "${CMAKE_SOURCE_DIR}/ohao" "${s}")
+                # As sources include it: under ohao/ ("ecs/world.hpp"), or under games/ ("slice/combat.hpp").
+                if(s MATCHES "^${CMAKE_SOURCE_DIR}/games/")
+                    file(RELATIVE_PATH rel "${CMAKE_SOURCE_DIR}/games" "${s}")
+                else()
+                    file(RELATIVE_PATH rel "${CMAKE_SOURCE_DIR}/ohao" "${s}")
+                endif()
                 set(OWNER_${rel} ${lib})
             endif()
         endforeach()

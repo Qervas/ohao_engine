@@ -7,14 +7,12 @@
 // took), and the round's screens: dead (a red wash, "DEAD", "RESTART 3") and won ("CLEARED",
 // "ENTER TO RESTART"). Times are counted in combat steps, so a frame of a lockstep world and its
 // headless capture show the same HUD. Never saved or hashed: the World's context holds it.
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
 #include "render/hud/hud_list.hpp"
 
 #include <cstdint>
 
-namespace ohao::ecs {
-
-class World;
+namespace ohao::slice {
 
 struct HudState {
     bool player{false};          // an input-driven character with Health: the HUD shows
@@ -55,8 +53,5 @@ private:
 [[nodiscard]] render::HudList combatHud(World& world, uint32_t width, uint32_t height);
 [[nodiscard]] CombatHud& combatHudOf(World& world);
 
-// Registers the slice's presentation (world_render/present.hpp): this HUD and the grenades in flight. A second
-// call does nothing. With installSlice until the slice is a module (step 3i).
-void installCombatPresentation(World& world);
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

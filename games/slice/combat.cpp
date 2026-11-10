@@ -1,13 +1,13 @@
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/audio_schedule.hpp"
-#include "ecs/enemy_ai.hpp"
+#include "slice/enemy_ai.hpp"
 #include "ecs/world_snapshots.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/player.hpp"
-#include "ecs/view_model.hpp"
+#include "slice/view_model.hpp"
 #include "ecs/world.hpp"
 
 #include <glm/gtc/quaternion.hpp>
@@ -17,7 +17,7 @@
 #include <cmath>
 #include <utility>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 namespace {
 
@@ -588,4 +588,4 @@ const CombatSystem* combatSystem(const World& world) {
     return installed ? installed->system : nullptr;
 }
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

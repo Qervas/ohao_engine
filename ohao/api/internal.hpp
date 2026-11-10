@@ -12,6 +12,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <optional>
@@ -31,8 +32,20 @@ using reflect::JsonType;
 using reflect::JsonWriter;
 using reflect::TypeInfo;
 
+// A method writes its result value into `out`, or reports into ctx.errors and returns false.
+using MethodFn = bool (*)(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                          JsonWriter& out);
+
+// One row per method: its doc (the catalogue, MCP tools/list, the CLI's method list) and its handler. A method
+// exists only as a row, so dispatch and the docs cannot disagree.
+struct Method {
+    reflect::MethodDoc doc;
+    std::function<bool(Session::Impl&, const JsonDocument&, const JsonNode&, DecodeContext&, JsonWriter&)> fn;
+    bool mutates{false};   // may change the world (Session::changeCount)
+};
+
 struct Session::Impl {
-    Impl(ecs::World& w, const reflect::TypeRegistry& t);
+    Impl(ecs::World& w, const reflect::TypeRegistry& t, const game::Module* game);
 
     ecs::World& world;
     const reflect::TypeRegistry& types;
@@ -40,6 +53,8 @@ struct Session::Impl {
     Timeline ownTime;
     Timeline* time{&ownTime};
     uint64_t schemaHash{0};
+    std::vector<Method> methods;              // the engine's rows, then the game's
+    std::vector<reflect::MethodDoc> docs;     // their docs, in that order
     std::vector<reflect::ChannelDoc> channels;   // the world's event channels, at the session's start
     std::string catalogue;            // built on the first schema.get
     ecs::JsonParser paramsParser;     // the request's params
@@ -95,9 +110,6 @@ struct Session::Impl {
     }
 };
 
-// A method writes its result value into `out`, or reports into ctx.errors and returns false.
-using MethodFn = bool (*)(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                          JsonWriter& out);
 bool methodApply(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 bool methodSummary(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
@@ -125,11 +137,6 @@ bool methodPlayerInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode&
                       JsonWriter& out);
 bool methodPlayerTeleport(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                           JsonWriter& out);
-// Combat (sub-project 7, step 5; combat.cpp).
-bool methodCombatInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                      JsonWriter& out);
-bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                        JsonWriter& out);
 // Animation (sub-project 10, step 1; animation.cpp).
 bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                          JsonWriter& out);
@@ -185,7 +192,7 @@ void writeQuery(Session::Impl& s, const QueryPlan& plan, JsonWriter& out);
 
 // ---- helpers (session.cpp) -------------------------------------------------------------
 
-[[nodiscard]] std::string hex16(uint64_t id);
+using reflect::hex16;
 // Reports unknown members (E_UNKNOWN_FIELD, with a suggestion) and repeated ones
 // (E_DUPLICATE_KEY). `obj` must be an object. `what` names it in messages.
 bool checkKeys(const JsonDocument& doc, const JsonNode& obj, std::initializer_list<std::string_view> allowed,
@@ -209,12 +216,7 @@ inline bool badParams(Session::Impl& s) {
 // is skipped. False (BadParams) after reporting.
 template <class P>
 bool decodeParams(Session::Impl& s, const JsonNode& params, DecodeContext& ctx, P& out) {
-    const TypeInfo* t = paramsRegistry().find<P>();
-    reflect::readStruct(&out, *t, params, ctx, "_meta");
-    for (const auto& f : t->fields)
-        if (f.attrs.required && params.type == JsonType::Object && !ctx.doc.member(params, f.name))
-            ctx.error("E_COMMAND", params, t->doc + " need \"" + f.name + "\"", f.attrs.doc);
-    return ctx.errors.empty() || badParams(s);
+    return reflect::readParams(&out, *paramsRegistry().find<P>(), params, ctx) || badParams(s);
 }
 
 // The file a params path names: as given without a sandbox, else resolved by it (E_ACCESS

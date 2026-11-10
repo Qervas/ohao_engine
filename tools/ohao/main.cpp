@@ -46,8 +46,8 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
-#include "ecs/slice.hpp"
-#include "world_render/combat_hud.hpp"
+#include "game/module.hpp"
+#include "slice/module.hpp"
 #include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/log.hpp"
@@ -56,7 +56,6 @@
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -95,9 +94,11 @@ namespace fs = std::filesystem;
 
 enum Exit : int { kOk = 0, kInput = 1, kAsset = 2, kInternal = 3 };
 
+// The engine's types and the slice's: the CLI is built with the slice, so every command reads its components
+// (`--game none` installs none of its systems or methods; its components then load as plain data).
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -209,10 +210,10 @@ struct Args {
     std::string error;
 };
 
-// --game: the game a world plays after the engine's systems: the slice (the default) or none.
-bool playsSlice(const Args& a) {
+// --game: the game a world plays after the engine's systems: the slice (the default) or none (null).
+const game::Module* gameOf(const Args& a) {
     const auto it = a.options.find("--game");
-    return it == a.options.end() || it->second != "none";
+    return it == a.options.end() || it->second != "none" ? &slice::module() : nullptr;
 }
 std::string gameError(const Args& a) {
     const auto it = a.options.find("--game");
@@ -301,17 +302,15 @@ struct Context {
     std::unique_ptr<ecs::World> world;
     std::unique_ptr<api::Session> session;
 
-    // `slice`: the slice installed after the engine (ecs/slice.hpp); false: an engine-only world (--game none).
-    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli, bool slice = true) {
+    // `game`: the game installed after the engine (the slice by default); null: an engine-only world (--game none).
+    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli,
+                     const game::Module* game = &slice::module()) {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
         engine::installEngine(*world, {*assets, engineTypes()});
-        if (slice) {
-            ecs::installSlice(*world);
-            ecs::installCombatPresentation(*world);
-        }
-        session = std::make_unique<api::Session>(*world, engineTypes());
+        if (game) game->install(*world);
+        session = std::make_unique<api::Session>(*world, engineTypes(), game);
         session->setAssetResolver(assets.get());
         render->bind(*world);
         session->setHost(render.get());
@@ -381,12 +380,14 @@ int cmdSchema(const Args& a) {
     const fs::path dir = opt(a, "-o", ".");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    // The engine's event channels: those a world with the engine installed has.
+    // The channels and methods a world with the engine and the slice installed has.
     ecs::FileAssetResolver resolver{"."};
     ecs::World world;
     engine::installEngine(world, {resolver, engineTypes()});
+    slice::module().install(world);
+    const api::Session session(world, engineTypes(), &slice::module());
     const std::vector<reflect::ChannelDoc> channels = api::channelDocs(world, engineTypes());
-    const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), channels, reflect::JsonLayout::Pretty});
+    const auto catalogue = reflect::exportCatalogue(engineTypes(), {session.methods(), channels, reflect::JsonLayout::Pretty});
     const auto schema = reflect::exportSceneJsonSchema(engineTypes());
     const std::string files[] = {(dir / "ohao_schema.json").generic_string(), (dir / "scene.schema.json").generic_string()};
     for (int i = 0; i < 2; ++i) {
@@ -405,7 +406,7 @@ int cmdSchema(const Args& a) {
     w.beginArray();
     for (const auto& f : files) w.string(f);
     w.endArray();
-    w.key("schemaHash"); w.hex64(reflect::schemaHash(engineTypes(), api::methods(), channels));
+    w.key("schemaHash"); w.hex64(session.schemaHash());
     w.endObject();
     w.endObject();
     emit(w.take());
@@ -618,7 +619,7 @@ int cmdRun(const Args& a) {
         }
     }
 
-    Context c(opt(a, "--root", "."), api::HostKind::Cli, playsSlice(a));
+    Context c(opt(a, "--root", "."), api::HostKind::Cli, gameOf(a));
     const bool lines = script.has_value();
     int worst = kOk;
     std::string combined;   // without a script: {"result": {method: result, ...}}
@@ -743,7 +744,7 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     if (has(a, "--present")) cfg.present = *presentModeFromName(opt(a, "--present"));   // checked by cmdServe
     cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
     cfg.sound = has(a, "--sound");  // the voice schedule played on the default device
-    cfg.slice = playsSlice(a);
+    cfg.game = gameOf(a);
     cfg.root = opt(a, "--root", ".");
     const std::string mode = opt(a, "--mode", "deferred");
     cfg.mode = mode == "rt_realtime" ? RenderMode::RTRealtime : mode == "rt_offline" ? RenderMode::RTOffline : RenderMode::Deferred;
@@ -828,7 +829,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     }
     if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage), *transport);
     const std::string root = opt(a, "--root", ".");
-    Context c(root, api::HostKind::Headless, playsSlice(a));
+    Context c(root, api::HostKind::Headless, gameOf(a));
     api::PathPolicy policy;
     policy.root = root;
     policy.out = opt(a, "--out");

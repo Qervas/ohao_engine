@@ -290,7 +290,6 @@ void registerParams(reflect::TypeRegistry& r) {
             .doc("Facing about +Y from -Z, counter-clockwise seen from above; absent: as it faced").unit("deg")
             .min(-360.0).max(360.0);
 
-    r.type<CombatInfoParams>("CombatInfoParams").doc("combat.info params");
     r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
         .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator");
     r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params");
@@ -305,12 +304,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("solo", &AudioMixParams::solo).doc("Hear only soloed buses (with their parents and children)")
         .field("snapshot", &AudioMixParams::snapshot).doc("Force this snapshot; \"\" gives the schedule's back")
         .field("clear", &AudioMixParams::clear).doc("Drop every override first");
-    r.type<CombatDamageParams>("CombatDamageParams").doc("combat.damage params")
-        .field("entity", &CombatDamageParams::entity).doc("Who takes it, 16 hex digits (its Health or an ancestor's)")
-            .required()
-        .field("amount", &CombatDamageParams::amount).doc("Hit points to take").unitless().min(0.0).max(kMaxDamage)
-            .required()
-        .field("source", &CombatDamageParams::source).doc("Who dealt it, 16 hex digits");
 }
 
 } // namespace

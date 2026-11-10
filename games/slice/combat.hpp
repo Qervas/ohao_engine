@@ -7,6 +7,7 @@
 // Health. Shots, hits, damage, deaths, reloads, the round's and the grenade's are the slice's events: channels of
 // the World's log (ecs/events.hpp), each with the cue the engine's data binds to.
 
+#include "slice/components.hpp"
 #include "ecs/events.hpp"
 #include "ecs/snapshot_hook.hpp"
 
@@ -21,11 +22,9 @@
 #include <string>
 #include <vector>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
-class World;
-
-// The slice's channels (the game's namespace; they move with it in step 3i). Entities by EntityId.
+// The slice's channels. Entities by EntityId.
 namespace slice_events {
 inline constexpr const char* kShot = "slice.shot";               // ShotEvent
 inline constexpr const char* kHit = "slice.hit";                 // HitEvent
@@ -82,7 +81,7 @@ struct ExplodeEvent {
     glm::vec3 point{0.0f};
 };
 
-// The step's events the slice's animation drivers read (ecs/arms_anim.hpp, ecs/enemy_anim.hpp).
+// The step's events the slice's animation drivers read (slice/arms_anim.hpp, slice/enemy_anim.hpp).
 struct DriverEvents {
     std::span<const Event<ShotEvent>> shots;
     std::span<const Event<DamageEvent>> damage;
@@ -151,7 +150,7 @@ private:
 };
 
 // Installs the `combat` simulate system (after `physics`, which must be installed first) and its channels.
-// Returns the installed system if there is one. installSlice (ecs/slice.hpp) calls it.
+// Returns the installed system if there is one. The slice's module installs it (slice/module.hpp).
 CombatSystem& installCombat(World& world);
 [[nodiscard]] CombatSystem* combatSystem(World& world);
 [[nodiscard]] const CombatSystem* combatSystem(const World& world);
@@ -180,4 +179,4 @@ namespace combat {
 [[nodiscard]] glm::vec3 spreadDirection(glm::vec3 aim, float coneDeg, uint32_t seed, uint32_t shot);
 } // namespace combat
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

@@ -8,14 +8,14 @@
 // the registry's context: never saved, hashed or snapshotted. A frame without presentation time
 // (World::presentationDt 0: lockstep, headless, every capture) draws the rest pose, the remap alone,
 // and resets the motion; a round's restart resets it too.
+#include "slice/components.hpp"
+
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>
 
-namespace ohao::ecs {
-
-class World;
+namespace ohao::slice {
 
 // The drawn view-space pose of a view-space pose: x and y shrunk by depthScale, z by depthScale times
 // tan(fovDeg / 2) / tan(sceneFovDeg / 2). Every point stays within depthScale of its distance from the
@@ -39,4 +39,4 @@ void installViewModel(World& world);
 // The motion of a ViewModel entity after the last sync (nullptr if it has none yet).
 [[nodiscard]] const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun);
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

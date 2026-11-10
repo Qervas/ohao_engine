@@ -46,10 +46,10 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/gpu_culling.hpp"
 #include "render/frame/pass_registry.hpp"
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/vfx.hpp"
-#include "world_render/combat_hud.hpp"
+#include "slice/module.hpp"
 #include "level/level_system.hpp"
 #include "render/scene/meshlet_builder.hpp"
 
@@ -736,7 +736,7 @@ int report(const Measurement& m, std::vector<Budget>& budgets, bool haveBudgets,
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -773,8 +773,8 @@ struct Gpu {
             // other blockout scenes (play_hud, play_anim) still measure that, as their budgets were set.
             level::installLevels(*world, *assets, engineTypes());
             ecs::installPhysics(*world, *assets);
-            ecs::installCombat(*world);
-            ecs::installCombatPresentation(*world);
+            slice::installCombat(*world);
+            slice::installSlicePresentation(*world);
             ecs::installVfx(*world, *assets);
             vfxInstalled = true;
         }

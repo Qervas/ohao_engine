@@ -1,4 +1,5 @@
 #include "api/internal.hpp"
+#include "game/module.hpp"
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
@@ -122,7 +123,7 @@ bool schemaGet(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
     SchemaGetParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
     if (s.catalogue.empty())
-        s.catalogue = reflect::exportCatalogue(s.types, {methods(), s.channels, reflect::JsonLayout::Compact});
+        s.catalogue = reflect::exportCatalogue(s.types, {s.docs, s.channels, reflect::JsonLayout::Compact});
     out.raw(s.catalogue);
     return true;
 }
@@ -819,14 +820,7 @@ bool logRead(Session::Impl& s, const JsonDocument&, const JsonNode& params, Deco
     return true;
 }
 
-// One row per method: its doc (the catalogue, MCP tools/list, the CLI's method list) and its handler. A method
-// exists only as a row, so dispatch and the docs cannot disagree.
-struct Method {
-    reflect::MethodDoc doc;
-    MethodFn fn;
-    bool mutates{false};   // may change the world (Session::changeCount)
-};
-
+// The engine's rows (Method, api/internal.hpp); a session adds its game's after them.
 const std::vector<Method>& methodTable() {
     static const std::vector<Method> table = [] {
         const reflect::TypeRegistry& p = paramsRegistry();
@@ -925,14 +919,6 @@ const std::vector<Method>& methodTable() {
            "input.inject and world.step."}, methodPlayerInfo},
         {{"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
            "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."}, methodPlayerTeleport, true},
-        {{"combat.info", p.find<CombatInfoParams>(),
-           "{steps, round?: {started, phase, restartIn?, restarts}, combatants: [{entity, name, player?, health?, max?, "
-           "dead?, pos, weapon?: {ammo, magazine, reloading, bloomDeg, kickDeg, shots}, enemy?: {state, lastSeen?}}], more?}",
-           "The fight: the round (playing, dead, won) and everything with Health or a Weapon, in id order. Fire with "
-           "input.inject (fire, reload) and world.step."}, methodCombatInfo},
-        {{"combat.damage", p.find<CombatDamageParams>(), "{entity, name, health, max, dead, taken}",
-           "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
-           "events; a dead enemy lies down at the next step."}, methodCombatDamage, true},
         {{"animation.info", p.find<AnimationInfoParams>(),
            "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?}",
            "Each Animator's layers (state, clip time in s, the fade); its clip events are events.read's "
@@ -953,15 +939,14 @@ const std::vector<Method>& methodTable() {
     return table;
 }
 
-const Method* findMethod(std::string_view name) {
-    const auto& t = methodTable();
-    const auto it = std::find_if(t.begin(), t.end(), [&](const Method& m) { return m.doc.name == name; });
-    return it == t.end() ? nullptr : &*it;
+const Method* findMethod(const Session::Impl& s, std::string_view name) {
+    const auto it = std::find_if(s.methods.begin(), s.methods.end(), [&](const Method& m) { return m.doc.name == name; });
+    return it == s.methods.end() ? nullptr : &*it;
 }
 
-Diagnostic unknownMethod(std::string_view method) {
+Diagnostic unknownMethod(const Session::Impl& s, std::string_view method) {
     std::vector<std::string_view> names;
-    for (const Method& m : methodTable()) names.push_back(m.doc.name);
+    for (const Method& m : s.methods) names.push_back(m.doc.name);
     Diagnostic d;
     d.code = "E_METHOD";
     d.message = "no method is named '" + std::string(method) + "'";
@@ -999,15 +984,6 @@ std::string errorEnvelope(std::vector<Diagnostic>& errors) {
 
 } // namespace
 
-std::span<const reflect::MethodDoc> methods() {
-    static const std::vector<reflect::MethodDoc> docs = [] {
-        std::vector<reflect::MethodDoc> out;
-        for (const Method& m : methodTable()) out.push_back(m.doc);
-        return out;
-    }();
-    return docs;
-}
-
 int exitClass(std::string_view code) noexcept {
     if (code == "E_ASSET_NOT_FOUND" || code == "E_ASSET_INVALID" || code == "E_MESH_INVALID" ||
         code.starts_with("E_LEVEL_"))
@@ -1033,13 +1009,6 @@ std::string errorObject(std::vector<Diagnostic> errors) {
 }
 
 // ---- helpers --------------------------------------------------------------------------
-
-std::string hex16(uint64_t id) {
-    static constexpr char kDigits[] = "0123456789abcdef";
-    std::string s(16, '0');
-    for (int i = 15; i >= 0; --i, id >>= 4) s[static_cast<std::size_t>(i)] = kDigits[id & 15u];
-    return s;
-}
 
 bool usePath(Session::Impl& s, const JsonNode& params, std::string_view key, std::string_view path, PathUse use,
              DecodeContext& ctx, std::string& resolved) {
@@ -1164,7 +1133,24 @@ void writeComponents(Session::Impl& s, JsonWriter& w, entt::entity e, bool inclu
 
 // ---- Session --------------------------------------------------------------------------
 
-Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t) : world(w), types(t) {
+Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t, const game::Module* game) : world(w), types(t) {
+    methods = methodTable();
+    if (game)
+        for (const game::Method& g : game->methods()) {
+            if (findMethod(*this, g.doc.name))
+                throw std::logic_error("game " + std::string(game->name()) + "'s method " + std::string(g.doc.name) +
+                                       " has an engine method's name");
+            methods.push_back({g.doc,
+                               [fn = g.fn](Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
+                                           JsonWriter& out) {
+                                   game::Call call{s.world};
+                                   const bool ok = fn(call, params, ctx, out);
+                                   if (call.paramsFailed) s.paramsFailed = true;
+                                   return ok;
+                               },
+                               g.mutates});
+        }
+    for (const Method& m : methods) docs.push_back(m.doc);
     for (const TypeInfo* ti : t.types()) {
         if (ti->role != reflect::TypeRole::Component || !ecs::componentOps(*ti)) continue;
         byName.emplace(ti->name, ti);
@@ -1178,7 +1164,7 @@ Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t) : world(w), t
     tTransform = t.find<ecs::Transform>();
     tParent = t.find<ecs::Parent>();
     channels = channelDocs(w, t);
-    schemaHash = reflect::schemaHash(t, methods(), channels);
+    schemaHash = reflect::schemaHash(t, docs, channels);
 }
 
 std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const reflect::TypeRegistry& types) {
@@ -1192,10 +1178,10 @@ std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const refl
     return out;
 }
 
-Session::Session(ecs::World& world, const reflect::TypeRegistry& types)
-    : m(std::make_unique<Impl>(world, types)) {
-    // A Round in the world keeps its start as a snapshot with these types (the combat system's
-    // WorldSnapshots; ECS system code has no reflection of its own).
+Session::Session(ecs::World& world, const reflect::TypeRegistry& types, const game::Module* game)
+    : m(std::make_unique<Impl>(world, types, game)) {
+    // A system keeps the whole world and goes back to it through these types (WorldSnapshots: the slice's round
+    // start; ECS system code has no reflection of its own).
     ecs::installWorldSnapshots(world, types);
 }
 Session::~Session() = default;
@@ -1221,6 +1207,7 @@ void Session::injectedLookDue(glm::vec2& sum, std::vector<std::chrono::steady_cl
     }
 }
 uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
+std::span<const reflect::MethodDoc> Session::methods() const noexcept { return m->docs; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
 void Session::setHost(Host* host) noexcept {
     m->render = host;
@@ -1260,10 +1247,10 @@ CallStatus run(Session::Impl& m, const Method& method, const JsonDocument& doc, 
 CallOutcome Session::call(std::string_view method, const JsonDocument& doc, const JsonNode& params,
                           const CallControl* control) {
     CallOutcome o;
-    const Method* found = findMethod(method);
+    const Method* found = findMethod(*m, method);
     if (!found) {
         o.status = CallStatus::UnknownMethod;
-        o.errors.push_back(unknownMethod(method));
+        o.errors.push_back(unknownMethod(*m, method));
         return o;
     }
     DecodeContext ctx(doc);
@@ -1285,9 +1272,9 @@ CallOutcome Session::call(std::string_view method, const JsonDocument& doc, cons
 }
 
 std::string Session::call(std::string_view method, std::string_view params) {
-    const Method* found = findMethod(method);
+    const Method* found = findMethod(*m, method);
     if (!found) {
-        std::vector<Diagnostic> errs{unknownMethod(method)};
+        std::vector<Diagnostic> errs{unknownMethod(*m, method)};
         return errorEnvelope(errs);
     }
     auto parsed = m->paramsParser.parse(params.empty() ? std::string_view("{}") : params);

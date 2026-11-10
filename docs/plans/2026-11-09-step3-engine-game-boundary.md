@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3h built (3g merged into 3c); 3i-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3i built (3g merged into 3c); 3j-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -708,6 +708,55 @@ exact.
     - **The grenade in flight:** its sphere is 18 pixels, gone without the slice's sphere source.
   - **Planted:** the view model without its `FirstPerson` signals fails the play golden
     (`cli_blockout_play_deferred`).
+
+*As built, commit 2 (2026-11-10): the slice as a module.*
+- **The game API** (`ohao/game`, library `ohao_game_api`): `game::Module` with three entry points.
+  - `registerTypes`: its components and event payloads, into the host's scene registry after the engine's.
+  - `install`: its systems, channels, drivers, rules, snapshot hooks and presentation, on a World with the engine
+    installed. A second call on one World does nothing.
+  - `methods`: rows of `game::Method` (a doc, `MethodFn(Call&, params, ctx, out)`, `mutates`), whose params types
+    live in the game's own registry. `game::decodeParams` decodes them, as the engine decodes its own:
+    `reflect::readParams`, shared.
+  - The plan's five entry points became three. Events are types, and their channels open at install; systems, HUDs
+    and drivers are all registrations on a World. Two of the five would have been empty indirections.
+- **The session serves the game.** `Session(world, types, game)`: its method rows are the engine's, then the game's,
+  per session. Dispatch, the catalogue, `schemaHash` and MCP's `tools/list` read one list, `Session::methods()`. The
+  free `api::methods()` is deleted. A game method with an engine method's name throws.
+- **`games/slice`** (library `ohao_slice`, namespace `ohao::slice`, sources under `games/`):
+  - Moved: combat, the enemy AI, the arms and enemy drivers, the view model and the HUD (`hud.*`), which git records
+    as renames. Also the methods (`methods.cpp`, from `api/combat.cpp`, now against `game::Call`), and `ecs/slice.*`,
+    which became `module.*` (`slice::module()`); these were rewritten past git's rename detection, so they show as
+    new files.
+  - Cut from the engine: the 9 components (`slice/components.hpp`, from `ecs/components.hpp`); their reflection and
+    the 7 payloads' (`types.cpp`, from `ecs/scene_types.cpp` and `ecs/event_types.cpp`); and the methods' params
+    (from `api/params.*`).
+  - `slice/components.hpp` opens the namespace with `using namespace ohao::ecs`: the game is written against the
+    engine's world, and its own names stay apart from the engine's.
+- **Hosts:**
+  - The CLI (`--game slice|none` gives the module or null), `LiveConfig::game` (`ohao_game` and feel_bench set the
+    slice), and the benches that measure the slice, which link it.
+  - The CLI's registry holds the slice's types under `--game none` too. The binary is built with the slice, so its
+    components load as plain data in an engine-only world, which has none of the slice's systems or methods.
+  - `ohao schema` documents the engine with the slice installed.
+- **The boundary, checked.**
+  - `cmake/ohao_layers.cmake` puts `ohao_slice` at level 9, above every engine library, and owns its headers by
+    their path under `games/`.
+  - `nm` over `ohao_ecs`, `ohao_api`, `ohao_engine`, `ohao_runtime`, `ohao_vfx`, `ohao_audio`, `ohao_world_render`
+    and `ohao_level_world` finds no slice symbol defined or referenced. Two engine comments name the slice, as an
+    example.
+- **Results:**
+  - **The baseline:** equal to commit 1's at every checkpoint but `world.hash`.
+    - The cause is shown by A/B: with the slice's types registered at their old places in the engine's registry,
+      every checkpoint equals commit 1's, `world.hash` included.
+    - The hash covers saved components in registration order, and the slice's now follow every engine type.
+  - **Gates:** `check.py --changed` 6 of 6. The play golden is exact.
+  - **`--game none`:** the play scene runs 30 steps. `tools/list` has 36 tools and no `combat_*`; with the slice,
+    38, `combat_info` and `combat_damage` among them.
+  - **Planted:** `ohao_api` linking `ohao_slice` fails configure ("ohao_api (level 7) depends on ohao_slice
+    (level 9)"); `ecs/world.cpp` including `slice/combat.hpp` fails it naming the file.
+  - **Benches:** physics_bench and audio_bench are within budget.
+- **The catalogue changes order.** The slice's methods follow the engine's, and its types follow the engine's, so
+  `schemaHash` moves (clients key their cached catalogue on it).
 
 ## 3j. A shared module and hot reload
 

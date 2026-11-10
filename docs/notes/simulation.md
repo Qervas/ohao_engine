@@ -153,9 +153,9 @@ step 2h, 2026-11-09), unchanged.
     window's `AudioPlayer` plays them from git-ignored `assets/local/audio/footsteps/` (staged
     for local listening only, never committed) else `assets/audio/footsteps/` (ours,
     `tools/audio/make_footsteps.py`).
-- **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`), the slice's: `ecs::installSlice`
-  (`ecs/slice.hpp`; the CLI context and `LiveHost` call it after `installEngine`, unless `--game none`) installs
-  it with the view model and the animation drivers. `installCombat` adds a `combat` simulate system
+- **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`), the slice's (`games/slice`, a `game::Module`:
+  the CLI context and `LiveHost` install it after `installEngine`, unless `--game none`), with the view model, the
+  animation drivers, its HUD and its methods. `installCombat` adds a `combat` simulate system
   after `physics`: every `Weapon`, in id order, reads its trigger (a player's from the World's
   input, `fire`/`reload`; anything else's from `WeaponTrigger`), advances cooldown, reload, bloom
   and recoil, and fires at most one round a step. A round is one ray from the eye (a character:
@@ -186,7 +186,7 @@ step 2h, 2026-11-09), unchanged.
   - Enemies (step 2) are characters on the player's code: `PlayerController` with `spawn`
     (the k-th character with a tag takes the k-th `SpawnPoint` with it, creation order; empty:
     where it stands) and `input: false` (moved by its saved `MoveIntent`, not the world's
-    input; weapons fire by input only for `input: true`). The enemy AI (`ecs/enemy_ai.cpp`)
+    input; weapons fire by input only for `input: true`). The enemy AI (`slice/enemy_ai.cpp`)
     runs at the start of the combat step, before the weapons: sight is a `raycastFrom` from its
     eye to the player's chest (in its cone only while idle); it writes `EnemyState`,
     `MoveIntent` (the next step walks it) and `WeaponTrigger` (this step fires it), all saved.
@@ -215,7 +215,7 @@ step 2h, 2026-11-09), unchanged.
   - Presentation (step 4). The muzzle flash is a `Light` with a saved `Muzzle {intensity,
     time}` below the weapon's entity: the combat step sets it to `intensity` for `time` after a
     round (`WeaponState.flash` counts the steps) and back to 0; a light at intensity 0 has no
-    emitter mesh (`render::lightEmitter`). A hit's mark is the vfx set's decal ("VFX"). The HUD (`world_render/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
+    emitter mesh (`render::lightEmitter`). A hit's mark is the vfx set's decal ("VFX"). The HUD (`slice/hud.hpp`, registered with `world_render/present.hpp` → `render::HudList` → the `hud` pass after the gizmo,
     `render/hud/`) is laid out from combat state and the log, read from its oldest event. A window always draws the HUD; `render.capture` and `ohao run --render` only with
     `hud: true`/`--hud`, and only on deferred frames; no crosshair or hit marker while dead or
     once the round is won. Its sounds (`assets/audio/weapons/`, ours:
@@ -223,7 +223,7 @@ step 2h, 2026-11-09), unchanged.
   - Agents (step 5) fight through `combat.info` (the round and every combatant: health, `pos`,
     weapon, enemy state), `events.read`'s `slice.*` and `combat.damage`
     (hit points off an entity's `Health` or an ancestor's, as a round does), all in
-    `ohao/api/combat.cpp`; firing is `input.inject` (`fire`), as in a window. Aim by
+    `games/slice/methods.cpp`, rows of the game API; firing is `input.inject` (`fire`), as in a window. Aim by
     `player.teleport` to where the player stands with the yaw toward a combatant's `pos`.
   - A restore keeps restored rotations bit for bit: a character a restart brings back (a dead
     enemy's, parked) is placed where its restored entity stands without rewriting its rotation
@@ -259,7 +259,7 @@ step 2h, 2026-11-09), unchanged.
     GPU work is normal and starts late, nothing of the engine's is queued in the gap, and a
     30,000-frame headless loop never shows one. They are not the engine's to fix; `feel_bench`
     counts them (`stalls`).
-  - **The first-person gun** (step 3, `ecs/view_model.hpp`): an entity with `ViewModel` (saved; the
+  - **The first-person gun** (step 3, `slice/view_model.hpp`): an entity with `ViewModel` (saved; the
     play scene's Gun) and its subtree are drawn by the `view_model` sync system (after
     `interpolate`; `installCombat` installs it, for the slice): placed in the view by `viewModelRemap` (S =
     diag(d, d, d/k), k = tan(scene/2) / tan(fov/2): every point stays within `depthScale` of its
@@ -281,7 +281,7 @@ step 2h, 2026-11-09), unchanged.
   no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
   import is not used), binds clips to skeletons by joint name, and parses and validates
   `.animgraph.json` (every error with its JSON pointer). `installAnimation(world, assets)` (`installEngine`;
-  a game registers its drivers, the slice's `arms` and `enemy` in `installSlice`) adds the `animation` simulate system and the
+  a game registers its drivers when it installs, the slice's `arms` and `enemy`) adds the `animation` simulate system and the
   `pose` sync system (before `render_extract`).
   - **A pose is presentation; animator state is saved integers.** The saved `Animator` holds
     integers only: each layer's state, its steps, the state faded from and
@@ -309,8 +309,8 @@ step 2h, 2026-11-09), unchanged.
   - **The enemy** (step 2): `assets/characters/toon_enemy/` (Quaternius, CC0, rebuilt by
     `tools/anim/make_enemy.py`, pure Python, from the staged upstream file; `README.upstream.md` says
     what it changed) and `assets/anim/enemy.animgraph.json` (body `move`/`combat`/`death`/`dead`;
-    additive `aim`, `fire`, `reload`, `hit`). Its driver `enemy` (`ecs/enemy_anim.cpp`, the slice's,
-    registered by `installSlice`) reads saved state and the step's slice events. A restart restores the
+    additive `aim`, `fire`, `reload`, `hit`). Its driver `enemy` (`slice/enemy_anim.cpp`, the slice's,
+    registered by its install) reads saved state and the step's slice events. A restart restores the
     round's start between steps (World::defer), so the step after a restart steps the restored Animators
     exactly as the round's second step did. Damage dealt
     between steps (`combat.damage`) is the next step's: it flinches and kills as a round's does.
@@ -322,7 +322,7 @@ step 2h, 2026-11-09), unchanged.
     joints), not every joint.
   - **The player's arms** (step 3): the play scene's `Gun` is the `ViewModel` root at the eye; its
     child `Arms` (`assets/characters/fps_arms/`, ours, `tools/anim/make_fps_arms.py` in Blender 5.2.2)
-    is skinned and driven by `arms` (`ecs/arms_anim.cpp`, from the owning player's saved state and
+    is skinned and driven by `arms` (`slice/arms_anim.cpp`, from the owning player's saved state and
     the step's slice events); the `Muzzle` is a `JointAttach` on its `gun` joint. `view_model` places
     the root and skips `JointAttach` children (the pose system draws them after it). A view-model rig
     is drawn as through `ViewModel.fovDeg` and pulled to 0.41 of its depth: author what should show

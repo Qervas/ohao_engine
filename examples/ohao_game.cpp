@@ -32,6 +32,7 @@
 //
 // Exit codes: 0 ok; 1 no window or GPU; 2 the scene did not load; 3 a readback; 4 validation.
 
+#include "slice/module.hpp"
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/scene_types.hpp"
@@ -72,9 +73,10 @@ std::string sceneArg(int argc, char** argv) {
     return "assets/scenes/helmet_game.scene.json";
 }
 
+// The engine's types and the game's (the slice).
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -84,6 +86,7 @@ const reflect::TypeRegistry& engineTypes() {
 int main(int argc, char** argv) {
     LiveConfig cfg;
     cfg.window.title = "OHAO";
+    cfg.game = &slice::module();
     if (argFlag(argc, argv, "--vsync")) cfg.present = PresentMode::Fifo;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--present") != 0) continue;

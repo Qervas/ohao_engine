@@ -9,14 +9,14 @@
 // and the events `shot` (its round), `hit` (damage it took and lived), `reload`, `death`, from the
 // step's slice events, in the order they happened.
 #include "ecs/animation.hpp"
-#include "ecs/combat.hpp"
-#include "ecs/components.hpp"
+#include "slice/combat.hpp"
+#include "slice/components.hpp"
 
 #include <entt/entt.hpp>
 
 #include <span>
 
-namespace ohao::ecs {
+namespace ohao::slice {
 
 // Any of the state may be missing (a dead enemy has lost its character): it reads as at rest.
 void driveEnemyAnim(const World& world, entt::entity e, const EnemyState* state, const PlayerState* body,
@@ -25,4 +25,4 @@ void driveEnemyAnim(const World& world, entt::entity e, const EnemyState* state,
 // The driver `enemy` (installSlice registers it), reading the slice's channels of `log`.
 void registerEnemyDriver(AnimationSystem& animation, EventLog& log);
 
-} // namespace ohao::ecs
+} // namespace ohao::slice

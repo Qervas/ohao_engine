@@ -242,9 +242,6 @@ struct PlayerTeleportParams {
     glm::vec3 pos{0.0f};
     std::optional<float> yawDeg;      // absent: it keeps its facing
 };
-// Sub-project 7, step 5.
-inline constexpr float kMaxDamage = 10'000.0f;   // combat.damage's amount: [0, 1e4] hp
-struct CombatInfoParams {};
 // Sub-project 11, step 4.
 struct AudioInfoParams {};
 struct VfxInfoParams {
@@ -262,11 +259,6 @@ struct AudioMixParams {
 };
 struct AnimationInfoParams {
     std::optional<uint64_t> entity;   // one animator; absent: every animator (the first 16)
-};
-struct CombatDamageParams {
-    std::optional<uint64_t> entity;   // required: the entity hit (its Health, or its nearest ancestor's)
-    float amount{0.0f};               // required
-    std::optional<uint64_t> source;   // who dealt it (the events' source)
 };
 
 // The registry of every params struct and its enums, built once.

@@ -220,7 +220,8 @@ at its start; both enemies dead, it is won and waits for `restart` (Enter). `gre
 a test grenade that does no damage: it lands about 9 m along the look and goes off 2.5 s after
 the throw as an `explode` event and sound at its place, a source to listen to (audio spec ruling
 23). Three tools read and drive it, beside `input.inject` (fire with `fire` down and up,
-`reload`, `restart`, `grenade`):
+`reload`, `restart`, `grenade`); `combat_info` and `combat_damage` are the slice's own (a game's methods, after the
+engine's in `tools/list`; a server started with `--game none` has neither):
 
 - `combat_info {}`: the combat steps, the round (`phase` playing, dead or won, `restartIn` while
   dead, `restarts`) and every combatant in id order: `health`, `max`, `dead`, `pos` (its feet),
