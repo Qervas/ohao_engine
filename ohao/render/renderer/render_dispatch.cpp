@@ -604,7 +604,7 @@ std::vector<float> VulkanRenderer::readbackLinear() {
         if (!rt || !readImageRGBA(rt->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL,
                                   VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, out))
             out.clear();
-    } else if (m_deferredRenderer) {
+    } else if (m_deferredRenderer && m_deferredRenderer->renderScale() == 1.0f) {   // the lit image is the frame's size
         // The lit image is left for its readers (SSR, post) in SHADER_READ_ONLY_OPTIMAL.
         if (!readImageRGBA(m_deferredRenderer->getLitImage(), true, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, out))

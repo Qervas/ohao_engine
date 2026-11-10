@@ -394,6 +394,7 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
     d.setSSSEnabled(s.sss);
     d.setDecalsDrawn(s.vfx.decals);
     d.setSmokeInGi(s.vfx.smokeInGi);
+    d.setRenderScale(s.renderScale);
     if (VfxRenderer* v = d.vfxRenderer()) {
         v->setParticlesEnabled(s.vfx.particles);
         v->setSoftEnabled(s.vfx.soft);
@@ -433,6 +434,7 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     s.sss = d.sssEnabled();
     s.vfx.decals = d.decalsDrawn();
     s.vfx.smokeInGi = d.smokeInGi();
+    s.renderScale = d.renderScale();
     if (const VfxRenderer* v = d.vfxRenderer()) {
         s.vfx.particles = v->particlesEnabled();
         s.vfx.soft = v->softEnabled();

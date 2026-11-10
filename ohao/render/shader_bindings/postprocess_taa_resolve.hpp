@@ -20,16 +20,24 @@ inline constexpr std::array<Binding, 5> kSet0{currentFrame, historyFrame, veloci
 
 struct TAAParams {
     glm::vec2 texelSize;
+    glm::vec2 inputTexelSize;
+    glm::vec2 jitterUv;
     float blendFactor;
     float motionScale;
     uint32_t flags;
+    float sharpness;
+    float pad;
     uint8_t gap0[4];
 };
 static_assert(offsetof(TAAParams, texelSize) == 0);
-static_assert(offsetof(TAAParams, blendFactor) == 8);
-static_assert(offsetof(TAAParams, motionScale) == 12);
-static_assert(offsetof(TAAParams, flags) == 16);
-static_assert(sizeof(TAAParams) == 24);
+static_assert(offsetof(TAAParams, inputTexelSize) == 8);
+static_assert(offsetof(TAAParams, jitterUv) == 16);
+static_assert(offsetof(TAAParams, blendFactor) == 24);
+static_assert(offsetof(TAAParams, motionScale) == 28);
+static_assert(offsetof(TAAParams, flags) == 32);
+static_assert(offsetof(TAAParams, sharpness) == 36);
+static_assert(offsetof(TAAParams, pad) == 40);
+static_assert(sizeof(TAAParams) == 48);
 
 using PushConstants = TAAParams;
 inline constexpr uint32_t kPushSize = sizeof(TAAParams);
@@ -38,4 +46,4 @@ inline constexpr uint32_t kPushSize = sizeof(TAAParams);
 
 // Every push-constant field and its offset: OHAO_CHECK_PUSH(CppStruct, postprocess_taa_resolve) holds a C++
 // struct to them.
-#define OHAO_PUSH_FIELDS_postprocess_taa_resolve(T, X) X(T, texelSize, 0) X(T, blendFactor, 8) X(T, motionScale, 12) X(T, flags, 16)
+#define OHAO_PUSH_FIELDS_postprocess_taa_resolve(T, X) X(T, texelSize, 0) X(T, inputTexelSize, 8) X(T, jitterUv, 16) X(T, blendFactor, 24) X(T, motionScale, 28) X(T, flags, 32) X(T, sharpness, 36) X(T, pad, 40)

@@ -84,6 +84,9 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
     - From submit to present is 20 to 22 ms: the frame's 9 ms on the GPU, then 7 to 9 ms to the display through
       the compositor. Polling only once the previous frame is presented (`--frames-ahead 0`) gives 15.7 ms from
       submit to present and 20.8 ms latency, at 16.9 ms a frame; two frames ahead gives 29.4 ms.
+    - With the render scale (`feel_bench --render-scale`, 20 s each): 16.7 ms at 0.667 (4.7 ms frames) and
+      12.7 ms at 0.5 (4.2 ms frames), against 20.8 ms at 1. From submit to present stays 12 to 16 ms: with the GPU
+      at 3 to 5 ms a frame, most of it is the compositor's.
     - `VK_KHR_present_wait`'s time agrees with the compositor's own (Wayland's presentation-time, read in the same
       run) to 0.3 ms.
     - Polling when the GPU finishes the newest frame, instead of at a present, measured 18.9 ms against 20.1 ms

@@ -158,6 +158,21 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 }
 
+void PostProcessingPipeline::setRenderSize(uint32_t width, uint32_t height) {
+    if (width == m_renderWidth && height == m_renderHeight) return;
+    m_renderWidth = width;
+    m_renderHeight = height;
+    if (m_bloomPass) m_bloomPass->onResize(width, height);
+    if (m_taaPass) {
+        m_taaPass->setInputSize(width, height);
+        m_taaPass->resetHistory();
+    }
+}
+
+void PostProcessingPipeline::setFrameJitter(glm::vec2 ndc) {
+    if (m_taaPass) m_taaPass->setFrameJitter(ndc);
+}
+
 void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) return;
 
@@ -167,7 +182,7 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     vkDeviceWaitIdle(m_device);
 
     // Resize sub-passes
-    if (m_bloomPass) m_bloomPass->onResize(width, height);
+    if (m_bloomPass) m_bloomPass->onResize(m_renderWidth ? m_renderWidth : width, m_renderHeight ? m_renderHeight : height);
     if (m_taaPass) m_taaPass->onResize(width, height);
 
     // Recreate final output

@@ -244,7 +244,11 @@ void registerParams(reflect::TypeRegistry& r) {
             .doc("A window's camera meters its frames (the log-average luminance to middle grey); captures use ev100")
         .field("exposureCompensation", &RenderSettings::exposureCompensation)
             .doc("EV added to what auto exposure meters (positive brightens)").unit("EV").min(-10.0).max(10.0)
-        .field("vfx", &RenderSettings::vfx).doc("Effects' switches");
+        .field("vfx", &RenderSettings::vfx).doc("Effects' switches")
+        .field("renderScale", &RenderSettings::renderScale)
+            .doc("The fraction of the output's width and height the deferred frame is rendered at; TAA upscales it "
+                 "(1: none). The frame's GPU time follows the pixels rendered")
+            .unitless().min(0.5).max(1.0);
     r.type<RenderSettingsParams>("RenderSettingsParams").doc("render.settings params")
         .field("set", &RenderSettingsParams::set)
             .doc("Members to change (the rest keep theirs); absent: read only");

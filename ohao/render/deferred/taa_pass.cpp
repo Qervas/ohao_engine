@@ -28,7 +28,7 @@ bool TAAPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_height = 1080;
 
     // Generate Halton sequence for jitter
-    for (uint32_t i = 0; i < JITTER_SAMPLES; ++i) {
+    for (uint32_t i = 0; i < UPSCALE_JITTER_SAMPLES; ++i) {
         m_jitterSequence[i] = glm::vec2(
             halton(i + 1, 2) - 0.5f,
             halton(i + 1, 3) - 0.5f
@@ -101,6 +101,11 @@ void TAAPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     TAAParams params{};
     params.texelSize = glm::vec2(1.0f / m_width, 1.0f / m_height);
+    params.inputTexelSize = glm::vec2(1.0f / (m_inputWidth ? m_inputWidth : m_width), 1.0f / (m_inputHeight ? m_inputHeight : m_height));
+    // The projection adds the jitter to clip x and y per unit of view z, and w is -z: the image moves by -jitter
+    // in NDC, half of that in uv.
+    params.jitterUv = -0.5f * m_frameJitter;
+    params.sharpness = 1.0f / (2.0f * 0.47f * 0.47f);   // Unreal's TAAU: sigma 0.47 output pixels
     params.blendFactor = m_historyValid ? m_blendFactor : 0.0f;  // no history yet: current frame only
     params.motionScale = m_motionScale;
     params.flags = 0;
@@ -180,8 +185,9 @@ void TAAPass::onResize(uint32_t width, uint32_t height) {
 }
 
 glm::vec2 TAAPass::getJitterOffset(uint32_t frameIndex) const {
-    uint32_t sampleIndex = frameIndex % JITTER_SAMPLES;
-    return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);
+    const glm::vec2 input(m_inputWidth ? m_inputWidth : m_width, m_inputHeight ? m_inputHeight : m_height);
+    // +-1/2 of a rendered pixel: NDC spans 2.
+    return 2.0f * m_jitterSequence[frameIndex % (upscales() ? UPSCALE_JITTER_SAMPLES : JITTER_SAMPLES)] / input;
 }
 
 void TAAPass::setCurrentFrame(VkImageView currentFrame) {

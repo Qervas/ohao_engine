@@ -60,6 +60,11 @@ public:
     // seeds and the sky, RT GI's and TAA's history, the previous view-projection), so the
     // frames that follow render as a fresh renderer's would. The device must be idle.
     void resetTemporalState();
+    // render.settings renderScale: the scene is rendered at this fraction of the output's width and height and
+    // TAA upscales it (taa_resolve.slang). 1: plain TAA. The frame's cost follows the pixels rendered.
+    static constexpr float kMinRenderScale = 0.5f;
+    void setRenderScale(float scale);
+    [[nodiscard]] float renderScale() const noexcept { return m_renderScale; }
 
     // RT direct light and RT GI seed every sample from (render seed, frame index since the last
     // resetTemporalState, pixel, sample): frame k after a reset is the same in every run.
@@ -237,8 +242,11 @@ private:
     BindlessTextureManager* m_textureManager{nullptr};
 
     // Dimensions
-    uint32_t m_width{0};
+    uint32_t m_width{0};      // the scene passes' size: the output's times the render scale
     uint32_t m_height{0};
+    uint32_t m_outWidth{0};   // onResize's: TAA's history, the display pass, the gizmo and the HUD
+    uint32_t m_outHeight{0};
+    float m_renderScale{1.0f};
 
     // Camera data
     glm::mat4 m_view{1.0f};

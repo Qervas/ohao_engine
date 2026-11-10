@@ -1,6 +1,13 @@
-// TAA's resolve: this frame blended with its history, reprojected by the motion vectors and sampled
-// Catmull-Rom (four bilinear taps), clipped toward the 3x3 neighbourhood's mean +- 1 sigma in YCoCg
-// (variance clipping, Salvi 2016). Motion and a transparent's coverage weigh the history less.
+// TAA's resolve, which is also the upscaler (render.settings renderScale): the current frame may be smaller than the
+// history and the output.
+// - Each frame's samples sit at its pixel centres moved by that frame's jitter, so over the jitter sequence they
+//   cover the output's pixels. An output pixel takes this frame's nearest sample by how close it fell to the pixel's
+//   centre (a Gaussian of the distance in output pixels: Karis 2014's temporal upsample, as Unreal's TAAU), and
+//   keeps its history otherwise.
+// - The history is reprojected by the motion vectors less this frame's jitter (an output pixel stands still), sampled
+//   Catmull-Rom (four bilinear taps), and clipped toward the sample's 3x3 neighbourhood's mean +- 1 sigma in YCoCg
+//   (variance clipping, Salvi 2016).
+// - Motion and a transparent's coverage weigh the history less.
 
 [[vk::binding(0, 0)]] Sampler2D currentFrame;
 [[vk::binding(1, 0)]] Sampler2D historyFrame;
@@ -12,10 +19,14 @@
 
 struct TAAParams
 {
-    float2 texelSize;
+    float2 texelSize;      // the output's (the history's)
+    float2 inputTexelSize; // the current frame's
+    float2 jitterUv;       // where this frame's jitter moved the image, in uv
     float blendFactor;     // the history's weight (higher: more history)
     float motionScale;     // how fast motion takes it toward 0.5
     uint flags;            // bit 0 the motion vectors, bit 1 variance clipping, bit 2 the transparency mask bound
+    float sharpness;       // the sample weight's Gaussian: 1 / (2 sigma^2), in output pixels
+    float pad;
 };
 [[vk::push_constant]] ConstantBuffer<TAAParams> params;
 
@@ -80,16 +91,25 @@ float3 sampleHistory(float2 uv)
 [shader("fragment")]
 float4 main(float2 uv : TEXCOORD0) : SV_Target0
 {
-    const float3 currentColor = currentFrame.Sample(uv).rgb;
+    // The current frame's texel this pixel reads, and how much of the pixel that sample stands for.
+    const float2 q = (uv + params.jitterUv) / params.inputTexelSize;   // in the jittered image's pixels
+    const float2 c = floor(q) + 0.5;
+    const float2 d = (c - q) * params.inputTexelSize / params.texelSize;   // in output pixels
+    const float2 texelUv = c * params.inputTexelSize;
+    const float sampleWeight = exp(-dot(d, d) * params.sharpness);
+    const float3 currentColor = currentFrame.Sample(texelUv).rgb;
 
     float2 velocity = float2(0.0);
     if ((params.flags & 1u) != 0u)
-        velocity = velocityBuffer.Sample(uv).rg;
+        velocity = velocityBuffer.Sample(texelUv).rg;
 
+    // The motion vectors run from last frame's unjittered position to this frame's jittered one; an output pixel
+    // stands still, so the jitter comes out (left in, the history is resampled a jitter away every frame: a blur).
+    velocity -= params.jitterUv;
     const float2 historyUV = uv - velocity;
     const bool validHistory = historyUV.x >= 0.0 && historyUV.x <= 1.0 && historyUV.y >= 0.0 && historyUV.y <= 1.0;
-    if (!validHistory)
-        return float4(currentColor, 1.0);
+    if (!validHistory || params.blendFactor <= 0.0)   // no history: this frame, bilinear
+        return float4(currentFrame.Sample(uv + params.jitterUv).rgb, 1.0);
 
     float3 historyColor = sampleHistory(historyUV);
 
@@ -99,7 +119,7 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
     {
         for (int x = -1; x <= 1; ++x)
         {
-            float3 c = currentFrame.Sample(uv + float2(x, y) * params.texelSize).rgb;
+            float3 c = currentFrame.Sample(texelUv + float2(x, y) * params.inputTexelSize).rgb;
             c = RGBToYCoCg(c);
             m1 += c;
             m2 += c * c;
@@ -109,6 +129,8 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
     m2 /= 9.0;
 
     const float3 sigma = sqrt(max(m2 - m1 * m1, float3(0.0)));
+    const float velocityMag = length(velocity);
+    const float motionWeight = clamp(velocityMag * params.motionScale, 0.0, 1.0);
     const float varClipGamma = 1.0;
     const float3 aabbMin = m1 - varClipGamma * sigma;
     const float3 aabbMax = m1 + varClipGamma * sigma;
@@ -117,13 +139,14 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
     historyYCoCg = clipToAABB(aabbMin, aabbMax, historyYCoCg);
     historyColor = YCoCgToRGB(historyYCoCg);
 
-    const float velocityMag = length(velocity);
-    const float motionWeight = clamp(velocityMag * params.motionScale, 0.0, 1.0);
     float blend = lerp(params.blendFactor, 0.5, motionWeight);
     // Under a transparent (particles, tracers, a blended pane): toward the current frame. A pixel
     // no transparent covers keeps its blend exactly.
-    const float transparency = (params.flags & 4u) != 0u ? transparencyMask.Sample(uv).r : 0.0;
+    const float transparency = (params.flags & 4u) != 0u ? transparencyMask.Sample(texelUv).r : 0.0;
     if (transparency > 0.0) blend = lerp(blend, 0.2, transparency);
+
+    // The sample counts for as much of this pixel as it covers.
+    blend = 1.0 - (1.0 - blend) * sampleWeight;
 
     return float4(lerp(currentColor, historyColor, blend), 1.0);
 }

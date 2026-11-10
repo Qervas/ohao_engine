@@ -523,3 +523,29 @@ a `[shader]` attribute's place) are stated in `AGENTS.md`.
   light order, or a froxel's lighting stops equalling the sum. A froxel past 256 drops lights and
   `render.stats` reports `lightsOverflow`. The slices run to the camera's far plane; the
   sky is only the cleared depth (1.0), so geometry at any distance keeps its pixel.
+
+## TAA and the render scale
+
+`shaders/postprocess/taa_resolve.slang`, `render/deferred/taa_pass.*`; `render.settings renderScale` (0.5 to 1,
+default 1). Record: `docs/changes/2026-11-10-render-scale.md`.
+
+- **One resolve, which is also the upscaler.** The scene passes (G-buffer, lights, RT direct light and GI, their
+  denoisers, SSS, transparents, bloom's input) render at the output's size times `renderScale`; TAA's history, the
+  display pass, the gizmo and the HUD are at the output's.
+  - Each frame's samples sit at its pixel centres moved by that frame's jitter. An output pixel takes this frame's
+    nearest sample, weighted by a Gaussian of its distance to the pixel's centre (sigma 0.47 output pixels: Karis
+    2014, Unreal's TAAU), and keeps its history otherwise.
+  - The jitter is +-1/2 of a rendered pixel, Halton(2, 3): 16 frames at scale 1, 32 when upscaling.
+  - **The motion vectors carry this frame's jitter** (last frame's unjittered position to this frame's jittered
+    one). The resolve takes it out before it reprojects the history. Left in, the history is resampled a jitter
+    away every frame, which is a blur: the old resolve did that.
+- **Cost follows the pixels rendered** (4060 laptop, the play scene at 1920x1080, headless): 8.7 ms at scale 1,
+  4.7 ms at 0.667, 3.2 ms at 0.5. The resolve itself is 0.27 to 0.28 ms.
+- **Quality is judged against a supersampled frame** (3840x2160, box-filtered to 1920x1080; 64 frames, still
+  camera): the play scene 46.3 dB at scale 1, 42.3 dB at 0.667 and 40.3 dB at 0.5, against 41.3 and 39.5 dB for the
+  smaller frame stretched bilinearly.
+- **Not done:**
+  - no texture mip bias when upscaling (textures are sampled at the rendered size's mips);
+  - the motion vector is the nearest sample's, not the closest depth's of its neighbourhood;
+  - a moving camera was looked at in one window run (no trails seen), not measured;
+  - `render.capture`'s `hdr` (the lit image) needs scale 1.

@@ -23,7 +23,12 @@ public:
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
-    void onResize(uint32_t width, uint32_t height) override;
+    void onResize(uint32_t width, uint32_t height) override;   // the output's size
+    // The lit image's size when the frame is rendered smaller than the output (render.settings renderScale):
+    // bloom runs at it and TAA upscales from it. Called before onResize; equal sizes are plain TAA.
+    void setRenderSize(uint32_t width, uint32_t height);
+    // The jitter the frame about to be resolved was rendered with (getJitterOffset's).
+    void setFrameJitter(glm::vec2 ndc);
     [[nodiscard]] const char* getName() const override { return "PostProcessingPipeline"; }
 
     // Input configuration
@@ -126,6 +131,8 @@ private:
     VkImageView m_hdrInputView{VK_NULL_HANDLE};
 
     // Dimensions
+    uint32_t m_renderWidth{0};   // setRenderSize; 0: the output's
+    uint32_t m_renderHeight{0};
     uint32_t m_width{0};
     uint32_t m_height{0};
 

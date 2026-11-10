@@ -6,6 +6,7 @@
 #include "render/frame/gpu_pass_timer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "core/log.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
@@ -20,8 +21,8 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_device = device;
     m_physicalDevice = physicalDevice;
 
-    m_width = 1920;
-    m_height = 1080;
+    m_width = m_outWidth = 1920;
+    m_height = m_outHeight = 1080;
 
     OHAO_LOG(Debug, render, "DeferredRenderer: initializing...");
 
@@ -232,6 +233,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // the frame-in-flight slot, which cycled 3 of the 16 samples and made a capture depend on
     // the slot it started in).
     glm::vec2 jitter = m_postProcessing ? m_postProcessing->getJitterOffset(m_framesSinceReset) : glm::vec2(0.0f);
+    if (m_postProcessing) m_postProcessing->setFrameJitter(jitter);
     glm::mat4 jitteredProj = m_proj;
     jitteredProj[2][0] += jitter.x;
     jitteredProj[2][1] += jitter.y;
@@ -611,7 +613,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 7. The HUD, over the final RGBA8 image (a frame without a list records nothing).
     if (m_hudPass && m_hudPass->hasItems() && m_postProcessing && m_postProcessing->didExecute()) {
         timerBegin("hud");
-        m_hudPass->setTarget(m_postProcessing->getOutputImage(), m_postProcessing->getOutputView(), m_width, m_height);
+        m_hudPass->setTarget(m_postProcessing->getOutputImage(), m_postProcessing->getOutputView(), m_outWidth, m_outHeight);
         m_hudPass->execute(cmd, frameIndex);
         timerEnd();
     }
@@ -620,9 +622,24 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     m_prevViewProj = m_proj * m_view;   // unjittered: next frame's velocity carries its own jitter
 }
 
-void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
-    if (width == m_width && height == m_height) return;
+void DeferredRenderer::setRenderScale(float scale) {
+    scale = std::clamp(scale, kMinRenderScale, 1.0f);
+    if (scale == m_renderScale) return;
+    m_renderScale = scale;
+    if (m_outWidth == 0) return;
+    vkDeviceWaitIdle(m_device);   // frames in flight read the targets a resize replaces
+    onResize(m_outWidth, m_outHeight);
+    resetTemporalState();
+}
 
+void DeferredRenderer::onResize(uint32_t outWidth, uint32_t outHeight) {
+    // The scene is rendered at the output's size times the render scale, and TAA resolves it to the output's.
+    const uint32_t width = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(outWidth) * m_renderScale)));
+    const uint32_t height = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(outHeight) * m_renderScale)));
+    if (width == m_width && height == m_height && outWidth == m_outWidth && outHeight == m_outHeight) return;
+
+    m_outWidth = outWidth;
+    m_outHeight = outHeight;
     m_width = width;
     m_height = height;
 
@@ -644,9 +661,12 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_rtGI) m_rtGI->resize(width, height);
     if (m_sssPass) m_sssPass->onResize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
-    if (m_postProcessing) m_postProcessing->onResize(width, height);
-    if (m_gizmoPass) m_gizmoPass->onResize(width, height);
-    if (m_hudPass) m_hudPass->onResize(width, height);
+    if (m_postProcessing) {
+        m_postProcessing->setRenderSize(width, height);
+        m_postProcessing->onResize(outWidth, outHeight);
+    }
+    if (m_gizmoPass) m_gizmoPass->onResize(outWidth, outHeight);
+    if (m_hudPass) m_hudPass->onResize(outWidth, outHeight);
 
     // The transparent pass draws into the new lit image against the new depth.
     if (m_vfx && m_lightingPass && m_gbufferPass &&
