@@ -779,6 +779,45 @@ exact.
 *Done when* a reload keeps `world.hash`, and a small edit is playing again in under 5 s, measured. `replay_test`
 passes with the slice loaded as a shared library.
 
+*As built, commit 1 (2026-11-10): the spike, and the slice as a module.*
+- **Linux only** (Frank, 2026-11-10: "don worry about windows, if the linux greenlight then we'll keep building it
+  here"; the Windows machine lacks the compute for several projects at once). The Windows half of the spike is not
+  run.
+- **The spike's answers, measured:**
+  - **Linking.** The executable exports its symbols (`ENABLE_EXPORTS`, `-rdynamic`); the module (`ohao_slice`,
+    `MODULE`) links no engine library, its engine headers taken with `$<COMPILE_ONLY:...>`.
+    - The module needs 140 dynamic symbols, 76 of them the engine's. `ohao` and `ohao_game` export all 140.
+    - One was missing at first: `game::decodeParams`, which only a game calls, so the linker never took its object
+      out of the static library. It is inline now.
+    - A missing symbol fails at load (RTLD_NOW), named and demangled.
+    - `nm` finds no engine function defined in the module: the process has one engine.
+  - **EnTT.** Pools and `ctx()` are keyed by `type_hash`, a hash of the type's name, and `type_info` compares by
+    it, so the executable and the module agree.
+    - EnTT 3.13 cannot remove a pool, so a module whose types have pools can never be unloaded. A reload loads the
+      new build beside the old, which stays mapped; the old pools keep their code.
+    - This is the way Unreal's Hot Reload worked (the old DLL stays loaded). Live++ patches in place, which needs a
+      layout that does not change.
+  - **Our type identity.** `TypeKey` was the address of a static: a second copy of the module would key the same
+    type apart, and a re-registration would collide. It is a 64-bit FNV-1a of the type's name now
+    (`__PRETTY_FUNCTION__`, at compile time), as EnTT's `type_hash`.
+- **Loading** (`game/loader.hpp`).
+  - The file is read into a memfd and `dlopen`ed from `/proc/self/fd/N`, RTLD_LOCAL so a later copy never binds to
+    an earlier one's symbols.
+  - The build can then replace the file while the game runs, and the next load of the same path is a new copy.
+  - The memfd stays open: glibc matches loaded objects by name first, and a reused fd number would hand back the
+    old copy.
+- **Hosts:**
+  - `--game slice|none|<path>` on every command of the CLI, taken out of argv before the command.
+  - `ohao_game` loads the slice beside it.
+  - The benches link the same objects statically (`ohao_slice_static`); the objects are compiled once.
+- **Results:**
+  - **The baseline:** equal to 3i's at every checkpoint, `world.hash` included.
+  - **Gates:** `check.py --changed` 6 of 6, replay_test through the loaded module.
+  - **`--game none`:** the play scene loads with its 13 slice components preserved.
+  - **Cost:** a 1-step run of the play scene is 21.5 ms with the module, 19.1 ms without (medians of 7; spread 6 to
+    9 ms). The load and install are inside the noise.
+  - **Benches:** physics_bench and audio_bench are within budget.
+
 ## 3k. A second game, and the game developers' docs
 
 - **The second game.** `games/sample` is a minimal game against `ohao/game` headers only: targets that spin up and

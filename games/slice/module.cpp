@@ -39,3 +39,8 @@ const game::Module& module() {
 }
 
 } // namespace ohao::slice
+
+// The module's entry (game/loader.hpp): the one symbol a host looks up.
+extern "C" __attribute__((visibility("default"))) const ohao::game::Module* ohao_game_module() {
+    return &ohao::slice::module();
+}

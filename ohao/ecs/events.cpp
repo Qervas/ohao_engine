@@ -48,7 +48,7 @@ namespace {
 struct SavedWindow {
     struct Channel {
         std::string name;
-        TypeKey type{nullptr};
+        TypeKey type{0};
         std::shared_ptr<const void> values;   // a std::vector<T>
     };
     std::vector<Channel> channels;

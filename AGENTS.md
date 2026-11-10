@@ -96,6 +96,9 @@ git config core.hooksPath .githooks      # the light CI, once per clone ("Gates"
   `-depfile`), a renderer `.cpp` in about 2 s (mostly relinking 14 programs). The dependencies are re-checked only
   when their declarations change (`OHAO_DEPENDENCIES_POPULATED`), and NRD's config header keeps its time across
   configures, else every configure recompiles NRD and relinks everything.
+- **The game is a module** (step 3j): the slice builds as `build/Release/libohao_slice.so`, which `ohao` and
+  `ohao_game` load at start (`--game`, `game/loader.hpp`) and export the engine's symbols to (`ENABLE_EXPORTS`);
+  building either builds it. The benches link the same objects statically (`ohao_slice_static`).
 - **The `shaders` target is not in `ALL`**, but every target that loads SPIR-V depends on it, so building any of
   them builds the shaders. Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`.
 - **Every shader is Slang** (no GLSL, no glslc). A `.slang` with one `[shader(...)]` entry point gives

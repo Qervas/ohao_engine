@@ -14,7 +14,7 @@ set(OHAO_LAYERS
     ohao_engine=6 ohao_game_api=6
     ohao_api=7
     ohao_rpc=8 ohao_runtime=8
-    ohao_slice=9)   # a game sits above every engine library: none links it or includes its headers
+    ohao_slice_objects=9 ohao_slice=9 ohao_slice_static=9)   # a game sits above every engine library: none links it or includes its headers
 
 # "from->to": allowed although it points sideways or up. Each has its end. None today: the world and the renderer
 # share a level so neither reaches the other (step 3a); ohao_world_render joins them.

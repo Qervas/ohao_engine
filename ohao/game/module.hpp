@@ -12,6 +12,7 @@
 //   - state a step reads (ecs/snapshot_hook.hpp), the whole world kept and restored (ecs/world_snapshots.hpp);
 //   - what it presents (world_render/present.hpp: HUDs, spheres).
 #include "reflect/schema.hpp"
+#include "reflect/type_info.hpp"
 
 #include <functional>
 #include <span>
@@ -37,9 +38,14 @@ struct Call {
 };
 
 // Decodes a method's params into `out`, a `t` (from the game's own registry): unknown members, types, enums and limits
-// as scene files report them, then the required members. False after reporting, with call.paramsFailed set.
-bool decodeParams(Call& call, const reflect::TypeInfo& t, const reflect::JsonNode& params, reflect::DecodeContext& ctx,
-                  void* out);
+// as scene files report them, then the required members. False after reporting, with call.paramsFailed set. Inline: a
+// game calls it, the engine never does, so the host executable would not carry it (game/loader.hpp).
+inline bool decodeParams(Call& call, const reflect::TypeInfo& t, const reflect::JsonNode& params,
+                         reflect::DecodeContext& ctx, void* out) {
+    if (reflect::readParams(out, t, params, ctx)) return true;
+    call.paramsFailed = true;
+    return false;
+}
 
 // A method writes its result value into `out`, or reports into ctx and returns false.
 using MethodFn = std::function<bool(Call&, const reflect::JsonNode& params, reflect::DecodeContext& ctx,

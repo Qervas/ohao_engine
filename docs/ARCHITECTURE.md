@@ -34,7 +34,14 @@ Games (`games/`, above every engine library: `cmake/ohao_layers.cmake` fails con
 or includes one): `ohao_slice` (`games/slice`, namespace `ohao::slice`), the game the engine is built with: combat,
 the enemy AI, grenades and rounds, the view model, the arms and enemy drivers, its HUD, its 9 components and 7 event
 payloads (`types.cpp`), and `combat.info` and `combat.damage` (`methods.cpp`, params in its own registry);
-`slice::module()` is its `game::Module`. The CLI, `ohao_game` and the benches that measure it link it.
+`slice::module()` is its `game::Module`, and `ohao_game_module` its entry. Its objects are compiled once
+(position independent) and linked two ways: `ohao_slice`, a module (`libohao_slice.so`) that `ohao` and `ohao_game`
+load at start (`game/loader.hpp`: read into a memfd, `dlopen` RTLD_NOW and RTLD_LOCAL) and that links no engine
+library, its references to the engine resolving against the host executable, which exports its symbols
+(`ENABLE_EXPORTS`), so the process holds one engine; and `ohao_slice_static`, for the benches that measure its
+internals. A loaded module is never unloaded: EnTT keeps a pool for each component type, with no removal, and a
+module's pools run its code. Type identities are names, not addresses (`core/type_key.hpp`, EnTT's `type_hash`), so
+the executable, the module and a later build of it agree on every type.
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
 `env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,

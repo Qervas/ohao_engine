@@ -32,7 +32,7 @@
 //
 // Exit codes: 0 ok; 1 no window or GPU; 2 the scene did not load; 3 a readback; 4 validation.
 
-#include "slice/module.hpp"
+#include "game/loader.hpp"
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/scene_types.hpp"
@@ -73,10 +73,13 @@ std::string sceneArg(int argc, char** argv) {
     return "assets/scenes/helmet_game.scene.json";
 }
 
-// The engine's types and the game's (the slice).
+// The game: the slice, loaded from beside the executable (game/loader.hpp).
+std::shared_ptr<const ohao::game::LoadedModule> g_slice;
+
+// The engine's types and the game's.
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), g_slice->module->registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -84,9 +87,15 @@ const reflect::TypeRegistry& engineTypes() {
 } // namespace
 
 int main(int argc, char** argv) {
+    std::string gameError;
+    g_slice = ohao::game::loadModule(ohao::game::executableDir() / "libohao_slice.so", gameError);
+    if (!g_slice) {
+        std::cerr << "[ohao_game] " << gameError << std::endl;
+        return 1;
+    }
     LiveConfig cfg;
     cfg.window.title = "OHAO";
-    cfg.game = &slice::module();
+    cfg.game = g_slice->module;
     if (argFlag(argc, argv, "--vsync")) cfg.present = PresentMode::Fifo;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--present") != 0) continue;
