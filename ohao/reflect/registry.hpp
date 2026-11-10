@@ -119,6 +119,10 @@ public:
     [[nodiscard]] std::span<const TypeInfo* const> types() const noexcept { return m_typeOrder; }
     [[nodiscard]] std::span<const EnumInfo* const> enums() const noexcept { return m_enumOrder; }
 
+    // The game whose types follow (game::registerGameTypes); empty: the engine's. Each type and enum registered
+    // records it (TypeInfo::module), and the catalogue names it.
+    void setModule(std::string module) { m_module = std::move(module); }
+
     // Registration mistakes, in the order they were made.
     [[nodiscard]] const std::vector<std::string>& errors() const noexcept { return m_errors; }
 
@@ -146,6 +150,7 @@ private:
     std::unordered_map<TypeKey, const TypeDesc*> m_descByKey;
     std::unordered_map<std::string, int> m_names;
     std::vector<std::string> m_errors;
+    std::string m_module;
     TypeInfo m_rejectedType;   // target of builders whose registration failed
     EnumInfo m_rejectedEnum;
 };
@@ -196,6 +201,7 @@ TypeBuilder<T> TypeRegistry::type(std::string_view name, uint32_t version) {
     if (version == 0) error("type " + std::string(name) + ": version starts at 1");
     TypeInfo& t = m_typeStore.emplace_back();
     t.name = name;
+    t.module = m_module;
     t.version = version == 0 ? 1 : version;
     t.size = sizeof(T);
     t.align = alignof(T);
@@ -220,6 +226,7 @@ EnumBuilder<E> TypeRegistry::enumeration(std::string_view name) {
     }
     EnumInfo& e = m_enumStore.emplace_back();
     e.name = name;
+    e.module = m_module;
     m_enumOrder.push_back(&e);
     m_enumByKey.emplace(typeKey<E>(), &e);
     return EnumBuilder<E>(*this, e);

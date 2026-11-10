@@ -5,8 +5,7 @@
 #include "slice/components.hpp"
 #include "slice/module.hpp"
 
-#include "ecs/scene_types.hpp"
-#include "reflect/registry.hpp"
+#include "game/api.hpp"
 
 namespace ohao::slice {
 

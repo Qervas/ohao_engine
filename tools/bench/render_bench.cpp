@@ -46,6 +46,7 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/gpu_culling.hpp"
 #include "render/frame/pass_registry.hpp"
+#include "game/install.hpp"
 #include "slice/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/vfx.hpp"
@@ -736,7 +737,7 @@ int report(const Measurement& m, std::vector<Budget>& budgets, bool haveBudgets,
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), game::registerGameTypes(r, slice::module()), true);
     (void)once;
     return r;
 }

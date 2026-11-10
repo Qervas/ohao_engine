@@ -1,8 +1,7 @@
 #include "slice/view_model.hpp"
 
 #include "slice/combat.hpp"
-#include "ecs/components.hpp"
-#include "ecs/world.hpp"
+#include "game/api.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 

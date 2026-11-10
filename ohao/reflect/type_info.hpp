@@ -134,6 +134,7 @@ enum class TypeRole : uint8_t {
 struct TypeInfo {
     std::string name;
     std::string doc;
+    std::string module;       // the game that registered it (TypeRegistry::setModule); empty: the engine's
     uint32_t version{1};
     TypeRole role{TypeRole::Struct};
     bool serialized{true};    // false: runtime-only, listed in the catalogue, never saved
@@ -175,6 +176,7 @@ struct EnumValue {
 
 struct EnumInfo {
     std::string name;
+    std::string module;   // the game that registered it; empty: the engine's
     std::string doc;
     std::vector<EnumValue> values;   // registration order
 

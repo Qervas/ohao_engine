@@ -30,8 +30,13 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (`physics/backend`: the `IPhysicsBackend` over Jolt that the ECS's physics scene builds, steps and joins bodies through) and audio (the mixer, the bank and the reverb; what plays is the ECS's voice schedule, played by a window's `runtime::AudioPlayer`) |
 | `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
 
-Games (`games/`, above every engine library: `cmake/ohao_layers.cmake` fails configure when an engine library links
-or includes one): `ohao_slice` (`games/slice`, namespace `ohao::slice`), the game the engine is built with: combat,
+Games (`games/`, each `ohao_add_game(<name>)`, cmake/ohao_games.cmake; above every engine library:
+`cmake/ohao_layers.cmake` fails configure when an engine library links or includes one, or when a game includes any
+engine header but `game/api.hpp`, the game API's one header, which is also its precompiled header). The catalogue
+(`ohao schema`, `schema.get`) names each type, enum, method and channel a game owns (`module`). `ohao_sample`
+(`games/sample`): the smallest game, targets that spin until shot and then fall, `sample.targets`, `sample.hit`;
+it is `--game build/Release/libohao_sample.so` with `assets/scenes/sample_targets.scene.json`. `ohao_slice`
+(`games/slice`, namespace `ohao::slice`), the game the engine is built with: combat,
 the enemy AI, grenades and rounds, the view model, the arms and enemy drivers, its HUD, its 9 components and 7 event
 payloads (`types.cpp`), and `combat.info` and `combat.damage` (`methods.cpp`, params in its own registry);
 `slice::module()` is its `game::Module`, and `ohao_game_module` its entry. Its objects are compiled once

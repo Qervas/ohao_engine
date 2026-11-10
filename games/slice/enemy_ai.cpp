@@ -1,9 +1,7 @@
 #include "slice/enemy_ai.hpp"
 
 #include "slice/combat.hpp"
-#include "ecs/components.hpp"
-#include "ecs/physics_scene.hpp"
-#include "ecs/world.hpp"
+#include "game/api.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 

@@ -32,6 +32,7 @@
 //
 // Exit codes: 0 ok; 1 no window or GPU; 2 the scene did not load; 3 a readback; 4 validation.
 
+#include "game/install.hpp"
 #include "game/loader.hpp"
 #include "core/log.hpp"
 #include "ecs/components.hpp"
@@ -79,7 +80,7 @@ std::shared_ptr<const ohao::game::LoadedModule> g_slice;
 // The engine's types and the game's.
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), g_slice->module->registerTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), ohao::game::registerGameTypes(r, *g_slice->module), true);
     (void)once;
     return r;
 }

@@ -5,6 +5,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
+#include "game/install.hpp"
 #include "game/module.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "reflect/json_writer.hpp"
@@ -273,7 +274,7 @@ void shaderChecks(const Options& o, std::vector<Check>& out) {
 void typesCheck(const Options& o, std::vector<Check>& out) {
     reflect::TypeRegistry types;
     ecs::registerSceneTypes(types);
-    if (o.game) o.game->registerTypes(types);
+    if (o.game) game::registerGameTypes(types, *o.game);
     const std::string which = o.game ? "the engine's and " + std::string(o.game->name()) + "'s" : "the engine's";
     if (types.errors().empty())
         out.push_back(pass("types.register", "error", std::to_string(types.types().size()) + " types (" + which + ")"));

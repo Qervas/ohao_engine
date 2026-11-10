@@ -1,11 +1,7 @@
 #include "slice/hud.hpp"
 #include "slice/module.hpp"
 
-#include "ecs/components.hpp"
-#include "ecs/player.hpp"
-#include "ecs/scene_view.hpp"
-#include "ecs/world.hpp"
-#include "world_render/present.hpp"
+#include "game/api.hpp"
 
 #include <algorithm>
 #include <cmath>

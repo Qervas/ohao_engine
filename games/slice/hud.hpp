@@ -8,7 +8,7 @@
 // "ENTER TO RESTART"). Times are counted in combat steps, so a frame of a lockstep world and its
 // headless capture show the same HUD. Never saved or hashed: the World's context holds it.
 #include "slice/combat.hpp"
-#include "render/hud/hud_list.hpp"
+#include "game/api.hpp"
 
 #include <cstdint>
 

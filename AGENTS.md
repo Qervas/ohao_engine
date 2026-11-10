@@ -193,7 +193,8 @@ What every change must respect. The build checks some of these; the rest are her
 - **Systems are installed by `engine::installEngine` and `engine::installRendering`** (`ohao/engine/install.hpp`) in
   every host, then the game's (`game::Module::install`: the slice, `games/slice`, unless `--game none`). No engine
   library names a game: `cmake/ohao_layers.cmake` puts games above every one, and configure fails on a link or an
-  include of one. Each phase's order is computed from what
+  include of one; a game includes the engine through `game/api.hpp` only (configure fails on any other engine
+  header). The guide for game developers: `docs/games/README.md`. Each phase's order is computed from what
   the systems declare (`ecs::SystemOrder`: `after`, `before`, `readsCues`) and the event handles they hold (a
   channel's writers before its typed readers; a channel with a cue before every system that reads cues), ties to the
   lesser name: never from who installs them, when, or what data binds; a cycle throws at install. A new system

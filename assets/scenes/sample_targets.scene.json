@@ -1,0 +1,113 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Collider": 1,
+    "InputActions": 1,
+    "Light": 1,
+    "Material": 1,
+    "MeshSource": 1,
+    "Name": 1,
+    "Parent": 1,
+    "PlayerController": 1,
+    "RigidBody": 1,
+    "Spin": 1,
+    "Target": 1,
+    "Transform": 1
+  },
+  "entities": [
+    {
+      "id": "5a3b1e0000000001",
+      "Name": { "value": "Sun" },
+      "Transform": {
+        "position": [0, 20, 0],
+        "rotation": [-0.440377, -0.266729, -0.13885, 0.845957]
+      },
+      "Light": { "type": "Directional", "color": [1, 0.95, 0.85], "intensity": 3 }
+    },
+    {
+      "id": "5a3b1e0000000002",
+      "Name": { "value": "Floor" },
+      "MeshSource": {
+        "source": {
+          "BoxPrim": { "lo": [-10, -0.1, -10], "hi": [10, 0, 10], "color": [0.5, 0.5, 0.52] }
+        }
+      },
+      "Material": { "base_color": [0.5, 0.5, 0.52], "specular_roughness": 0.9 },
+      "Collider": {}
+    },
+    {
+      "id": "5a3b1e0000000003",
+      "Name": { "value": "Player" },
+      "PlayerController": { "spawn": "" }
+    },
+    {
+      "id": "5a3b1e0000000004",
+      "Name": { "value": "Head" },
+      "Transform": { "position": [0, 1.62, 0] },
+      "Parent": { "entity": "5a3b1e0000000003" },
+      "Camera": { "fovDeg": 75, "nearPlane": 0.05 }
+    },
+    {
+      "id": "5a3b1e0000000005",
+      "Name": { "value": "Controls" },
+      "InputActions": {
+        "actions": [
+          { "action": "fire", "key": "MouseLeft" },
+          { "action": "jump", "key": "Space" },
+          { "action": "release_mouse", "key": "Escape" }
+        ],
+        "axes": [
+          { "axis": "move_forward", "positive": "W", "negative": "S" },
+          { "axis": "move_right", "positive": "D", "negative": "A" }
+        ]
+      }
+    },
+    {
+      "id": "5a3b1e0000000010",
+      "Name": { "value": "Target1" },
+      "Transform": { "position": [-2, 1.62, -6] },
+      "MeshSource": {
+        "source": {
+          "BoxPrim": { "lo": [-0.3, -0.3, -0.3], "hi": [0.3, 0.3, 0.3], "color": [0.85, 0.25, 0.2] }
+        }
+      },
+      "Material": { "base_color": [0.85, 0.25, 0.2], "specular_roughness": 0.5 },
+      "Spin": { "degreesPerSecond": 60 },
+      "Collider": {},
+      "RigidBody": { "motion": "Kinematic", "mass": 5 },
+      "Target": {}
+    },
+    {
+      "id": "5a3b1e0000000011",
+      "Name": { "value": "Target2" },
+      "Transform": { "position": [0, 1.62, -6] },
+      "MeshSource": {
+        "source": {
+          "BoxPrim": { "lo": [-0.3, -0.3, -0.3], "hi": [0.3, 0.3, 0.3], "color": [0.95, 0.75, 0.2] }
+        }
+      },
+      "Material": { "base_color": [0.95, 0.75, 0.2], "specular_roughness": 0.5 },
+      "Spin": {},
+      "Collider": {},
+      "RigidBody": { "motion": "Kinematic", "mass": 5 },
+      "Target": {}
+    },
+    {
+      "id": "5a3b1e0000000012",
+      "Name": { "value": "Target3" },
+      "Transform": { "position": [2, 1.62, -6] },
+      "MeshSource": {
+        "source": {
+          "BoxPrim": { "lo": [-0.3, -0.3, -0.3], "hi": [0.3, 0.3, 0.3], "color": [0.25, 0.55, 0.9] }
+        }
+      },
+      "Material": { "base_color": [0.25, 0.55, 0.9], "specular_roughness": 0.5 },
+      "Spin": { "degreesPerSecond": 120 },
+      "Collider": {},
+      "RigidBody": { "motion": "Kinematic", "mass": 5 },
+      "Target": {}
+    }
+  ]
+}

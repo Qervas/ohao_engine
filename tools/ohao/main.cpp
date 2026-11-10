@@ -104,7 +104,7 @@ const game::Module* g_game = nullptr;
 // written).
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), g_game ? g_game->registerTypes(r) : void(), true);
+    static const bool once = (ecs::registerSceneTypes(r), g_game ? game::registerGameTypes(r, *g_game) : void(), true);
     (void)once;
     return r;
 }

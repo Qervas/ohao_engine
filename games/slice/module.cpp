@@ -4,8 +4,7 @@
 #include "slice/combat.hpp"
 #include "slice/enemy_anim.hpp"
 
-#include "ecs/animation.hpp"
-#include "ecs/world.hpp"
+#include "game/api.hpp"
 
 namespace ohao::slice {
 

@@ -1149,7 +1149,9 @@ void Session::Impl::setGame(std::shared_ptr<const game::LoadedModule> loaded) {
             if (findMethod(*this, g.doc.name))
                 throw std::logic_error("game " + std::string(module->name()) + "'s method " + std::string(g.doc.name) +
                                        " has an engine method's name");
-            methods.push_back({g.doc,
+            reflect::MethodDoc doc = g.doc;
+            doc.module = module->name();
+            methods.push_back({doc,
                                [fn = g.fn](Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
                                            JsonWriter& out) {
                                    game::Call call{s.world};
@@ -1188,7 +1190,7 @@ std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const refl
         const TypeInfo* t = types.find(c->type());
         std::vector<std::string> readers = c->readers();
         readers.insert(readers.end(), c->cueReaders().begin(), c->cueReaders().end());
-        out.push_back({c->name(), t ? t->name : std::string(), c->writers(), std::move(readers)});
+        out.push_back({c->name(), t ? t->name : std::string(), c->writers(), std::move(readers), t ? t->module : std::string()});
     }
     return out;
 }

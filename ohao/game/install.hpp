@@ -23,6 +23,10 @@ namespace ohao::game {
 
 class Module;
 
+// The module's types into `types`, after the engine's (ecs::registerSceneTypes), each recording the module's name
+// (TypeInfo::module: the catalogue says whose it is). Every host registers a game's types this way.
+void registerGameTypes(reflect::TypeRegistry& types, const Module& module);
+
 // Installs `module` on `world` (after engine::installEngine), recording what it added: simulate and sync systems,
 // snapshot hooks, animation drivers, presenters (world_render/present.hpp) and the physics control rule. If install
 // throws, what it added so far is removed before the exception goes on.

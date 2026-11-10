@@ -3,7 +3,7 @@
 // with its rounds, enemies and grenades, its channels (slice.*), the first-person view model, the arms and enemy
 // animation drivers, its HUD and grenades drawn, its 9 components and its methods (combat.info, combat.damage). A
 // game::Module: a host plays it (`--game slice`, the default) or an engine-only world.
-#include "game/module.hpp"
+#include "game/api.hpp"
 
 #include <span>
 

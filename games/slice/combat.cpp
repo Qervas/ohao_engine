@@ -1,16 +1,9 @@
 #include "slice/combat.hpp"
 
-#include "core/layout_key.hpp"
+#include "game/api.hpp"
 
-#include "core/log.hpp"
-#include "ecs/components.hpp"
-#include "ecs/audio_schedule.hpp"
 #include "slice/enemy_ai.hpp"
-#include "ecs/world_snapshots.hpp"
-#include "ecs/physics_scene.hpp"
-#include "ecs/player.hpp"
 #include "slice/view_model.hpp"
-#include "ecs/world.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 

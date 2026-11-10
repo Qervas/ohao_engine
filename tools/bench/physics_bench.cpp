@@ -31,6 +31,7 @@
 #include "core/log.hpp"
 #include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "game/install.hpp"
 #include "slice/combat.hpp"
 #include "slice/module.hpp"
 #include "ecs/components.hpp"
@@ -67,7 +68,7 @@ constexpr float kDt = 1.0f / 60.0f;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), game::registerGameTypes(r, slice::module()), true);
     (void)once;
     return r;
 }

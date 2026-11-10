@@ -10,7 +10,7 @@
 //   reloadTime  Weapon.reloadTime (the reload clip's rateFrom: its mag_in lands on the weapon's reloaded)
 // and the events `shot` (the owner's round) and `reload`, from the step's slice events, in the order they
 // happened.
-#include "ecs/animation.hpp"
+#include "game/api.hpp"
 #include "slice/combat.hpp"
 #include "slice/components.hpp"
 
