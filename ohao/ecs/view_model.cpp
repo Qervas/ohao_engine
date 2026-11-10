@@ -255,9 +255,18 @@ private:
 
 } // namespace
 
+namespace {
+// Every ViewModel is drawn first person (the engine's FirstPerson), from the moment it exists to its removal.
+void addFirstPerson(entt::registry& reg, entt::entity e) { reg.emplace_or_replace<FirstPerson>(e); }
+void removeFirstPerson(entt::registry& reg, entt::entity e) { reg.remove<FirstPerson>(e); }
+} // namespace
+
 void installViewModel(World& world) {
     auto& reg = world.registry();
     if (reg.ctx().contains<ViewModelInstalled>()) return;
+    reg.on_construct<ViewModel>().connect<&addFirstPerson>();
+    reg.on_destroy<ViewModel>().connect<&removeFirstPerson>();
+    for (const entt::entity e : reg.view<ViewModel>()) reg.emplace_or_replace<FirstPerson>(e);
     auto state = std::make_shared<ViewModelState>();
     reg.ctx().emplace<ViewModelInstalled>(ViewModelInstalled{state});
     auto system = std::make_shared<ViewModelSystem>(state);

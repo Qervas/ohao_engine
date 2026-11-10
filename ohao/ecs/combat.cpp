@@ -4,7 +4,7 @@
 #include "ecs/components.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/enemy_ai.hpp"
-#include "ecs/round_hook.hpp"
+#include "ecs/world_snapshots.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/player.hpp"
 #include "ecs/view_model.hpp"
@@ -415,10 +415,10 @@ struct CombatSystem::Impl {
         const auto rounds = reg.view<const Round>();
         if (rounds.empty()) return;
         const Round round = reg.get<Round>(rounds.front());
-        const auto* hook = reg.ctx().find<RoundHook>();
+        const auto* hook = reg.ctx().find<WorldSnapshots>();
         if (!hook || !hook->save || !hook->restore) {
             if (!warnedNoHook)
-                OHAO_LOG(Warn, ecs, "combat: the world has a Round but its host installed no RoundHook; no round runs");
+                OHAO_LOG(Warn, ecs, "combat: the world has a Round but its host installed no WorldSnapshots; no round runs");
             warnedNoHook = true;
             return;
         }
@@ -463,7 +463,7 @@ struct CombatSystem::Impl {
 
     // Back to the round's start, between steps: the next step is the round's second again, and starts with the
     // restore's `world.restore` and then `slice.restart`.
-    void restart(const RoundHook& hook) {
+    void restart(const WorldSnapshots& hook) {
         const auto t0 = std::chrono::steady_clock::now();
         // The restore puts back combat's own state too (the `combat` hook): what counts the round's history goes on
         // from here instead.
@@ -563,6 +563,12 @@ CombatSystem& installCombat(World& world) {
     reg.ctx().emplace<CombatInstalled>(CombatInstalled{system.get()});
     // Rounds and grenades meet the world as the step's physics left it.
     world.addSimulate("combat", [system](World&, float dt) { system->step(dt); }, {.after = {"physics"}});
+    // A dead player stands, or falls, where it died until the round restarts.
+    if (PhysicsScene* physics = physicsScene(world))
+        physics->setInputControl([](const entt::registry& r, entt::entity e) {
+            const auto* h = r.try_get<Health>(e);
+            return !h || h->current > 0.0f;
+        });
     CombatSystem* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"combat", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreState(s); },

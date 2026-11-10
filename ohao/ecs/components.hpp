@@ -358,6 +358,11 @@ struct RenderPose {
     glm::mat4 prevWorld{1.0f};   // what the last frame drew (motion vectors)
 };
 
+// Runtime, render only: the entity and its subtree are drawn first person (a gun in the view): in no shadow cascade
+// and seen by camera rays only (render::DrawDesc::viewModel). A game adds it (the slice: to every ViewModel). Never
+// saved or hashed.
+struct FirstPerson {};
+
 // Runtime, render only (sub-project 10 step 3): the field of view a live frame draws a Camera with,
 // in place of Camera.fovDeg: aiming down the sights narrows it (the `view_model` sync system writes it
 // on the view's camera in realtime frames only, and removes it otherwise, so lockstep frames and every
@@ -541,7 +546,7 @@ struct EnemyState {
 };
 
 // The round's rules, one per world. A world with one keeps the round's start (a snapshot through
-// the host's RoundHook, at the end of its first combat step) and goes back to it restartDelay
+// the host's WorldSnapshots, at the end of its first combat step) and goes back to it restartDelay
 // after the player dies, or when `restart` is pressed; every Enemy dead wins the round.
 struct Round {
     float restartDelay{3.0f};       // s from the player's death to the restart

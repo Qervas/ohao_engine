@@ -105,7 +105,7 @@ struct DriverReaders {
 
 enum class RoundPhase : uint8_t { Playing, Dead, Won };
 
-// The round as the last step left it (a world with a Round and a RoundHook).
+// The round as the last step left it (a world with a Round and a WorldSnapshots).
 struct RoundInfo {
     bool started{false};
     RoundPhase phase{RoundPhase::Playing};

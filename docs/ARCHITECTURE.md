@@ -21,7 +21,7 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_asset`, `ohao_reflect`, `ohao_physics`, EnTT (simdjson privately); never the renderer (one layer: the layer check holds it) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components (`MeshRenderer` holds `core/render_handles.hpp`'s ids), systems (spin, fly controller, transform, physics), the scene codec, snapshots, the world hash and diff, the scene view. The physics system (`physics_scene`, installed by `installPhysics`) builds Jolt bodies from `Collider`/`RigidBody`; `physicsScene(world)` reaches it. |
 | `ohao_anim` | `anim/` | `ohao_core`, glm (simdjson privately) | skeletal animation without ECS or Vulkan: glTF skins and clips (`gltf_anim`), binding clips to skeletons by joint name, sampling, `.animgraph.json` graphs (parse, bind, validate with JSON pointers), one layer's step (`stepLayer`) and a pose (`evaluatePose`), the skinning palette |
 | `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
-| `ohao_world_render` | `world_render/` | `ohao_ecs`, `ohao_renderer` | the world into the renderer: instantiate (MeshSources into meshes, `installInstantiate`), the render extract, the effects' draw (`vfx_draw`), in-memory models (`model_spawn`), framing, the combat HUD's list. `engine::installRendering` installs it. |
+| `ohao_world_render` | `world_render/` | `ohao_ecs`, `ohao_renderer` | the world into the renderer: instantiate (MeshSources into meshes, `installInstantiate`), the render extract, the effects' draw (`vfx_draw`), in-memory models (`model_spawn`), framing, what a game presents (`present.hpp`: its HUDs, drawn by the hosts, and its presented spheres, by `vfx_draw`). `engine::installRendering` installs it. |
 | `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header. |
@@ -96,8 +96,9 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     its ancestor; recoil -> PhysicsScene::turnPlayer;
                     WeaponState written; shot/hit/damage/death/reload
                     events (slice.*, each with its cue); last
-                    the round (a world with Round and the RoundHook       RoundHook: api::Session
-                    api::Session installs): round_start and a snapshot   (ecs::installRoundHook)
+                    the round (a world with Round and the                 WorldSnapshots: api::Session
+                    WorldSnapshots api::Session installs): round_start   (ecs::installWorldSnapshots)
+                    and a snapshot
                     at its first step's end; the player dead for
                     restartDelay, or `restart` pressed -> the snapshot
                     restored at this step's end (restart; both by
@@ -272,7 +273,7 @@ which turns every emissive triangle into a light with its power, `pt.cache.updat
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
 frame: poll the window; run the queued protocol requests (`rpc::Server::poll`, waiting up
 to 16 ms while nothing steps); the timeline's steps (`Session::step` each, then the
-`fixedUpdate` hook); the `update` hook; the combat sounds and the HUD list (`ecs::combatHud`
+`fixedUpdate` hook); the `update` hook; the game's sounds and its HUDs (`ecs::drawHuds`
 at the window's size); render and present in its live mode (`--mode`:
 deferred, `rt_realtime` or `rt_offline`; realtime: every frame; lockstep or paused: only
 when `Session::changeCount()` moved or the window resized, and an `rt_offline` window

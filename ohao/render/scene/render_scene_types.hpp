@@ -141,7 +141,7 @@ struct InstanceDesc {
     // A light's emitter mesh (RenderScene makes them from the lights; kInstanceEmitter):
     // emitterLight is then its radiance and light.
     bool emitter{false};
-    // A first-person gun's mesh (ecs ViewModel; kInstanceViewModel): drawn and lit as any mesh, but
+    // A first-person gun's mesh (ecs FirstPerson; kInstanceViewModel): drawn and lit as any mesh, but
     // in no CSM cascade and no shadow, GI or bounce ray (its pose is shrunk toward the eye).
     bool viewModel{false};
     glm::vec4 emitterLight{0.0f};   // see InstanceGpu

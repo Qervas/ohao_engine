@@ -361,11 +361,9 @@ void PhysicsScene::Impl::updatePlayers(std::span<const InputMap> inputs, float d
         const MoveIntent* intent = pc.input ? nullptr : reg.try_get<MoveIntent>(e);
         glm::vec2 wish(0.0f);
         bool sprinting = false, jumpPressed = false;
-        // A dead player (Health 0; combat, sub-project 7) neither walks, turns nor jumps: it
-        // stands (or falls) where it died until the round restarts.
-        const auto* health = reg.try_get<Health>(e);
-        const bool dead = health && !(health->current > 0.0f);
-        if (pc.input && !dead) {
+        // A player out of control (the game's rule: setInputControl) neither walks, turns nor jumps: it
+        // stands, or falls, where it is.
+        if (pc.input && controlled(e)) {
             const LookResult look =
                 applyLook(p.yawDeg, p.pitchDeg, mouse + glm::vec2(input.axis(pc.lookX), input.axis(pc.lookY)), pc);
             p.yawDeg = look.yawDeg;
@@ -560,7 +558,7 @@ void PhysicsScene::Impl::lookLead(bool between, float alpha, glm::vec2 pending, 
         const auto* pc = reg.try_get<PlayerController>(e);
         const auto* t = reg.try_get<Transform>(e);
         if (!pc || !pc->input || pc->stream != 0 || !t) continue;   // the window's mouse: stream 0's player
-        if (const auto* h = reg.try_get<Health>(e); h && !(h->current > 0.0f)) continue;
+        if (!controlled(e)) continue;
         leadsLook = true;
         if (!lead) continue;
         const LookResult look = applyLook(p.yawDeg, p.pitchDeg, pending, *pc);

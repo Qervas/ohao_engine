@@ -183,9 +183,11 @@ struct PhysicsScene::Impl {
     // components' path (teleports and BodyMotion) does what it can.
     struct SavedSimulation;
     std::shared_ptr<const SavedSimulation> savedPending;
-    // A restore since the players last spawned: a PlayerController it put back (a dead enemy's,
-    // combat's round restart) gets its character where the restored entity stands, not at a spawn.
+    // A restore since the players last spawned: a PlayerController it put back (one a game removed, and its
+    // restart restored) gets its character where the restored entity stands, not at a spawn.
     bool restoredSinceSpawn{false};
+    InputControl inputControl;   // a game's rule (setInputControl); empty: every character is in control
+    [[nodiscard]] bool controlled(entt::entity e) const { return !inputControl || inputControl(reg, e); }
 
     // A player (spec "The player"): its character, and what the step last made of it.
     struct PlayerRecord {

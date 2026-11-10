@@ -168,9 +168,9 @@ the result includes that. A capture renders `--frames` frames from a reset and k
 last: by default 1 deferred frame (10 with TAA) or `--spp` path-traced ones. The hybrid's
 RT GI keeps a history, so give `--frames` (about 10) for converged indirect light. Without
 `--post` no post effect is on; `model_viewer` turns on `--post taa,bloom --ev100 0`.
-`--hud` (`render.capture {hud: true}`) draws the combat HUD over a deferred frame: the
+`--hud` (`render.capture {hud: true}`) draws the game's HUDs over a deferred frame (the slice's: the
 player's health, ammunition and crosshair, the hit marker, the damage vignette, the round's
-end. Without it no capture has a HUD.
+end). Without it no capture has a HUD.
 
 `--bounces N` (`render.capture {bounces: N}`) sets the path tracer's bounces for this capture: 0
 is direct light only, 1 one bounce, and so on; without it, the profile's (the reference, 32). It is

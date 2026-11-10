@@ -33,7 +33,7 @@ static const uint kCullCone = 8u;
 static const uint kDrawOneSided = 1u;
 // DrawRecord.info.y bit: a light's emitter mesh, in no CSM cascade (it never shadows)
 static const uint kDrawEmitter = 2u;
-// DrawRecord.info.y bit: a first-person gun's mesh (ViewModel), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)
+// DrawRecord.info.y bit: a first-person gun's mesh (FirstPerson), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)
 static const uint kDrawViewModel = 4u;
 // DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
 static const uint kDrawSkinned = 8u;
@@ -97,7 +97,7 @@ static const uint kSmokeSphereStride = 32u;
 static const uint kSmokeSpheresOffset = 16u;
 // skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
 static const uint kSkinGroupSize = 64u;
-// InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
+// InstanceGpu.flags bit: a first-person gun's mesh (FirstPerson): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
 static const uint kInstanceViewModel = 4u;
 // InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.emitterLight.rgb its radiance, lit by nothing
 static const uint kInstanceEmitter = 2u;
@@ -105,7 +105,7 @@ static const uint kInstanceEmitter = 2u;
 static const uint kTlasMaskScene = 1u;
 // TLAS instance mask of a light's emitter mesh: the path tracer's camera and bounce rays (a bounce that meets it is weighed against its light's sampling, by InstanceGpu.emitterLight.w) and the realtime tracer's camera and near-mirror rays see it; no shadow or GI ray, so it shadows nothing and lights nothing twice
 static const uint kTlasMaskEmitter = 2u;
-// TLAS instance mask of a first-person gun's mesh (ViewModel): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
+// TLAS instance mask of a first-person gun's mesh (FirstPerson): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
 static const uint kTlasMaskViewModel = 4u;
 // TLAS instance mask of an instance whose every material is blended (glTF BLEND): only the path tracer's camera rays see it, so in the hybrid frame it casts no shadow and bounces no GI
 static const uint kTlasMaskTransparent = 8u;

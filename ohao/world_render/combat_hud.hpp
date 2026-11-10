@@ -55,4 +55,8 @@ private:
 [[nodiscard]] render::HudList combatHud(World& world, uint32_t width, uint32_t height);
 [[nodiscard]] CombatHud& combatHudOf(World& world);
 
+// Registers the slice's presentation (world_render/present.hpp): this HUD and the grenades in flight. A second
+// call does nothing. With installSlice until the slice is a module (step 3i).
+void installCombatPresentation(World& world);
+
 } // namespace ohao::ecs

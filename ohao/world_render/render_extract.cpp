@@ -182,10 +182,10 @@ private:
         return d;
     }
 
-    // A first-person gun's part: the entity or an ancestor has a ViewModel.
+    // Drawn first person: the entity or an ancestor has FirstPerson.
     [[nodiscard]] bool inViewModel(entt::entity e) const {
         for (int depth = 0; e != entt::null && m_reg.valid(e) && depth < 64; ++depth) {
-            if (m_reg.all_of<ViewModel>(e)) return true;
+            if (m_reg.all_of<FirstPerson>(e)) return true;
             const auto* p = m_reg.try_get<Parent>(e);
             e = p ? p->entity : entt::null;
         }
@@ -196,7 +196,7 @@ private:
         m_lights.clear();
         for (auto [e, l, wtStep] : m_reg.view<const Light, const WorldTransform>().each()) {
             // Where the frame draws it: between two steps, or with a first-person gun (a muzzle
-            // light below a ViewModel follows the drawn gun), else the step's pose.
+            // light below it follows the drawn gun), else the step's pose.
             const auto* rp = m_reg.try_get<RenderPose>(e);
             const WorldTransform wt = rp ? WorldTransform{rp->world, rp->prevWorld} : wtStep;
             render::LightDesc d{};

@@ -7,8 +7,8 @@
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/combat.hpp"
 #include "world_render/combat_hud.hpp"
+#include "world_render/present.hpp"
 #include "world_render/instantiate.hpp"
 #include "ecs/physics_scene.hpp"
 #include "world_render/render_extract.hpp"
@@ -89,7 +89,10 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
     engine::installEngine(*m_world, {*m_assets, types});
-    if (cfg.slice) ecs::installSlice(*m_world);
+    if (cfg.slice) {
+        ecs::installSlice(*m_world);
+        ecs::installCombatPresentation(*m_world);
+    }
     engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
@@ -119,8 +122,8 @@ void LiveHost::renderFrame() {
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
     if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
     m_liveSamples = changed ? 1 : m_liveSamples + 1;
-    // The window always draws the combat HUD (empty without a player: no pass).
-    render::HudList hud = ecs::combatHud(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
+    // The window always draws the game's HUDs (empty without one: no pass).
+    render::HudList hud = ecs::drawHuds(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
     if (m_cfg.latencyReadout) drawLatencyReadout(hud);
     m_renderer->setHud(hud);
     m_renderer->render();

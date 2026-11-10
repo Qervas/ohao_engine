@@ -49,6 +49,7 @@
 #include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/vfx.hpp"
+#include "world_render/combat_hud.hpp"
 #include "level/level_system.hpp"
 #include "render/scene/meshlet_builder.hpp"
 
@@ -773,6 +774,7 @@ struct Gpu {
             level::installLevels(*world, *assets, engineTypes());
             ecs::installPhysics(*world, *assets);
             ecs::installCombat(*world);
+            ecs::installCombatPresentation(*world);
             ecs::installVfx(*world, *assets);
             vfxInstalled = true;
         }

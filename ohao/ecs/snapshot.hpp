@@ -81,9 +81,9 @@ enum class RestoreInput : uint8_t { Yes, No };
 // events. Between steps only, as takeSnapshot: during a step it throws std::logic_error (ask with World::defer).
 RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot, RestoreInput input = RestoreInput::Yes);
 
-// Puts the World's RoundHook (ecs/round_hook.hpp) in its context: a round's start is a snapshot of
+// Puts the World's WorldSnapshots (ecs/world_snapshots.hpp) in its context: a round's start is a snapshot of
 // the world taken with these types, a restart restores it. The world and types must outlive it.
-void installRoundHook(World& world, const reflect::TypeRegistry& types);
+void installWorldSnapshots(World& world, const reflect::TypeRegistry& types);
 
 // The parts of a capture, for code that reads the world in snapshot order without copying
 // its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;

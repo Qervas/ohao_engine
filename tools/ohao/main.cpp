@@ -47,6 +47,7 @@
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
 #include "ecs/slice.hpp"
+#include "world_render/combat_hud.hpp"
 #include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/log.hpp"
@@ -306,7 +307,10 @@ struct Context {
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
         engine::installEngine(*world, {*assets, engineTypes()});
-        if (slice) ecs::installSlice(*world);
+        if (slice) {
+            ecs::installSlice(*world);
+            ecs::installCombatPresentation(*world);
+        }
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);

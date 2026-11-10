@@ -673,6 +673,42 @@ order runs the baseline unchanged; where it differs from today's list, the plan 
 and `ohao_audio` name none). `replay_test` and the baseline pass with the slice as a module, and the play golden is
 exact.
 
+*As built, commit 1 (2026-11-10): the engine's leaks, in place.*
+- **The dead player.**
+  - A flag in `PlayerController`, as planned, would have been wrong: physics treats any edit of a PlayerController
+    as a new character (`touchPlayer`, then `createPlayer`), so every death would rebuild the character in place
+    and drop its velocity. A separate component would have been a second truth beside Health, which a restore and
+    an API edit would have to keep in step.
+  - Instead, physics asks the game: `PhysicsScene::setInputControl(fn)`, "does this input-driven character take
+    its input this step?". It is asked where Health was read: the move, turn and jump, and the window's look lead.
+  - The slice's rule is Health above 0, set with combat's install. No new state, so `world.hash` is unchanged.
+  - An AI's MoveIntent is not gated, as before: the enemy AI zeroes it at death and removes the character.
+- **`characterOf`'s `Enemy`, deleted, not replaced.** A dead enemy's character goes at its death, and no scene has
+  colliders on an enemy's parts (the play scene, the only one with enemies, has none). So the clause never
+  decided anything. A character is what holds a PlayerController; a corpse's parts, should a scene author some,
+  occlude as any body does.
+- **`FirstPerson`**, the engine's runtime tag (render only, never saved or hashed). The render extract draws an
+  entity first person by it. The slice's view model adds it to every `ViewModel` from construction to removal (its
+  install connects the registry's signals). The layout docs name it.
+- **What a game presents** (`world_render/present.hpp`): HUD functions the hosts draw (`drawHuds`: the window,
+  `render.capture {hud: true}`), and sphere sources that `vfx_draw` gives the renderer (`presentedSpheres`).
+  `vfx_draw`, the window host and frame captures no longer name combat. Until the module (commit 2), the slice
+  registers both with `installCombatPresentation`, called beside `installSlice` by the CLI context, the window
+  host and render_bench.
+- **`WorldSnapshots`** (`ecs/world_snapshots.hpp`, `installWorldSnapshots`) is the round hook's engine-neutral
+  name: a whole-world save and restore for any system, through `World::defer`.
+- **Results:**
+  - **The baseline:** equal to 3h's, `world.hash` included, at every checkpoint.
+  - **Gates:** `check.py --changed` 6 of 6.
+  - **Three one-off checks**, for what the fight does not reach (its player has 100,000 hit points):
+    - **The dead player:** after `combat.damage`, 30 steps of move and look input leave it where it was ([1.5, 0,
+      2.2], yaw 0). Planted, a rule that always says "in control" walks it to [2.47, 0, 0.73], yaw -60.
+    - **The HUD:** a capture with `hud: true` differs from one without in 337 pixels at 320x180 (the crosshair, the
+      bars).
+    - **The grenade in flight:** its sphere is 18 pixels, gone without the slice's sphere source.
+  - **Planted:** the view model without its `FirstPerson` signals fails the play golden
+    (`cli_blockout_play_deferred`).
+
 ## 3j. A shared module and hot reload
 
 1. **A spike first, on Linux and on Windows.**

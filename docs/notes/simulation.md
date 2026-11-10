@@ -201,15 +201,16 @@ step 2h, 2026-11-09), unchanged.
     right after a load holds the built bodies; a restore of one taken before the bodies existed
     rebuilt them, and a character standing on a slope replayed one float off.
   - The round (step 3): a world with the saved singleton `Round` starts it in its first combat
-    step (`round_start`) and keeps its start, a snapshot through the `RoundHook` in the registry's
-    context (which `api::Session` installs with `ecs::installRoundHook`; a bare World installs it
+    step (`round_start`) and keeps its start, a snapshot through the `WorldSnapshots` in the registry's
+    context (which `api::Session` installs with `ecs::installWorldSnapshots`; a bare World installs it
     itself, else the round warns once and never runs), taken at that step's end. It restarts at the
     end of the step the player has been dead `restartDelay` (3 s) or `restart` is pressed. Both go
     through `World::defer` (step 3d): they run between steps, after the step's last system. Nothing
     snapshots or restores inside a step (takeSnapshot and restoreSnapshot throw there). After the
     restart the world is the round's start (its canonical scene), and the next step is the round's
     second again; it starts with the restore's `world.restore` (history) and `slice.restart`. Every enemy dead is `win` once, then the round waits for
-    `restart`. A dead player neither walks, turns, jumps nor fires. A character a restore
+    `restart`. A dead player neither walks, turns, jumps nor fires (physics asks the game's rule,
+    `PhysicsScene::setInputControl`: the slice's is Health above 0). A character a restore
     creates starts where its restored entity stands, never at a spawn.
   - Presentation (step 4). The muzzle flash is a `Light` with a saved `Muzzle {intensity,
     time}` below the weapon's entity: the combat step sets it to `intensity` for `time` after a
@@ -244,7 +245,7 @@ step 2h, 2026-11-09), unchanged.
   - **The look lead** (step 2): a realtime window hands the World the look no step has consumed
     yet (`World::setPendingLook`: the window's mouse movements since the last step and the
     `input.inject` ones due at the next step, summed in the step's order), and the `interpolate`
-    sync system draws the input-driven, living player turned by it through `applyLook`, the step's
+    sync system draws the input-driven player in control (`setInputControl`) turned by it through `applyLook`, the step's
     own arithmetic, so the next step lands exactly where the frame already was. **Gotcha: that
     player's rotation is drawn from the newest step plus the lead, never interpolated** (only its
     position is); anything else interpolates as before. Presentation only: `RenderPose`, never
@@ -265,7 +266,8 @@ step 2h, 2026-11-09), unchanged.
     distance, so it never reaches into a wall it stands against, and lands on screen where it would
     through `fovDeg`), swayed by the drawn turn, bobbed by ground speed, kicked by the owner's
     `shot` events, all at render rate from `World::presentationDt()` (the window's frame time; 0 in
-    lockstep and captures: the rest pose). `RenderPose` only. Its instances are `kDrawViewModel`
+    lockstep and captures: the rest pose). `RenderPose` only. A `ViewModel` gets the engine's runtime `FirstPerson`
+    (the render extract reads that, never the slice's component), so its instances are `kDrawViewModel`
     (no CSM cascade) with TLAS mask `kTlasMaskViewModel` (4), in only the path tracer's camera ray
     mask (`kRayMaskCamera` 7): it casts no shadow and no GI. A light below it (the Muzzle) follows
     its `RenderPose`. **Gotcha: the projection is `glm::perspective` without

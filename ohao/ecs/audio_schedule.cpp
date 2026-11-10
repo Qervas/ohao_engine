@@ -36,11 +36,10 @@ Occlusion grade(uint8_t walls) {
 
 float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
 
-// The character a body belongs to (the entity or an ancestor: a living character holds a
-// PlayerController, a dead enemy keeps Enemy and its body boxes), or null.
+// The character a body belongs to (the entity or an ancestor holding a PlayerController), or null.
 entt::entity characterOf(const entt::registry& reg, entt::entity e) {
     for (int depth = 0; depth < 64 && e != entt::null && reg.valid(e); ++depth) {
-        if (reg.all_of<PlayerController>(e) || reg.all_of<Enemy>(e)) return e;
+        if (reg.all_of<PlayerController>(e)) return e;
         const auto* p = reg.try_get<Parent>(e);
         e = p ? p->entity : entt::null;
     }
@@ -147,8 +146,8 @@ Occlusion occlusionBetween(const World& world, const AudioListener& listener, gl
     entt::entity ignore = listener.body;
     uint8_t walls = 0;
     int hops = 0;
-    // Each hit is passed through: a character (the source's own capsule, another enemy, a body box)
-    // is skipped up to 4 times, a wall is counted; two walls is the last grade.
+    // Each hit is passed through: a character (the source's own capsule, another's, a body under one) is skipped up
+    // to 4 times, a wall is counted; two walls is the last grade.
     for (int i = 0; i < 8 && remaining > 0.0f && walls < 2; ++i) {
         const auto hit = physics->raycastFrom(from, dir, remaining, ignore);
         if (!hit) break;

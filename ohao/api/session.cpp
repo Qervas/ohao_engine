@@ -1195,8 +1195,8 @@ std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const refl
 Session::Session(ecs::World& world, const reflect::TypeRegistry& types)
     : m(std::make_unique<Impl>(world, types)) {
     // A Round in the world keeps its start as a snapshot with these types (the combat system's
-    // RoundHook; ECS system code has no reflection of its own).
-    ecs::installRoundHook(world, types);
+    // WorldSnapshots; ECS system code has no reflection of its own).
+    ecs::installWorldSnapshots(world, types);
 }
 Session::~Session() = default;
 

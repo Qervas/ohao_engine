@@ -462,14 +462,14 @@ int main(int argc, char** argv) {
     }
     // 8. The round's restart (step 3): the blockout, the player and two enemies with a Round; after
     // 30 steps of a fight, `restart` pressed: what restoring the round's start takes (the whole
-    // world's snapshot through the RoundHook), 50 restarts after 5, N rounds / 5.
+    // world's snapshot through the WorldSnapshots), 50 restarts after 5, N rounds / 5.
     std::vector<double> restartMs;
     uint32_t restarts = 0;
     for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
         Blockout b;
         ecs::installCombat(b.world);
         ecs::CombatSystem& combat = *ecs::combatSystem(b.world);
-        ecs::installRoundHook(b.world, engineTypes());
+        ecs::installWorldSnapshots(b.world, engineTypes());
         (void)addPlayer(b.world, true);
         addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
         addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
@@ -584,7 +584,7 @@ int main(int argc, char** argv) {
         w.seedIds(7);
         level::installLevels(w, files, engineTypes());
         ecs::installPhysics(w, files);
-        ecs::installRoundHook(w, engineTypes());
+        ecs::installWorldSnapshots(w, engineTypes());
         ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
         ecs::installSlice(w);   // combat and the animation drivers
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
@@ -623,7 +623,7 @@ int main(int argc, char** argv) {
         w.seedIds(7);
         level::installLevels(w, files, engineTypes());
         ecs::installPhysics(w, files);
-        ecs::installRoundHook(w, engineTypes());
+        ecs::installWorldSnapshots(w, engineTypes());
         ecs::installAnimation(w, files);
         ecs::installAudio(w, files);
         ecs::VfxSystem& vfx = ecs::installVfx(w, files);

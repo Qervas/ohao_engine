@@ -282,7 +282,7 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    ecs::installRoundHook(w, engineTypes());
+    ecs::installWorldSnapshots(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
     ecs::installSlice(w);   // combat and the animation drivers
@@ -436,7 +436,7 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    ecs::installRoundHook(w, engineTypes());
+    ecs::installWorldSnapshots(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
     ecs::installSlice(w);   // combat and the animation drivers

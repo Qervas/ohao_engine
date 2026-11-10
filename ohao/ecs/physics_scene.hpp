@@ -46,6 +46,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -205,15 +206,20 @@ public:
     void spawnPlayers();
     // RenderPose for what the last step moved (players, their heads, dynamic bodies) and their
     // subtrees, between the last two step poses at alpha; alpha 1 removes them (the `interpolate`
-    // sync system, with World::renderAlpha). The look lead (sub-project 9): an input-driven, living
-    // player and its subtree are drawn turned by `pendingLook` through applyLook, its turn the
+    // sync system, with World::renderAlpha). The look lead (sub-project 9): stream 0's input-driven player, in
+    // control (setInputControl), and its subtree are drawn turned by `pendingLook` through applyLook, its turn the
     // newest step's (never slerped) whenever alpha < 1 or a look is pending.
     void interpolate(float alpha, glm::vec2 pendingLook = glm::vec2(0.0f));
-    // Whether the last interpolate saw an input-driven, living player (a window measures its look
+    // Whether the last interpolate saw an input-driven player in control (a window measures its look
     // latency by the lead's rule then, and keeps one frame ahead).
     [[nodiscard]] bool leadsLook() const noexcept;
     // The channels physics emits into (installPhysics: the World's); without them it emits nothing.
     void setEvents(EventLog& log);
+    // Whether an input-driven character takes its stream's input this step: it walks, turns and jumps, and the
+    // window's look lead turns it; out of control it stands, or falls, where it is. A game's rule (the slice's: not
+    // with Health 0); without one every character is in control.
+    using InputControl = std::function<bool(const entt::registry&, entt::entity)>;
+    void setInputControl(InputControl fn);
     [[nodiscard]] uint64_t steps() const noexcept;
     // Jolt updates the last step ran (its substeps).
     [[nodiscard]] int lastSubsteps() const noexcept;

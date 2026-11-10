@@ -1,7 +1,7 @@
 #include "runtime/frame_capture.hpp"
 
 #include "core/log.hpp"
-#include "world_render/combat_hud.hpp"
+#include "world_render/present.hpp"
 #include "ecs/components.hpp"
 #include "world_render/instantiate.hpp"
 #include "ecs/scene_view.hpp"
@@ -241,8 +241,8 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
                                 : r.tonemap == "agx"   ? render::DisplayCurve::AgX
                                                        : settings.defaultCurve);
         }
-    // The combat HUD only when asked (hud: true), so captures and goldens stay the scene's.
-    renderer.setHud(r.hud && mode == RenderMode::Deferred ? ecs::combatHud(world, renderer.getWidth(), renderer.getHeight())
+    // A game's HUDs only when asked (hud: true), so captures and goldens stay the scene's.
+    renderer.setHud(r.hud && mode == RenderMode::Deferred ? ecs::drawHuds(world, renderer.getWidth(), renderer.getHeight())
                                                           : render::HudList{});
     const double setupMs = msSince(start);
     // A fresh renderer renders exactly as the examples do (the goldens); one that has

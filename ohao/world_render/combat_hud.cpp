@@ -4,6 +4,7 @@
 #include "ecs/player.hpp"
 #include "ecs/scene_view.hpp"
 #include "ecs/world.hpp"
+#include "world_render/present.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -180,6 +181,26 @@ render::HudList combatHud(World& world, uint32_t width, uint32_t height) {
     CombatHud& hud = combatHudOf(world);
     hud.observe(world);
     return CombatHud::layout(hud.state(world, width, height), width, height);
+}
+
+namespace {
+struct CombatPresentationInstalled {};
+} // namespace
+
+void installCombatPresentation(World& world) {
+    auto& ctx = world.registry().ctx();
+    if (ctx.contains<CombatPresentationInstalled>()) return;
+    ctx.emplace<CombatPresentationInstalled>();
+    addHud(world, [](World& w, render::HudList& out, uint32_t width, uint32_t height) {
+        const render::HudList list = combatHud(w, width, height);
+        out.items.insert(out.items.end(), list.items.begin(), list.items.end());
+    });
+    // The test grenades in flight, between the last two steps.
+    addSpheres(world, [](const World& w, std::vector<render::RenderScene::PresentedSphere>& out) {
+        if (const CombatSystem* combat = combatSystem(w))
+            for (const CombatGrenade& g : combat->grenadesInFlight())
+                out.push_back({g.prev + (g.pos - g.prev) * w.renderAlpha(), combat::kGrenadeRadius});
+    });
 }
 
 } // namespace ohao::ecs

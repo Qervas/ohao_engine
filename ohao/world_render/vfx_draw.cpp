@@ -1,7 +1,7 @@
 #include "world_render/vfx_draw.hpp"
 
 #include "ecs/asset_resolver.hpp"
-#include "ecs/combat.hpp"
+#include "world_render/present.hpp"
 #include "ecs/components.hpp"
 #include "ecs/vfx.hpp"
 #include "ecs/world.hpp"
@@ -172,12 +172,8 @@ struct VfxDraw {
     }
 
     void run(World& world) {
-        // The test grenades in flight, between the last two steps (a runtime presentation: never saved).
-        std::vector<render::RenderScene::PresentedSphere> grenades;
-        if (const CombatSystem* combat = combatSystem(world))
-            for (const CombatGrenade& g : combat->grenadesInFlight())
-                grenades.push_back({g.prev + (g.pos - g.prev) * world.renderAlpha(), combat::kGrenadeRadius});
-        scene.setPresentedSpheres(grenades);
+        // A game's presented spheres (world_render/present.hpp), at the frame's render alpha.
+        scene.setPresentedSpheres(presentedSpheres(world));
         const VfxSystem* system = vfxSystem(world);
         if (!system) {
             if (!scene.vfx().effects.empty() || scene.vfx().set) scene.setVfx({});

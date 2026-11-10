@@ -1,7 +1,7 @@
 #include "ecs/snapshot.hpp"
 
 #include "ecs/components.hpp"
-#include "ecs/round_hook.hpp"
+#include "ecs/world_snapshots.hpp"
 #include "ecs/scene_types.hpp"
 
 #include <algorithm>
@@ -36,8 +36,8 @@ std::size_t Snapshot::bytes() const noexcept {
     return n;
 }
 
-void installRoundHook(World& world, const reflect::TypeRegistry& types) {
-    RoundHook hook;
+void installWorldSnapshots(World& world, const reflect::TypeRegistry& types) {
+    WorldSnapshots hook;
     hook.save = [&world, &types]() -> std::shared_ptr<const void> {
         return std::make_shared<const Snapshot>(takeSnapshot(world, types));
     };
