@@ -76,6 +76,20 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
       latency from 67 ms to 23 ms (`feel_bench`, immediate).
     - The window is made smaller in the desktop's units instead, and fitted again when Wayland tells it its
       display's scale. It logs `window: WxH pixels asked, scale S, framebuffer WxH`.
+  - **A window's latency on this laptop** (the panel is on the Intel GPU, the frames come from the NVIDIA one;
+    KWin 6.8 on Wayland; `feel_bench`, immediate, 2026-11-10, the display on):
+    - Look latency is 23 to 24 ms at the median (about 20 ms while the player lives: a dead player's movements,
+      which nothing shows, are counted at about 55 ms), with 9.1 ms frames. The budget is 15 ms.
+    - From submit to present is 20 to 22 ms: the frame's 9 ms on the GPU, then 7 to 9 ms to the display through
+      the compositor. Polling only once the previous frame is presented (`--frames-ahead 0`) gives 15.7 ms from
+      submit to present and 20.8 ms latency, at 16.9 ms a frame; two frames ahead gives 29.4 ms.
+    - `VK_KHR_present_wait`'s time agrees with the compositor's own (Wayland's presentation-time, read in the same
+      run) to 0.3 ms.
+    - Polling when the GPU finishes the newest frame, instead of at a present, measured 18.9 ms against 20.1 ms
+      while alive, one run each: not kept, the difference is not shown to be above the spread.
+  - **A window measures nothing with the display asleep.** KWin discards every frame, and a frame's present is then
+    confirmed only when the next frame replaces it, which reads as a present a frame late. `feel_bench` exits 2
+    when no connected display is on (`/sys/class/drm/*/dpms`); `kscreen-doctor --dpms on` wakes it.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
   is the one exception: it imports `tools.monograph`, so it runs from `site/`.

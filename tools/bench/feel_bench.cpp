@@ -15,7 +15,7 @@
 // budget is gated only on a display of at least minRefreshHz with present wait, else it is reported
 // pending. Other processes' CPU is recorded over each measured minute (dwm.exe aside): beside more than
 // half a core, a gated budget is `noisy`. Exit 0: no gated budget missed; 1: one did on a quiet run,
-// or a run measured nothing; 2: noisy (tools/check.py reruns it).
+// or a run measured nothing; 2: noisy (tools/check.py reruns it), or every display is off (nothing is shown).
 
 #include "common/harness.hpp"
 #include "slice/combat.hpp"
@@ -258,6 +258,23 @@ int stalls(const ModeRun& r) {
 
 } // namespace
 
+// Linux: false when no connected display is on. With the displays asleep the compositor discards every frame,
+// and the presentation engine confirms a frame only when the next one replaces it: 2026-11-10, a run measured that
+// way read as a present-wait fault. True where it cannot be told (no DRM sysfs).
+static bool displayOn() {
+    std::error_code ec;
+    bool connected = false;
+    for (const auto& e : std::filesystem::directory_iterator("/sys/class/drm", ec)) {
+        std::string status, dpms;
+        std::ifstream(e.path() / "status") >> status;
+        std::ifstream(e.path() / "dpms") >> dpms;
+        if (status != "connected") continue;
+        if (dpms == "On") return true;
+        connected = true;
+    }
+    return !connected;
+}
+
 int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/feel_bench.json", csvDir = "build";
     double seconds = 60.0, warmup = 2.0;
@@ -289,6 +306,11 @@ int main(int argc, char** argv) {
                                  "[--modes immediate,mailbox,fifo] [--csv-dir DIR] [--frames-ahead N]\n");
             return 1;
         }
+    }
+    if (!displayOn()) {
+        std::fprintf(stderr, "feel_bench: every display is off (DPMS): the compositor shows no frame, so no latency "
+                             "can be measured. Wake the display (kscreen-doctor --dpms on) and run again.\n");
+        return 2;
     }
     nlohmann::json budgets = nlohmann::json::object();
     int currentStep = 0;
