@@ -126,8 +126,11 @@ struct InjectEvent {
 
 struct InputInjectParams {
     std::vector<InjectEvent> events;
+    std::optional<uint64_t> player;   // whose stream takes them (its PlayerController.stream); absent: stream 0
 };
-struct InputStateParams {};
+struct InputStateParams {
+    std::optional<uint64_t> player;   // whose stream; absent: stream 0
+};
 struct InputRecordParams {
     std::optional<std::string> path;
     bool stop{false};

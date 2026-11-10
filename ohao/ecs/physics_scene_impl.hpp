@@ -434,9 +434,9 @@ struct PhysicsScene::Impl {
 
     // Every player, once per step, before the bodies step (spec: the character moves first); its
     // footsteps and landing go into `out`.
-    void updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out);
+    void updatePlayers(std::span<const InputMap> inputs, float dt, std::vector<PhysicsEvent>& out);
 
-    void step(const InputMap& input, float dt, uint64_t worldStep);
+    void step(std::span<const InputMap> inputs, float dt, uint64_t worldStep);
 
     // RenderPose for what the last step moved, between its last two step poses at alpha, and for
     // their subtrees (a descendant that moves by itself has its own entry). Alpha 1 (or outside

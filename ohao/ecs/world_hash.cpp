@@ -54,7 +54,8 @@ uint64_t hashWorld(const World& world, const reflect::TypeRegistry& types, Snaps
     // What the components do not hold (step 3b, complete state): the systems' registered state and the input.
     HookHash hooks(h, world);
     hashSystems(reg, hooks);
-    world.input().hashState(h);
+    h.u64(world.inputs().size());
+    for (const InputMap& in : world.inputs()) in.hashState(h);
     // The World's step and the events the next step reads (step 3c), by channel name and payload; never a seq.
     h.u64(world.steps());
     world.events().visitWindow([&](const EventChannelBase& c, std::size_t i) {

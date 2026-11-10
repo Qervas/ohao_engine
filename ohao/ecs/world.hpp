@@ -128,8 +128,14 @@ public:
     // simulation step, before simulate(), with that step's events (stepInput). Its bindings
     // follow the InputActions singleton: rebuilt at the next stepInput whenever one is set,
     // changed or removed. A world without InputActions keeps bindings made in code.
-    [[nodiscard]] InputMap& input() noexcept { return m_input; }
-    [[nodiscard]] const InputMap& input() const noexcept { return m_input; }
+    // One stream per player (step 3f): a PlayerController reads `stream` (PlayerController.stream), an event goes to
+    // its InputEvent::stream, a device's to 0. A stream is made on first use with stream 0's bindings; one never
+    // made reads as nothing held.
+    static constexpr std::size_t kMaxInputStreams = 8;
+    [[nodiscard]] InputMap& input(std::size_t stream = 0);
+    [[nodiscard]] const InputMap& input(std::size_t stream = 0) const noexcept;
+    [[nodiscard]] std::span<const InputMap> inputs() const noexcept { return m_inputs; }
+    void setInputs(std::vector<InputMap> inputs);   // a restore's (at least one)
     void stepInput(std::span<const InputEvent> events);
     // How far past the last step the next render shows, as a fraction of a fixed step: the
     // `interpolate` sync system draws what the steps move between their last two step poses
@@ -173,7 +179,7 @@ private:
     IdGenState m_idGen;
     std::vector<std::pair<std::string, SimulateSystem>> m_simulate;
     std::vector<std::pair<std::string, SyncSystem>> m_sync;
-    InputMap m_input;
+    std::vector<InputMap> m_inputs = std::vector<InputMap>(1);   // by stream
     EventLog m_events;
     std::vector<std::function<void(World&)>> m_deferred;
     float m_stepDt{1.0f / 60.0f};

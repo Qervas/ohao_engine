@@ -814,7 +814,7 @@ bool PhysicsScene::teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<f
     return m->teleport(e, pos, yawDeg);
 }
 
-void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt, world.steps()); }
+void PhysicsScene::step(World& world, float dt) { m->step(world.inputs(), dt, world.steps()); }
 void PhysicsScene::spawnPlayers() { m->spawnPlayers(); }
 void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
 bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }

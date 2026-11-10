@@ -130,8 +130,13 @@ void registerParams(reflect::TypeRegistry& r) {
     r.type<InputInjectParams>("InputInjectParams").doc("input.inject params")
         .field("events", &InputInjectParams::events).doc("Events in order; same-step events apply in this order, "
                                                           "after that step's device events").required()
-            .maxItems(kMaxInjectEvents);
-    r.type<InputStateParams>("InputStateParams").doc("input.state params");
+            .maxItems(kMaxInjectEvents)
+        .field("player", &InputInjectParams::player)
+            .doc("The player (16 hex digits) whose input stream (PlayerController.stream) takes the events; absent: "
+                 "stream 0, a device's");
+    r.type<InputStateParams>("InputStateParams").doc("input.state params")
+        .field("player", &InputStateParams::player)
+            .doc("The player (16 hex digits) whose input stream to read; absent: stream 0, a device's");
     r.type<InputRecordParams>("InputRecordParams").doc("input.record params")
         .field("path", &InputRecordParams::path).doc("JSON-Lines file to write, under the output directory (starts)")
         .field("stop", &InputRecordParams::stop).doc("Stops the recording in progress");

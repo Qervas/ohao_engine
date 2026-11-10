@@ -314,12 +314,14 @@ auto PhysicsScene::Impl::playerEvent(PhysicsEvent::Kind kind, entt::entity e, co
 
 // Every player, once per step, before the bodies step (spec: the character moves first); its
 // footsteps and landing go into `out`.
-void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out) {
+void PhysicsScene::Impl::updatePlayers(std::span<const InputMap> inputs, float dt, std::vector<PhysicsEvent>& out) {
     if (players.empty() || !(dt > 0.0f) || !backend) return;
     const glm::vec3 gravity = backend->getGravity();
-    const glm::vec2 mouse = input.mouseDelta();
+    static const InputMap kNothing;
     for (auto& [e, p] : players) {
         const PlayerController& pc = reg.get<PlayerController>(e);
+        const InputMap& input = pc.stream < inputs.size() ? inputs[pc.stream] : kNothing;   // its player's stream
+        const glm::vec2 mouse = input.mouseDelta();
         const Transform& t = reg.get<Transform>(e);
         // Moved by anything but this system (an edit, a restore): it goes there, at rest (a
         // placement: the step draws from there).
@@ -443,7 +445,7 @@ void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vec
     playerMotion.clear();
 }
 
-void PhysicsScene::Impl::step(const InputMap& input, float dt, uint64_t worldStep) {
+void PhysicsScene::Impl::step(std::span<const InputMap> inputs, float dt, uint64_t worldStep) {
     using Clock = std::chrono::steady_clock;
     const auto ms = [](Clock::time_point a, Clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -468,7 +470,7 @@ void PhysicsScene::Impl::step(const InputMap& input, float dt, uint64_t worldSte
     stepDt = 0.0f;
     for (auto& [e, mv] : movers) mv.moved = false;
     const auto tp = Clock::now();
-    updatePlayers(input, dt, fresh);
+    updatePlayers(inputs, dt, fresh);
     posedExternally.clear();   // the bodies took theirs in the sync, the players in their update
     auto t1 = Clock::now(), t2 = t1, t3 = t1;
     timing.playerMs = ms(tp, t1);
@@ -557,7 +559,7 @@ void PhysicsScene::Impl::lookLead(bool between, float alpha, glm::vec2 pending, 
         if (!reg.valid(e)) continue;
         const auto* pc = reg.try_get<PlayerController>(e);
         const auto* t = reg.try_get<Transform>(e);
-        if (!pc || !pc->input || !t) continue;
+        if (!pc || !pc->input || pc->stream != 0 || !t) continue;   // the window's mouse: stream 0's player
         if (const auto* h = reg.try_get<Health>(e); h && !(h->current > 0.0f)) continue;
         leadsLook = true;
         if (!lead) continue;

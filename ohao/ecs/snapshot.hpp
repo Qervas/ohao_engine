@@ -54,7 +54,7 @@ struct Snapshot {
     World::IdGenState idGen{};
     uint64_t nextSeq{0};
     uint64_t frame{0};
-    InputMap input;                        // the World's input: held keys and axes carry across a step
+    std::vector<InputMap> inputs;          // the World's input streams: held keys and axes carry across a step
     uint64_t steps{0};                     // the World's step
     std::shared_ptr<const void> events;    // the next step's events (EventLog::saveWindow), or null
     std::shared_ptr<const void> systems;   // the snapshot hooks' states (SystemStates), or null (not counted in bytes())

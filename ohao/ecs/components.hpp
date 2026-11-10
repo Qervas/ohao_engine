@@ -335,6 +335,7 @@ struct PlayerController {
     // order) takes the k-th SpawnPoint with that tag; empty: it starts where it stands.
     std::string spawn{"player"};
     bool input{true};             // false: moved by its MoveIntent (an AI), not by the world's input
+    uint32_t stream{0};           // its input stream (World::input; a device's events go to 0)
 };
 
 // The move a character without input (PlayerController.input false) makes each step: written by

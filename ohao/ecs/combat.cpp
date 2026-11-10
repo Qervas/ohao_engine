@@ -6,6 +6,7 @@
 #include "ecs/enemy_ai.hpp"
 #include "ecs/round_hook.hpp"
 #include "ecs/physics_scene.hpp"
+#include "ecs/player.hpp"
 #include "ecs/view_model.hpp"
 #include "ecs/world.hpp"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <utility>
 
 namespace ohao::ecs {
 
@@ -248,7 +250,7 @@ struct CombatSystem::Impl {
         // The trigger: a player's from the World's input, anyone else's from its WeaponTrigger.
         bool held = false, pressed = false, reload = false, aiming = false;
         if (const auto* pc = reg.try_get<PlayerController>(e); pc && pc->input) {
-            const InputMap& in = world.input();
+            const InputMap& in = std::as_const(world).input(pc->stream);   // its player's stream
             held = in.held(w.fire);
             pressed = in.pressed(w.fire);
             reload = in.pressed(w.reload);
@@ -364,13 +366,9 @@ struct CombatSystem::Impl {
     // goes off when its fuse runs out: an Explode event at its place.
     void stepGrenades(float dt, PhysicsScene& physics) {
         grenadeCooldown = std::max(0.0f, grenadeCooldown - dt);
-        entt::entity player = entt::null;
-        uint64_t bestId = UINT64_MAX;
-        for (auto [e, pc] : reg.view<const PlayerController>().each()) {
-            const uint64_t id = world.idOf(e);
-            if (pc.input && id < bestId) bestId = id, player = e;
-        }
-        if (player != entt::null && alive(player) && grenadeCooldown <= kTimeEps && world.input().pressed(combat::kGrenadeAction))
+        const entt::entity player = playerOf(world);
+        if (player != entt::null && alive(player) && grenadeCooldown <= kTimeEps &&
+            std::as_const(world).input(reg.get<PlayerController>(player).stream).pressed(combat::kGrenadeAction))
             if (const auto info = physics.playerInfo(player)) {
                 const glm::vec3 eye = info->pos + glm::vec3(0.0f, reg.get<PlayerController>(player).eyeHeight, 0.0f);
                 const glm::vec3 look = yawQuat(info->yawDeg) * pitchQuat(info->pitchDeg) * glm::vec3(0.0f, 0.0f, -1.0f);
@@ -439,16 +437,10 @@ struct CombatSystem::Impl {
             world.defer([this, hook](World&) { roundStart = hook->save(); });
             return;
         }
-        // The player: the first character moved by input, in id order.
-        bool playerDead = false;
-        uint64_t bestId = UINT64_MAX;
-        for (auto [e, pc] : reg.view<const PlayerController>().each()) {
-            const uint64_t id = world.idOf(e);
-            if (!pc.input || id >= bestId) continue;
-            bestId = id;
-            const auto* h = reg.try_get<Health>(e);
-            playerDead = h && !(h->current > 0.0f);
-        }
+        // The player (ecs/player.hpp).
+        const entt::entity player = playerOf(world);
+        const auto* playerHealth = player != entt::null ? reg.try_get<Health>(player) : nullptr;
+        const bool playerDead = playerHealth && !(playerHealth->current > 0.0f);
         std::size_t enemies = 0, dead = 0;
         for (auto [e, en] : reg.view<const Enemy>().each()) {
             ++enemies;
@@ -467,7 +459,8 @@ struct CombatSystem::Impl {
             if (roundInfo.phase == RoundPhase::Dead) roundInfo.phase = RoundPhase::Playing;
         }
         roundInfo.restartIn = playerDead ? std::max(0.0f, round.restartDelay - deadFor) : 0.0f;
-        const bool pressed = !round.restart.empty() && world.input().pressed(round.restart);
+        const bool pressed = !round.restart.empty() && player != entt::null &&
+                             std::as_const(world).input(reg.get<PlayerController>(player).stream).pressed(round.restart);
         if ((pressed || (playerDead && deadFor + kTimeEps >= round.restartDelay)) && roundStart)
             world.defer([this, hook](World&) { restart(*hook); });   // after this step's last system
     }

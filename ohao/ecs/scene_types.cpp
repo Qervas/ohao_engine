@@ -325,7 +325,10 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
                  "spawn point with it; empty: it starts where it stands")
             .maxLength(32)
         .field("input", &PlayerController::input)
-            .doc("Moved by the world's input (a player); false: by its MoveIntent (an AI or an agent)");
+            .doc("Moved by the world's input (a player); false: by its MoveIntent (an AI or an agent)")
+        .field("stream", &PlayerController::stream)
+            .doc("Its input stream: one per player; a device's events go to 0, an agent's to the player's it names")
+            .unitless().min(0).max(7).omitDefault();
     r.type<MoveIntent>("MoveIntent").component().host(makeComponentOps<MoveIntent>())
         .doc("The move a character without input (PlayerController.input false) makes each step, written by the "
              "enemy AI or an agent. Absent: it stands still, facing as it faces.")

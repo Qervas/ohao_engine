@@ -7,6 +7,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
+#include "ecs/player.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "asset/model.hpp"
@@ -108,12 +109,8 @@ struct AudioInstalled {
 
 std::optional<AudioListener> listenerAtStep(const World& world) {
     const auto& reg = world.registry();
-    entt::entity player = entt::null;
-    uint64_t playerId = std::numeric_limits<uint64_t>::max();
-    for (auto [e, pc] : reg.view<const PlayerController>().each()) {
-        const uint64_t id = world.idOf(e);
-        if (pc.input && id < playerId) player = e, playerId = id;
-    }
+    const entt::entity player = playerOf(world);   // the device's player hears
+    const uint64_t playerId = player != entt::null ? world.idOf(player) : 0;
     if (player != entt::null) {
         const auto* t = reg.try_get<Transform>(player);
         if (!t) return std::nullopt;

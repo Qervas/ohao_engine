@@ -204,7 +204,9 @@ What every change must respect. The build checks some of these; the rest are her
 - Input is stepped per simulation step, not per frame: read `pressed`/`released` in a
   simulate system or `fixedUpdate`, never once per frame (two steps in one frame would
   lose a press). A world with an `InputActions` component rebuilds its bindings from it;
-  one without keeps the bindings made in code.
+  one without keeps the bindings made in code. Input is one stream per player (`World::input(stream)`,
+  `PlayerController.stream`; a device's events go to 0), and "the player" is `ecs::playerOf(world, stream)`: never
+  a loop of its own over PlayerControllers.
 - **A GPU fault is a report and an exit** (system design step 1, `gpu/vulkan/gpu_fault.*`): every submit, frame fence,
   acquire and present goes through it; a lost device, or a fence not signalled within 2 s (`kGpuTimeout`, Windows' TDR
   delay), logs one `GPU fault: {...}` line on the `gpu` channel (what each frame in flight ran, from breadcrumbs the

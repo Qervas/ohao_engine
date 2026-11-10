@@ -1,6 +1,7 @@
 #include "world_render/combat_hud.hpp"
 
 #include "ecs/components.hpp"
+#include "ecs/player.hpp"
 #include "ecs/scene_view.hpp"
 #include "ecs/world.hpp"
 
@@ -17,20 +18,6 @@ struct CombatHudHolder {
     std::shared_ptr<CombatHud> hud;
 };
 
-// The input-driven character with the lowest id (the round's player).
-entt::entity playerOf(const World& world) {
-    entt::entity best = entt::null;
-    uint64_t bestId = UINT64_MAX;
-    for (auto [e, pc] : world.registry().view<const PlayerController>().each()) {
-        if (!pc.input) continue;
-        const uint64_t id = world.idOf(e);
-        if (id < bestId) {
-            bestId = id;
-            best = e;
-        }
-    }
-    return best;
-}
 
 constexpr float kTimeEps = 1e-5f;
 

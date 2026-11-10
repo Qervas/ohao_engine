@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3e built (3g merged into 3c); 3f-3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3f built (3g merged into 3c); 3h-3k planned.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -524,6 +524,33 @@ and audio timings, measured.
 
 *Done when* a scene with two input players moves them independently (checked once, by hand), and the baseline is
 unchanged.
+
+*As built (2026-11-09), deciding by AGENTS.md's "Deciding":*
+- **Why now, though singleplayer comes first:**
+  - The requirement is the spec's "multiplayer later needs no redesign".
+  - The game API (3i) is where input reaches a game. Keyed by player from the start, games written against it
+    will not change when a second player arrives.
+  - "The player" in seven places was a deletion due anyway.
+- **Streams.** `World::input(stream)` holds one `InputMap` per stream, at most `kMaxInputStreams` (8).
+  - A stream is made on first use with stream 0's bindings (`InputMap::freshCopy`). A stream never made reads
+    as nothing held.
+  - `stepInput` sends each event to its `InputEvent::stream` and steps every stream every step.
+  - `InputActions` rebinds every stream.
+  - The snapshot (`inputs`) and `world.hash` carry them all.
+- **`PlayerController.stream`** (0 to 7, `omitDefault`, so files and hashes are unchanged).
+  - A character moves by its own stream, and a weapon fires by its holder's.
+  - The look lead belongs to stream 0's player: the window's mouse is stream 0.
+- **`ecs::playerOf(world, stream = 0)`** (`ecs/player.hpp`) replaces the copies in the listener, the HUD, vfx,
+  combat's round and its grenade.
+  - The round's `restart` and the grenade read the player's stream.
+  - The enemies' target stays their own rule, the first living input player on any stream: it is the game's
+    targeting, and it moves with the game in 3i.
+- **The API.** `input.inject {player}` and `input.state {player}` select a player's stream (`E_NOT_FOUND` for an
+  entity that is no input-driven player). A recording writes `stream` past 0 and its replay reads it. Record and
+  replay release every stream.
+- **Checked once, by hand:** the play scene's player, duplicated onto stream 1. Stream 1's input walked the copy
+  2.667 m while the first stayed put (0.000 m), and stream 0's the other way round.
+- **The baseline** matches 3e's, apart from the hashes (which now count the streams). Every gate passes.
 
 ## 3g. Event names as data
 

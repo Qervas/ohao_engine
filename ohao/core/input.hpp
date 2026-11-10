@@ -69,6 +69,7 @@ struct InputEvent {
     double x{0.0}, y{0.0};
     std::string name;
     float value{0.0f};
+    uint8_t stream{0};   // the player's input stream it goes to (World::input; a device's: 0)
 };
 
 // Named actions and axes. Call beginStep once per simulation step with that step's events;
@@ -86,6 +87,13 @@ public:
     void bindAxis(std::string_view axis, Binding positive, Binding negative);
     // Drops every binding (the state of keys and the virtual device is kept).
     void clearBindings();
+    // The same bindings, nothing held: a new player's stream starts from the first one's.
+    [[nodiscard]] InputMap freshCopy() const {
+        InputMap m;
+        m.m_actions = m_actions;
+        m.m_axes = m_axes;
+        return m;
+    }
 
     void beginStep(std::span<const InputEvent> events);
 

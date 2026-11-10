@@ -90,21 +90,51 @@ void World::onChildrenDestroyed(entt::registry& r, entt::entity parent) {
 
 void World::onInputActionsChanged(entt::registry&, entt::entity) { m_bindingsDirty = true; }
 
+InputMap& World::input(std::size_t stream) {
+    stream = std::min(stream, kMaxInputStreams - 1);
+    while (m_inputs.size() <= stream) m_inputs.push_back(m_inputs.front().freshCopy());
+    return m_inputs[stream];
+}
+
+const InputMap& World::input(std::size_t stream) const noexcept {
+    static const InputMap kNothing;
+    return stream < m_inputs.size() ? m_inputs[stream] : kNothing;
+}
+
+void World::setInputs(std::vector<InputMap> inputs) {
+    if (inputs.empty()) inputs.emplace_back();
+    m_inputs = std::move(inputs);
+}
+
 void World::stepInput(std::span<const InputEvent> events) {
+    // Every stream the events name exists before the bindings are rebuilt, so all of them get them.
+    for (const InputEvent& e : events) (void)input(e.stream);
     if (m_bindingsDirty) {
         m_bindingsDirty = false;
-        m_input.clearBindings();
         const auto view = m_registry.view<const InputActions>();
-        if (!view.empty()) {
+        for (InputMap& in : m_inputs) {
+            in.clearBindings();
+            if (view.empty()) continue;
             const InputActions& a = view.get<const InputActions>(view.front());
             const Binding none{InputDevice::Key, 0};   // GLFW never reports key 0
             for (const ActionBinding& b : a.actions)
-                if (const auto k = keyBinding(b.key)) m_input.bindAction(b.action, *k);
+                if (const auto k = keyBinding(b.key)) in.bindAction(b.action, *k);
             for (const AxisBinding& b : a.axes)
-                m_input.bindAxis(b.axis, keyBinding(b.positive).value_or(none), keyBinding(b.negative).value_or(none));
+                in.bindAxis(b.axis, keyBinding(b.positive).value_or(none), keyBinding(b.negative).value_or(none));
         }
     }
-    m_input.beginStep(events);
+    // Each stream steps every step (its presses and releases of the last step clear), with its own events.
+    if (m_inputs.size() == 1) {
+        m_inputs.front().beginStep(events);
+        return;
+    }
+    thread_local std::vector<InputEvent> mine;
+    for (std::size_t k = 0; k < m_inputs.size(); ++k) {
+        mine.clear();
+        for (const InputEvent& e : events)
+            if (std::min<std::size_t>(e.stream, kMaxInputStreams - 1) == k) mine.push_back(e);
+        m_inputs[k].beginStep(mine);
+    }
 }
 
 void World::onIdConstructed(entt::registry& r, entt::entity e) {

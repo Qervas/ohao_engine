@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "ecs/player.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "vfx/particle_math.hpp"
@@ -252,15 +253,6 @@ struct VfxSystem::Impl {
         }
     }
 
-    entt::entity inputPlayer() const {
-        entt::entity best = entt::null;
-        uint64_t bestId = UINT64_MAX;
-        for (auto [e, pc] : world.registry().view<const PlayerController>().each()) {
-            const uint64_t id = world.idOf(e);
-            if (pc.input && id < bestId) bestId = id, best = e;
-        }
-        return best;
-    }
 
     bool under(entt::entity e, entt::entity ancestor) const {
         const auto& reg = world.registry();
@@ -428,7 +420,7 @@ struct VfxSystem::Impl {
         refreshSet();
         // A game's events, in the order they happened, as the set binds them.
         bindEvents();
-        const entt::entity player = inputPlayer();
+        const entt::entity player = playerOf(world);
         world.events().visitWindow([&](const EventChannelBase& c, std::size_t i) {
             if (c.index() >= bound.size() || !bound[c.index()].binding) return;
             Cue cue;

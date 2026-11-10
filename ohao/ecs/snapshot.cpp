@@ -79,7 +79,7 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     }
     s.columns.resize(used);
     s.frame = frame;
-    s.input = world.input();
+    s.inputs.assign(world.inputs().begin(), world.inputs().end());
     s.steps = world.steps();
     s.events = world.events().saveWindow();
     s.systems = saveSystems(reg);
@@ -185,7 +185,7 @@ RestoreStats restoreComponents(World& world, const Snapshot& s);
 RestoreStats restoreSnapshot(World& world, const Snapshot& s, RestoreInput input) {
     if (world.events().inStep()) throw std::logic_error("restoreSnapshot during a step: ask for it with World::defer");
     const RestoreStats stats = restoreComponents(world, s);
-    if (input == RestoreInput::Yes) world.input() = s.input;
+    if (input == RestoreInput::Yes) world.setInputs(s.inputs);
     world.setSteps(s.steps);
     restoreSystems(world.registry(), s.systems);
     world.events().writer<RestoreEvent>(kRestoreChannel, "world").emit(RestoreEvent{s.steps});
