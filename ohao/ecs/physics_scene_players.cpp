@@ -551,6 +551,7 @@ void PhysicsScene::Impl::interpolate(float alpha, glm::vec2 pendingLook) {
 
 void PhysicsScene::Impl::lookLead(bool between, float alpha, glm::vec2 pending, const ankerl::unordered_dense::set<entt::entity>& was) {
     leadsLook = false;
+    bool driven = false;
     const bool lead = between || pending != glm::vec2(0.0f);
     std::vector<std::pair<entt::entity, glm::mat4>> stack;
     for (auto& [e, p] : players) {
@@ -558,6 +559,7 @@ void PhysicsScene::Impl::lookLead(bool between, float alpha, glm::vec2 pending, 
         const auto* pc = reg.try_get<PlayerController>(e);
         const auto* t = reg.try_get<Transform>(e);
         if (!pc || !pc->input || pc->stream != 0 || !t) continue;   // the window's mouse: stream 0's player
+        driven = true;
         if (!controlled(e)) continue;
         leadsLook = true;
         if (!lead) continue;
@@ -585,6 +587,7 @@ void PhysicsScene::Impl::lookLead(bool between, float alpha, glm::vec2 pending, 
                 for (const entt::entity c : ch->entities) stack.emplace_back(c, world);
         }
     }
+    ignoresLook = driven && !leadsLook;
 }
 
 // A drawn pose for x this frame; its previous one is what the last frame drew of it.

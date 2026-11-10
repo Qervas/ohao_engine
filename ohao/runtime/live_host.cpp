@@ -164,7 +164,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             const bool look = std::any_of(polled.begin(), polled.end(), [](const InputEvent& e) {
                 return e.type == InputEvent::Type::MouseDelta && (e.x != 0.0f || e.y != 0.0f);
             });
-            if (look) trackLook(polledAt, false);
+            const auto* physics = ecs::physicsScene(*m_world);
+            if (look && !(physics && physics->ignoresLook())) trackLook(polledAt, false);
             m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them
         }
         if (m_window.consumeResized()) {
@@ -212,7 +213,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             std::vector<FrameTime> due;
             m_session->injectedLookDue(pending, due);
             for (const FrameTime q : due)
-                if (std::none_of(m_looks.begin(), m_looks.end(), [&](const LookInFlight& l) { return l.injected && l.poll == q; }))
+                if (const auto* physics = ecs::physicsScene(*m_world); physics && physics->ignoresLook()) continue;
+                else if (std::none_of(m_looks.begin(), m_looks.end(), [&](const LookInFlight& l) { return l.injected && l.poll == q; }))
                     trackLook(q, true);
         }
         m_world->setPendingLook(pending);

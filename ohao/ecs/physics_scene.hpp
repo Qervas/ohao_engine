@@ -213,6 +213,9 @@ public:
     // Whether the last interpolate saw an input-driven player in control (a window measures its look
     // latency by the lead's rule then, and keeps one frame ahead).
     [[nodiscard]] bool leadsLook() const noexcept;
+    // Whether the last interpolate saw stream 0's input-driven players all out of control (the slice's dead
+    // player): no frame shows a look then, so a window measures none.
+    [[nodiscard]] bool ignoresLook() const noexcept;
     // The channels physics emits into (installPhysics: the World's); without them it emits nothing.
     void setEvents(EventLog& log);
     // Whether an input-driven character takes its stream's input this step: it walks, turns and jumps, and the

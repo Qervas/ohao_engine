@@ -820,6 +820,7 @@ void PhysicsScene::setInputControl(InputControl fn) { m->inputControl = std::mov
 bool PhysicsScene::hasInputControl() const noexcept { return static_cast<bool>(m->inputControl); }
 void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
 bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }
+bool PhysicsScene::ignoresLook() const noexcept { return m->ignoresLook; }
 void PhysicsScene::setEvents(EventLog& log) {
     namespace pe = physics_events;
     m->out.contactBegin = log.writer<ContactEvent>(pe::kContactBegin, "physics");

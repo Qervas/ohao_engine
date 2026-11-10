@@ -451,6 +451,7 @@ struct PhysicsScene::Impl {
     // steps (realtime) its turn is drawn at the newest step's, never slerped: only the position is
     // interpolated. In lockstep (alpha 1) with nothing pending, nothing is drawn but the step's poses.
     // Presentation only: RenderPose, never Transform.
+    bool ignoresLook{false};   // stream 0 has input-driven players and none is in control (a dead player)
     bool leadsLook{false};   // an input-driven, living player exists (the last interpolate saw one)
 
     void lookLead(bool between, float alpha, glm::vec2 pending, const ankerl::unordered_dense::set<entt::entity>& was);

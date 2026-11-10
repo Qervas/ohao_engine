@@ -78,8 +78,9 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
       display's scale. It logs `window: WxH pixels asked, scale S, framebuffer WxH`.
   - **A window's latency on this laptop** (the panel is on the Intel GPU, the frames come from the NVIDIA one;
     KWin 6.8 on Wayland; `feel_bench`, immediate, 2026-11-10, the display on):
-    - Look latency is 23 to 24 ms at the median (about 20 ms while the player lives: a dead player's movements,
-      which nothing shows, are counted at about 55 ms), with 9.1 ms frames. The budget is 15 ms.
+    - Look latency is 20.8 ms at the median and 25.0 ms at p95, with 9.1 ms frames. The budget is 15 ms. (A dead
+      player's movements, which nothing shows, were counted at about 55 ms until `PhysicsScene::ignoresLook`:
+      the median read 23 to 24 ms and the p95 63 ms.)
     - From submit to present is 20 to 22 ms: the frame's 9 ms on the GPU, then 7 to 9 ms to the display through
       the compositor. Polling only once the previous frame is presented (`--frames-ahead 0`) gives 15.7 ms from
       submit to present and 20.8 ms latency, at 16.9 ms a frame; two frames ahead gives 29.4 ms.
