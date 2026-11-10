@@ -21,6 +21,7 @@ struct MethodDoc {
     const TypeInfo* params{nullptr};   // the params struct; its JSON Schema is the input schema
     std::string_view result;           // a compact description of the result
     std::string_view doc;
+    std::string_view module;           // the game whose method it is; empty: the engine's
 };
 
 // JSON Schema (draft 2020-12) of a params struct, self-contained (no $ref) and terse:
@@ -36,6 +37,7 @@ struct ChannelDoc {
     std::string name;
     std::string type;
     std::vector<std::string> writers, readers;
+    std::string module;   // the game whose payload it carries; empty: the engine's
 };
 
 struct CatalogueOptions {

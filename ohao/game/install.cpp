@@ -98,6 +98,12 @@ std::string typeMismatch(const reflect::TypeRegistry& live, const reflect::TypeR
 
 } // namespace
 
+void registerGameTypes(reflect::TypeRegistry& types, const Module& module) {
+    types.setModule(std::string(module.name()));
+    module.registerTypes(types);
+    types.setModule({});
+}
+
 void installGame(ecs::World& world, const Module& module) {
     if (world.registry().ctx().contains<InstalledGame>()) throw std::logic_error("a game is installed already");
     const Inventory before = inventory(world);
@@ -141,7 +147,7 @@ bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, const Mod
     {
         reflect::TypeRegistry scratch;
         ecs::registerSceneTypes(scratch);
-        next.registerTypes(scratch);
+        registerGameTypes(scratch, next);
         if (!scratch.errors().empty()) {
             error = "the new build's types do not register: " + scratch.errors().front();
             return false;

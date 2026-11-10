@@ -8,8 +8,7 @@
 // the World's log (ecs/events.hpp), each with the cue the engine's data binds to.
 
 #include "slice/components.hpp"
-#include "ecs/events.hpp"
-#include "ecs/snapshot_hook.hpp"
+#include "game/api.hpp"
 
 #include <glm/glm.hpp>
 #include <entt/entt.hpp>

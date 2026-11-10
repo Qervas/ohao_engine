@@ -9,11 +9,7 @@
 #include "slice/components.hpp"
 #include "slice/module.hpp"
 
-#include "ecs/world.hpp"
-#include "reflect/decode.hpp"
-#include "reflect/json_value.hpp"
-#include "reflect/json_writer.hpp"
-#include "reflect/registry.hpp"
+#include "game/api.hpp"
 
 #include <glm/glm.hpp>
 

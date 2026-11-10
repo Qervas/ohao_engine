@@ -13,8 +13,9 @@ set(OHAO_LAYERS
     ohao_level_world=5 ohao_world_render=5
     ohao_engine=6 ohao_game_api=6
     ohao_api=7
-    ohao_rpc=8 ohao_runtime=8
-    ohao_slice_objects=9 ohao_slice=9 ohao_slice_static=9)   # a game sits above every engine library: none links it or includes its headers
+    ohao_rpc=8 ohao_runtime=8)
+# The games (cmake/ohao_games.cmake) sit above every engine library: none links one or includes its headers. A game's own
+# sources include the engine only through the game API, game/api.hpp (checked below).
 
 # "from->to": allowed although it points sideways or up. Each has its end. None today: the world and the renderer
 # share a level so neither reaches the other (step 3a); ohao_world_render joins them.
@@ -50,6 +51,26 @@ endfunction()
 
 function(ohao_check_layers)
     set(errors "")
+    get_property(games GLOBAL PROPERTY OHAO_GAMES)
+    foreach(game ${games})
+        list(APPEND OHAO_LAYERS ohao_${game}_objects=9 ohao_${game}=9 ohao_${game}_static=9)
+    endforeach()
+    # A game includes the engine through game/api.hpp only: no other header under ohao/, quoted or in angle brackets.
+    file(GLOB engine_dirs LIST_DIRECTORIES true RELATIVE "${CMAKE_SOURCE_DIR}/ohao" "${CMAKE_SOURCE_DIR}/ohao/*")
+    foreach(game ${games})
+        get_target_property(srcs ohao_${game}_objects SOURCES)
+        foreach(s ${srcs})
+            file(STRINGS "${s}" includes REGEX "^[ \t]*#[ \t]*include[ \t]+[\"<][a-z_]+/[^\">]+[\">]")
+            foreach(line ${includes})
+                string(REGEX REPLACE "^[^\"<]*[\"<]([^\">]+)[\">].*$" "\\1" path "${line}")
+                string(REGEX REPLACE "/.*$" "" top "${path}")
+                if(top IN_LIST engine_dirs AND NOT path STREQUAL "game/api.hpp")
+                    file(RELATIVE_PATH where "${CMAKE_SOURCE_DIR}" "${s}")
+                    list(APPEND errors "${where} includes ${path}: a game includes the engine through game/api.hpp only")
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
     # Which library owns each header (by path under ohao/).
     set(owners "")
     foreach(entry ${OHAO_LAYERS})

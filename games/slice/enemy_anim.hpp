@@ -8,7 +8,7 @@
 //   alive     Health above 0
 // and the events `shot` (its round), `hit` (damage it took and lived), `reload`, `death`, from the
 // step's slice events, in the order they happened.
-#include "ecs/animation.hpp"
+#include "game/api.hpp"
 #include "slice/combat.hpp"
 #include "slice/components.hpp"
 

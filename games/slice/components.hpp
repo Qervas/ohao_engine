@@ -2,19 +2,12 @@
 // The slice's components (sub-projects 7, 9 and 10; moved from the engine's ecs/components.hpp in step 3i, their
 // names unchanged, so scene files need no migration). The slice is written against the engine's world, so its
 // namespace sees ohao::ecs's names; it adds its own beside them.
-#include "ecs/components.hpp"
+#include "game/api.hpp"
 
 #include <glm/glm.hpp>
 
 #include <cstdint>
 #include <string>
-
-namespace ohao::ecs {
-class AnimationSystem;
-class EventLog;
-class PhysicsScene;
-class World;
-} // namespace ohao::ecs
 
 namespace ohao::slice {
 

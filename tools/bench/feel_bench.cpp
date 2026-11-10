@@ -20,6 +20,7 @@
 #include "common/harness.hpp"
 #include "slice/combat.hpp"
 #include "slice/module.hpp"
+#include "game/install.hpp"
 #include "game/loader.hpp"
 #include "ecs/scene_types.hpp"
 #include "render/deferred/deferred_renderer.hpp"
@@ -50,7 +51,7 @@ using Clock = std::chrono::steady_clock;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), game::registerGameTypes(r, slice::module()), true);
     (void)once;
     return r;
 }

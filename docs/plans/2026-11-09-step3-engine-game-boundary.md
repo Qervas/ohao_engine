@@ -1,6 +1,6 @@
 # Step 3: the engine/game boundary
 
-**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** 3a to 3j built (3g merged into 3c); 3k planned.
+**Spec:** `docs/specs/2026-11-08-system-design.md`, 4.3, 4.4 and 5 (step 3). **Status:** built, 3a to 3k (3g merged into 3c); step 3 closed 2026-11-10.
 
 The slice (combat, the grenade, rounds, enemy AI, the arms and enemy drivers, the HUD, the view model) leaves the
 engine libraries for `games/slice`, behind a game API that a second game also builds against.
@@ -890,10 +890,53 @@ passes with the slice loaded as a shared library.
 *Done when* both games build against the same API, the sample loads and plays headless (a scripted session), and the
 spec's step 3 "done when" holds. The baseline tool is then deleted.
 
+*As built (2026-11-10): the second game, the API's header, the catalogue, and the close.*
+- **`games/sample`**, the smallest game, against `game/api.hpp` only. Targets spin (the engine's `Spin`) on kinematic
+  bodies until a player's round meets one; then its `Spin` goes and its body turns dynamic, so it falls.
+  - It adds `sample.hit` (a cue: point, normal, shooter, target), `sample.targets`, one simulate system `shoot`
+    (after physics), and no state outside its components: no snapshot hook, nothing for a reload to carry.
+  - Its scene is `assets/scenes/sample_targets.scene.json`.
+  - **Headless, from a script** (`ohao run ... --game build/Release/libohao_sample.so --script`): one press of `fire`
+    downs the middle target on step 1 (hit on its face at z -5.7); 90 steps later it rests at y 0.295 (its half-size
+    0.3), and the others stand. The script twice gives one hash; with a `game.reload` in it, the same hash
+    (`carried: []`).
+  - The module is 279 KB.
+- **`game/api.hpp`**, the game API's one header: the 20 engine headers the slice used, which both games now include in
+  their place.
+  - Configure fails when a game includes any other engine header, quoted or in angle brackets, naming the file.
+    Planted (`ecs/world.hpp` in `slice/hud.cpp`): caught.
+  - It is the games' precompiled header.
+  - `ohao_add_game(<name>)` (cmake/ohao_games.cmake) builds every game the same way, and the layer check takes the
+    games from it.
+- **The catalogue** names the game that owns each type, enum, method and channel (`module`).
+  - `TypeRegistry::setModule`, through `game::registerGameTypes`, which every host uses.
+  - `ohao schema` with the slice: 16 owned types (9 components, 7 payloads), 2 methods, 10 channels. With the
+    sample: 2 types, 1 method, 1 channel. With `--game none`: the engine's 37 methods only.
+- **`docs/games/README.md`**: the game developers' guide (a module, what it includes, the rules, the reload, what an
+  agent reads).
+- The sample's method is not in `docs/agents/ohao-cli.md`, whose method list is checked against the default game's
+  (the doc check refused it); its catalogue and its source document it.
+- **The baseline tool** (`tests/replay/step3_baseline.py`) is deleted, its work done.
+  - Every part matched the previous part's recording: logs equal, and where `world.hash` moved, an A/B showed the
+    cause was ordering only (3h's hook order, 3i's type registration order).
+  - With 3k the fight equals 3j's, `world.hash` included.
+- **Step 3's done-when holds:**
+  - the engine libraries hold no game code (3i: `nm`, the layer check);
+  - `replay_test` passes with the slice as a module (3j);
+  - a hot reload keeps `world.hash` (3j, held by `replay_test`);
+  - a second minimal game builds against the same API (3k).
+- The record for the wiki: `docs/changes/2026-11-10-step3-engine-game-boundary.md`.
+
 ## Spec corrections
 
-- 4.4 and section 3 count 8 game methods; there are 5 (`player.info`, `player.teleport`, `combat.info`,
-  `combat.events`, `combat.damage`).
+- 4.4 and section 3 count 8 game methods; there were 5 (`player.info`, `player.teleport`, `combat.info`,
+  `combat.events`, `combat.damage`). After 3c (`combat.events` became `events.read`) and 3i, the slice has 2:
+  `combat.info` and `combat.damage`. `player.*` are the engine's: the player is physics'.
+- **4.4, the module (3i, 3k).** Three entry points and an inverse: `registerTypes`, `install`, `uninstall` and
+  `methods`, not four. Events are types and their channels open at install, and HUDs, drivers and systems all
+  register on a World. The services are one header, `game/api.hpp`, which configure holds games to.
+- **4.4, hot reload (3j).** The module is never unloaded, because EnTT cannot remove a pool. The new build reads the
+  game's data in place, and a layout change is refused (`core/layout_key.hpp`). The spec is corrected.
 - Section 3's "combat's runtime state is in no snapshot" understates the gap. Physics', animation's and audio's
   counters and the World's input are missing too, and snapshot columns hold raw entity handles. 3b covers all of
   them.

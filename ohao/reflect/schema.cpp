@@ -55,6 +55,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
         else { w.beginObject(); w.endObject(); }
         w.key("result"); w.string(m.result);
         w.key("doc"); w.string(m.doc);
+        if (!m.module.empty()) { w.key("module"); w.string(m.module); }
         w.endObject();
     }
     w.endArray();
@@ -73,6 +74,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
         w.beginArray();
         for (const auto& n : c.readers) w.string(n);
         w.endArray();
+        if (!c.module.empty()) { w.key("module"); w.string(c.module); }
         w.endObject();
     }
     w.endArray();
@@ -83,6 +85,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
         w.beginObject();
         w.key("name"); w.string(e->name);
         w.key("doc"); w.string(e->doc);
+        if (!e->module.empty()) { w.key("module"); w.string(e->module); }
         w.key("values");
         w.beginArray();
         for (const auto& v : e->values) {
@@ -103,6 +106,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
         w.beginObject();
         w.key("name"); w.string(t->name);
         w.key("doc"); w.string(t->doc);
+        if (!t->module.empty()) { w.key("module"); w.string(t->module); }
         w.key("role"); w.string(t->role == TypeRole::Component ? "component" : t->role == TypeRole::Event ? "event" : "struct");
         w.key("serialized"); w.boolean(t->serialized);
         w.key("singleton"); w.boolean(t->singleton);
