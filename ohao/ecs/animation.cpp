@@ -1,9 +1,9 @@
 #include "ecs/animation.hpp"
 
+#include "ecs/snapshot_hook.hpp"
+
 #include "core/log.hpp"
 #include "ecs/components.hpp"
-#include "ecs/arms_anim.hpp"
-#include "ecs/enemy_anim.hpp"
 #include "asset/model.hpp"
 
 #include <algorithm>
@@ -107,20 +107,21 @@ void AnimationSystem::setDriver(std::string name, AnimDriver fn) {
     m_drivers.emplace_back(std::move(name), std::move(fn));
 }
 
-std::vector<AnimEvent> AnimationSystem::eventsSince(uint64_t seq, std::size_t max, uint64_t& dropped) const {
-    const uint64_t first = m_nextSeq - m_log.size();
-    dropped = seq < first ? first - seq : 0;
-    std::vector<AnimEvent> out;
-    for (std::size_t i = static_cast<std::size_t>(std::max(seq, first) - first); i < m_log.size() && out.size() < max; ++i)
-        out.push_back(m_log[i]);
+void AnimationSystem::removeDriver(std::string_view name) {
+    std::erase_if(m_drivers, [&](const auto& d) { return d.first == name; });
+}
+
+std::vector<std::string> AnimationSystem::driverNames() const {
+    std::vector<std::string> out;
+    for (const auto& [n, f] : m_drivers) out.push_back(n);
     return out;
 }
+
+void AnimationSystem::setEvents(EventLog& log) { m_clipEvents = log.writer<ClipEvent>(kClipEventChannel, "animation"); }
 
 void AnimationSystem::step(World& world) {
     const auto t0 = std::chrono::steady_clock::now();
     auto& reg = world.registry();
-    ++m_steps;
-    m_stepEvents.clear();
     m_order.clear();
     for (const entt::entity e : reg.view<Animator>()) m_order.emplace_back(world.idOf(e), e);
     std::sort(m_order.begin(), m_order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -146,20 +147,13 @@ void AnimationSystem::step(World& world) {
             const int layer = static_cast<int>(li);
             anim::LayerState s = toState(*g, layer, a.layers[li]);
             fired.clear();
-            anim::stepLayer(*g, layer, s, params, fired);
+            anim::stepLayer(*g, layer, s, params, world.stepDt(), fired);
             fromState(*g, layer, s, a.layers[li]);
-            for (const anim::FiredEvent& f : fired) {
-                AnimEvent ev;
-                ev.step = m_steps;
-                ev.seq = m_nextSeq++;
-                ev.entity = id;
-                ev.layer = static_cast<uint8_t>(f.layer);
-                ev.clip = f.clip >= 0 ? g->clips[static_cast<std::size_t>(f.clip)].name : std::string();
-                ev.name = f.name;
-                m_stepEvents.push_back(ev);
-                m_log.push_back(std::move(ev));
-                if (m_log.size() > kLogCapacity) m_log.pop_front();
-            }
+            if (m_clipEvents)
+                for (const anim::FiredEvent& f : fired)
+                    m_clipEvents.emit(ClipEvent{id, static_cast<uint32_t>(f.layer),
+                                                f.clip >= 0 ? g->clips[static_cast<std::size_t>(f.clip)].name : std::string(),
+                                                f.name});
         }
         if (p) p->events.clear();
     }
@@ -184,7 +178,7 @@ void AnimationSystem::poseEntity(World& world, entt::entity e, bool placed) {
     anim::Params params;
     toParams(*g, reg.try_get<AnimParams>(e), params);
     const float alpha = std::clamp(world.renderAlpha(), 0.0f, 1.0f);
-    anim::evaluatePose(*g, layers, params, alpha, m_local, m_scratch);
+    anim::evaluatePose(*g, layers, params, alpha, world.stepDt(), m_local, m_scratch);
 
     AnimPose& pose = reg.get_or_emplace<AnimPose>(e);
     if (pose.graph != g) {
@@ -323,8 +317,7 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<AnimationInstalled>()) return *installed->system;
     auto system = std::make_shared<AnimationSystem>(assets);
     reg.ctx().emplace<AnimationInstalled>(AnimationInstalled{system.get()});
-    registerEnemyDriver(*system);
-    registerArmsDriver(*system);
+    system->setEvents(world.events());
     // Animator writes from outside the step are placements (the step writes through get<>()).
     struct Placed {
         AnimationSystem* s;
@@ -333,15 +326,11 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     auto placed = std::make_shared<Placed>(Placed{system.get()});
     reg.on_construct<Animator>().connect<&Placed::on>(*placed);
     reg.on_update<Animator>().connect<&Placed::on>(*placed);
-    // After the simulate systems installed before it (physics, combat): it reads what they wrote.
-    world.addSimulate("animation", [system, placed](World& w, float) { system->step(w); });
-    // The pose: after the drawn poses of what the step moved (interpolate, the gun), before the
-    // render extract reads them.
-    const auto names = world.syncNames();
-    const auto has = [&](const char* n) { return std::find(names.begin(), names.end(), n) != names.end(); };
-    const auto run = [system](World& w) { system->pose(w); };
-    if (has("render_extract")) world.addSyncBefore("render_extract", "pose", run);
-    else world.addSyncAfter(has("view_model") ? "view_model" : has("interpolate") ? "interpolate" : "transform", "pose", run);
+    // It animates what the step moved; a game's drivers' event readers order it after their writers.
+    world.addSimulate("animation", [system, placed](World& w, float) { system->step(w); }, {.after = {"physics"}});
+    // The pose: after the drawn poses of what the step moved (a game's view model declares itself before it); the
+    // render extract declares itself after it.
+    world.addSync("pose", [system](World& w) { system->pose(w); }, {.after = {"interpolate"}});
     return *system;
 }
 

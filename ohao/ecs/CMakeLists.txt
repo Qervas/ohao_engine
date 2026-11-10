@@ -5,7 +5,7 @@ target_include_directories(ohao_ecs PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_ecs PUBLIC cxx_std_20)
 # ohao_physics: the physics system's bodies (physics_scene.cpp). It links only core, glm and
 # Jolt, so there is no cycle back to the ECS.
-target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_asset ohao_reflect ohao_physics ohao_anim glm EnTT::EnTT
+target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_asset ohao_reflect ohao_physics ohao_anim glm EnTT::EnTT
     ohao_unordered_dense)
 target_link_libraries(ohao_ecs PRIVATE ohao_simdjson)
 # The audio schedule reads the world's .audio.json (the bank, plain data: no miniaudio).

@@ -1,4 +1,5 @@
 #include "post_processing_pipeline.hpp"
+#include "render/shader_bindings/postprocess_tonemap.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include <array>
 
@@ -240,41 +241,15 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
     if (set == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
     if (input == VK_NULL_HANDLE || bloom == VK_NULL_HANDLE) return;
 
-    // Write the bindings: HDR input, bloom, the metered EV100
-    std::array<VkDescriptorImageInfo, 2> imageInfos{};
-    std::array<VkWriteDescriptorSet, 3> writes{};
-
-    // Binding 0: HDR input
-    imageInfos[0].sampler = m_sampler;
-    imageInfos[0].imageView = input;
-    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = set;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &imageInfos[0];
-
-    // Binding 1: Bloom texture
-    imageInfos[1].sampler = m_sampler;
-    imageInfos[1].imageView = bloom;
-    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = set;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &imageInfos[1];
-
-    // Binding 2: auto exposure's state (x EV100)
+    // The HDR input, the bloom, and auto exposure's state (x EV100).
+    namespace T = shader::postprocess_tonemap;
+    const VkDescriptorImageInfo images[2] = {{m_sampler, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                             {m_sampler, bloom, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     const VkDescriptorBufferInfo exposureInfo{m_autoExposure->stateBuffer(), 0, VK_WHOLE_SIZE};
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = set;
-    writes[2].dstBinding = 2;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[2].descriptorCount = 1;
+    std::array<VkWriteDescriptorSet, 3> writes{shader::write(T::hdrInput, set), shader::write(T::bloomInput, set),
+                                               shader::write(T::exposureState, set)};
+    writes[0].pImageInfo = &images[0];
+    writes[1].pImageInfo = &images[1];
     writes[2].pBufferInfo = &exposureInfo;
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
@@ -399,14 +374,7 @@ bool PostProcessingPipeline::createTonemappingPass() {
         return false;
     }
 
-    // Descriptor layout: HDR input + bloom, auto exposure's state
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
-    for (uint32_t b = 0; b < 3; ++b) {
-        bindings[b].binding = b;
-        bindings[b].descriptorType = b < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[b].descriptorCount = 1;
-        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    }
+    const auto bindings = shader::layoutBindings(shader::postprocess_tonemap::kSet0, shader::postprocess_tonemap::kStages);
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

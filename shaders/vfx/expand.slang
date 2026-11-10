@@ -126,9 +126,10 @@ float sunVisibility(float3 p)
     return 1.0;
 }
 
+// Not `expand`: Slang 2026 made it a keyword (variadic generics' `expand each`).
 [shader("compute")]
 [numthreads(kVfxGroupSize, 1, 1)]
-void expand(uint3 id : SV_DispatchThreadID)
+void expandParticles(uint3 id : SV_DispatchThreadID)
 {
     const uint i = id.x;
     if (i >= pc.config.x) return;

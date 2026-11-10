@@ -1,1 +1,0 @@
-{"error":{"code":"E_PATH","message":"Transform has no field 'positon'","data":[{"code":"E_PATH","path":"/fields/0","message":"Transform has no field 'positon'","expected":"one of: position, rotation, scale","got":"\"positon\"","suggestion":"position"}]}}

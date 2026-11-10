@@ -448,9 +448,8 @@ void installLevels(World& world, ecs::AssetResolver& assets, const reflect::Type
     }
     auto state = std::make_shared<LevelState>(world, assets, types);
     reg.ctx().emplace<LevelInstalled>(LevelInstalled{state});
-    const auto names = world.syncNames();
-    const bool instantiate = std::find(names.begin(), names.end(), "instantiate") != names.end();
-    world.addSyncBefore(instantiate ? "instantiate" : "transform", "level", [state](World&) { state->run(); });
+    // The entities it expands get their transforms in the same sync.
+    world.addSync("level", [state](World&) { state->run(); }, {.before = {"transform"}});
 }
 
 std::vector<Diagnostic> levelDiagnostics(const World& world, entt::entity level) {

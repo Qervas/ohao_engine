@@ -1,4 +1,5 @@
 #include "vulkan_renderer_impl.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "render/rt/env_cdf.hpp"
 #include "render/rt/env_sun.hpp"
 #include "render/scene/render_scene.hpp"
@@ -101,7 +102,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
             }
             // Replacing an earlier env map: frames in flight may still sample it.
             if (m_envMapImage != VK_NULL_HANDLE) {
-                vkQueueWaitIdle(m_graphicsQueue);
+                gpu::checkResult(vkQueueWaitIdle(m_graphicsQueue), "environment replace");
                 destroyEnvMapImage();
             }
 
@@ -272,8 +273,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
                 submitInfo.commandBufferCount = 1;
                 submitInfo.pCommandBuffers = &uploadCmd;
-                vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-                vkQueueWaitIdle(m_graphicsQueue);
+                gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "environment upload");
                 vkDestroyBuffer(m_device, stagingBuf, nullptr);
                 vkFreeMemory(m_device, stagingMem, nullptr);
                 vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);

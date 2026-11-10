@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/shader_bindings/core_gbuffer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "render/rt/rt_compute.hpp"
@@ -85,8 +86,6 @@ public:
     [[nodiscard]] bool getWireframeEnabled() const { return m_wireframeEnabled; }
 
     // Descriptor set for deferred lighting
-    [[nodiscard]] VkDescriptorSetLayout getGBufferLayout() const { return m_gbufferLayout; }
-    [[nodiscard]] VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }
 
     // SSS classification (layout.json, kSSSHeaderWords): the pass resets it before drawing and
     // every visible fragment of a subsurface material flags its 16x16 tile; SSSPass dispatches
@@ -109,13 +108,8 @@ private:
     [[nodiscard]] bool createFramebuffer();
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createGBuffer();
-    [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createSceneDescriptors();
-    // Set 1's bindings: 0-5 as before the meshlets, then 6 the vertex arena, 7-9 the meshlet
-    // arenas, 10 GPU culling's commands, 11 the Hi-Z pyramid (sampled, GENERAL).
-    static constexpr uint32_t kSceneBindings = 12;
-    static constexpr uint32_t kSceneHiZ = 11;
-    [[nodiscard]] static VkDescriptorType sceneBindingType(uint32_t binding);
+    static constexpr uint32_t kSceneBindings = 12;   // set 1 (gbuffer_pass.cpp's kScene)
     void destroySceneDescriptors();
     void destroyGBuffer();
     // Rewrites the frame slot's scene set and camera UBO. False when the scene has
@@ -168,12 +162,8 @@ private:
     render::GpuPassTimer* m_passTimer{nullptr};
 
     // Descriptors for G-Buffer access
-    VkDescriptorSetLayout m_gbufferLayout{VK_NULL_HANDLE};
-    VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_gbufferDescriptor{VK_NULL_HANDLE};
 
     // Sampler for G-Buffer
-    VkSampler m_sampler{VK_NULL_HANDLE};
 
     // Scene the pass draws (owned by VulkanRenderer)
     const render::RenderScene* m_renderScene{nullptr};
@@ -207,6 +197,7 @@ private:
         uint32_t tilesX, tilesY;
         uint32_t pad0, pad1;
     };
+    OHAO_CHECK_PUSH(DrawPushConstant, core_gbuffer)   // core/gbuffer.slang's
     static_assert(sizeof(DrawPushConstant) == 16);
 
     glm::mat4 m_view{1.0f};

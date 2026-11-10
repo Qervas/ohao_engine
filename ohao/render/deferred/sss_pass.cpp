@@ -1,4 +1,5 @@
 #include "sss_pass.hpp"
+#include "render/shader_bindings/postprocess_sss.hpp"
 #include "gbuffer_pass.hpp"
 #include "gpu/shared_layout.hpp"
 #include "core/log.hpp"
@@ -47,20 +48,19 @@ bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height))
         return false;
 
-    using rtc::layoutBinding;
     // 7, 8 (OpenPBR step 4): the G-buffer's layers target (each pixel's material) and the material
     // table (its subsurface's free path and colour). blurH's 0 is the subsurface diffuse light, blurV's
     // 9 the same image (the centre's own, which it takes out of the lit image).
     const VkDescriptorSetLayoutBinding h[] = {
-        layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+        shader::layoutBinding(shader::postprocess_sss::hLit), shader::layoutBinding(shader::postprocess_sss::gPosition),
+        shader::layoutBinding(shader::postprocess_sss::gNormal), shader::layoutBinding(shader::postprocess_sss::tiles),
+        shader::layoutBinding(shader::postprocess_sss::hOut), shader::layoutBinding(shader::postprocess_sss::gLayers),
+        shader::layoutBinding(shader::postprocess_sss::materials)};
     const VkDescriptorSetLayoutBinding v[] = {
-        layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), layoutBinding(5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), layoutBinding(9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)};
+        shader::layoutBinding(shader::postprocess_sss::gPosition), shader::layoutBinding(shader::postprocess_sss::gNormal),
+        shader::layoutBinding(shader::postprocess_sss::tiles), shader::layoutBinding(shader::postprocess_sss::vIn),
+        shader::layoutBinding(shader::postprocess_sss::vLit), shader::layoutBinding(shader::postprocess_sss::gLayers),
+        shader::layoutBinding(shader::postprocess_sss::materials), shader::layoutBinding(shader::postprocess_sss::vDiffuse)};
     for (auto [bindings, count, layout] : {std::tuple{h, 7u, &m_hSetLayout}, std::tuple{v, 8u, &m_vSetLayout}}) {
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -152,10 +152,10 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                                                  {VK_NULL_HANDLE, normal, kReadOnly},
                                                  {VK_NULL_HANDLE, m_scratch.view, kGeneral}};
         VkWriteDescriptorSet writes[7] = {
-            rtc::descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-            rtc::descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), rtc::descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+            shader::write(shader::postprocess_sss::hLit, set), shader::write(shader::postprocess_sss::gPosition, set),
+            shader::write(shader::postprocess_sss::gNormal, set), shader::write(shader::postprocess_sss::tiles, set),
+            shader::write(shader::postprocess_sss::hOut, set), shader::write(shader::postprocess_sss::gLayers, set),
+            shader::write(shader::postprocess_sss::materials, set)};
         writes[0].pImageInfo = &images[0];
         writes[1].pImageInfo = &images[1];
         writes[2].pImageInfo = &images[2];
@@ -181,10 +181,10 @@ void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                                                  {VK_NULL_HANDLE, m_scratch.view, kGeneral},
                                                  {VK_NULL_HANDLE, m_litView, kGeneral}};
         VkWriteDescriptorSet writes[8] = {
-            rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), rtc::descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            rtc::descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)};
+            shader::write(shader::postprocess_sss::gPosition, set), shader::write(shader::postprocess_sss::gNormal, set),
+            shader::write(shader::postprocess_sss::tiles, set), shader::write(shader::postprocess_sss::vIn, set),
+            shader::write(shader::postprocess_sss::vLit, set), shader::write(shader::postprocess_sss::gLayers, set),
+            shader::write(shader::postprocess_sss::materials, set), shader::write(shader::postprocess_sss::vDiffuse, set)};
         writes[0].pImageInfo = &images[0];
         writes[1].pImageInfo = &images[1];
         writes[2].pBufferInfo = &tileInfo;

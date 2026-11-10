@@ -13,7 +13,12 @@
 #include <windows.h>
 #include <sddl.h>
 #else
+#include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
+
+#include <cstdint>
+#include <mutex>
 #endif
 
 namespace ohao::rpc {
@@ -57,7 +62,17 @@ void StdioTransport::interruptRead(void* readerThread) {
 #ifdef _WIN32
     CancelSynchronousIo(static_cast<HANDLE>(readerThread));
 #else
-    (void)readerThread;   // a POSIX host closes stdin instead
+    // CancelSynchronousIo's POSIX counterpart: SIGUSR1 to the reader, whose handler does nothing and is installed
+    // without SA_RESTART, so its blocked read() returns EINTR (read() then reports the end of the input).
+    static std::once_flag installed;
+    std::call_once(installed, [] {
+        struct sigaction sa {};
+        sa.sa_handler = [](int) {};
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGUSR1, &sa, nullptr);
+    });
+    pthread_kill(static_cast<pthread_t>(reinterpret_cast<std::uintptr_t>(readerThread)), SIGUSR1);
 #endif
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "core/input.hpp"
 #include "ecs/components.hpp"
+#include "ecs/events.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <entt/entt.hpp>
@@ -14,15 +15,33 @@
 
 namespace ohao::ecs {
 
-// The game world: an EnTT registry plus two explicitly ordered lists of systems, one per
-// phase (sub-project 4 spec, "System phases"). Systems run in exactly the order they were
-// added -- no discovery, no sorting.
-//   simulate  behaviour (spin, later physics and gameplay): once per fixed step, with the
-//             fixed dt. simulate(dt) runs them.
-//   sync      derived state (instantiate, transform, the render extract): once before each
-//             render and after each batch of steps, with no dt. sync() runs them.
-// A frame's simulation is then independent of how often it is rendered: a realtime session
-// and a lockstep one that run the same steps reach the same state.
+// A restore put the world back to another moment (restoreSnapshot): `world.restore`, in the history only (emitted
+// before the snapshot's next-step events come back, so no step reads it); the HUD and agents read it there.
+inline constexpr const char* kRestoreChannel = "world.restore";
+struct RestoreEvent {
+    uint64_t step{0};   // the World's step the world went back to
+};
+
+// Where a system runs among its phase's others (step 3h): it runs after every system it names in `after` and before
+// every one in `before`, when that system is installed (a name not installed is no constraint). In the simulate
+// phase every event writer also runs before the channel's typed readers (EventLog::writer/reader name them) and,
+// when the channel has a cue, before every system that reads cues.
+struct SystemOrder {
+    std::vector<std::string> after;
+    std::vector<std::string> before;
+    // It reads channels by their cues, which its data binds (the audio schedule, vfx): it runs after the writers of
+    // every channel with a cue, whatever its data binds, so loading data never moves a system.
+    bool readsCues{false};
+};
+
+// The game world: an EnTT registry plus the systems of two phases (sub-project 4 spec, "System phases").
+//   simulate  behaviour (spin, physics, gameplay): once per fixed step, with the fixed dt. simulate(dt) runs them.
+//   sync      derived state (instantiate, transform, the render extract): once before each render and after each
+//             batch of steps, with no dt. sync() runs them.
+// A frame's simulation is then independent of how often it is rendered: a realtime session and a lockstep one that
+// run the same steps reach the same state. Each phase's order is computed from what its systems declare
+// (SystemOrder, the event edges), ties going to the lesser name: a function of the systems installed, never of who
+// installed them or when.
 class World {
 public:
     using SimulateSystem = std::function<void(World&, float dt)>;
@@ -39,8 +58,10 @@ public:
     // empty Children and its CreationOrder.
     entt::entity create(std::string_view name, const Transform& local = {});
     // Same, with a caller-chosen id (from a file or a command). Returns entt::null and
-    // creates nothing when id is 0 or already in use.
-    entt::entity createWithId(uint64_t id, std::string_view name, const Transform& local = {});
+    // creates nothing when id is 0 or already in use. `hint`: the handle to take when it is free (a snapshot
+    // restore recreates an entity as it was, so references held as handles stay valid).
+    entt::entity createWithId(uint64_t id, std::string_view name, const Transform& local = {},
+                              entt::entity hint = entt::null);
 
     // Stable ids. Generated ids are splitmix64(seed + counter++), skipping 0 and ids in
     // use. The seed comes from std::random_device unless seedIds() fixes it; the whole
@@ -80,15 +101,34 @@ public:
     void attach(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
-    void addSimulate(std::string name, SimulateSystem fn);
-    void addSync(std::string name, SyncSystem fn);
-    // Inserts right after / before the sync system named `anchor` (appends if there is none).
-    void addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn);
-    void addSyncBefore(std::string_view anchor, std::string name, SyncSystem fn);
-    // Inserts right before the simulate system named `anchor` (appends if there is none).
-    void addSimulateBefore(std::string_view anchor, std::string name, SimulateSystem fn);
-    // One fixed step: every simulate system, in order.
+    // Installs a system at the place its order and the others' give it. A name already installed, an order with a
+    // cycle, or a simulate system added inside a step throws std::logic_error and installs nothing.
+    void addSimulate(std::string name, SimulateSystem fn, SystemOrder order = {});
+    void addSync(std::string name, SyncSystem fn, SystemOrder order = {});
+    // Removes a system (a game's, before its next build installs: game/reload.hpp); a simulate system also leaves the
+    // event log (EventLog::forgetSystem). Between steps; a name not installed does nothing.
+    void removeSimulate(std::string_view name);
+    void removeSync(std::string_view name);
+    [[nodiscard]] std::vector<std::string> simulateNames() const;   // in their order
+    [[nodiscard]] std::vector<std::string> syncNames() const;
+    // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp),
+    // then what the step deferred runs. When systems took new event handles since the last step, the order is
+    // computed again first; a cycle then throws std::logic_error, before the step.
     void simulate(float dt);
+    // Work that must happen between steps (a snapshot, a restore: step 3d): asked during a step, it runs after the
+    // step's last system, in the order asked, with the step's events already history; asked between steps, at once.
+    // Nothing snapshots or restores the world inside a step.
+    void defer(std::function<void(World&)> op);
+    // The steps simulated (saved and hashed): the step running, or the last one between steps.
+    [[nodiscard]] uint64_t steps() const noexcept { return m_events.step(); }
+    // The World's clock (step 3e): the fixed dt of the step running, else of the last one (1/60 s before any). A
+    // system reads time from it, never from a constant; durations in data (seconds, milliseconds) become steps of
+    // it. The host's configuration, so never saved or hashed.
+    [[nodiscard]] float stepDt() const noexcept { return m_stepDt; }
+    void setSteps(uint64_t steps) noexcept { m_events.setStep(steps); }   // a restore
+    // The world's events (ecs/events.hpp): channels, the step's events, the history.
+    [[nodiscard]] EventLog& events() noexcept { return m_events; }
+    [[nodiscard]] const EventLog& events() const noexcept { return m_events; }
     // Every sync system, in order.
     void sync();
     // One sync system by name (false when there is none): a session expands levels right
@@ -99,15 +139,19 @@ public:
         simulate(dt);
         sync();
     }
-    [[nodiscard]] std::vector<std::string> simulateNames() const;
-    [[nodiscard]] std::vector<std::string> syncNames() const;
 
     // The world's input (core/input.hpp), read by simulate systems. Hosts step it once per
     // simulation step, before simulate(), with that step's events (stepInput). Its bindings
     // follow the InputActions singleton: rebuilt at the next stepInput whenever one is set,
     // changed or removed. A world without InputActions keeps bindings made in code.
-    [[nodiscard]] InputMap& input() noexcept { return m_input; }
-    [[nodiscard]] const InputMap& input() const noexcept { return m_input; }
+    // One stream per player (step 3f): a PlayerController reads `stream` (PlayerController.stream), an event goes to
+    // its InputEvent::stream, a device's to 0. A stream is made on first use with stream 0's bindings; one never
+    // made reads as nothing held.
+    static constexpr std::size_t kMaxInputStreams = 8;
+    [[nodiscard]] InputMap& input(std::size_t stream = 0);
+    [[nodiscard]] const InputMap& input(std::size_t stream = 0) const noexcept;
+    [[nodiscard]] std::span<const InputMap> inputs() const noexcept { return m_inputs; }
+    void setInputs(std::vector<InputMap> inputs);   // a restore's (at least one)
     void stepInput(std::span<const InputEvent> events);
     // How far past the last step the next render shows, as a fraction of a fixed step: the
     // `interpolate` sync system draws what the steps move between their last two step poses
@@ -141,7 +185,7 @@ private:
     void onIdDestroyed(entt::registry& r, entt::entity e);
     void onIdUpdated(entt::registry& r, entt::entity e);
     void onInputActionsChanged(entt::registry& r, entt::entity e);
-    entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local);
+    entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local, entt::entity hint = entt::null);
     uint64_t nextId();
     bool claim(uint64_t id);
 
@@ -149,9 +193,20 @@ private:
     ankerl::unordered_dense::map<uint64_t, entt::entity> m_byId;
     entt::entity* m_claimed{nullptr};   // the slot claim() reserved for the entity being created
     IdGenState m_idGen;
-    std::vector<std::pair<std::string, SimulateSystem>> m_simulate;
-    std::vector<std::pair<std::string, SyncSystem>> m_sync;
-    InputMap m_input;
+    template <class Fn>
+    struct System {
+        std::string name;
+        Fn fn;
+        SystemOrder order;
+    };
+    void orderSimulate();
+    std::vector<System<SimulateSystem>> m_simulate;   // in their order
+    std::vector<System<SyncSystem>> m_sync;
+    uint64_t m_simulateTopology{~uint64_t{0}};   // the event log's topology m_simulate was ordered with
+    std::vector<InputMap> m_inputs = std::vector<InputMap>(1);   // by stream
+    EventLog m_events;
+    std::vector<std::function<void(World&)>> m_deferred;
+    float m_stepDt{1.0f / 60.0f};
     bool m_bindingsDirty{false};
     float m_renderAlpha{1.0f};
     glm::vec2 m_pendingLook{0.0f};

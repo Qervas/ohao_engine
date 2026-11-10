@@ -11,7 +11,7 @@ The closed box: six walls of Lambertian albedo rho (specular_weight 0, diffuse r
 emitting Le, the camera inside, no lights. Every point's radiance is Le / (1 - rho) with every
 bounce. With N bounces (0: direct light only, which here is the walls' light reflected once) it is
 Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the reference's bounces),
-1.75 at --bounces 1, 1.5 at --bounces 0; the realtime profile (the same tracer at 2 bounces, then the
+1.75 at --bounces 1, 1.5 at --bounces 0; 2 within 1% with path guiding (its own program, raygenGuided); the realtime profile (the same tracer at 2 bounces, then the
 radiance cache) 2 within 3%, the same bits captured twice in one process (across processes the driver
 may build the BVH differently: a ray on a shared edge takes either triangle, its hit moves by an ulp,
 and since emissive triangles are lights (F3) that can change the cache's integer sums). Deferred: RT GI with its radiance cache behind each
@@ -24,18 +24,23 @@ hit (frontier F5a: every bounce, one more a frame) gives Le / (1 - rho), 2, with
 import json
 import math
 import os
-import subprocess
 import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from check_parity import read_pfm  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+from ohao_serve import ROOT, Serve  # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe")
 OUT = "build/material"
-W, H = 320, 180
+# One serve process renders every case (one device, the programs compiled once). The size and samples are the least
+# that hold every bar below with margin: the checks average a sphere's face and rim, or a whole closed box.
+W, H = 128, 72
+SPP = 64
+# The noisiest cases keep the full size: rough glass (its rim is heavy-tailed: 1.008 at 64 samples, 0.981 at 256 at
+# this size, 1.002 at 320x180), and the realtime box, whose radiance
+# cache learns from one pixel in 5x5 a frame (fewer pixels: fewer samples a cell).
+MORE = {"furnace_glass_r05": {"spp": 256, "width": 320, "height": 180}, "box_all_realtime": {"spp": 256, "width": 320, "height": 180}}
+SERVE = None
 FOV = 30.0
 CAM_D = 3.0
 SPHERE_R = 0.5
@@ -62,36 +67,19 @@ def write_white_hdr(path, w=16, h=8):
 NO_CAUSTICS = "--no-caustics" in sys.argv
 
 
-def capture(name, scene, mode, args):
+def capture(name, scene, mode, params):
+    """Loads `scene` and renders it in `mode` with render.capture `params`: (HDR image, None) or (None, error)."""
     rel = "%s/%s" % (OUT, name)
     with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
         json.dump(scene, f, indent=1)
-    cmd = [OHAO, "run", rel + ".scene.json", "--render", "%s.%s.png" % (rel, mode), "--hdr", "%s.%s.pfm" % (rel, mode),
-           "--mode", mode, "--size", "%dx%d" % (W, H)] + args
     if NO_CAUSTICS and mode == "rt_offline":
-        cmd.append("--no-caustics")
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    if r.returncode != 0:
-        return None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:])
-    return read_pfm(os.path.join(ROOT, "%s.%s.pfm" % (rel, mode))), None
-
-
-def capture_twice(name, scene, mode, spp):
-    # Two captures of one world in one process, through a script.
-    rel = "%s/%s" % (OUT, name)
-    with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
-        json.dump(scene, f, indent=1)
-    with open(os.path.join(ROOT, rel + ".jsonl"), "w", newline="\n") as f:
-        for tag in "ab":
-            f.write(json.dumps({"method": "render.capture",
-                                "params": {"path": "%s_%s.png" % (rel, tag), "hdr": "%s_%s.pfm" % (rel, tag),
-                                           "mode": mode, "spp": spp, "denoise": "none", "width": W,
-                                           "height": H}}) + "\n")
-    r = subprocess.run([OHAO, "run", rel + ".scene.json", "--script", rel + ".jsonl"], cwd=ROOT,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return None, None, "exit %d: %s" % (r.returncode, r.stdout.strip()[-200:])
-    return (read_pfm(os.path.join(ROOT, rel + "_a.pfm")), read_pfm(os.path.join(ROOT, rel + "_b.pfm")), None)
+        params = {**params, "caustics": False}
+    params = {"width": W, "height": H, **params, **({} if mode == "deferred" else MORE.get(name, {}))}
+    try:
+        SERVE.load(rel + ".scene.json")
+        return SERVE.capture("%s.%s" % (rel, mode), mode=mode, **params), None
+    except RuntimeError as e:
+        return None, str(e)[-300:]
 
 
 def furnace_scene(material):
@@ -110,13 +98,13 @@ def furnace_scene(material):
     }
 
 
-def sphere_masks():
-    # The sphere's disc in the frame (camera on +Z looking at it): its face (within 70% of the
+def sphere_masks(h, w):
+    # The sphere's disc in an h x w frame (camera on +Z looking at it): its face (within 70% of the
     # disc's radius) and its rim (85-97%).
-    ys, xs = np.mgrid[0:H, 0:W]
-    focal = (H / 2) / math.tan(math.radians(FOV / 2))
+    ys, xs = np.mgrid[0:h, 0:w]
+    focal = (h / 2) / math.tan(math.radians(FOV / 2))
     disc = focal * math.tan(math.asin(SPHERE_R / CAM_D))
-    r = np.hypot(xs + 0.5 - W / 2, ys + 0.5 - H / 2) / disc
+    r = np.hypot(xs + 0.5 - w / 2, ys + 0.5 - h / 2) / disc
     return r < 0.7, (r > 0.85) & (r < 0.97)
 
 
@@ -157,7 +145,6 @@ FURNACE = [
 
 def furnace(modes, failures, results):
     write_white_hdr(os.path.join(ROOT, OUT, "white.hdr"))
-    face, rim = sphere_masks()
     checks = 0
     for name, material in FURNACE:
         for mode, args in modes:
@@ -167,6 +154,7 @@ def furnace(modes, failures, results):
                 failures.append("furnace %s %s: %s" % (name, mode, err))
                 continue
             lum = img @ np.array([0.2126, 0.7152, 0.0722])
+            face, rim = sphere_masks(*lum.shape)
             f, g = float(lum[face].mean()), float(lum[rim].mean())
             results["furnace_%s_%s" % (name, mode)] = [round(f, 4), round(g, 4)]
             ok = abs(f - 1.0) <= FURNACE_TOLERANCE and abs(g - 1.0) <= FURNACE_TOLERANCE
@@ -202,9 +190,9 @@ def closed_box(failures, results):
              ("rt_realtime", None, le / (1 - rho))]
     for mode, bounces, expected in cases:
         checks += 1
-        args = ["--spp", "256", "--denoise", "none"] + (["--bounces", str(bounces)] if bounces is not None else [])
+        params = {"spp": SPP, "denoise": "none", **({"bounces": bounces} if bounces is not None else {})}
         tag = ("all" if bounces is None else str(bounces)) + ("" if mode == "rt_offline" else "_realtime")
-        img, err = capture("box_%s" % tag, box_scene(rho, le), mode, args)
+        img, err = capture("box_%s" % tag, box_scene(rho, le), mode, params)
         if err:
             failures.append("closed box, bounces %s: %s" % (tag, err))
             continue
@@ -216,17 +204,40 @@ def closed_box(failures, results):
                                                                           "ok" if ok else "FAIL"))
         if not ok:
             failures.append("closed box, bounces %s: x%.4f of %.4f" % (tag, ratio, expected))
+    # Path guiding (sub-project 23) on its own program (raygenGuided: the default raygen has none of its code) is
+    # unbiased, so the closed form holds with it too; the log shows the program built.
+    checks += 1
+    img, err = capture("box_guided", box_scene(rho, le), "rt_offline", {"spp": SPP, "denoise": "none", "guiding": True})
+    with open(os.path.join(ROOT, OUT, "serve.stderr.txt"), errors="replace") as f:
+        log = f.read()
+    if err:
+        failures.append("closed box, guided: %s" % err)
+    else:
+        expected = le / (1 - rho)
+        got = float((img @ np.array([0.2126, 0.7152, 0.0722])).mean())
+        ratio = got / expected
+        results["box_guided"] = round(ratio, 4)
+        built = "path_tracer_guided pipeline" in log
+        ok = abs(ratio - 1.0) <= BOX_TOLERANCE and built
+        print("closed box  guided       expected %.4f got %.4f (x%.4f)%s %s" % (
+            expected, got, ratio, "" if built else " (raygenGuided never built)", "ok" if ok else "FAIL"))
+        if not ok:
+            failures.append("closed box, guided: x%.4f of %.4f%s" % (ratio, expected,
+                                                                     "" if built else ", raygenGuided never built"))
     # The cache sums integers and is emptied by the capture's reset: two captures in one process (one
     # BVH) are the same bits.
     checks += 1
-    a, b, err = capture_twice("box_repeat", box_scene(rho, le), "rt_realtime", 16)
+    a, err = capture("box_repeat_a", box_scene(rho, le), "rt_realtime", {"spp": 16, "denoise": "none"})
+    b, err2 = (None, err) if err else capture("box_repeat_b", box_scene(rho, le), "rt_realtime",
+                                               {"spp": 16, "denoise": "none"})
+    err = err or err2
     same = a is not None and b is not None and np.array_equal(a, b)
     print("closed box  realtime twice: %s" % ("the same bits" if same else "DIFFERENT"))
     if not same:
         failures.append("closed box, realtime captured twice: %s" % (err or "different images"))
     checks += 1
     expected = le / (1 - rho)
-    img, err = capture("box_deferred", box_scene(rho, le), "deferred", ["--frames", "256"])
+    img, err = capture("box_deferred", box_scene(rho, le), "deferred", {"frames": 256})
     if err:
         failures.append("closed box, deferred: %s" % err)
         return checks
@@ -245,10 +256,12 @@ def main():
     failures, results = [], {}
     # Both path tracer profiles run one tracer (rt/path_tracer.slang): the realtime one answers as
     # the reference does where its bounces reach (a convex sphere under the sky: one).
-    checks = furnace([("rt_offline", ["--spp", "256", "--denoise", "none"]),
-                      ("rt_realtime", ["--spp", "256", "--denoise", "none"]),
-                      ("deferred", ["--frames", "32"])], failures, results)
-    checks += closed_box(failures, results)
+    global SERVE
+    with Serve(OUT) as SERVE:
+        checks = furnace([("rt_offline", {"spp": SPP, "denoise": "none"}),
+                          ("rt_realtime", {"spp": SPP, "denoise": "none"}),
+                          ("deferred", {"frames": 32})], failures, results)
+        checks += closed_box(failures, results)
     with open(os.path.join(ROOT, OUT, "material.json"), "w", newline="\n") as f:
         json.dump(results, f, indent=2)
     print(json.dumps({"suite": "check_material", "passed": checks - len(failures), "failed": len(failures),

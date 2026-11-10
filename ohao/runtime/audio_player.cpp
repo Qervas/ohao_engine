@@ -6,24 +6,28 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <string_view>
 
 namespace ohao::runtime {
-
-bool audioTraceRequested() {
-    const char* v = std::getenv("OHAO_AUDIO_TRACE");
-    return v && std::string_view(v) == "1";
-}
 
 void AudioPlayer::initialize(const std::filesystem::path& root, AudioSystem& audio) {
     m_root = root;
     m_audio = &audio;
 }
 
+uint32_t AudioPlayer::rate() const noexcept {
+    return m_audio && m_audio->isInitialized() ? m_audio->sampleRate() : 48000;
+}
+
+// One step of the World's clock in device frames (step 3e: the World's dt, not 1/60).
 uint32_t AudioPlayer::stepFrames() const noexcept {
-    const uint32_t rate = m_audio && m_audio->isInitialized() ? m_audio->sampleRate() : 48000;
-    return rate / 60;
+    return static_cast<uint32_t>(std::lround(static_cast<double>(rate()) * m_stepDt));
+}
+
+uint32_t AudioPlayer::msFrames(uint32_t ms) const noexcept {
+    return static_cast<uint32_t>(static_cast<uint64_t>(ms) * rate() / 1000u);
 }
 
 uint32_t AudioPlayer::horizonFrames() const noexcept { return stepFrames(); }   // one step (OPEN ruling 7)
@@ -146,32 +150,34 @@ std::vector<DeviceBus> AudioPlayer::deviceBuses() const {
     return out;
 }
 
-void AudioPlayer::play(const ecs::AudioCommand& c) {
-    if (c.sound >= m_bank.sounds.size()) return;
-    const SoundDesc& d = m_bank.sounds[c.sound];
-    if (m_audio->variantCount(c.sound) == 0) {   // no file in any folder: skipped, warned once
+void AudioPlayer::play(const ecs::AudioPlay& c, uint64_t step) {
+    const int si = m_bank.sound(c.sound);
+    if (si < 0) return;
+    const auto sound = static_cast<uint16_t>(si);
+    const SoundDesc& d = m_bank.sounds[sound];
+    if (m_audio->variantCount(sound) == 0) {   // no file in any folder: skipped, warned once
         if (m_missing.insert(d.name).second)
             OHAO_LOG(Warn, audio, "audio player: sound '{}' has no file in the bank's folders; it plays nothing", d.name);
         return;
     }
-    const uint64_t start = startFrameOf(c.step);
-    if (c.outcome == ecs::AudioCommand::Outcome::Dropped) return;
+    const uint64_t start = startFrameOf(step);
+    if (c.outcome == ecs::AudioOutcome::Dropped) return;
     VoicePlacement p;
-    p.spatial = c.spatial;
-    p.position = c.pos;
+    p.spatial = c.pos.has_value();
+    p.position = c.pos.value_or(glm::vec3(0.0f));
     if (const ShapeDesc* shape = m_bank.shape(d.shape)) p.shape = SoundShape{shape->minDistance, shape->maxDistance, shape->rolloff, false};
     p.volume = d.volume > 0.0f ? c.gain / d.volume : 0.0f;
-    p.occlusionDb = c.occl.db;
-    p.occlusionLowPassHz = c.occl.lowPassHz;
-    const SoundHandle h = m_audio->play(c.sound, c.variant, p, start);
+    p.occlusionDb = c.occlusionDb;
+    p.occlusionLowPassHz = c.lowPassHz;
+    const SoundHandle h = m_audio->play(sound, c.variant, p, start);
     if (!isValidSoundHandle(h)) return;
     m_voices[c.voice] = h;
-    m_voiceBus[c.voice] = c.bus;
+    m_voiceBus[c.voice] = static_cast<uint8_t>(std::max(0, m_bank.bus(d.bus)));
     ++m_played;
 }
 
-void AudioPlayer::zone(const ecs::AudioCommand& c) {
-    const uint32_t blend = c.blendSteps * stepFrames();
+void AudioPlayer::zone(const ecs::AudioZone& c) {
+    const uint32_t blend = msFrames(c.blendMs);
     if (c.zone != m_zoneName) {
         m_zoneName = c.zone;
         if (const ReverbDesc* preset = m_bank.preset(c.zone)) m_audio->setReverb(*preset, blend);
@@ -193,81 +199,56 @@ void AudioPlayer::zone(const ecs::AudioCommand& c) {
     m_bed = m_audio->play(static_cast<uint16_t>(bed), 0, p, 0);
 }
 
-void AudioPlayer::submit(std::span<const ecs::AudioCommand> commands, uint64_t scheduleStep, bool realtime) {
-    if (!ready() || !m_hasBank) return;
-    // The clock: anchored while the timeline runs in real time; again after a step back (a restore, a
-    // restart) or a drift over a step from the device clock.
+void AudioPlayer::clock(uint64_t step, bool realtime) {
+    // Anchored while the timeline runs in real time; again after a step back (a restore, a restart) or a
+    // drift over a step from the device clock.
     if (!realtime) {
         m_anchored = false;
-    } else if (!m_anchored || scheduleStep < m_lastStep) {
-        anchor(scheduleStep);
+    } else if (!m_anchored || step < m_lastStep) {
+        anchor(step);
     } else {
-        const int64_t expected = static_cast<int64_t>(m_f0) + (static_cast<int64_t>(scheduleStep) - static_cast<int64_t>(m_s0)) * stepFrames();
-        if (std::llabs(expected - static_cast<int64_t>(m_audio->engineFrame())) > static_cast<int64_t>(stepFrames())) anchor(scheduleStep);
+        const int64_t expected = static_cast<int64_t>(m_f0) + (static_cast<int64_t>(step) - static_cast<int64_t>(m_s0)) * stepFrames();
+        if (std::llabs(expected - static_cast<int64_t>(m_audio->engineFrame())) > static_cast<int64_t>(stepFrames())) anchor(step);
     }
-    m_lastStep = scheduleStep;
+    m_lastStep = step;
+}
 
-    for (const ecs::AudioCommand& c : commands) {
-        const uint32_t blend = c.blendSteps * stepFrames();
-        switch (c.op) {
-            case ecs::AudioCommand::Op::Play: play(c); break;
-            case ecs::AudioCommand::Op::Stop:
-                if (const auto it = m_voices.find(c.voice); it != m_voices.end()) {
-                    m_audio->stop(it->second, ecs::kStealFadeFrames);
-                    m_voices.erase(it);
-                }
-                break;
-            case ecs::AudioCommand::Op::Bus:
-                if (c.bus < m_duckDb.size()) {
-                    m_duckDb[c.bus] = c.db;
-                    m_audio->setBus(c.bus, levelDb(c.bus), levelHz(c.bus), blend);
-                }
-                break;
-            case ecs::AudioCommand::Op::Snapshot: {
-                if (c.snapshot == m_snapshotName) break;   // already there: nothing (a restore's step after its resync)
-                m_snapshotName = c.snapshot;
-                std::fill(m_snapshotDb.begin(), m_snapshotDb.end(), 0.0f);
-                std::fill(m_snapshotHz.begin(), m_snapshotHz.end(), 0.0);
-                for (const SnapshotDesc& s : m_bank.snapshots) {
-                    if (s.name != c.snapshot) continue;
-                    for (const auto& [name, level] : s.buses)
-                        if (const int b = m_bank.bus(name); b >= 0) {
-                            m_snapshotDb[static_cast<std::size_t>(b)] = level.db;
-                            m_snapshotHz[static_cast<std::size_t>(b)] = level.lowPassHz;
-                        }
-                }
-                applyBuses(blend);
-                break;
+void AudioPlayer::snapshot(const ecs::AudioSnapshot& c) {
+    if (c.snapshot == m_snapshotName) return;   // already there: nothing (a restore's step after its resync)
+    m_snapshotName = c.snapshot;
+    std::fill(m_snapshotDb.begin(), m_snapshotDb.end(), 0.0f);
+    std::fill(m_snapshotHz.begin(), m_snapshotHz.end(), 0.0);
+    for (const SnapshotDesc& s : m_bank.snapshots) {
+        if (s.name != c.snapshot) continue;
+        for (const auto& [name, level] : s.buses)
+            if (const int b = m_bank.bus(name); b >= 0) {
+                m_snapshotDb[static_cast<std::size_t>(b)] = level.db;
+                m_snapshotHz[static_cast<std::size_t>(b)] = level.lowPassHz;
             }
-            case ecs::AudioCommand::Op::Zone: zone(c); break;
-            case ecs::AudioCommand::Op::Occlusion:
-                if (const auto it = m_voices.find(c.voice); it != m_voices.end())
-                    m_audio->setVoiceOcclusion(it->second, c.occl.db, c.occl.lowPassHz, blend);
-                break;
-            case ecs::AudioCommand::Op::StopWorld: {
-                const int world = m_bank.bus("world");
-                const auto underWorld = [&](uint8_t b) {
-                    if (world < 0) return !m_bank.buses[b].isReturn;
-                    for (int at = b; at >= 0; at = m_bank.parentOf(at))
-                        if (at == world) return true;
-                    return false;
-                };
-                for (auto it = m_voices.begin(); it != m_voices.end();) {
-                    const auto bus = m_voiceBus.find(it->first);
-                    if (bus != m_voiceBus.end() && bus->second < m_bank.buses.size() && underWorld(bus->second)) {
-                        m_audio->stop(it->second, blend);
-                        it = m_voices.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                break;
-            }
+    }
+    applyBuses(msFrames(c.blendMs));
+}
+
+void AudioPlayer::stopWorld(uint32_t blend) {
+    const int world = m_bank.bus("world");
+    const auto underWorld = [&](uint8_t b) {
+        if (world < 0) return !m_bank.buses[b].isReturn;
+        for (int at = b; at >= 0; at = m_bank.parentOf(at))
+            if (at == world) return true;
+        return false;
+    };
+    for (auto it = m_voices.begin(); it != m_voices.end();) {
+        const auto bus = m_voiceBus.find(it->first);
+        if (bus != m_voiceBus.end() && bus->second < m_bank.buses.size() && underWorld(bus->second)) {
+            m_audio->stop(it->second, blend);
+            it = m_voices.erase(it);
+        } else {
+            ++it;
         }
     }
 }
 
-void AudioPlayer::update(ecs::World& world, bool realtime) {
+void AudioPlayer::update(const ecs::World& world, bool realtime) {
     const ecs::AudioSchedule* schedule = ecs::audioSchedule(world);
     if (!schedule || !ready()) return;
     if (schedule->bankVersion() != m_bankVersion) {
@@ -280,17 +261,47 @@ void AudioPlayer::update(ecs::World& world, bool realtime) {
         const glm::vec3 forward(std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p));
         m_audio->setListenerPosition(view->position, forward, glm::vec3(0.0f, 1.0f, 0.0f));
     }
-    if (!std::exchange(m_started, true)) m_cursor = schedule->nextSeq();   // nothing from before
-    bool any = false;
-    for (;;) {
-        uint64_t dropped = 0;
-        const auto commands = schedule->commandsSince(m_cursor, 256, dropped);
-        if (commands.empty()) break;
-        submit(commands, schedule->steps(), realtime);
-        m_cursor = commands.back().seq + 1;
-        any = true;
-    }
-    if (!any) submit({}, schedule->steps(), realtime);   // the clock keeps its anchor current
+    // The schedule's events since the cursor, in the order it wrote them.
+    m_stepDt = world.stepDt();
+    const ecs::EventLog& log = world.events();
+    if (!std::exchange(m_started, true)) m_cursor = log.nextSeq() - 1;   // nothing from before
+    namespace ae = ecs::audio_events;
+    const auto* plays = log.find<ecs::AudioPlay>(ae::kPlay);
+    const auto* stops = log.find<ecs::AudioStop>(ae::kStop);
+    const auto* buses = log.find<ecs::AudioBus>(ae::kBus);
+    const auto* snapshots = log.find<ecs::AudioSnapshot>(ae::kSnapshot);
+    const auto* zones = log.find<ecs::AudioZone>(ae::kZone);
+    const auto* occlusions = log.find<ecs::AudioOcclusion>(ae::kOcclusion);
+    const auto* stopWorlds = log.find<ecs::AudioStopWorld>(ae::kStopWorld);
+    if (m_hasBank) clock(world.steps(), realtime);
+    m_cursor = log.visit(m_cursor, SIZE_MAX, [&](const ecs::EventChannelBase& c, std::size_t i) {
+        if (!m_hasBank) return;
+        if (&c == plays) {
+            play(plays->at(i).value, c.meta(i).step);
+        } else if (&c == stops) {
+            if (const auto it = m_voices.find(stops->at(i).value.voice); it != m_voices.end()) {
+                m_audio->stop(it->second, ecs::kStealFadeFrames);
+                m_voices.erase(it);
+            }
+        } else if (&c == buses) {
+            const ecs::AudioBus& b = buses->at(i).value;
+            if (const int bus = m_bank.bus(b.bus); bus >= 0 && static_cast<std::size_t>(bus) < m_duckDb.size()) {
+                const auto at = static_cast<uint8_t>(bus);
+                m_duckDb[at] = b.db;
+                m_audio->setBus(at, levelDb(at), levelHz(at), msFrames(b.blendMs));
+            }
+        } else if (&c == snapshots) {
+            snapshot(snapshots->at(i).value);
+        } else if (&c == zones) {
+            zone(zones->at(i).value);
+        } else if (&c == occlusions) {
+            const ecs::AudioOcclusion& o = occlusions->at(i).value;
+            if (const auto it = m_voices.find(o.voice); it != m_voices.end())
+                m_audio->setVoiceOcclusion(it->second, o.occlusionDb, o.lowPassHz, msFrames(o.blendMs));
+        } else if (&c == stopWorlds) {
+            stopWorld(msFrames(stopWorlds->at(i).value.blendMs));
+        }
+    });
     m_audio->update();   // finished sounds free their voices
     std::erase_if(m_voices, [&](const auto& v) { return !m_audio->voice(v.second); });
 }

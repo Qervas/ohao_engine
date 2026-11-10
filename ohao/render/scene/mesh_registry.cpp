@@ -1,4 +1,5 @@
 #include "render/scene/mesh_registry.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "render/scene/meshlet_builder.hpp"
 #include "gpu/shared_layout.hpp"
 
@@ -117,8 +118,7 @@ void MeshRegistry::endOneShot(VkCommandBuffer cmd) {
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_ctx.queue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_ctx.queue);
+    gpu::submitAndWait(m_ctx.device, m_ctx.queue, si, "mesh upload");
     vkFreeCommandBuffers(m_ctx.device, m_ctx.commandPool, 1, &cmd);
 }
 

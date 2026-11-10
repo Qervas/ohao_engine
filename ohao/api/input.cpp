@@ -7,6 +7,7 @@
 #include "ecs/world_hash.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <charconv>
 #include <fstream>
 #include <sstream>
@@ -29,6 +30,7 @@ void writeDouble(JsonWriter& w, double v) {
 void writeEventLine(JsonWriter& w, uint64_t step, const InputEvent& e) {
     w.beginObject();
     w.key("step"); w.uint64(step);
+    if (e.stream) { w.key("stream"); w.uint64(e.stream); }   // a player's stream past the first
     switch (e.type) {
     case InputEvent::Type::Down:
     case InputEvent::Type::Up: {
@@ -124,10 +126,29 @@ void stepOnce(Session::Impl& s, std::span<const InputEvent> deviceEvents, float 
 
 // ---- input.inject ---------------------------------------------------------------------------
 
+// The stream a `player` param names (its PlayerController.stream), else 0; E_NOT_FOUND for an entity that is no
+// input-driven player.
+bool streamOf(Session::Impl& s, const JsonNode& params, DecodeContext& ctx, const std::optional<uint64_t>& player,
+              uint8_t& stream) {
+    stream = 0;
+    if (!player) return true;
+    const entt::entity e = s.world.findById(*player);
+    const auto* pc = e != entt::null ? s.world.registry().try_get<ecs::PlayerController>(e) : nullptr;
+    if (!pc || !pc->input) {
+        ctx.error("E_NOT_FOUND", *ctx.doc.member(params, "player"), "entity " + hex16(*player) + " is no input-driven player",
+                  "a PlayerController with input true", "\"" + hex16(*player) + "\"");
+        return false;
+    }
+    stream = static_cast<uint8_t>(std::min<uint32_t>(pc->stream, ecs::World::kMaxInputStreams - 1));
+    return true;
+}
+
 bool methodInputInject(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out) {
     InputInjectParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
+    uint8_t stream = 0;
+    if (!streamOf(s, params, ctx, p.player, stream)) return false;
     const JsonNode& list = *doc.member(params, "events");
     const uint64_t next = s.time->frame();
     std::vector<Session::Impl::PendingInput> add;
@@ -180,6 +201,7 @@ bool methodInputInject(Session::Impl& s, const JsonDocument& doc, const JsonNode
         } else {
             e.type = InputEvent::Type::FocusLost;
         }
+        e.stream = stream;
         if (ok) add.push_back({next + static_cast<uint64_t>(ev.step), std::move(e), std::chrono::steady_clock::now()});
         ctx.pop();
     }
@@ -214,7 +236,9 @@ bool methodInputState(Session::Impl& s, const JsonDocument&, const JsonNode& par
                       JsonWriter& out) {
     InputStateParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
-    const InputMap& in = s.world.input();
+    uint8_t stream = 0;
+    if (!streamOf(s, params, ctx, p.player, stream)) return false;
+    const InputMap& in = std::as_const(s.world).input(stream);
     out.beginObject();
     out.key("actions");
     out.beginObject();
@@ -290,7 +314,7 @@ bool methodInputRecord(Session::Impl& s, const JsonDocument& doc, const JsonNode
     r.fixedDt = s.time->fixedDt();
     // A recording and its replay start from the same input state: nothing held.
     const InputEvent release{InputEvent::Type::FocusLost};
-    s.world.input().beginStep(std::span<const InputEvent>(&release, 1));
+    for (std::size_t k = 0; k < s.world.inputs().size(); ++k) s.world.input(k).beginStep(std::span<const InputEvent>(&release, 1));
     JsonWriter w(256);
     w.beginObject();
     w.key("format"); w.string("ohao.input");
@@ -379,6 +403,11 @@ bool parseRecording(const std::string& text, uint64_t& startFrame, uint64_t& sta
         if (!integer(d.member(o, "step"), r.step)) {
             error = where + "every line after the header needs a step (or is the end line)";
             return false;
+        }
+        if (const JsonNode* st = d.member(o, "stream")) {
+            uint64_t stream = 0;
+            if (!integer(st, stream) || stream >= ecs::World::kMaxInputStreams) { error = where + "a bad stream"; return false; }
+            r.event.stream = static_cast<uint8_t>(stream);
         }
         double x = 0.0, y = 0.0;
         const JsonNode* down = d.member(o, "down");
@@ -502,7 +531,7 @@ bool methodInputReplay(Session::Impl& s, const JsonDocument& doc, const JsonNode
     uint64_t end = startFrame;
     for (const ReplayLine& l : lines) end = std::max(end, l.step);
     const InputEvent release{InputEvent::Type::FocusLost};   // the state a recording starts from
-    s.world.input().beginStep(std::span<const InputEvent>(&release, 1));
+    for (std::size_t k = 0; k < s.world.inputs().size(); ++k) s.world.input(k).beginStep(std::span<const InputEvent>(&release, 1));
     std::size_t next = 0, events = 0, checkpoints = 0;
     std::vector<InputEvent> step;
     const uint64_t total = end - startFrame;

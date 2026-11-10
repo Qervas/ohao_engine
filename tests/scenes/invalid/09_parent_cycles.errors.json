@@ -1,4 +1,0 @@
-[
-  { "code": "E_PARENT_CYCLE", "path": "/entities/0/Parent/entity", "line": 5 },
-  { "code": "E_PARENT_CYCLE", "path": "/entities/2/Parent/entity", "line": 7 }
-]

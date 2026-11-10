@@ -109,7 +109,7 @@ public:
      * @param timeoutNs Timeout in nanoseconds (default: infinite)
      * @return true if fence was signaled, false if timeout
      */
-    bool waitForFrame(uint32_t frameIndex, uint64_t timeoutNs = UINT64_MAX);
+    bool waitForFrame(uint32_t frameIndex);   // at most gpu::kGpuTimeout; a hang never returns
 
     /**
      * Reset the fence for a frame so it can be reused.

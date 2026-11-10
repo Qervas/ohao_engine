@@ -14,6 +14,7 @@ file(GLOB_RECURSE RENDERER_SOURCES CONFIGURE_DEPENDS
 )
 
 add_library(ohao_renderer ${RENDERER_SOURCES})
+add_dependencies(ohao_renderer shaders)   # it includes render/shader_bindings/*.hpp, which the shader build writes
 
 target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -34,6 +35,11 @@ target_link_libraries(ohao_renderer PUBLIC
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}
 )
+# The sky's rows run through std::execution::par (render/sky/atmosphere.cpp): libstdc++ runs the parallel
+# algorithms on oneTBB, which must then be linked (MSVC's standard library needs nothing).
+if(NOT MSVC AND TARGET TBB::tbb)
+    target_link_libraries(ohao_renderer PUBLIC TBB::tbb)
+endif()
 if(OpenImageDenoise_FOUND)
     target_link_libraries(ohao_renderer PUBLIC OpenImageDenoise)
     target_compile_definitions(ohao_renderer PRIVATE OHAO_OIDN_ENABLED)

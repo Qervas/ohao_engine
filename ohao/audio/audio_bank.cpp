@@ -118,7 +118,7 @@ Result<AudioBank, std::vector<BankError>> parseAudioBank(std::string_view json) 
     if (root.get_object().get(doc) != simdjson::SUCCESS) return R::err({{"", "the bank is not an object"}});
     Parser p;
     AudioBank b;
-    p.keys(doc, {"folders", "buses", "voices", "shapes", "sounds", "ducks", "snapshots", "reverb", "defaultZone"}, "");
+    p.keys(doc, {"folders", "buses", "voices", "shapes", "sounds", "ducks", "events", "snapshots", "reverb", "defaultZone"}, "");
 
     if (element e; doc["folders"].get(e) == simdjson::SUCCESS) {
         array a;
@@ -262,19 +262,84 @@ Result<AudioBank, std::vector<BankError>> parseAudioBank(std::string_view json) 
             DuckDesc d;
             object o;
             if (value.get_object().get(o) != simdjson::SUCCESS) { p.fail(path, "not an object"); continue; }
-            p.keys(o, {"on", "bus", "db", "attackSteps", "releaseSteps"}, path);
+            p.keys(o, {"on", "bus", "db", "attackMs", "releaseMs"}, path);
             if (element e; o["on"].get(e) != simdjson::SUCCESS) p.fail(path + "/on", "missing: the sound that ducks");
             else if (p.str(e, d.on, path + "/on") && b.sound(d.on) < 0) p.fail(path + "/on", "no sound named '" + d.on + "'");
             if (element e; o["bus"].get(e) != simdjson::SUCCESS) p.fail(path + "/bus", "missing");
             else if (p.str(e, d.bus, path + "/bus") && !busExists(d.bus)) p.fail(path + "/bus", "no bus named '" + d.bus + "'");
             if (element e; o["db"].get(e) != simdjson::SUCCESS) p.fail(path + "/db", "missing");
             else p.num(e, d.db, path + "/db", -96.0, 0.0);
-            if (element e; o["attackSteps"].get(e) == simdjson::SUCCESS) p.uint(e, d.attackSteps, path + "/attackSteps", 0, 3600);
-            if (element e; o["releaseSteps"].get(e) == simdjson::SUCCESS) p.uint(e, d.releaseSteps, path + "/releaseSteps", 0, 3600);
+            if (element e; o["attackMs"].get(e) == simdjson::SUCCESS) p.uint(e, d.attackMs, path + "/attackMs", 0, 60000);
+            if (element e; o["releaseMs"].get(e) == simdjson::SUCCESS) p.uint(e, d.releaseMs, path + "/releaseMs", 0, 60000);
             b.ducks.push_back(std::move(d));
         }
     } else if (element e; doc["ducks"].get(e) == simdjson::SUCCESS) {
         p.fail("/ducks", "not an array of ducks");
+    }
+
+    // What a game's events play: channels by name, their cues matched in order (step 3c).
+    if (array events; doc["events"].get_array().get(events) == simdjson::SUCCESS) {
+        std::size_t i = 0;
+        for (element value : events) {
+            const std::string path = "/events/" + std::to_string(i++);
+            EventSound d;
+            object o;
+            if (value.get_object().get(o) != simdjson::SUCCESS) { p.fail(path, "not an object"); continue; }
+            p.keys(o, {"on", "by", "tag", "play", "fallback", "at", "owner"}, path);
+            if (element e; o["on"].get(e) != simdjson::SUCCESS) p.fail(path + "/on", "missing: the event channel");
+            else if (p.str(e, d.on, path + "/on") && d.on.empty()) p.fail(path + "/on", "empty");
+            if (element e; o["by"].get(e) == simdjson::SUCCESS) {
+                std::string by;
+                if (p.str(e, by, path + "/by")) {
+                    if (by == "player") d.by = EventSound::By::Player;
+                    else if (by == "other") d.by = EventSound::By::Other;
+                    else p.fail(path + "/by", "'player' or 'other'");
+                }
+            }
+            if (element e; o["tag"].get(e) == simdjson::SUCCESS) {
+                std::string tag;
+                if (p.str(e, tag, path + "/tag")) d.tag = std::move(tag);
+            }
+            const auto known = [&](const std::string& name) {   // "{tag}" is resolved per event
+                return name.find("{tag}") != std::string::npos || b.sound(name) >= 0;
+            };
+            if (element e; o["play"].get(e) != simdjson::SUCCESS) {
+                p.fail(path + "/play", "missing: the sound, or sounds in order");
+            } else if (array a; e.get_array().get(a) == simdjson::SUCCESS) {
+                std::size_t k = 0;
+                for (element n : a) {
+                    std::string name;
+                    const std::string at = path + "/play/" + std::to_string(k++);
+                    if (p.str(n, name, at)) {
+                        if (!known(name)) p.fail(at, "no sound named '" + name + "'");
+                        d.play.push_back(std::move(name));
+                    }
+                }
+            } else if (std::string name; p.str(e, name, path + "/play")) {
+                if (!known(name)) p.fail(path + "/play", "no sound named '" + name + "'");
+                d.play.push_back(std::move(name));
+            }
+            if (element e; o["fallback"].get(e) == simdjson::SUCCESS)
+                if (p.str(e, d.fallback, path + "/fallback") && b.sound(d.fallback) < 0)
+                    p.fail(path + "/fallback", "no sound named '" + d.fallback + "'");
+            if (element e; o["at"].get(e) == simdjson::SUCCESS) {
+                std::string at;
+                if (p.str(e, at, path + "/at")) {
+                    if (at == "ear") d.ear = true;
+                    else if (at != "event") p.fail(path + "/at", "'ear' or 'event'");
+                }
+            }
+            if (element e; o["owner"].get(e) == simdjson::SUCCESS) {
+                std::string owner;
+                if (p.str(e, owner, path + "/owner")) {
+                    if (owner == "none") d.world = true;
+                    else if (owner != "source") p.fail(path + "/owner", "'source' or 'none'");
+                }
+            }
+            b.events.push_back(std::move(d));
+        }
+    } else if (element e; doc["events"].get(e) == simdjson::SUCCESS) {
+        p.fail("/events", "not an array of event bindings");
     }
 
     if (object snaps; doc["snapshots"].get_object().get(snaps) == simdjson::SUCCESS) {
@@ -284,7 +349,7 @@ Result<AudioBank, std::vector<BankError>> parseAudioBank(std::string_view json) 
             s.name = name;
             object o;
             if (value.get_object().get(o) != simdjson::SUCCESS) { p.fail(path, "not an object"); continue; }
-            p.keys(o, {"buses", "inSteps", "outSteps"}, path);
+            p.keys(o, {"buses", "inMs", "outMs"}, path);
             if (object sb; o["buses"].get_object().get(sb) == simdjson::SUCCESS) {
                 for (auto [busName, bv] : sb) {
                     const std::string bp = path + "/buses/" + esc(busName);
@@ -298,8 +363,8 @@ Result<AudioBank, std::vector<BankError>> parseAudioBank(std::string_view json) 
                     s.buses.emplace_back(std::string(busName), level);
                 }
             }
-            if (element e; o["inSteps"].get(e) == simdjson::SUCCESS) p.uint(e, s.inSteps, path + "/inSteps", 0, 3600);
-            if (element e; o["outSteps"].get(e) == simdjson::SUCCESS) p.uint(e, s.outSteps, path + "/outSteps", 0, 3600);
+            if (element e; o["inMs"].get(e) == simdjson::SUCCESS) p.uint(e, s.inMs, path + "/inMs", 0, 60000);
+            if (element e; o["outMs"].get(e) == simdjson::SUCCESS) p.uint(e, s.outMs, path + "/outMs", 0, 60000);
             b.snapshots.push_back(std::move(s));
         }
     } else if (element e; doc["snapshots"].get(e) == simdjson::SUCCESS) {
@@ -400,14 +465,25 @@ std::string audioBankJsonSchema() {
     "ducks": {"type": "array", "items": {
       "type": "object", "additionalProperties": false, "required": ["on", "bus", "db"],
       "properties": {"on": {"type": "string"}, "bus": {"type": "string"}, "db": {"type": "number", "minimum": -96, "maximum": 0},
-                     "attackSteps": {"type": "integer", "minimum": 0}, "releaseSteps": {"type": "integer", "minimum": 0}}}},
+                     "attackMs": {"type": "integer", "minimum": 0, "maximum": 60000}, "releaseMs": {"type": "integer", "minimum": 0, "maximum": 60000}}}},
+    "events": {"type": "array", "description": "What a game's events play: the first binding of a channel whose by and tag hold", "items": {
+      "type": "object", "additionalProperties": false, "required": ["on", "play"],
+      "properties": {
+        "on": {"type": "string", "description": "An event channel (events.read's names), e.g. slice.shot"},
+        "by": {"enum": ["player", "other"], "description": "The event's source is the listener's player, or not"},
+        "tag": {"type": "string", "description": "The event's tag must be this (a surface, empty)"},
+        "play": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                 "description": "The sound or sounds, in order; {tag} is the event's tag (default when empty)"},
+        "fallback": {"type": "string", "description": "In place of a sound the bank lacks"},
+        "at": {"enum": ["ear", "event"], "description": "At the listener, or at the event's place (the default)"},
+        "owner": {"enum": ["source", "none"], "description": "Whose sound: the event's source (the default), or nobody's"}}}},
     "snapshots": {"type": "object", "additionalProperties": {
       "type": "object", "additionalProperties": false,
       "properties": {
         "buses": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": false,
                   "properties": {"db": {"type": "number", "minimum": -96, "maximum": 12},
                                  "lowPassHz": {"type": "number", "description": "0: none; else 20..24000"}}}},
-        "inSteps": {"type": "integer", "minimum": 0}, "outSteps": {"type": "integer", "minimum": 0}}}},
+        "inMs": {"type": "integer", "minimum": 0, "maximum": 60000}, "outMs": {"type": "integer", "minimum": 0, "maximum": 60000}}}},
     "reverb": {"type": "object", "additionalProperties": {
       "type": "object", "additionalProperties": false,
       "properties": {"room": {"type": "number", "minimum": 0, "maximum": 1}, "damp": {"type": "number", "minimum": 0, "maximum": 1},

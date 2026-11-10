@@ -9,7 +9,6 @@ add_library(ohao_asset STATIC ${ASSET_HEADERS} ${ASSET_SOURCES} ${UFBX_SOURCE})
 target_include_directories(ohao_asset
     PUBLIC
         ${CMAKE_SOURCE_DIR}/ohao
-        ${Vulkan_INCLUDE_DIRS}
 )
 
 target_compile_features(ohao_asset PUBLIC cxx_std_20)
@@ -18,8 +17,8 @@ target_link_libraries(ohao_asset
     PUBLIC
         ohao_core
         ohao_level   # glTF structure: ModelLoader::loadMesh's primitive ranges
+        ohao_stb_image
         glm
-        ${Vulkan_LIBRARIES}
 )
 
 # stb for image decoding (glTF goes through Assimp)

@@ -36,6 +36,7 @@ import sampling.vmf;
 import rt.lights;
 import rt.caustics;
 import rt.manifold;
+import rt.manifold_cert;
 import rt.pt_hit;
 import display.display;
 
@@ -112,6 +113,8 @@ static const uint kClassManifold = 128u;      // the manifold pass's connections
 // for the pass (off under OHAO_MANIFOLD_SPLIT_ONLY, which drops the terms without adding them).
 static const uint kFlagManifold = 1u << 19u;
 static const uint kFlagManifoldRequests = 1u << 20u;
+// Bit 23: step 2b, the sun through owned solids (manifoldGlass; set with OHAO_MANIFOLD_GLASS=1, opt-in).
+static const uint kFlagManifoldGlass = 1u << 23u;
 static const uint kManifoldOwnedBit = 1u;
 static const uint kManifoldBaseBit = 2u;
 static const uint kManifoldCoatBit = 4u;
@@ -408,7 +411,9 @@ float4 nrdPackRadianceHitDist(float3 radiance, float hitDist, float viewZ, float
 // The camera's path through one pixel. CAUSTICS compiles in caustics' split (sub-project 24): its own
 // entry and pipeline (raygenCaustics), so the default raygen carries none of its code. In the default
 // one, behind a flag, it measured 8.5% of pt.trace on helmet_rt_1080p with the flag off (69.0 -> 75.0 ms).
-void tracePixel<let CAUSTICS : bool>(uint2 pixel)
+// GUIDING compiles in path guiding (sub-project 23) the same way (raygenGuided, raygenCausticsGuided): behind its flag
+// alone, off, it was 18 ms of the helmet's 61 (docs/changes/2026-11-06-pt-trace-bisect.md).
+void tracePixel<let CAUSTICS : bool, let GUIDING : bool>(uint2 pixel)
 {
     const uint2 size = pc.params.xy;
     const uint bounces = pc.params.w & 0xFFFFu;
@@ -463,7 +468,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
     uint walkSteps = kNoWalk;   // scattering events so far (kWalkSteps: the cap's ray)
     // Path guiding: the proposals written (at most kGuideTrainVertices) and the one whose ray the
     // next trace is (its end point is written after it).
-    const bool guiding = (flags & kFlagGuiding) != 0u;
+    const bool guiding = GUIDING && (flags & kFlagGuiding) != 0u;
     const uint pixelIndex = pixel.y * size.x + pixel.x;
     uint guideProposed = 0u;
     uint guidePending = kGuideNoSlot;
@@ -882,9 +887,14 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
         }
 
         // ---- each direction weighed ----
-        // k = 0 the light's, 1 the environment's (each through the vertex's one shadow ray), 2 the bounce's.
-        float3 smoothNee = float3(0.0), coreNee = float3(0.0);   // caustics: the light sample's smooth part and its core
+        // k = 0 the light's, 1 the environment's, 2 the bounce's, every term before any shadow ray: a sample's light is
+        // kept without its visibility (every term of it is linear in it) and the vertex's one shadow ray multiplies it in
+        // below, so neither the surface nor its view is live across a trace (they were: 7 ms of the helmet's 61).
         float3 sB = float3(0.0), cB = float3(0.0), dB = float3(0.0);   // the bounce's terms (its caustic split)
+        // The light's (0) and the environment's (1): the light before visibility, its diffuse and specular parts (NRD's).
+        float3 nee0 = float3(0.0), neeD0 = float3(0.0), neeS0 = float3(0.0);
+        float3 nee1 = float3(0.0), neeD1 = float3(0.0), neeS1 = float3(0.0);
+        bool shadow0 = false, shadow1 = false;
         [loop]
         for (uint k = 0u; k < 3u; ++k)
         {
@@ -904,10 +914,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                 fs = sT + cT;
             }
             const float3 f = fs + fd;
-            float3 vis = float3(1.0);
-            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, ng) > 0.0 &&
-                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
-                continue;
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, ng) > 0.0)) continue;
             float bsdfPdf = fd.x, basePdf = 0.0;
             if (!walkExitVertex && (k != 0u || (ls.pdf > 0.0 && ls.mis)))
                 bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
@@ -936,7 +943,7 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                 }
                 continue;
             }
-            float3 le;
+            float3 le;   // before visibility
             if (k == 0u)
             {
                 // A sun is a delta (its radiance already over its choice); a light without an
@@ -947,17 +954,17 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                     if (ls.mis && !walkExitVertex) bsdfPdf = guidePdf(gm, ls.L, bsdfPdf);
                     w = (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf;
                 }
-                le = ls.radiance * vis * w;
+                le = ls.radiance * w;
             }
             else
             {
                 if (!walkExitVertex) bsdfPdf = guidePdf(gm, L, bsdfPdf);
-                le = envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL;
+                le = envRadiance(L) * powerHeuristic(pdfL, bsdfPdf) / pdfL;
             }
             float3 c = throughput * f * le;
             if (CAUSTICS && k == 0u && !walkExitVertex)
             {
-                float3 rough;
+                float3 smoothNee, coreNee, rough;   // the light sample's smooth part and its core
                 base.split(sT, cT, fd, kCausticRough, smoothNee, rough);
                 coreNee = back ? float3(0.0) : base.coreOf(o, iFront, sT, cT, kCausticRough,
                                                            float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2));
@@ -972,19 +979,33 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
                     c -= chainOne * coreNee * le;
                 }
             }
+            float3 kept = c;
             if (CAUSTICS)
             {
                 const bool smoothVertex = !walkExitVertex && hit.specularRoughness < kCausticRough;
                 const uint sunClass = !smoothVertex ? kClassSunDirect : roughBefore ? kClassSunGlint : kClassSunSpecular;
                 const uint cls = k == 0u ? (ls.pdf == 0.0 ? sunClass : kClassLights)
                                          : smoothVertex && roughBefore ? kClassEnvCaustic : kClassEnv;
-                radiance += c * classKeep(classMask, cls);
+                kept = c * classKeep(classMask, cls);
             }
-            else radiance += c;
             // The first hit's direct light by lobe (NRD's split); later ones by the first lobe.
-            if (depth == 0u) { diffuseOut += throughput * fd * le; specularOut += throughput * fs * le; }
-            else if (firstLobe == 1u) diffuseOut += c;
-            else specularOut += c;
+            float3 dPart = float3(0.0), sPart = float3(0.0);
+            if (depth == 0u) { dPart = throughput * fd * le; sPart = throughput * fs * le; }
+            else if (firstLobe == 1u) dPart = c;
+            else sPart = c;
+            if (k == 0u) { nee0 = kept; neeD0 = dPart; neeS0 = sPart; shadow0 = true; }
+            else { nee1 = kept; neeD1 = dPart; neeS1 = sPart; shadow1 = true; }
+        }
+        // The light's and the environment's shadow ray, the vertex's one (panes multiply their transmittance in).
+        [loop]
+        for (uint k = 0u; k < 2u; ++k)
+        {
+            if (!(k == 0u ? shadow0 : shadow1)) continue;
+            float3 vis = float3(1.0);
+            if (!visible(p, k == 0u ? ls.L : L, k == 0u ? ls.dist : 1.0e4, vis)) continue;
+            radiance += (k == 0u ? nee0 : nee1) * vis;
+            diffuseOut += (k == 0u ? neeD0 : neeD1) * vis;
+            specularOut += (k == 0u ? neeS0 : neeS1) * vis;
         }
 
         if (walkExitVertex)
@@ -1155,13 +1176,25 @@ void tracePixel<let CAUSTICS : bool>(uint2 pixel)
 [shader("raygeneration")]
 void raygen()
 {
-    tracePixel<false>(DispatchRaysIndex().xy);
+    tracePixel<false, false>(DispatchRaysIndex().xy);
 }
 
 [shader("raygeneration")]
 void raygenCaustics()
 {
-    tracePixel<true>(DispatchRaysIndex().xy);
+    tracePixel<true, false>(DispatchRaysIndex().xy);
+}
+
+[shader("raygeneration")]
+void raygenGuided()
+{
+    tracePixel<false, true>(DispatchRaysIndex().xy);
+}
+
+[shader("raygeneration")]
+void raygenCausticsGuided()
+{
+    tracePixel<true, true>(DispatchRaysIndex().xy);
 }
 
 // ---- caustics step 2: manifold connections (docs/specs/2026-11-04-caustics-step2-design.md) ----------------------
@@ -1198,8 +1231,9 @@ ManifoldSurface manifoldSurface(PathPayload hit, int channel, float3 normal)
         basisOf(s.n, s.t, s.b);
     }
     const float4 row13 = materials[hit.material * kMaterialRows + kTransmissionRowFirst + 1u];
+    // max(channel, 0): a call with channel -1 inlines the index as a constant, which SPIR-V refuses even unreached.
     if (transmissive && row13.z > 0.0 && channel >= 0)
-        s.mi.specularIor = dispersedIor(s.mi.specularIor, row13.w, row13.z, kDispersionLambda[channel]);
+        s.mi.specularIor = dispersedIor(s.mi.specularIor, row13.w, row13.z, kDispersionLambda[max(channel, 0)]);
     return s;
 }
 
@@ -1218,6 +1252,233 @@ float manifoldDrawWeight(uint d, uint4 header, float3 p)
 
 uint manifoldHash(uint a, uint b, uint c, uint d) { return pcg(a ^ pcg(b ^ pcg(c ^ pcg(d ^ 0x3C6EF372u)))); }
 float manifoldUnit(uint h) { return float(h >> 8u) * (1.0 / 16777216.0); }
+
+// ---- step 2b: the sun through a solid (docs/specs/2026-11-04-caustics-step2-design.md, "Step 2b as designed") ----
+
+// The walk's scene (rt/manifold_cert.slang's IManifoldScene): one instance's triangles in world space. Its rays are forced
+// non-opaque, so every candidate comes to the loop and only the instance's own are committed; every triangle takes the
+// request's frame reference c (a pair's slopes are in frames that must not change between the walks of one request).
+// Each ray is clipped to the instance's bounding sphere (grown 2%), which holds every triangle of it: outside it the
+// traversal would hand back every other instance's triangles along the ray for nothing.
+struct ManifoldInstanceScene : IManifoldScene
+{
+    uint slot;
+    float3 c;
+    float4 sphere;   // centre, radius: the mesh's world bounds
+
+    bool trace(float3 o, float3 d, float tMax, out uint tri, out float2 uv, out float t)
+    {
+        tri = 0u;
+        uv = float2(0.0);
+        t = 0.0;
+        const float3 oc = o - sphere.xyz;
+        const float dd = dot(d, d);
+        const float bh = dot(oc, d);
+        const float rad = 1.02 * sphere.w + 1e-4;
+        const float disc = bh * bh - dd * (dot(oc, oc) - rad * rad);
+        if (!(disc >= 0.0) || !(dd > 0.0)) return false;
+        const float sq = sqrt(disc);
+        const float t1 = (-bh + sq) / dd;
+        if (!(t1 > 1e-6)) return false;
+        RayDesc ray;
+        ray.Origin = o;
+        ray.Direction = d;
+        ray.TMin = max((-bh - sq) / dd, 1e-6);
+        ray.TMax = min(min(tMax, 1.0e4), t1);
+        RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
+        q.TraceRayInline(scene, RAY_FLAG_FORCE_NON_OPAQUE, kPathMask, ray);
+        while (q.Proceed())
+        {
+            if (q.CandidateInstanceID() == slot) q.CommitNonOpaqueTriangleHit();
+        }
+        if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
+        tri = q.CommittedPrimitiveIndex();
+        uv = q.CommittedTriangleBarycentrics();
+        t = q.CommittedRayT();
+        return true;
+    }
+
+    ManifoldTri triangle(uint i)
+    {
+        const uint stride = kInstanceGpuStride / 16u;
+        const uint4 mesh = meshes[asuint(instances[slot * stride + 8u]).x];
+        const uint base = mesh.y + i * 3u;
+        const uint v0 = mesh.x + indices[base], v1 = mesh.x + indices[base + 1u], v2 = mesh.x + indices[base + 2u];
+        ManifoldTri tri = manifoldTriangleFrom(instances[slot * stride], instances[slot * stride + 1u],
+                                               instances[slot * stride + 2u], instances[slot * stride + 3u],
+                                               vertexF3(v0, 0u), vertexF3(v1, 0u), vertexF3(v2, 0u), vertexF3(v0, 6u),
+                                               vertexF3(v1, 6u), vertexF3(v2, 6u));
+        tri.c = c;
+        return tri;
+    }
+}
+
+// A path the walk found (y1 on A at first.x.xy, y2 on B at first.x.zw), checked as the camera side would trace it, and
+// its light before the re-find count: X -> y2 and y2 -> y1 must meet the solid first at the walk's distances (its
+// material; from outside at y2, from inside at y1), the sun must reach y1's outer side, and the three vertices' BSDFs in
+// the camera's roles (OpenPBR is not reciprocal), at one evaluation site (each OpenPBR call site is compiled whole):
+// X's rough part, wo toward the camera side and wi toward y2; the refraction at y2, wo toward X and wi toward y1; at
+// y1, wo toward y2 (below its outward frame) and wi toward the sun (smooth + rough: the whole lobe). 0 if refused.
+float3 manifoldGlassPath(ManifoldTri A, ManifoldTri B, ManifoldWalkResult first, uint material, float alpha, float4 target,
+                         float3 pX, float3 gX, float3 woX, ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E,
+                         int ch, float3 chMask)
+{
+    const float4 row12 = materials[material * kMaterialRows + kTransmissionRowFirst];
+    const float4 row13 = materials[material * kMaterialRows + kTransmissionRowFirst + 1u];
+    const float3 y1 = manifoldPoint(A, first.x.xy), y2 = manifoldPoint(B, first.x.zw);
+    const float3 toY2 = y2 - pX;
+    const float rX = length(toY2);
+    const float3 wX = toY2 / rX;   // X -> y2
+    if (dot(wX, gX) <= 0.0) return float3(0.0);
+    const float3 inner = y1 - y2;
+    const float rIn = length(inner);
+    const float3 back = inner / rIn;   // y2 -> y1
+    PathPayload hs[2];
+    for (uint k = 0u; k < 2u; ++k)
+    {
+        const float3 o = k == 0u ? pX : y2 + back * (1e-4 * rIn);
+        const float3 dir = k == 0u ? wX : back;
+        const float expect = k == 0u ? rX : rIn * (1.0 - 1e-4);
+        const PathPayload p = trace(o, dir, kPathMask | kTlasMaskEmitter, 1.0e4, 0.0);
+        if ((p.flags & kHit) == 0u || (p.flags & kHitEmitter) != 0u || p.material != material ||
+            abs(p.t - expect) > 1e-4 * expect + 1e-5)
+            return float3(0.0);
+        hs[k] = p;
+    }
+    // The sun at y1, from outside it, off its outer side.
+    const float3 out1 = -hs[1].geoNormal;   // the hit's geometric normal faces the ray (inside)
+    if (dot(L, out1) <= 0.0) return float3(0.0);
+    float3 T;
+    if (!visible(y1 + out1 * 1e-3, L, 1.0e4, T)) return float3(0.0);
+    float3 f = float3(1.0);
+    for (uint k = 0u; k < 3u; ++k)
+    {
+        ManifoldSurface s = sx;
+        if (k > 0u)
+        {
+            s = manifoldSurface(hs[k - 1u], ch, float3(0.0));
+            if (s.fromInside != (k == 2u)) return float3(0.0);   // a solid: met from outside at y2, from inside at y1
+        }
+        const float3 a = k == 0u ? woX : k == 1u ? -wX : -back;
+        const float3 b = k == 0u ? wX : k == 1u ? back : L;
+        float3 sm, ro;
+        OpenPBRSurface(s.mi).evalParts(toLocal(a, s.t, s.b, s.n), toLocal(b, s.t, s.b, s.n), tables, kCausticRough, sm, ro);
+        f *= k == 0u ? ro : sm + ro;
+    }
+    if (!any(f > 0.0)) return float3(0.0);
+    // The solid's inside absorbs over y1 -> y2 (transmission_color at transmission_depth, as the camera side's volume).
+    float3 absorb = float3(1.0);
+    if (row13.x > 0.0) absorb = exp(log(max(row12.rgb, float3(1e-4))) * (rIn / row13.x));
+    // Area to slopes: |det ds / dA| = slopeDet / (|e1 x e2| at y1 x at y2); each area to its solid angle at the vertex
+    // before it by its geometric cosine over the distance squared.
+    const float3 g1 = cross(A.e1, A.e2), g2 = cross(B.e1, B.e2);
+    const float pdf = manifoldGgxSlopeDensity(alpha, target.xy) * manifoldGgxSlopeDensity(alpha, target.zw);
+    const float k = abs(dot(wX, g2)) * abs(dot(back, g1)) / (rX * rX * rIn * rIn * first.slopeDet * pdf);
+    const float3 c = f * E * T * absorb * chMask * k;
+    return all(isfinite(c)) ? c : float3(0.0);
+}
+
+// Re-find trials a found path is counted by, at most (the first walk among them): a ceiling, not a cap. Zeltner et
+// al.'s count is exact only uncapped, and a path near a fold is found again rarely and weighs much: at 64 the ball
+// focused on the floor read 30% dark (check_caustics m10_ball_focus); no path there needs 1,024. Uncapped the walks
+// a sample costs are on average one a reachable root (a path found with probability p takes 1/p walks); the ceiling
+// only bounds a warp's worst lane, and paths that reach it are counted (the stats' word 11, the teardown log).
+static const uint kManifoldGlassTrials = 4096u;
+
+// Step 2b's light at X from one directional light (direction L, illuminance E) through one solid instance: sun -> into
+// the solid at y1 -> out at y2 -> X's rough part, each refraction over its whole lobe (the camera side renders none of
+// it: its light samples look above a surface only and its shadow rays stop at solids, ruling M12). Without beta and the
+// draw's choice. The slopes s1, s2 are drawn from GGX's at the draw's alpha; the seeded walk (rt/manifold_cert.slang,
+// uncertified) finds a path from a seed drawn in the cone the solid's bounding sphere subtends from X, counted by the
+// walks it takes to find the same path again (Zeltner et al. 2020: exact in expectation for every path a seed reaches;
+// up to kManifoldGlassTrials). The estimate and its walk are manifold_tests t15's GPU form, held there to light
+// traced through a rough glass ball. The first walk's path is checked and weighed (manifoldGlassPath) before any
+// re-find walk: a refused path costs none. The walk has one call site (each is compiled whole). counts: (walks, paths
+// found, connections, paths at the trials' ceiling).
+float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float3 pX, float3 gX, float3 woX,
+                     ManifoldSurface sx, OpenPBRTables tables, float3 L, float3 E, int channel, uint h, inout uint4 counts)
+{
+    const float4 row13 = materials[material * kMaterialRows + kTransmissionRowFirst + 1u];
+    // A dispersive solid draws the path's wavelength unless the path has one, as the camera side does there: that
+    // channel alone, three times over.
+    int ch = channel;
+    float3 chMask = float3(1.0);
+    if (ch < 0 && row13.z > 0.0)
+    {
+        ch = int(min(manifoldUnit(h) * 3.0, 2.0));
+        chMask = float3(ch == 0 ? 3.0 : 0.0, ch == 1 ? 3.0 : 0.0, ch == 2 ? 3.0 : 0.0);
+    }
+    // The walk refracts at the IOR the BSDF refracts at: the specular IOR (dispersed for the channel) modulated by
+    // specular_weight and clamped, as OpenPBRBase. A coat makes the base's IOR the coat-relative one and adds an
+    // interface the two refractions do not model, and a specular-weight texture gives each texel its own IOR: neither
+    // is step 2b's (the caller's gate).
+    const float ior = materials[material * kMaterialRows + 5u].x;
+    const float etaSpec = ch >= 0 && row13.z > 0.0 ? dispersedIor(ior, row13.w, row13.z, kDispersionLambda[max(ch, 0)]) : ior;
+    const float eta = clamp(modulatedIor(etaSpec, materials[material * kMaterialRows + 4u].w), 1.0, kPbrEtaMax);
+    uint r = pcg(h ^ 0x2B5EED5u);
+    const uint r0 = pcg(r), r1 = pcg(r0), r2 = pcg(r1), r3 = pcg(r2);
+    r = r3;
+    const float4 target = float4(manifoldGgxSlope(alpha, float2(manifoldUnit(r0), manifoldUnit(r1))),
+                                 manifoldGgxSlope(alpha, float2(manifoldUnit(r2), manifoldUnit(r3))));
+    // The slopes' frame, the same at every walk of the request: perpendicular to the sun and to the solid's direction
+    // from X, so a normal along it (the frame's pole) is one the sun grazes or one X sees edge-on.
+    const float3 toC = sphere.xyz - pX;
+    const float dC = length(toC);
+    if (!(dC > 0.0)) return float3(0.0);
+    float3 c = cross(L, toC);
+    if (dot(c, c) > 1e-8 * dC * dC) c = normalize(c);
+    else
+    {
+        float3 cb;
+        basisOf(L, c, cb);
+    }
+    ManifoldInstanceScene sc;
+    sc.slot = slot;
+    sc.c = c;
+    sc.sphere = sphere;
+    // Seeds uniform in the cone the solid's bounding sphere (grown 2%) subtends from X; every direction from inside it.
+    const float3 axis = toC / dC;
+    const float sinA = min(1.0, 1.02 * sphere.w / dC);
+    const float cosA = dC > 1.02 * sphere.w ? sqrt(1.0 - sinA * sinA) : -1.0;
+    float3 ta, tb;
+    basisOf(axis, ta, tb);
+    ManifoldWalkResult first;
+    first.found = false;
+    first.entry = 0u;
+    first.exit = 0u;
+    first.x = float4(0.0);
+    first.slopeDet = 0.0;
+    float3 light = float3(0.0);
+    uint trials = 0u;
+    for (uint k = 0u; k < kManifoldGlassTrials; ++k)
+    {
+        r = pcg(r);
+        const float uc = manifoldUnit(r);
+        r = pcg(r);
+        const float cz = cosA + (1.0 - cosA) * uc, sz = sqrt(max(0.0, 1.0 - cz * cz));
+        const float ph = 2.0 * kManifoldPi * manifoldUnit(r);
+        const float3 seedDir = axis * cz + ta * (sz * cos(ph)) + tb * (sz * sin(ph));
+        const ManifoldWalkResult w = manifoldWalkPair<ManifoldInstanceScene, false>(sc, pX, L, eta, target, seedDir);
+        ++counts.x;
+        if (k == 0u)
+        {
+            if (!w.found || !(w.slopeDet > 0.0)) return float3(0.0);
+            first = w;
+            ++counts.y;
+            light = manifoldGlassPath(sc.triangle(w.entry), sc.triangle(w.exit), w, material, alpha, target, pX, gX, woX,
+                                      sx, tables, L, E, ch, chMask);
+            if (!any(light > 0.0)) return float3(0.0);
+            trials = 1u;
+            continue;
+        }
+        // The same path: the same pair and root (the walk polishes it in the pair's own parameters).
+        if (w.found && w.entry == first.entry && w.exit == first.exit && all(abs(w.x - first.x) < 1e-3)) break;
+        ++trials;
+    }
+    ++counts.z;
+    if (trials == kManifoldGlassTrials) ++counts.w;
+    return light * float(trials);
+}
 
 // The manifold pass (render/rt/path_tracer_render.cpp, after raygenCaustics): a thread a pixel over its requests. Each
 // retraces the ray that met X, and for each directional light and owned draw draws one slope in the draw's smooth
@@ -1240,6 +1501,7 @@ void manifoldConnect()
     float3 sum = float3(0.0);
     uint requests = 0u, candidates = 0u, roots = 0u, connections = 0u;
     uint clusterTests = 0u, subTests = 0u, triTests = 0u;
+    uint4 glassCounts = uint4(0u);   // step 2b: walks, paths found, connections, at the trials' ceiling
     for (uint slot = 0u; slot < kManifoldDepths; ++slot)
     {
         const uint r = (pixelIndex * kManifoldDepths + slot) * 3u;
@@ -1366,15 +1628,16 @@ void manifoldConnect()
                                 abs(hs.t - dist) > 1e-4 * dist + 1e-5) continue;
                             if (dot(L, hs.geoNormal) <= 0.0) continue;
                             int ch = channel;
-                            float chWeight = 1.0;
+                            float3 chMask = float3(1.0);
                             const float4 row13 = materials[hs.material * kMaterialRows + kTransmissionRowFirst + 1u];
                             ManifoldSurface ss = manifoldSurface(hs, -1, nS);
                             if (ss.fromInside) continue;
                             if (ch < 0 && row13.z > 0.0 && ss.mi.transmissionWeight > 0.0 && ss.mi.baseMetalness < 1.0)
                             {
-                                // A dispersive surface draws the path's wavelength, as the camera side does there.
+                                // A dispersive surface draws the path's wavelength, as the camera side does there:
+                                // that channel alone, three times over (all three at 3 read dispersive glints 3x bright).
                                 ch = int(min(manifoldUnit(pcg(h2 ^ k)) * 3.0, 2.0));
-                                chWeight = 3.0;
+                                chMask = float3(ch == 0 ? 3.0 : 0.0, ch == 1 ? 3.0 : 0.0, ch == 2 ? 3.0 : 0.0);
                             }
                             if (ch >= 0) ss = manifoldSurface(hs, ch, nS);
                             const float3 woS = toLocal(-w, ss.t, ss.b, ss.n), wiS = toLocal(L, ss.t, ss.b, ss.n);
@@ -1389,7 +1652,7 @@ void manifoldConnect()
                             const float det = abs(du.x * dv.y - dv.x * du.y);
                             const float dens = manifoldSlopeDensity(alphas, coreSlope, sigma);
                             if (!(det > 0.0) || !(dens > 0.0)) continue;
-                            const float3 c = beta * ro * core * E * T * (invP * chWeight * cosY * area2 / (dist * dist * det * dens));
+                            const float3 c = beta * ro * core * E * T * chMask * (invP * cosY * area2 / (dist * dist * det * dens));
                             if (all(isfinite(c)))
                             {
                                 sum += c;
@@ -1398,6 +1661,22 @@ void manifoldConnect()
                         }
                         }
                     }
+                }
+                // Step 2b: the same draw, a transmissive solid, refracting the sun through itself onto X. The walk takes
+                // the whole instance, so one draw of each (instance, material) runs it (db.w, the host's mark: a merged
+                // model's runs of one glass are several draws), with that draw's own choice probability. Not for a solid
+                // that cannot refract (metalness 1, thin-walled), nor for a coat or a specular-weight texture (the walk's
+                // single interface and IOR would not be the BSDF's: manifoldGlass).
+                if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0 && db.w != 0u)
+                {
+                    const uint mrow = db.z * kMaterialRows;
+                    const float4 row12 = materials[mrow + kTransmissionRowFirst];
+                    const float4 row13 = materials[mrow + kTransmissionRowFirst + 1u];
+                    const bool single = materials[mrow + kLayerRowFirst].w <= 0.0 && asuint(materials[mrow + 5u].w) >= 4096u;
+                    if (row12.w > 0.0 && row13.y <= 0.5 && materials[mrow + 1u].y < 1.0 && single)
+                        sum += beta * invP *
+                               manifoldGlass(da.w, db.z, asfloat(manifoldDraws[3u + 3u * d]), alphas.x, pX, hx.geoNormal,
+                                             -rayDir, sx, tables, L, E, channel, pcg(h2 ^ 0x6B1A55u), glassCounts);
                 }
             }
         }
@@ -1412,6 +1691,13 @@ void manifoldConnect()
         InterlockedAdd(causticStats[5], clusterTests);
         InterlockedAdd(causticStats[6], subTests);
         InterlockedAdd(causticStats[7], triTests);
+        if (any(glassCounts > 0u))
+        {
+            InterlockedAdd(causticStats[8], glassCounts.x);
+            InterlockedAdd(causticStats[9], glassCounts.y);
+            InterlockedAdd(causticStats[10], glassCounts.z);
+            InterlockedAdd(causticStats[11], glassCounts.w);
+        }
     }
     sum *= classKeep(classMask, kClassManifold);
     if (any(sum != 0.0))
@@ -1747,7 +2033,9 @@ void cacheUpdate()
                                                      s, baseDrawn);
         if (back) s.wi = base.mirrored(s.wi);
 
-        // k = 0 the light's, 1 the environment's (each through one shadow ray), 2 the bounce's.
+        // k = 0 the light's, 1 the environment's, 2 the bounce's, every term before the shadow ray (tracePixel's order).
+        float3 nee0 = float3(0.0), nee1 = float3(0.0);   // the light's and the environment's light before visibility
+        bool shadow0 = false, shadow1 = false;
         [loop]
         for (uint k = 0u; k < 3u; ++k)
         {
@@ -1758,10 +2046,7 @@ void cacheUpdate()
             float3 sT, cT, dT;
             base.terms(o, iFront, surfView, tables, sT, cT, dT);
             const float3 f = sT + cT + dT;
-            float3 vis = float3(1.0);
-            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, hit.geoNormal) > 0.0 &&
-                            visible(p, Lw, k == 0u ? ls.dist : 1.0e4, vis)))
-                continue;
+            if (k < 2u && !((k == 0u || pdfL > 0.0) && any(f > 0.0) && dot(Lw, hit.geoNormal) > 0.0)) continue;
             float bsdfPdf = 0.0, basePdf = 0.0;
             if (k != 0u || (ls.pdf > 0.0 && ls.mis)) bsdfPdf = base.pdfFrom(o, iFront, surfView, shares, tables, basePdf);
             if (k == 2u)
@@ -1769,10 +2054,22 @@ void cacheUpdate()
             else if (k == 0u)
             {
                 const float w = ls.pdf > 0.0 ? (ls.mis ? powerHeuristic(ls.pdf, bsdfPdf) : 1.0) / ls.pdf : 1.0;
-                cacheContribute(verts, count, throughput * f * ls.radiance * vis * w);
+                nee0 = throughput * f * ls.radiance * w;
+                shadow0 = true;
             }
             else
-                cacheContribute(verts, count, throughput * f * envRadiance(L) * vis * powerHeuristic(pdfL, bsdfPdf) / pdfL);
+            {
+                nee1 = throughput * f * envRadiance(L) * powerHeuristic(pdfL, bsdfPdf) / pdfL;
+                shadow1 = true;
+            }
+        }
+        [loop]
+        for (uint k = 0u; k < 2u; ++k)
+        {
+            if (!(k == 0u ? shadow0 : shadow1)) continue;
+            float3 vis = float3(1.0);
+            if (visible(p, k == 0u ? ls.L : L, k == 0u ? ls.dist : 1.0e4, vis))
+                cacheContribute(verts, count, (k == 0u ? nee0 : nee1) * vis);
         }
         if (!(s.pdf > 0.0)) break;
         const float3 next = toWorld(s.wi, t, b, n);

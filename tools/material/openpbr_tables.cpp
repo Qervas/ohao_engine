@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -537,6 +538,26 @@ std::string header(const std::vector<float>& t) {
     return o.str();
 }
 
+// The numbers of a written table, in order (each is written "<%.9g>f,").
+std::vector<float> tableNumbers(const std::string& text) {
+    std::vector<float> v;
+    const size_t start = text.find("= {");
+    if (start == std::string::npos) return v;
+    const char* p = text.c_str() + start + 3;
+    for (;;) {
+        char* end = nullptr;
+        const float x = std::strtof(p, &end);
+        if (end == p) break;
+        v.push_back(x);
+        p = end;
+        while (*p == 'f' || *p == ',' || *p == ' ' || *p == '\n' || *p == '\r') ++p;
+    }
+    return v;
+}
+
+// What another platform's math library moves a table number by, at most (measured MSVC to GCC: 5.4e-6).
+constexpr float kCrossPlatform = 1e-5f;
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -551,7 +572,17 @@ int main(int argc, char** argv) {
         std::ifstream in(path, std::ios::binary);
         std::stringstream have;
         have << in.rdbuf();
-        const bool same = have.str() == text;
+        bool same = have.str() == text;
+        if (!same) {
+            // Byte for byte on the platform that wrote them; on another the math library's last digits differ (MSVC's
+            // to GCC's: 1,111 of 89,280 numbers, at most 5.4e-6), so there every number within kCrossPlatform.
+            const std::vector<float> want = tableNumbers(have.str()), got = tableNumbers(text);
+            float worst = want.size() == got.size() ? 0.0f : 1.0f;
+            for (size_t i = 0; i < want.size() && i < got.size(); ++i) worst = std::max(worst, std::fabs(want[i] - got[i]));
+            same = want.size() == got.size() && worst <= kCrossPlatform;
+            std::fprintf(stderr, "openpbr_tables: not byte for byte; %zu numbers, the largest difference %.3g (%s)\n",
+                         got.size(), worst, same ? "within the other platform's rounding" : "a module change");
+        }
         std::printf("{\"suite\":\"openpbr_tables\",\"passed\":%d,\"failed\":%d,\"failures\":[%s]}\n", same ? 1 : 0,
                     same ? 0 : 1, same ? "" : "\"the tables are not what this build generates: regenerate them\"");
         return same ? 0 : 1;

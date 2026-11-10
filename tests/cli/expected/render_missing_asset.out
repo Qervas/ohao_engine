@@ -1,1 +1,0 @@
-{"method":"render.capture","error":{"code":"E_ASSET_NOT_FOUND","message":"entity 00000000000000a1: no file 'assets/test_models/NoSuchModel.glb' in the project","data":[{"code":"E_ASSET_NOT_FOUND","path":"","entity":"00000000000000a1","message":"entity 00000000000000a1: no file 'assets/test_models/NoSuchModel.glb' in the project"}]}}

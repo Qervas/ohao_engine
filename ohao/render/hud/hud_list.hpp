@@ -3,7 +3,7 @@
 // LDR image, before present and readback. A list of items in pixels (origin top left, y down),
 // drawn in order with alpha blending: solid rectangles, glyphs of a built-in 5x7 bitmap font, and
 // a vignette (a rectangle whose alpha grows from 0 at its centre to `color.a` at its edges). The
-// host builds the list each frame (ecs/combat_hud.hpp) and hands it to the renderer; an empty
+// host builds the list each frame (world_render/combat_hud.hpp) and hands it to the renderer; an empty
 // list draws nothing and records no pass.
 #include <glm/glm.hpp>
 

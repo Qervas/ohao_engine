@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "skeleton": { "file": "assets/characters/toon_enemy/enemy.glb", "skin": "EnemySkin" },
   "driver": "enemy",
   "clips": {
@@ -52,10 +53,10 @@
         "dead": { "clip": "death", "rate": 0.0, "startAt": 0.75 }
       },
       "transitions": [
-        { "from": "move", "to": "death", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
-        { "from": "combat", "to": "death", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
-        { "from": "move", "to": "combat", "when": { "param": "mode", "op": "==", "value": 2 }, "fade": 8 },
-        { "from": "combat", "to": "move", "when": { "param": "mode", "op": "<", "value": 2 }, "fade": 12 },
+        { "from": "move", "to": "death", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 0.0667 },
+        { "from": "combat", "to": "death", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 0.0667 },
+        { "from": "move", "to": "combat", "when": { "param": "mode", "op": "==", "value": 2 }, "fade": 0.1333 },
+        { "from": "combat", "to": "move", "when": { "param": "mode", "op": "<", "value": 2 }, "fade": 0.2 },
         { "from": "death", "to": "dead", "when": { "clipEnd": true }, "fade": 0 },
         { "from": "dead", "to": "move", "when": { "param": "alive", "op": "==", "value": 1 }, "fade": 0 }
       ]
@@ -85,8 +86,8 @@
       },
       "transitions": [
         { "from": "still", "to": "kick", "when": { "event": "shot" }, "fade": 0 },
-        { "from": "kick", "to": "kick", "when": { "event": "shot" }, "fade": 2 },
-        { "from": "kick", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "kick", "to": "kick", "when": { "event": "shot" }, "fade": 0.0333 },
+        { "from": "kick", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 0.0667 },
         { "from": "kick", "to": "still", "when": { "clipEnd": true }, "fade": 0 }
       ]
     },
@@ -101,9 +102,9 @@
         "reload": { "clip": "reload" }
       },
       "transitions": [
-        { "from": "still", "to": "reload", "when": { "event": "reload" }, "fade": 4 },
-        { "from": "reload", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
-        { "from": "reload", "to": "still", "when": { "clipEnd": true }, "fade": 4 }
+        { "from": "still", "to": "reload", "when": { "event": "reload" }, "fade": 0.0667 },
+        { "from": "reload", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 0.0667 },
+        { "from": "reload", "to": "still", "when": { "clipEnd": true }, "fade": 0.0667 }
       ]
     },
     {
@@ -118,8 +119,8 @@
       },
       "transitions": [
         { "from": "still", "to": "flinch", "when": { "event": "hit" }, "fade": 0 },
-        { "from": "flinch", "to": "flinch", "when": { "event": "hit" }, "fade": 2 },
-        { "from": "flinch", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "flinch", "to": "flinch", "when": { "event": "hit" }, "fade": 0.0333 },
+        { "from": "flinch", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 0.0667 },
         { "from": "flinch", "to": "still", "when": { "clipEnd": true }, "fade": 0 }
       ]
     }

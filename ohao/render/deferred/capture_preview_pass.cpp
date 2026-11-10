@@ -1,4 +1,5 @@
 #include "capture_preview_pass.hpp"
+#include "render/shader_bindings/compute_capture_preview.hpp"
 #include "render/rt/rt_compute.hpp"
 #include "gpu/shared_layout.hpp"
 #include "core/log.hpp"
@@ -16,9 +17,8 @@ CapturePreviewPass::~CapturePreviewPass() {
 
 bool CapturePreviewPass::initialize(VkDevice device) {
     m_device = device;
-    using rtc::layoutBinding;
-    const VkDescriptorSetLayoutBinding bindings[] = {layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-                                                     layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+    const VkDescriptorSetLayoutBinding bindings[] = {shader::layoutBinding(shader::compute_capture_preview::finalImage),
+                                                     shader::layoutBinding(shader::compute_capture_preview::preview)};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = 2;
@@ -69,8 +69,8 @@ void CapturePreviewPass::record(VkCommandBuffer cmd, uint32_t slot, VkImageView 
     const VkDescriptorSet set = m_sets[slot];
     VkDescriptorImageInfo image{VK_NULL_HANDLE, finalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorBufferInfo buffer{out, 0, static_cast<VkDeviceSize>(dstWidth) * dstHeight * 4};
-    VkWriteDescriptorSet writes[2] = {rtc::descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-                                      rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+    VkWriteDescriptorSet writes[2] = {shader::write(shader::compute_capture_preview::finalImage, set),
+                                      shader::write(shader::compute_capture_preview::preview, set)};
     writes[0].pImageInfo = &image;
     writes[1].pBufferInfo = &buffer;
     vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);

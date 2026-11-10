@@ -1,8 +1,9 @@
 #include "ohao/render_host.hpp"
+#include "engine/install.hpp"
 
-#include "ecs/instantiate.hpp"
-#include "ecs/render_extract.hpp"
-#include "ecs/vfx_draw.hpp"
+#include "world_render/instantiate.hpp"
+#include "world_render/render_extract.hpp"
+#include "world_render/vfx_draw.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"
@@ -33,7 +34,7 @@ std::optional<api::RenderStats> RenderHost::renderStats(int frames) {
 
 std::optional<api::RenderSettings> RenderHost::renderSettings() {
     if (m_kind == api::HostKind::Cli) return std::nullopt;
-    if (m_renderer) return runtime::readRenderSettings(*m_renderer);
+    if (m_renderer) return m_renderer->renderSettings();
     return m_settings;
 }
 
@@ -41,7 +42,7 @@ void RenderHost::setRenderSettings(const api::RenderSettings& settings) {
     if (m_kind == api::HostKind::Cli) return;
     m_settings = settings;
     m_settingsSet = true;
-    if (m_renderer) runtime::applyRenderSettings(*m_renderer, settings);
+    if (m_renderer) m_renderer->setRenderSettings(settings);
 }
 
 std::optional<api::Host::GpuInfo> RenderHost::gpuInfo() {
@@ -73,10 +74,8 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
                 m_defaultEv100 = pp->ev100();
                 m_defaultCurve = pp->displayCurve();
             }
-        ecs::installRenderExtract(*m_world, m_renderer->renderScene());
-        ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
-        ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);   // likewise
-        if (m_settingsSet) runtime::applyRenderSettings(*m_renderer, m_settings);
+        engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
+        if (m_settingsSet) m_renderer->setRenderSettings(m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size
     }

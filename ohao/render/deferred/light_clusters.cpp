@@ -1,4 +1,5 @@
 #include "light_clusters.hpp"
+#include "render/shader_bindings/compute_light_cluster.hpp"
 #include "core/log.hpp"
 
 #include <algorithm>
@@ -46,10 +47,9 @@ LightClusters::~LightClusters() {
 bool LightClusters::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physicalDevice = physicalDevice;
-    using rtc::layoutBinding;
-    const VkDescriptorSetLayoutBinding bindings[] = {layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                                     layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                                     layoutBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+    const VkDescriptorSetLayoutBinding bindings[] = {shader::layoutBinding(shader::compute_light_cluster::lights),
+                                                     shader::layoutBinding(shader::compute_light_cluster::clusters),
+                                                     shader::layoutBinding(shader::compute_light_cluster::stats)};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = 3;
@@ -173,7 +173,7 @@ void LightClusters::build(VkCommandBuffer cmd, uint32_t slot, const glm::mat4& v
                                              {s.stats.buffer, 0, VK_WHOLE_SIZE}};
     VkWriteDescriptorSet writes[3];
     for (uint32_t i = 0; i < 3; ++i) {
-        writes[i] = rtc::descriptorWrite(m_sets[slot], i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writes[i] = shader::write(shader::compute_light_cluster::kSet0[i], m_sets[slot]);
         writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);

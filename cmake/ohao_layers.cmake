@@ -1,0 +1,135 @@
+# The engine's layers (system design 4.1, step 2g): dependencies point down only. Each library has a level; configure
+# fails when a library links one at its own level or above, or when one of its sources includes a header another
+# library owns at its own level or above. Third-party targets have no level and are not checked.
+#
+# A known upward edge is listed in OHAO_LAYER_EXCEPTIONS with the step that removes it, and nowhere else.
+
+set(OHAO_LAYERS
+    ohao_core=0
+    ohao_gpu_vulkan=1 ohao_reflect=1 ohao_level=1 ohao_anim=1 ohao_audio_bank=1 ohao_vfx=1 ohao_physics=1
+    ohao_asset=2 ohao_audio=2
+    ohao_renderer=4
+    ohao_ecs=4
+    ohao_level_world=5 ohao_world_render=5
+    ohao_engine=6 ohao_game_api=6
+    ohao_api=7
+    ohao_rpc=8 ohao_runtime=8
+    ohao_slice_objects=9 ohao_slice=9 ohao_slice_static=9)   # a game sits above every engine library: none links it or includes its headers
+
+# "from->to": allowed although it points sideways or up. Each has its end. None today: the world and the renderer
+# share a level so neither reaches the other (step 3a); ohao_world_render joins them.
+set(OHAO_LAYER_EXCEPTIONS)
+
+function(_ohao_level target out)
+    set(level "")
+    foreach(entry ${OHAO_LAYERS})
+        string(REPLACE "=" ";" kv "${entry}")
+        list(GET kv 0 name)
+        if(name STREQUAL target)
+            list(GET kv 1 level)
+        endif()
+    endforeach()
+    set(${out} "${level}" PARENT_SCOPE)
+endfunction()
+
+function(_ohao_layer_edge from to errors_var)
+    set(errors "${${errors_var}}")
+    if(from STREQUAL to)
+        return()
+    endif()
+    _ohao_level(${from} lf)
+    _ohao_level(${to} lt)
+    if(lf STREQUAL "" OR lt STREQUAL "")
+        return()
+    endif()
+    if(NOT lt LESS lf AND NOT "${from}->${to}" IN_LIST OHAO_LAYER_EXCEPTIONS)
+        list(APPEND errors "${from} (level ${lf}) depends on ${to} (level ${lt})")
+        set(${errors_var} "${errors}" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(ohao_check_layers)
+    set(errors "")
+    # Which library owns each header (by path under ohao/).
+    set(owners "")
+    foreach(entry ${OHAO_LAYERS})
+        string(REPLACE "=" ";" kv "${entry}")
+        list(GET kv 0 lib)
+        if(NOT TARGET ${lib})
+            message(FATAL_ERROR "ohao_layers: ${lib} is in OHAO_LAYERS but is not a target")
+        endif()
+        get_target_property(type ${lib} TYPE)
+        if(type STREQUAL "INTERFACE_LIBRARY")
+            continue()
+        endif()
+        get_target_property(srcs ${lib} SOURCES)
+        get_target_property(dir ${lib} SOURCE_DIR)
+        foreach(s ${srcs})
+            if(NOT IS_ABSOLUTE "${s}")
+                set(s "${dir}/${s}")
+            endif()
+            if(s MATCHES "\\.(hpp|h)$")
+                # As sources include it: under ohao/ ("ecs/world.hpp"), or under games/ ("slice/combat.hpp").
+                if(s MATCHES "^${CMAKE_SOURCE_DIR}/games/")
+                    file(RELATIVE_PATH rel "${CMAKE_SOURCE_DIR}/games" "${s}")
+                else()
+                    file(RELATIVE_PATH rel "${CMAKE_SOURCE_DIR}/ohao" "${s}")
+                endif()
+                set(OWNER_${rel} ${lib})
+            endif()
+        endforeach()
+    endforeach()
+    # Links and includes.
+    foreach(entry ${OHAO_LAYERS})
+        string(REPLACE "=" ";" kv "${entry}")
+        list(GET kv 0 lib)
+        get_target_property(type ${lib} TYPE)
+        set(links "")
+        if(NOT type STREQUAL "INTERFACE_LIBRARY")
+            get_target_property(l ${lib} LINK_LIBRARIES)
+            if(l)
+                list(APPEND links ${l})
+            endif()
+        endif()
+        get_target_property(il ${lib} INTERFACE_LINK_LIBRARIES)
+        if(il)
+            list(APPEND links ${il})
+        endif()
+        foreach(dep ${links})
+            if(TARGET ${dep})
+                _ohao_layer_edge(${lib} ${dep} errors)
+            endif()
+        endforeach()
+        if(type STREQUAL "INTERFACE_LIBRARY")
+            continue()
+        endif()
+        get_target_property(srcs ${lib} SOURCES)
+        get_target_property(dir ${lib} SOURCE_DIR)
+        foreach(s ${srcs})
+            if(NOT IS_ABSOLUTE "${s}")
+                set(s "${dir}/${s}")
+            endif()
+            if(NOT s MATCHES "\\.(cpp|hpp|h)$" OR NOT EXISTS "${s}")
+                continue()
+            endif()
+            file(STRINGS "${s}" includes REGEX "^[ \t]*#[ \t]*include[ \t]+\"[a-z_]+/[^\"]+\"")
+            foreach(line ${includes})
+                string(REGEX REPLACE "^[^\"]*\"([^\"]+)\".*$" "\\1" path "${line}")
+                if(DEFINED OWNER_${path})
+                    set(before "${errors}")
+                    _ohao_layer_edge(${lib} ${OWNER_${path}} errors)
+                    if(NOT errors STREQUAL before)
+                        file(RELATIVE_PATH where "${CMAKE_SOURCE_DIR}" "${s}")
+                        list(POP_BACK errors last)
+                        list(APPEND errors "${last}: ${where} includes ${path}")
+                    endif()
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
+    if(errors)
+        list(REMOVE_DUPLICATES errors)
+        list(JOIN errors "\n  " text)
+        message(FATAL_ERROR "ohao_layers: a dependency points up a layer (cmake/ohao_layers.cmake):\n  ${text}")
+    endif()
+endfunction()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/shader_bindings/shadow_shadow_csm.hpp"
 #include "render/frame/frame_resources.hpp"
 #include <array>
 
@@ -118,6 +119,7 @@ private:
     struct ShadowPushConstant {
         glm::mat4 viewProj;   // the cascade being rendered
     };
+    OHAO_CHECK_PUSH(ShadowPushConstant, shadow_shadow_csm)   // shadow/shadow_csm.slang's
     static_assert(sizeof(ShadowPushConstant) == 64);
 };
 

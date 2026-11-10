@@ -6,7 +6,7 @@
 #include "ecs/physics_scene.hpp"
 
 #include "core/log.hpp"
-#include "ecs/instantiate.hpp"
+#include "ecs/primitive_model.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
 #include "asset/model.hpp"
@@ -25,6 +25,16 @@
 namespace ohao::ecs {
 
 namespace pb = physics::backend;
+
+// An event as the step finds it, before it is sorted and emitted into physics_scene.hpp's channels.
+struct PhysicsEvent {
+    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit, Footstep, Land, JointBreak };
+    Kind kind{Kind::ContactBegin};
+    uint64_t aId{0}, bId{0};   // contacts: a the lower id; triggers: a the trigger; footsteps: a the player
+    glm::vec3 point{0.0f}, normal{0.0f};
+    float speed{0.0f};
+    std::string surface;
+};
 
 // Helpers the Impl's files share (each its own internal copy).
 namespace {
@@ -142,12 +152,15 @@ struct PhysicsScene::Impl {
     bool removing{false};
     // Events (spec "Events").
     ankerl::unordered_dense::map<uint64_t, Pair> pairs;
-    std::vector<PhysicsEvent> pending;      // ends from bodies removed since the last step
-    std::vector<PhysicsEvent> stepEvents;   // the latest step's, published
-    std::vector<PhysicsEvent> log;          // a ring of kEventLog, by seq
     std::size_t dormant{0};                 // pairs kept through their bodies' sleep
-    uint64_t nextSeq{1};
-    uint64_t steps{0};
+    uint64_t steps{0};   // the World's step this scene last stepped in
+    struct Writers {
+        EventWriter<ContactEvent> contactBegin, contactEnd;
+        EventWriter<TriggerEvent> triggerEnter, triggerExit;
+        EventWriter<FootEvent> footstep, land;
+        EventWriter<JointBreakEvent> jointBreak;
+    } out;
+    void emit(const PhysicsEvent& ev);
     int lastSubsteps{0};
     bool warnedLongStep{false};
     PhysicsScene::StepTiming timing;
@@ -164,15 +177,17 @@ struct PhysicsScene::Impl {
     ankerl::unordered_dense::set<entt::entity> posedExternally;
     bool writingPose{false};
 
-    // The simulation a snapshot carries (SnapshotHook): the backend's state (bodies, contact
+    // The simulation a snapshot carries (its snapshot hook): the backend's state (bodies, contact
     // cache, characters), which body is whose, the players and the contact bookkeeping. A restore
     // hands it back; the next sync puts it in place if the bodies are the same ones, else the
     // components' path (teleports and BodyMotion) does what it can.
     struct SavedSimulation;
     std::shared_ptr<const SavedSimulation> savedPending;
-    // A restore since the players last spawned: a PlayerController it put back (a dead enemy's,
-    // combat's round restart) gets its character where the restored entity stands, not at a spawn.
+    // A restore since the players last spawned: a PlayerController it put back (one a game removed, and its
+    // restart restored) gets its character where the restored entity stands, not at a spawn.
     bool restoredSinceSpawn{false};
+    InputControl inputControl;   // a game's rule (setInputControl); empty: every character is in control
+    [[nodiscard]] bool controlled(entt::entity e) const { return !inputControl || inputControl(reg, e); }
 
     // A player (spec "The player"): its character, and what the step last made of it.
     struct PlayerRecord {
@@ -331,7 +346,7 @@ struct PhysicsScene::Impl {
     // Every joint's constraint and its entity's id, by handle.
     [[nodiscard]] std::vector<std::pair<pb::ConstraintHandle, uint64_t>> jointIdentity() const;
 
-    // ---- snapshots (SnapshotHook) ----------------------------------------------------------------
+    // ---- snapshots (its snapshot hook) ----------------------------------------------------------------
 
     struct SavedPlayer {
         uint64_t id{0}, headId{0}, groundId{0};
@@ -342,6 +357,7 @@ struct PhysicsScene::Impl {
     [[nodiscard]] std::vector<std::pair<pb::BodyHandle, uint64_t>> bodyIdentity() const;
 
     [[nodiscard]] std::shared_ptr<const void> saveSimulation() const;
+    void hashSimulation(StateHash& h) const;
     void restoreSimulation(const std::shared_ptr<const void>& state);
     bool restoreSaved();
 
@@ -365,7 +381,7 @@ struct PhysicsScene::Impl {
     // into BodyMotion (asleep at rest, once, as it falls asleep).
     void writeBack();
 
-    void publish(std::vector<PhysicsEvent>& fresh);
+    void publish(std::vector<PhysicsEvent>& fresh);   // sorted, then emitted
 
     // ---- the player (spec "The player") -----------------------------------------------------------
 
@@ -420,9 +436,9 @@ struct PhysicsScene::Impl {
 
     // Every player, once per step, before the bodies step (spec: the character moves first); its
     // footsteps and landing go into `out`.
-    void updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out);
+    void updatePlayers(std::span<const InputMap> inputs, float dt, std::vector<PhysicsEvent>& out);
 
-    void step(const InputMap& input, float dt);
+    void step(std::span<const InputMap> inputs, float dt, uint64_t worldStep);
 
     // RenderPose for what the last step moved, between its last two step poses at alpha, and for
     // their subtrees (a descendant that moves by itself has its own entry). Alpha 1 (or outside
@@ -441,8 +457,6 @@ struct PhysicsScene::Impl {
 
     // A drawn pose for x this frame; its previous one is what the last frame drew of it.
     void setDrawn(entt::entity x, const glm::mat4& world, const ankerl::unordered_dense::set<entt::entity>& was);
-
-    [[nodiscard]] std::vector<PhysicsEvent> since(uint64_t after, std::size_t max, uint64_t& dropped) const;
 };
 
 } // namespace ohao::ecs

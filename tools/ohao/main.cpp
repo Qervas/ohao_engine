@@ -22,7 +22,7 @@
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
 //                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
 //                                [--mode deferred|rt_realtime|rt_offline] [--spp N]
-//                                [--present immediate|mailbox|fifo] [--sound]]
+//                                [--present immediate|mailbox|fifo] [--sound] [--fps N]]
 //                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
 //                 over newline-delimited JSON until stdin closes (ohao/rpc). --pipe NAME serves
 //                 \\.\pipe\ohao-NAME instead: one local client of the current user, until it
@@ -36,6 +36,8 @@
 //                 the window is closed); 1 if the scene does not load or the pipe cannot be
 //                 created; 3 without a window or GPU.
 //   every command: [--root DIR]   the project root asset paths are relative to (default: .)
+//   every command: [--game slice|none|<module.so>]   the game after the engine's systems (default: the slice,
+//                 libohao_slice.so beside the executable, loaded at start: game/loader.hpp)
 //
 // Output: one JSON document on stdout, {"result": ...} or {"error": {code, message,
 // data}}. `run` without a script prints {"result": {method: result, ...}} for the
@@ -45,6 +47,10 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
+#include "game/install.hpp"
+#include "game/loader.hpp"
+#include "game/module.hpp"
+#include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
@@ -52,7 +58,6 @@
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -91,9 +96,15 @@ namespace fs = std::filesystem;
 
 enum Exit : int { kOk = 0, kInput = 1, kAsset = 2, kInternal = 3 };
 
+// The game every command plays (--game, read before the command: loadGame): a module loaded at start, or none.
+std::shared_ptr<const game::LoadedModule> g_module;
+const game::Module* g_game = nullptr;
+
+// The engine's types and the game's (its components then load as data; with --game none they are unknown, kept as
+// written).
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), g_game ? g_game->registerTypes(r) : void(), true);
     (void)once;
     return r;
 }
@@ -205,6 +216,28 @@ struct Args {
     std::string error;
 };
 
+// --game, for every command: `slice` (the default: libohao_slice.so beside the executable), a module's path, or
+// `none` (an engine-only world). Taken out of argv before the command reads its options. False with `error` set when
+// the module does not load.
+bool loadGame(std::vector<char*>& args, std::string& error) {
+    std::string game = "slice";
+    for (std::size_t i = 1; i < args.size(); ++i)
+        if (std::string_view(args[i]) == "--game") {
+            if (i + 1 >= args.size()) {
+                error = "--game needs slice, none or a module's path";
+                return false;
+            }
+            game = args[i + 1];
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i), args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    if (game == "none") return true;
+    const std::filesystem::path path = game == "slice" ? game::executableDir() / "libohao_slice.so" : std::filesystem::path(game);
+    g_module = game::loadModule(path, error);
+    g_game = g_module ? g_module->module : nullptr;
+    return g_module != nullptr;
+}
+
 // `flags` take no value; every other --option takes one.
 Args parseArgs(int argc, char** argv, int first, std::initializer_list<std::string_view> flags,
                std::initializer_list<std::string_view> valued) {
@@ -286,18 +319,15 @@ struct Context {
     std::unique_ptr<ecs::World> world;
     std::unique_ptr<api::Session> session;
 
-    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli) {
+    // `game`: the game installed after the engine (--game's); null: an engine-only world.
+    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli,
+                     std::shared_ptr<const game::LoadedModule> game = g_module) {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
-        level::installLevels(*world, *assets, engineTypes());   // Level components expand into entities
-        ecs::installPhysics(*world, *assets);                    // and their colliders into bodies
-        ecs::installCombat(*world);                              // weapons fire after physics steps
-        ecs::installAnimation(*world, *assets);                  // animators step after combat
-        // The audio schedule: the step's last (OHAO_AUDIO_TRACE=1 logs its commands).
-        ecs::installAudio(*world, *assets).setTrace(runtime::audioTraceRequested());
-        ecs::installVfx(*world, *assets);                        // effects' spawn records, before the schedule
-        session = std::make_unique<api::Session>(*world, engineTypes());
+        engine::installEngine(*world, {*assets, engineTypes()});
+        if (game) game::installGame(*world, *game->module);
+        session = std::make_unique<api::Session>(*world, engineTypes(), game);
         session->setAssetResolver(assets.get());
         render->bind(*world);
         session->setHost(render.get());
@@ -367,7 +397,14 @@ int cmdSchema(const Args& a) {
     const fs::path dir = opt(a, "-o", ".");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});
+    // The channels and methods a world with the engine and the game (--game's) installed has.
+    ecs::FileAssetResolver resolver{"."};
+    ecs::World world;
+    engine::installEngine(world, {resolver, engineTypes()});
+    if (g_game) game::installGame(world, *g_game);
+    const api::Session session(world, engineTypes(), g_module);
+    const std::vector<reflect::ChannelDoc> channels = api::channelDocs(world, engineTypes());
+    const auto catalogue = reflect::exportCatalogue(engineTypes(), {session.methods(), channels, reflect::JsonLayout::Pretty});
     const auto schema = reflect::exportSceneJsonSchema(engineTypes());
     const std::string files[] = {(dir / "ohao_schema.json").generic_string(), (dir / "scene.schema.json").generic_string()};
     for (int i = 0; i < 2; ++i) {
@@ -386,7 +423,7 @@ int cmdSchema(const Args& a) {
     w.beginArray();
     for (const auto& f : files) w.string(f);
     w.endArray();
-    w.key("schemaHash"); w.hex64(reflect::schemaHash(engineTypes(), api::methods()));
+    w.key("schemaHash"); w.hex64(session.schemaHash());
     w.endObject();
     w.endObject();
     emit(w.take());
@@ -599,7 +636,7 @@ int cmdRun(const Args& a) {
         }
     }
 
-    Context c(opt(a, "--root", "."));
+    Context c(opt(a, "--root", "."), api::HostKind::Cli, g_module);
     const bool lines = script.has_value();
     int worst = kOk;
     std::string combined;   // without a script: {"result": {method: result, ...}}
@@ -696,6 +733,7 @@ int cmdDoctor(const Args& a) {
     o.root = opt(a, "--root", ".");
     if (has(a, "--shader-dir")) o.shaderDir = opt(a, "--shader-dir");
     if (has(a, "--spirv-dir")) o.spirvDir = opt(a, "--spirv-dir");
+    o.game = g_game;
     const auto checks = doctor::run(o);
     emit("{\"result\":" + doctor::toJson(checks, o.cpuOnly) + "}");
     return doctor::passed(checks) ? kOk : kInput;
@@ -724,12 +762,15 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     if (has(a, "--present")) cfg.present = *presentModeFromName(opt(a, "--present"));   // checked by cmdServe
     cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
     cfg.sound = has(a, "--sound");  // the voice schedule played on the default device
+    cfg.game = g_module;
     cfg.root = opt(a, "--root", ".");
     const std::string mode = opt(a, "--mode", "deferred");
     cfg.mode = mode == "rt_realtime" ? RenderMode::RTRealtime : mode == "rt_offline" ? RenderMode::RTOffline : RenderMode::Deferred;
     long long spp = 64;
     std::string err;
     if (intOpt(a, "--spp", 1, 65536, spp, err)) cfg.spp = static_cast<int>(spp);
+    long long fps = -1;   // the frame-rate cap: the display's refresh rate unless --fps (0: none)
+    if (has(a, "--fps") && intOpt(a, "--fps", 0, 1000, fps, err)) cfg.maxFps = static_cast<int>(fps);
     runtime::LiveHost host;
     if (!host.initialize(cfg, engineTypes())) {
         OHAO_LOG(Error, rpc, "serve: no window or no usable GPU");
@@ -758,10 +799,10 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     pump.poll = [&server](std::chrono::milliseconds wait) { return server.poll(wait); };
     pump.flush = [&server] { server.flush(); };
     server.start();
-    (void)host.run(runtime::GameHooks{}, &pump);
+    const runtime::RunReport run = host.run(runtime::GameHooks{}, &pump);
     server.stop();   // the window closed while the client still holds stdin: stop reading
     (void)host.shutdown();
-    return kOk;
+    return run.error.empty() ? kOk : kInternal;
 }
 
 int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const WindowOption& win) {
@@ -771,7 +812,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     if (!intOpt(a, "--max-message", 1024, 1ll << 30, maxMessage, err)) return usage(err);
     if (has(a, "--seed") && a.positional.empty()) return usage("--seed needs a scene");
     if (has(a, "--lockstep") && has(a, "--realtime")) return usage("--lockstep and --realtime exclude each other");
-    for (const char* o : {"--realtime", "--vsync", "--hidden", "--sound", "--mode", "--spp", "--present"})
+    for (const char* o : {"--realtime", "--vsync", "--hidden", "--sound", "--mode", "--spp", "--present", "--fps"})
         if (has(a, o) && !win.on)
             return usage(std::string(o) + " needs --window (a headless host is lockstep; its captures name their mode)");
     if (has(a, "--present") && !presentModeFromName(opt(a, "--present")))
@@ -783,6 +824,8 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     }
     long long spp = 64;
     if (!intOpt(a, "--spp", 1, 65536, spp, err)) return usage(err);
+    long long fps = -1;
+    if (has(a, "--fps") && !intOpt(a, "--fps", 0, 1000, fps, err)) return usage(err);
     if (has(a, "--log-level")) {
         const auto level = log::parseLevel(opt(a, "--log-level"));
         if (!level) return usage("--log-level is one of: trace, debug, info, warn, error, off");
@@ -804,7 +847,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     }
     if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage), *transport);
     const std::string root = opt(a, "--root", ".");
-    Context c(root, api::HostKind::Headless);
+    Context c(root, api::HostKind::Headless, g_module);
     api::PathPolicy policy;
     policy.root = root;
     policy.out = opt(a, "--out");
@@ -863,7 +906,7 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden", "--sound"},
                                  {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp",
-                                  "--present"});
+                                  "--present", "--fps"});
         return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {
@@ -915,7 +958,13 @@ int run(int argc, char** argv) {
 int main(int argc, char** argv) {
     separateLogsFromJson();
     try {
-        const int code = run(argc, argv);
+        std::vector<char*> args(argv, argv + argc);
+        std::string error;
+        if (!loadGame(args, error)) {
+            emit(errorDoc("E_INTERNAL", "--game: " + error));
+            return kInternal;
+        }
+        const int code = run(static_cast<int>(args.size()), args.data());
         std::fflush(g_json);
         return code;
     } catch (const std::exception& e) {

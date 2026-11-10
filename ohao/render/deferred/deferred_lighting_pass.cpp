@@ -1,4 +1,5 @@
 #include "deferred_lighting_pass.hpp"
+#include "render/shader_bindings/core_deferred_lighting.hpp"
 #include "core/log.hpp"
 #include <array>
 #include <cstring>
@@ -257,142 +258,55 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 16> imageInfos{};
-    std::array<VkWriteDescriptorSet, 21> writes{};
-    VkDescriptorBufferInfo tablesInfo{};
-    VkDescriptorBufferInfo materialsInfo{};
-    VkDescriptorBufferInfo bufferInfo{};
-    VkDescriptorBufferInfo cascadeBufferInfo{};
-    VkDescriptorBufferInfo clusterInfo{};
-
-    // G-Buffer textures (bindings 0-4) — always available after GBuffer init
-    std::array<VkImageView, 5> gbufferViews = {
-        m_gbufferPass->getPositionView(),
-        m_gbufferPass->getNormalView(),
-        m_gbufferPass->getAlbedoView(),
-        m_gbufferPass->getVelocityView(),
-        m_gbufferPass->getDepthView()
+    namespace L = shader::core_deferred_lighting;
+    std::array<VkDescriptorImageInfo, L::kSet0.size()> images{};
+    std::array<VkDescriptorBufferInfo, L::kSet0.size()> buffers{};
+    std::vector<VkWriteDescriptorSet> writes;
+    writes.reserve(L::kSet0.size());
+    const auto image = [&](const shader::Binding& b, VkImageView view, VkSampler sampler,
+                           VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        VkDescriptorImageInfo& i = images[writes.size()];
+        i = {sampler, view != VK_NULL_HANDLE ? view : fallbackView, layout};
+        VkWriteDescriptorSet w = shader::write(b, set);
+        w.pImageInfo = &i;
+        writes.push_back(w);
+    };
+    const auto buffer = [&](const shader::Binding& b, VkBuffer buf) {
+        VkDescriptorBufferInfo& i = buffers[writes.size()];
+        i = {buf != VK_NULL_HANDLE ? buf : m_dummyBuffer, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet w = shader::write(b, set);
+        w.pBufferInfo = &i;
+        writes.push_back(w);
     };
 
-    for (uint32_t i = 0; i < 5; ++i) {
-        VkImageView view = gbufferViews[i] != VK_NULL_HANDLE ? gbufferViews[i] : fallbackView;
-
-        imageInfos[i].sampler = m_gbufferSampler;
-        imageInfos[i].imageView = view;
-        // Use depth layout only for actual depth views, not fallback color views
-        imageInfos[i].imageLayout = (i == 4 && gbufferViews[i] != VK_NULL_HANDLE)
-                                    ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].descriptorCount = 1;
-        writes[i].pImageInfo = &imageInfos[i];
-    }
-
-    // The light table (binding 5) and the froxel lists (binding 16) — the dummy buffer as
-    // fallback (no lights drawn: the count is 0 then)
-    bufferInfo.buffer = m_lightBuffer != VK_NULL_HANDLE ? m_lightBuffer : m_dummyBuffer;
-    bufferInfo.offset = 0;
-    bufferInfo.range = VK_WHOLE_SIZE;
+    // The G-buffer, always there after its init.
+    image(L::gBuffer0, m_gbufferPass->getPositionView(), m_gbufferSampler);
+    image(L::gBuffer1, m_gbufferPass->getNormalView(), m_gbufferSampler);
+    image(L::gBuffer2, m_gbufferPass->getAlbedoView(), m_gbufferSampler);
+    image(L::gBufferEmissive, m_gbufferPass->getEmissiveView(), m_gbufferSampler);
+    image(L::gBufferSpecular, m_gbufferPass->getSpecularView(), m_gbufferSampler);   // OpenPBR's inputs
+    image(L::gBufferOpenPBR, m_gbufferPass->getOpenPBRView(), m_gbufferSampler);
+    image(L::gBufferLayers, m_gbufferPass->getLayersView(), m_gbufferSampler);       // OpenPBR's layers (uint)
+    // The light table and the froxel lists; the dummy buffer without lights (the count is 0 then).
     if (m_lightBuffer == VK_NULL_HANDLE) m_lightCount = 0;
-
-    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[5].dstSet = set;
-    writes[5].dstBinding = 5;
-    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[5].descriptorCount = 1;
-    writes[5].pBufferInfo = &bufferInfo;
-
-    clusterInfo.buffer = m_clusterBuffer != VK_NULL_HANDLE ? m_clusterBuffer : m_dummyBuffer;
-    clusterInfo.offset = 0;
-    clusterInfo.range = VK_WHOLE_SIZE;
-    writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[13].dstSet = set;
-    writes[13].dstBinding = 16;
-    writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[13].descriptorCount = 1;
-    writes[13].pBufferInfo = &clusterInfo;
-
-    // Shadow map (binding 6) — use fallback if not set
-    imageInfos[5].sampler = m_shadowSampler != VK_NULL_HANDLE ? m_shadowSampler : fallbackSampler;
-    imageInfos[5].imageView = m_shadowMapView != VK_NULL_HANDLE ? m_shadowMapView : fallbackView;
-    imageInfos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = set;
-    writes[6].dstBinding = 6;
-    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[6].descriptorCount = 1;
-    writes[6].pImageInfo = &imageInfos[5];
-
-    const auto imageWrite = [&](uint32_t w, uint32_t binding, uint32_t info, VkImageView view, VkSampler sampler) {
-        imageInfos[info].sampler = sampler;
-        imageInfos[info].imageView = view;
-        imageInfos[info].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        writes[w].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[w].dstSet = set;
-        writes[w].dstBinding = binding;
-        writes[w].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[w].descriptorCount = 1;
-        writes[w].pImageInfo = &imageInfos[info];
-    };
-    // Image-based lighting: the environment's irradiance (binding 7) and its GGX-prefiltered
-    // levels (binding 15); the dummy view without an environment (flag bit 0 stays clear).
+    buffer(L::lights, m_lightBuffer);
+    buffer(L::clusters, m_clusterBuffer);
+    // The CSM fallback: its map and its cascades.
+    image(L::shadowMap, m_shadowMapView, m_shadowSampler != VK_NULL_HANDLE ? m_shadowSampler : fallbackSampler);
+    buffer(L::cascades, m_cascadeBuffer);
+    // Image-based lighting: the environment's irradiance and GGX-prefiltered levels (flag bit 0 clear without).
     const VkSampler iblSampler = m_iblSampler != VK_NULL_HANDLE ? m_iblSampler : fallbackSampler;
-    imageWrite(7, 7, 6, m_irradianceView != VK_NULL_HANDLE ? m_irradianceView : fallbackView, iblSampler);
-    imageWrite(9, 11, 8, m_ssgiView != VK_NULL_HANDLE ? m_ssgiView : fallbackView,
-               m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler);
-
-    // CascadeData UBO (binding 12) — use dummy buffer if not yet set
-    cascadeBufferInfo.buffer = m_cascadeBuffer != VK_NULL_HANDLE ? m_cascadeBuffer : m_dummyBuffer;
-    cascadeBufferInfo.offset = 0;
-    cascadeBufferInfo.range = VK_WHOLE_SIZE;
-    writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[10].dstSet = set;
-    writes[10].dstBinding = 12;
-    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[10].descriptorCount = 1;
-    writes[10].pBufferInfo = &cascadeBufferInfo;
-
-    // RT direct light's diffuse and specular (bindings 14, 21), or the stand-in (flag bit 5 stays clear)
-    imageWrite(11, 14, 9, m_directDiffuseView != VK_NULL_HANDLE ? m_directDiffuseView : fallbackView, m_gbufferSampler);
-    imageWrite(18, 21, 14, m_directSpecularView != VK_NULL_HANDLE ? m_directSpecularView : fallbackView, m_gbufferSampler);
-    // RT GI's reflection (binding 22), with the diffuse's sampler
-    imageWrite(8, 22, 7, m_giReflectionView != VK_NULL_HANDLE ? m_giReflectionView : fallbackView,
-               m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler);
-    imageWrite(12, 15, 10, m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView, iblSampler);
-    // The G-buffer's emitted radiance (binding 17)
-    const VkImageView emissive = m_gbufferPass->getEmissiveView();
-    imageWrite(14, 17, 11, emissive != VK_NULL_HANDLE ? emissive : fallbackView, m_gbufferSampler);
-    // OpenPBR's per-pixel inputs (bindings 18, 19) and its energy tables (binding 20)
-    const VkImageView specular = m_gbufferPass->getSpecularView(), openpbr = m_gbufferPass->getOpenPBRView();
-    imageWrite(15, 18, 12, specular != VK_NULL_HANDLE ? specular : fallbackView, m_gbufferSampler);
-    imageWrite(16, 19, 13, openpbr != VK_NULL_HANDLE ? openpbr : fallbackView, m_gbufferSampler);
-    tablesInfo.buffer = m_openpbrTables.buffer() != VK_NULL_HANDLE ? m_openpbrTables.buffer() : m_dummyBuffer;
-    tablesInfo.offset = 0;
-    tablesInfo.range = VK_WHOLE_SIZE;
-    writes[17].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[17].dstSet = set;
-    writes[17].dstBinding = 20;
-    writes[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[17].descriptorCount = 1;
-    writes[17].pBufferInfo = &tablesInfo;
-    // OpenPBR's layers (binding 23, the G-buffer's uint target) and the material table they index
-    // (binding 24)
-    const VkImageView layers = m_gbufferPass->getLayersView();
-    imageWrite(19, 23, 15, layers != VK_NULL_HANDLE ? layers : fallbackView, m_gbufferSampler);
-    materialsInfo.buffer = m_materialBuffer != VK_NULL_HANDLE ? m_materialBuffer : m_dummyBuffer;
-    materialsInfo.offset = 0;
-    materialsInfo.range = VK_WHOLE_SIZE;
-    writes[20].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[20].dstSet = set;
-    writes[20].dstBinding = 24;
-    writes[20].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[20].descriptorCount = 1;
-    writes[20].pBufferInfo = &materialsInfo;
+    image(L::envIrradiance, m_irradianceView, iblSampler);
+    image(L::envPrefiltered, m_prefilteredView, iblSampler);
+    // RT GI's diffuse and reflection, RT direct light's diffuse and specular (or stand-ins: their flags clear).
+    const VkSampler giSampler = m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler;
+    image(L::ssgiTexture, m_ssgiView, giSampler);
+    image(L::giReflection, m_giReflectionView, giSampler);
+    image(L::directDiffuse, m_directDiffuseView, m_gbufferSampler);
+    image(L::directSpecular, m_directSpecularView, m_gbufferSampler);
+    // OpenPBR's energy tables and the material table the layers index.
+    buffer(L::openpbrTables, m_openpbrTables.buffer());
+    buffer(L::layerMaterials, m_materialBuffer);
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -527,36 +441,8 @@ bool DeferredLightingPass::createDescriptors() {
     // 5: The light table (SSBO, LightGpu records)
     // 6: Shadow map array (sampler2DArray, 4 cascades)
     // 7: The environment's irradiance (EnvPrefilter)
-    // 11: RT GI's diffuse
-    // 12: CascadeData UBO
-    // 14, 21: RT direct light's diffuse and specular
-    // 22: RT GI's reflection
-    // 15: The GGX-prefiltered environment (EnvPrefilter, kEnvPrefilterLevels mips)
-    // 16: The froxel light lists (SSBO, lights.cluster)
-    // 17: The G-buffer's emitted radiance
-    // 18, 19: The G-buffer's OpenPBR inputs (specular colour and weight; diffuse roughness and IOR)
-    // 20: OpenPBR's energy tables (SSBO)
-    constexpr struct { uint32_t binding; VkDescriptorType type; } kBindings[] = {
-        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-        {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {12, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},         {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-        {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-        {21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {22, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-        {23, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-    };
-    std::array<VkDescriptorSetLayoutBinding, std::size(kBindings)> bindings{};
-    for (std::size_t i = 0; i < bindings.size(); ++i) {
-        bindings[i].binding = kBindings[i].binding;
-        bindings[i].descriptorType = kBindings[i].type;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    }
-
+    const auto bindings = shader::layoutBindings(shader::core_deferred_lighting::kSet0,
+                                                 shader::core_deferred_lighting::kStages);
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());

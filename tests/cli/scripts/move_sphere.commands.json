@@ -1,4 +1,0 @@
-[
-  {"op": "field.set", "id": "b1ab29372b0e7edc", "path": "/Transform/position", "value": [2, -3.2, 0.5]},
-  {"op": "component.set", "id": "b1ab29372b0e7edc", "type": "Material", "value": {"base_color": [1, 0.8, 0.2], "specular_roughness": 0.3}}
-]

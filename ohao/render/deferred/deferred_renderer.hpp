@@ -195,9 +195,6 @@ public:
     // Get jitter offset for TAA
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
-    // === Hot-reload (runtime shader swap) ===
-    [[nodiscard]] bool reloadShaderForPass(std::string_view passName, std::string_view spvPath);
-
 private:
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};

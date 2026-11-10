@@ -514,6 +514,13 @@ char* writeShortestOf(char* out, uint32_t digits, int exponent, float value) {
     return out;
 }
 
+std::string hex16(uint64_t v) {
+    static constexpr char kDigits[] = "0123456789abcdef";
+    std::string s(16, '0');
+    for (int i = 15; i >= 0; --i, v >>= 4) s[static_cast<std::size_t>(i)] = kDigits[v & 15u];
+    return s;
+}
+
 void JsonWriter::hex64(uint64_t v) {
     beforeValue();
     static constexpr char kDigits[] = "0123456789abcdef";

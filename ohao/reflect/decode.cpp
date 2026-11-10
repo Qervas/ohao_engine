@@ -89,7 +89,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 49> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 50> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -123,6 +123,8 @@ constexpr std::array<ErrorCodeInfo, 49> kCodes = {{
     {"E_ACCESS", "A path outside the server's sandbox: absolute, with '..', or a write outside the output directory."},
     {"E_STATE", "A method not allowed in the current time mode or host."},
     {"E_REPLAY", "An input recording that does not match the world it is replayed on."},
+    {"E_RELOAD", "A game.reload that did not take: the new build does not load, or a type or a snapshot hook's state "
+                 "changed layout; the old build stays installed."},
     {"E_LEVEL_NODE", "A level node whose transform is not translation, rotation and scale (shear or perspective)."},
     {"E_LEVEL_UNSUPPORTED", "A level file that needs an extension OHAO does not read (Draco or meshopt compression)."},
     {"E_LEVEL_EXTRAS", "A level node's extras with a bad hint value or an unknown capitalised key (a misspelt component); "
@@ -510,6 +512,14 @@ int findField(const TypeInfo& t, std::string_view key, uint32_t position) noexce
             if (a == key) return static_cast<int>(i);
     }
     return -1;
+}
+
+bool readParams(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx) {
+    readStruct(obj, t, n, ctx, "_meta");
+    for (const auto& f : t.fields)
+        if (f.attrs.required && n.type == JsonType::Object && !ctx.doc.member(n, f.name))
+            ctx.error("E_COMMAND", n, t.doc + " need \"" + f.name + "\"", f.attrs.doc);
+    return ctx.errors.empty();
 }
 
 void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx, std::string_view ignoredKey) {

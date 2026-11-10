@@ -12,6 +12,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <optional>
@@ -31,8 +32,21 @@ using reflect::JsonType;
 using reflect::JsonWriter;
 using reflect::TypeInfo;
 
+// A method writes its result value into `out`, or reports into ctx.errors and returns false.
+using MethodFn = bool (*)(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                          JsonWriter& out);
+
+// One row per method: its doc (the catalogue, MCP tools/list, the CLI's method list) and its handler. A method
+// exists only as a row, so dispatch and the docs cannot disagree.
+struct Method {
+    reflect::MethodDoc doc;
+    std::function<bool(Session::Impl&, const JsonDocument&, const JsonNode&, DecodeContext&, JsonWriter&)> fn;
+    bool mutates{false};   // may change the world (Session::changeCount)
+};
+
 struct Session::Impl {
-    Impl(ecs::World& w, const reflect::TypeRegistry& t);
+    Impl(ecs::World& w, const reflect::TypeRegistry& t, std::shared_ptr<const game::LoadedModule> game);
+    void setGame(std::shared_ptr<const game::LoadedModule> game);   // its method rows after the engine's
 
     ecs::World& world;
     const reflect::TypeRegistry& types;
@@ -40,6 +54,12 @@ struct Session::Impl {
     Timeline ownTime;
     Timeline* time{&ownTime};
     uint64_t schemaHash{0};
+    std::vector<Method> methods;              // the engine's rows, then the game's
+    std::vector<reflect::MethodDoc> docs;     // their docs, in that order
+    std::shared_ptr<const game::LoadedModule> game;
+    // game.reload's new build: its rows replace the old build's after the call (never while a row runs).
+    std::shared_ptr<const game::LoadedModule> pendingGame;
+    std::vector<reflect::ChannelDoc> channels;   // the world's event channels, at the session's start
     std::string catalogue;            // built on the first schema.get
     ecs::JsonParser paramsParser;     // the request's params
     ecs::JsonParser rollbackParser;   // the undo batch built when a batch fails
@@ -94,9 +114,6 @@ struct Session::Impl {
     }
 };
 
-// A method writes its result value into `out`, or reports into ctx.errors and returns false.
-using MethodFn = bool (*)(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                          JsonWriter& out);
 bool methodApply(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 bool methodSummary(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
@@ -118,24 +135,21 @@ bool methodPhysicsRaycast(Session::Impl& s, const JsonDocument& doc, const JsonN
                           JsonWriter& out);
 bool methodPhysicsInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
-bool methodPhysicsEvents(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                         JsonWriter& out);
 bool methodPhysicsContacts(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                            JsonWriter& out);
 bool methodPlayerInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                       JsonWriter& out);
 bool methodPlayerTeleport(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                           JsonWriter& out);
-// Combat (sub-project 7, step 5; combat.cpp).
-bool methodCombatInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+// The game module (step 3j; game.cpp).
+bool methodGameReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                       JsonWriter& out);
-bool methodCombatEvents(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                        JsonWriter& out);
-bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                        JsonWriter& out);
 // Animation (sub-project 10, step 1; animation.cpp).
 bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                          JsonWriter& out);
+// The World's event log (step 3c; events.cpp).
+bool methodEventsRead(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                      JsonWriter& out);
 // Effects (sub-project 12; vfx.cpp).
 bool methodVfxInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 // Audio (sub-project 11, step 4; audio.cpp).
@@ -185,7 +199,7 @@ void writeQuery(Session::Impl& s, const QueryPlan& plan, JsonWriter& out);
 
 // ---- helpers (session.cpp) -------------------------------------------------------------
 
-[[nodiscard]] std::string hex16(uint64_t id);
+using reflect::hex16;
 // Reports unknown members (E_UNKNOWN_FIELD, with a suggestion) and repeated ones
 // (E_DUPLICATE_KEY). `obj` must be an object. `what` names it in messages.
 bool checkKeys(const JsonDocument& doc, const JsonNode& obj, std::initializer_list<std::string_view> allowed,
@@ -209,12 +223,7 @@ inline bool badParams(Session::Impl& s) {
 // is skipped. False (BadParams) after reporting.
 template <class P>
 bool decodeParams(Session::Impl& s, const JsonNode& params, DecodeContext& ctx, P& out) {
-    const TypeInfo* t = paramsRegistry().find<P>();
-    reflect::readStruct(&out, *t, params, ctx, "_meta");
-    for (const auto& f : t->fields)
-        if (f.attrs.required && params.type == JsonType::Object && !ctx.doc.member(params, f.name))
-            ctx.error("E_COMMAND", params, t->doc + " need \"" + f.name + "\"", f.attrs.doc);
-    return ctx.errors.empty() || badParams(s);
+    return reflect::readParams(&out, *paramsRegistry().find<P>(), params, ctx) || badParams(s);
 }
 
 // The file a params path names: as given without a sandbox, else resolved by it (E_ACCESS

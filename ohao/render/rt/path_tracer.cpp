@@ -383,6 +383,12 @@ void PathTracer::destroy() {
     if (m_causticsSbtMemory) { vkFreeMemory(m_device, m_causticsSbtMemory, nullptr); m_causticsSbtMemory = VK_NULL_HANDLE; }
     if (m_manifoldSbtBuffer) { vkDestroyBuffer(m_device, m_manifoldSbtBuffer, nullptr); m_manifoldSbtBuffer = VK_NULL_HANDLE; }
     if (m_manifoldSbtMemory) { vkFreeMemory(m_device, m_manifoldSbtMemory, nullptr); m_manifoldSbtMemory = VK_NULL_HANDLE; }
+    for (GuidedProgram& g : m_guided) {
+        if (g.sbtBuffer) vkDestroyBuffer(m_device, g.sbtBuffer, nullptr);
+        if (g.sbtMemory) vkFreeMemory(m_device, g.sbtMemory, nullptr);
+        if (g.pipeline) vkDestroyPipeline(m_device, g.pipeline, nullptr);
+        g = GuidedProgram{};
+    }
 
     // Pipeline
     if (m_rtPipeline) { vkDestroyPipeline(m_device, m_rtPipeline, nullptr); m_rtPipeline = VK_NULL_HANDLE; }

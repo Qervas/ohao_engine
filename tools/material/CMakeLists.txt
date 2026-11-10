@@ -1,12 +1,12 @@
 # OpenPBR on the CPU (docs/plans/2026-10-29-openpbr-step1.md, T1): shaders/material/openpbr.slang
 # compiled to C++ by slangc through openpbr_kernel.slang, for the energy-table generator and the
-# module's tests (tests/material). SLANGC comes from shaders/CMakeLists.txt.
+# module's tests (tests/material). SLANGC_CPP (the twins' slangc) comes from shaders/CMakeLists.txt.
 set(OHAO_OPENPBR_KERNEL_CPP ${CMAKE_BINARY_DIR}/material/openpbr_kernel.cpp)
 file(GLOB OHAO_MATERIAL_SLANG CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/shaders/material/*.slang)
 add_custom_command(
     OUTPUT ${OHAO_OPENPBR_KERNEL_CPP}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/material
-    COMMAND ${SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/openpbr_kernel.slang -I ${CMAKE_SOURCE_DIR}/shaders
+    COMMAND ${SLANGC_CPP} ${CMAKE_CURRENT_SOURCE_DIR}/openpbr_kernel.slang -I ${CMAKE_SOURCE_DIR}/shaders
             -target cpp -entry run -stage compute -o ${OHAO_OPENPBR_KERNEL_CPP}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/openpbr_kernel.slang ${OHAO_MATERIAL_SLANG}
     COMMENT "slangc: OpenPBR's kernel to C++"

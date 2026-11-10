@@ -64,8 +64,5 @@ bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDevice
                       HostBuffer& out);
 void destroyHostBuffer(VkDevice device, HostBuffer& buf);
 
-VkDescriptorSetLayoutBinding layoutBinding(uint32_t index, VkDescriptorType type,
-                                           VkShaderStageFlags stages = VK_SHADER_STAGE_COMPUTE_BIT);
-VkWriteDescriptorSet descriptorWrite(VkDescriptorSet set, uint32_t index, VkDescriptorType type);
 
 } // namespace ohao::rtc

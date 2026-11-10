@@ -1,63 +1,30 @@
 ---
 name: verify
-description: Run OHAO's gates (unit suites, CLI and doc checks, GPU tests, validation, render goldens, the scene benchmark) and judge pass/fail. Use before every commit and whenever a change touches shared code.
+description: Run OHAO's gates (validation, the renderer against closed forms, the goldens, the replay test) and judge pass/fail. Use before every commit that changes code, and whenever a change touches shared code.
 ---
 
 # Verify OHAO
 
-Every suite exits 0 on success and nonzero on any failure; that is the pass criterion.
-Newer suites end with one JSON line `{"suite", "passed", "failed", "failures"}`. Build
-first (the `build` skill), shaders included if `shaders/` changed.
+The gates serve five requirements (AGENTS.md, "Gates"): never hurt the machine, the renderer right
+against closed forms, a handful of goldens, gameplay replays exactly, it builds. One command:
 
-## 1. CPU gates (seconds; run always)
-
-```console
-$ build/Release/runtime_tests.exe > /dev/null
-$ build/Release/reflect_tests.exe > /dev/null
-$ build/Release/scene_tests.exe > /dev/null
-$ build/Release/api_tests.exe > /dev/null
-$ build/Release/systems_tests.exe > /dev/null
-$ build/Release/physics_backend_tests.exe > /dev/null
-$ build/Release/audio_system_tests.exe > /dev/null
-$ build/Release/env_cdf_test.exe > /dev/null
-$ build/Release/denoise_parse_test.exe > /dev/null
-$ build/Release/sobol_test.exe > /dev/null
-$ python tests/cli/check_cli.py --cpu-only > /dev/null
-$ python tests/reflect/check_scene_schema.py > /dev/null
+```
+python tools/check.py --changed      # while iterating: only what the change reaches (seconds)
+python tools/check.py                # to close a step: build, ohao doctor, every gate (about 10 s in all)
 ```
 
-## 2. GPU gates (a minute or two; when rendering, ECS, scene or API code changed)
-
-```console
-$ build/Release/engine_tests.exe > /dev/null   # gpu
-$ build/Release/ecs_tests.exe > /dev/null   # gpu
-$ build/Release/renderer_test.exe > /dev/null   # gpu
-$ build/Release/instantiate_gpu_test.exe > /dev/null   # gpu
-$ build/Release/scene_view_gpu_test.exe > /dev/null   # gpu
-$ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
-$ python tests/cli/check_cli.py > /dev/null   # gpu
-$ python tests/validation/check_validation.py > /dev/null   # gpu
-$ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
-```
-
-## 3. Long gates (minutes; before committing rendering-adjacent or codec changes)
-
-```console
-$ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
-$ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
-$ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
-```
+Exit 0 = pass, 1 = a test failed or the kernel logged a GPU fault during the run (`gpuFaults` in
+`build/check/check.json`), 2 = the environment is wrong. A failing test's entry carries the last 40
+lines of its output.
 
 ## Judging a failure
 
-- **A golden** fails: run it alone (`--only NAME`) and look at the `.actual.png` written
-  beside the golden. Never widen a tolerance. A change that perturbs the sample sequence
-  moves every pixel by the noise; that is not proof of a regression, and `--update` is
-  right only after you have looked.
-- **Validation** reports messages: set `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` to see
-  every report.
-- **The bench** reports `OVER`: budgets change only by Frank's ruling; report the numbers.
-- **The CLI or doc checks** show a stdout diff: if the change was deliberate (a new
-  component changes `schemaHash`), rerun with `--update` (CLI) or fix the doc, and check
-  that the diff is only what you meant.
-- **Device lost (-4) everywhere** after a crash is a wedged GPU, not your change: reboot.
+- **A golden** fails: look at `build/golden_diff/<name>.heat.png` and `<name>.crop.png` before
+  anything else. Never widen a tolerance; `--update` only after looking.
+- **Validation** reports messages: `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` shows every report;
+  `OHAO_VALIDATION=sync` for a missing barrier.
+- **A GPU fault (Xid)** in `gpuFaults`: the GPU, not a test, failed. Read `journalctl -k`; after a
+  firmware fault (Xid 119/120/62) the laptop needs a full power-off, not a warm reboot.
+- **A test hangs** past its time limit: CTest kills it. Never loop a window-opening program on the
+  desktop to chase it; reproduce headless.
+- **Device lost (-4) everywhere** after a crash: `ohao doctor` says whether the GPU is wedged.

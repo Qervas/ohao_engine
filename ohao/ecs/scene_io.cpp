@@ -4,7 +4,6 @@
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
-#include "reflect/json_layout.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -807,8 +806,8 @@ void decodeTree(std::string_view text, const TypeRegistry& r, Decoded& out) {
 
 // ---- public API ------------------------------------------------------------------------------
 
-Result<std::string, Diagnostic> saveSceneGeneric(const World& world, const TypeRegistry& types, SaveOptions options,
-                                                 SaveReport* report) {
+Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry& types, SaveOptions options,
+                                          SaveReport* report) {
     using R = Result<std::string, Diagnostic>;
     const entt::registry& reg = world.registry();
 
@@ -895,199 +894,6 @@ Result<std::string, Diagnostic> saveSceneGeneric(const World& world, const TypeR
     if (report) unsaveableMeshes(world, order, *report);
     std::string out = w.take();
     if (options.layout == reflect::JsonLayout::Pretty) out.push_back('\n');
-    return R::ok(std::move(out));
-}
-
-Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry& types, SaveOptions options,
-                                          SaveReport* report) {
-    using R = Result<std::string, Diagnostic>;
-    const entt::registry& reg = world.registry();
-    const bool pretty = options.layout == reflect::JsonLayout::Pretty;
-    const bool omit = !options.includeDefaults;
-
-    struct Row {
-        uint64_t seq;
-        entt::entity e;
-        uint64_t id;
-    };
-    std::vector<Row> order;
-    order.reserve(reg.storage<CreationOrder>() ? reg.storage<CreationOrder>()->size() : 0);
-    // A level's node entities are the level file's: only their Level entity is saved.
-    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>(entt::exclude<LevelNode>).each())
-        order.push_back({co.seq, e, id.value});
-    std::sort(order.begin(), order.end(), [](const Row& a, const Row& b) { return a.seq < b.seq; });
-
-    // The saved component types, their keys as JSON tokens, and whether an entity writes
-    // one: an always-present component that is entirely default is left out.
-    const std::vector<SavedType> saved = savedTypes(types);
-    const std::size_t nt = saved.size();
-    std::vector<std::string> keys(nt);   // never resized: the tree references these keys
-    std::vector<const void*> pools(nt);
-    std::vector<std::size_t> present;    // the types some entity has, in key order: only these are looked up per entity
-    for (std::size_t i = 0; i < nt; ++i) {
-        reflect::appendJsonString(keys[i], saved[i].type->name);
-        pools[i] = saved[i].ops->pool(reg);
-        if (pools[i] && saved[i].ops->count(reg) > 0) present.push_back(i);
-    }
-    const auto* preservedPool = reg.storage<PreservedComponents>();
-    const auto writes = [&](std::size_t i, entt::entity e) -> const void* {
-        const void* value = saved[i].ops->tryGetIn(pools[i], e);
-        const TypeInfo& t = *saved[i].type;
-        if (value && omit && t.alwaysPresent && reflect::equalStruct(value, t.defaultValue.get(), t)) return nullptr;
-        return value;
-    };
-
-    // Header: every type some entity writes, and every preserved component, by name.
-    std::map<std::string, uint32_t> header;
-    for (const std::size_t i : present) {
-        for (const Row& row : order)
-            if (writes(i, row.e)) {
-                header[saved[i].type->name] = saved[i].type->version;
-                break;
-            }
-    }
-    for (auto [e, p, id, co] :
-         reg.view<const PreservedComponents, const EntityId, const CreationOrder>(entt::exclude<LevelNode>).each())
-        for (const auto& entry : p.entries) header.emplace(entry.name, entry.version);
-    std::vector<std::string> headerKeys;   // never resized once filled: the tree references them
-    headerKeys.reserve(header.size());
-    for (const auto& [name, version] : header) reflect::appendJsonString(headerKeys.emplace_back(), name);
-
-    thread_local reflect::LayoutTree tree;
-    FieldSink sink{tree, world};
-    WorldEntityIds ids(world);
-    std::vector<const PreservedComponent*> extra;
-    std::string scratchKey;
-
-    // One entity into the tree, as a top-level value. False (with the error) when a value
-    // cannot be written canonically.
-    const auto build = [&](const Row& row) {
-        tree.beginObject();
-        tree.hex64("\"id\"", row.id);
-        for (const std::size_t i : present) {
-            const void* value = writes(i, row.e);
-            if (!value) continue;
-            const TypeInfo& t = *saved[i].type;
-            const void* omitEqualTo = omit ? t.defaultValue.get() : nullptr;
-            if (saved[i].ops->writeFields) {
-                tree.beginObject(keys[i]);
-                saved[i].ops->writeFields(value, omitEqualTo, sink);
-                tree.endObject();
-            } else {
-                // A type without a per-type writer: the generic one, laid out like the rest.
-                JsonWriter w;
-                w.entityIds = &ids;
-                reflect::writeStruct(value, w, t, omitEqualTo);
-                if (!w.ok()) tree.fail(w.error());
-                tree.compact(keys[i], w.str());
-            }
-        }
-        if (const auto* p = preservedPool && preservedPool->contains(row.e) ? &preservedPool->get(row.e) : nullptr) {
-            extra.clear();
-            for (const auto& entry : p->entries) extra.push_back(&entry);
-            std::sort(extra.begin(), extra.end(), [](auto* a, auto* b) { return a->name < b->name; });
-            for (const PreservedComponent* entry : extra) {
-                scratchKey.clear();
-                reflect::appendJsonString(scratchKey, entry->name);
-                tree.compact(scratchKey, entry->json);
-            }
-        }
-        tree.endObject();
-    };
-    const auto failed = [&](std::size_t n) {
-        Diagnostic d;
-        d.code = tree.error().rfind("non-finite", 0) == 0 ? "E_NONFINITE" : "E_ENUM";
-        d.path = "/entities/" + std::to_string(n);
-        d.entity = order[n].id;
-        d.message = "entity " + hexId(d.entity) + ": " + tree.error();
-        return R::err(std::move(d));
-    };
-
-    // Entities are emitted into a warm scratch buffer sized by the tree's bound, then
-    // appended: no per-token string growth checks.
-    thread_local std::vector<char> scratch;
-    const auto appendEntity = [&](std::string& out, uint32_t node, uint32_t column, bool comma, bool asPretty) {
-        const std::size_t need = tree.bound(2) + 8;
-        if (scratch.size() < need) scratch.resize(need * 2);
-        char* o = scratch.data();
-        o = asPretty ? tree.emitPretty(o, node, column, 2, comma) : tree.emitCompact(o, node);
-        out.append(scratch.data(), static_cast<std::size_t>(o - scratch.data()));
-    };
-
-    std::string out;
-    out.reserve(order.size() * (pretty ? 560 : 420) + 4096);
-    tree.clear();
-    tree.beginObject();
-    std::size_t hk = 0;
-    for (const auto& [name, version] : header) tree.i64(headerKeys[hk++], version);
-    tree.endObject();
-    if (pretty) {
-        // The root always breaks: one member per line, indented 2. "components" starts
-        // at column 16, "entities" at column 14 (the last member, so no comma).
-        out.append("{\n  \"format\": \"ohao.scene\",\n  \"version\": 1,\n  \"components\": ");
-        tree.appendPretty(out, tree.roots().front(), 16, 1, true);
-        out.append(",\n  \"entities\": ");
-        // The entities array fits on one line only while its one-line form ends by column
-        // 100: hold the first entities until that is decided, then stream the rest.
-        constexpr uint32_t kColumn = 14, kWidth = 100;
-        tree.clear();
-        std::size_t n = 0;
-        uint32_t oneLine = 2;   // "[" ... "]"
-        bool broken = false;
-        for (; n < order.size(); ++n) {
-            build(order[n]);
-            if (!tree.ok()) return failed(n);
-            oneLine += tree.oneLine(tree.roots().back()) + (n ? 2u : 0u);
-            if (kColumn + oneLine > kWidth) {
-                broken = true;
-                ++n;
-                break;
-            }
-        }
-        if (!broken) {
-            out.push_back('[');
-            for (std::size_t k = 0; k < tree.roots().size(); ++k) {
-                if (k) out.append(", ", 2);
-                tree.appendPretty(out, tree.roots()[k], 0, 2, false, false, ~0u);   // one line
-            }
-            out.push_back(']');
-        } else {
-            out.push_back('[');
-            const auto emitEntity = [&](uint32_t node, std::size_t index) {
-                const bool last = index + 1 == order.size();
-                out.append("\n    ", 5);
-                appendEntity(out, node, 4, !last, true);
-                if (!last) out.push_back(',');
-            };
-            for (std::size_t k = 0; k < tree.roots().size(); ++k) emitEntity(tree.roots()[k], k);
-            for (; n < order.size(); ++n) {
-                tree.clear();
-                build(order[n]);
-                if (!tree.ok()) return failed(n);
-                emitEntity(tree.roots().front(), n);
-            }
-            out.append("\n  ]", 4);
-        }
-        out.append("\n}\n", 3);
-    } else {
-        out.append("{\"format\":\"ohao.scene\",\"version\":1,\"components\":");
-        tree.appendCompact(out, tree.roots().front());
-        out.append(",\"entities\":[");
-        for (std::size_t n = 0; n < order.size(); ++n) {
-            tree.clear();
-            build(order[n]);
-            if (!tree.ok()) return failed(n);
-            if (n) out.push_back(',');
-            appendEntity(out, tree.roots().front(), 0, false, false);
-        }
-        out.append("]}");
-    }
-    if (report) {
-        std::vector<std::pair<uint64_t, entt::entity>> rows;
-        rows.reserve(order.size());
-        for (const Row& r : order) rows.emplace_back(r.seq, r.e);
-        unsaveableMeshes(world, rows, *report);
-    }
     return R::ok(std::move(out));
 }
 

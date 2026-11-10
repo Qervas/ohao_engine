@@ -159,12 +159,14 @@ Working the outline into the tracer's code changed five things; the outline stay
 ## Step 2b as designed (2026-11-05)
 
 **What it owns.** `sun → S₁ (into a solid, refracting) → S₂ (out of it, refracting) → X (rough, depth 1 … R) → … →
-camera`, both refractions within their cores, S₁ and S₂ on the same draw of a transmissive, owned material (a glass ball,
-a slab). The camera side drops it as 2a's terms: `chain₂ ← chain₁ × f_smooth,core / pdf` at the bounce after X when it
-refracts into an owned solid, and its sun sample at S₁ subtracts `chain₂ × f_smooth,core(wo, l) × Le` when that bounce
-refracts back out at the same draw. Every other chain of two (two reflections, a reflection then a refraction) stays
-the camera side's. It is missing today, not noisy: the showcase's glow under the glass ball, seen through the ball, is
-camera depth 2 behind two refractions, and nothing renders it.
+camera`, S₁ and S₂ on the same instance of a transmissive solid of an owned material (a glass ball, a slab), over both
+refractions' whole lobes. **Corrected while building T4 (2026-11-05):** the camera side renders none of this term, at any
+roughness, so it has no `chain₂` to drop: its light samples look above a surface only (inside the solid at S₁ the sun is
+below it), its shadow rays stop at solids (only thin panes pass them, ruling O14), and no BSDF ray meets a delta sun.
+So the pass draws each slope from GGX's whole distribution at the draw's alpha (2a's core truncation exists to split a
+lobe with the camera side; here nothing is split), and the camera side is unchanged. Thin-walled panes stay the camera
+side's (their shadow rays carry the sun). It was missing, not noisy: the showcase's glow under the glass ball, seen
+through the ball, is camera depth 2 behind two refractions, and nothing rendered it.
 
 **The map.** Unknowns `(u₁, v₁)` on an entry triangle T₁ and `(u₂, v₂)` on an exit triangle T₂ of the same draw; two slope
 constraints, one at each vertex, on the generalised half vector of refraction (Walter et al. 2007,
@@ -242,7 +244,31 @@ before it is built: beams a frame and beams covering X a request, on c3's ball a
 
 **Build order.** T1 the generic map and the Krawczyk solver (CPU twin, tests t9), applied to 2a's triangles (m1, m2
 unchanged, M1 closed); T2 refraction's half vector and the pair map (twin, tests); T3 pair candidates and their count
-on c3's ball; T4 the camera side's `chain₂` and the pass's pairs; T5 the closed forms; T6 cost.
+on c3's ball; T4 the pass's walk (no camera-side change: "What it owns"); T5 the closed forms; T6 cost.
+
+## Step 2b's re-find trials, bounded per dispatch (proposed, 2026-11-08)
+
+**Why.** Step 2b is opt-in since 2026-11-08 (`OHAO_MANIFOLD_GLASS=1`). A found path is counted by the walks it takes to
+be found again, K, geometric with mean 1/p; a lane runs them in one dispatch, the warp waits for it, and a GPU dispatch
+is not preempted. Measured on m9 (320 x 180, `--bounces 2`): at a cap of 64, 256 spp took 14.4 s (13.7 million walks,
+905,404 paths, 2,565 at the cap, about 15 walks a path); 2,048 spp did not finish in 11.7 minutes, alone on the GPU,
+against 41.7 s with step 2b off (not understood: eight times the frames took over fifty times as long). At a ceiling of
+4,096, 256 spp did not finish in 10 minutes. A cap is not the remedy: at 64 m10's focus read 30% dark.
+
+**No bounded count is exact.** An estimate made from at most M Bernoulli trials has an expectation that is a polynomial
+of degree M in p, and 1/p is none, so every exact count of 1/p has unbounded trials. Their mean is bounded (a path found
+with probability p takes 1/p walks: about one walk per reachable root), so only their scheduling must change.
+
+**Proposed: the trials leave the pixel's lane.** `manifoldConnect` runs the first walk and the path's check and weight
+(`manifoldGlassPath`), then appends the path (pixel, its light with every factor but K, the walk's inputs, the root) to
+a queue. Re-find rounds follow, each one walk a thread: the trials of an entry are the walks of fixed seeds
+`hash(entry, i)`, so K = 1 + the first index that finds the root again, computed in parallel (a round gives T threads an
+entry, indices base .. base + T - 1, and keeps the smallest success by `InterlockedMin`: order-free, the same K as
+sequential trials of those seeds). A resolved entry adds light x K to its pixel's running mean (order-free integer
+sums, as the radiance cache's); an unresolved one carries to the next round, and past R rounds to the next frame (the
+running mean is a sum over frames, so a late term is the same term). An offline render drains the queue after its last
+frame. Every dispatch is then at most one walk a thread (292 steps). To be measured before it is built: K's distribution
+on m9 and m10 (the CPU twin, t15's form), and the rounds a frame needs.
 
 ## Step 2c: normal-mapped glints (proposed, 2026-11-05)
 
@@ -302,11 +328,109 @@ helmet; it is measured per stage before anything else is built, as 2a's was. The
 cone (the vertex frame's cone with the map's) must be proven conservative, the tangents varying across the triangle too
 (`t8_disc_conservative`'s method, with maps).
 
+**T1 measured (2026-11-05 night, CPU twin, `manifold_tests` m10).** The map is built (`CellSlopeMap` in
+`rt/manifold_cert.slang`): the tracer's normal-mapped shading normal on one cell, its input the cell's (s, t) so a cell
+is the Krawczyk box [0, 1]^2 and the triangle its domain; the certifier is generic over a map (`ISlopeMap`,
+`manifoldCertifyMap`; 2a's triangle map is the other one, t9 unchanged to the box). `m10_cell_map`: the twin's map is
+the double map written from this description, sigma within 1.6e-6 and its Jacobian within 1.4e-5 (relative), at 1,979
+random points. `m10_cells_complete` (2,972 random cells: t9's triangles with tangents, 3-8 texels of a 64 x 64 map a
+side, texels tilted up to 27 or 45 degrees): **sound, not complete**. No root certified that a dense double search
+does not find, none missed where every box was decided; but 2,346 cells (79%) spend the 512-box budget, and with
+65,536 boxes 714 cells (24%) still do, with tens of thousands of boxes at the minimum width round roots that are well
+conditioned (median condition 3.7, 0.9 clear of the 1e-3 lift). Measured on boxes round those roots: F over a +-1e-3
+box is about 20x its true range and the Jacobian's enclosure over a +-0.1 box up to 1e9 wide (the dependency problem
+through the map's normalisations and products), so excluding boxes costs about 1,000 a cell (2a's triangles: 7); the
+centre's rounding interval F(c) is 3e-5 to 8e-5 wide (about 400 ulps), but it is not what decides: F(c) in double
+intervals left 1,250 cells at the budget (1,300 with it in float; 2a's random triangles 22 of 4,000, from 35), so it was
+not kept. **The map without divisions** (built:
+H' = (p - y) + L |p - y|, the tangent frame from the unnormalised vertex normal, the mapped normal at a positive scale,
+t' = m x (c x m) and b' = m x c, so sigma = (H' . t', |m| H' . b') / (|m x c| H' . m): the same roots, C a positive
+multiple of the old one, sigma within 1.6e-6 as before) leaves 1,300 cells (44%) at the budget, 384 boxes a cell:
+better, not the solver either: the products it trades the divisions for (m x (c x m) is quadratic in an M already cubic
+in the inputs) carry the dependency instead. Interval Newton on this map, with natural interval enclosures, is not the
+solver; precision is not its limit (above). M11 chose Specular Polynomials (resultants: no intervals at all) over
+tighter enclosures (affine arithmetic, Taylor models).
+
+**T2 measured (2026-11-06, CPU prototype in numpy: the reflection on random cells, 3-8 mm triangles, texels 0.5 mm,
+tilted up to 27 or 45 degrees, against a dense double-precision Newton search).**
+- **The cell's constraint is a polynomial only with MikkTSpace's normal.** The tracer and the G-buffer build a mapped
+  normal from the normalised interpolated normal and a Gram-Schmidt tangent; MikkTSpace, which glTF's normal maps are
+  baked against, uses the interpolated `vN`, `vT`, `vB` as they are and normalises only the result
+  (`normalize(tn.x vT + tn.y vB + tn.z vN)`, the bitangent `sign vN x vT` per vertex). With it the mapped normal `m` is
+  a polynomial on a cell (bidegree (2, 2), total 3): the texels' bilinear `tn` times the linear frame, without the
+  square roots T1's division-free map still carried (`|N|`, `|T'|`; the slope frame's `|m|` and `|m x c|` go with the
+  next item).
+- **The drawn slope in the vertex tangent frame**: `h = m - sigma.x vT - sigma.y vB`. The estimator divides by the
+  density of `sigma` and `|det d sigma / dA|` at each root, so any smooth frame is exact; this one only moves variance
+  (where a texel tilts `m` away from `vN`, `sigma` stretches by the tilt's cosine). The core's indicator is read at the
+  root from the true slope.
+- **The reflection as polynomials**: `r = d (h.h) - 2 (d.h) h` (`d = p - X`, no square root), `r.a = r.b = 0` for `a`,
+  `b` perpendicular to the sun, `r.L > 0`: bidegree (5, 5), total 7. (Specular Polynomials' own pair, coplanarity and
+  the product form, is (3, 3) and (5, 5), with spurious roots to filter.)
+- **The resultant fails in fp32.** In double, Bezout's resultant (s eliminated, its determinant interpolated in
+  Chebyshev's basis, roots by the colleague matrix) found every root the dense search did (19 of 19, 20 cells, 4 with
+  two roots). In float32 it missed 30 of 136 roots (27 degrees) and 33 of 151 (45 degrees), with 27-41 spurious. The
+  determinant is 1e-41 to 1e-53 over [0, 1], under fp32's normal range, and varies by 12 orders: across a 0.5 mm cell the
+  positions and the frame barely vary, so the high-order coefficients are 1e-8 to 1e-12 of the rest, and the resultant
+  carries roots far outside the cell (|s| about 1e3 to 1e4) whose factors dominate it. Rescaling does not remove that.
+- **Bernstein subdivision works in fp32.** The same polynomials' Bernstein coefficients over a box enclose them (the
+  convex hull property: no dependency problem, unlike T1's natural interval extensions), de Casteljau's split is convex
+  combinations, and Krawczyk's test with the derivatives' Bernstein bounds proves one root (Newton from the box's
+  centre) or none (K misses the box). The grids built in float32 from the cell's corner values by Bernstein products,
+  as the GPU would: every root found, none spurious, no box undecided (96 of 96 roots, 100 cells at 27 degrees; 97 of
+  97 at 45), 29-33 boxes a cell at the median (mean 56-84, max 1,301). With the grids from double: 180 of 180 and 198 of
+  198 (200 cells each), one cell of 400 at the 4,096-box budget (33 boxes undecided beside a root 8e-4 inside the
+  cell's edge, before Krawczyk's exclusion was added; its rerun was lost to a reboot, so that case is open). The exclusion test must keep a margin of
+  the grids' own rounding (float32 against double: 1e-7 to 1e-5 of the coefficients).
+- **Cost, estimated, not measured**: a box about 2,000 flops (three 6 x 6 grids split twice, Krawczyk), 29 boxes a cell,
+  47 cells a request on the helmet (T1's count): a few million flops a request, of the order of 2a's pass on the
+  showcase. Measured on the GPU before anything else is built, as 2a's was.
+
+**T3 built (2026-11-08, `shaders/rt/manifold_poly.slang`, the CPU twin's ops 16-17, `manifold_tests` m11-m12; the plan
+`docs/plans/2026-11-08-caustics-step2c.md`, tasks 1-2).** The cell's F1, F2 as degree-(5, 5) Bernstein grids built in
+fp32 from the corner values (MikkTSpace's normal, the slope in the vertex tangent frame), and every root by subdivision
+and Krawczyk's test on boxes grown 10% a side.
+- `m11_poly_matches_map` (595 cells at 27 and 45 degrees): every fp32 coefficient within 0.080 of its rounding bound mu
+  (the same construction on the inputs' absolute values times 64 roundings; the worst measured is 5.5 roundings) of the
+  double polynomial's (fitted from F in double at a 6 x 6 lattice); F at 647 roots of the double map within 0.00085 of mu.
+- `m12_cells_complete` (T2's random cells: 3-8 mm triangles, 0.5 mm texels): 27 degrees, 408 of 408 roots, no box
+  undecided, 27 boxes a cell at the median (mean 36.5, max 232); 45 degrees, 442 of 442, none undecided, 32 (45.0, 453).
+  A one-off run of 10,000 cells (5,000 each): 10,728 of 10,728 roots, none undecided, at most 620 boxes. T2's open case
+  (a root near the cell's edge) is among them: nothing undecided.
+- **What is solved is the fp32 grids** (the cell as the GPU holds it, as fp32 vertices are the mesh). Kept as the
+  solver's margin, mu blurred ill-conditioned roots (|Y| mu, up to 2e-3 cell units) wider than any box that could
+  certify them; the solver's margins are its own arithmetic's (a box's extraction, 24 roundings of the cell grid's
+  largest coefficient, 3 times past [0, 1]; F at a box's centre evaluated on the cell's grid, 12). Where a 1e-7 rad turn
+  of the light moves sigma far (grazing, |h| large), the fp32 cell holds a root the double one does not: 2 in the
+  10,000 cells, each within mu of a root of the double polynomial.
+- What it took beyond T2's prototype, each found by a probe of single boxes: the Jacobian's grids extracted from the
+  cell's derivatives (differenced from a box's own grid, their rounding grew as the box's inverse width and no box near
+  a root contracted); Rump's epsilon inflation, a box round what K leaves of the grown box and K's centre by twice the
+  blur (split halves narrower than the blur never certify, and a sliver beside a root another box certified never
+  decides); one Krawczyk call site (an inflation box rides the stack above the halves it settles).
+- SPIR-V (slangc 2026.20, a scratch compute entry calling `cellPolyOf` and `cellPolySolve`): 18,678 instructions, valid
+  (`spirv-val`); 26,684 with two Krawczyk call sites, 34,316 with the grids built a call per axis.
+- Per-lane cost on the GPU is unmeasured: a cell is 27-32 Krawczyk tests at the median and up to 620 here (each six grid
+  extractions); task 6 bounds it per dispatch.
+
 **Rulings.**
 - **M10 (ACCEPTED 2026-11-05) — the map read in fp32.** Needed for the pass to be exact; moves normal-mapped goldens by the
   hardware's quantisation. Recommended: yes, for owned materials only.
-- **M11 (OPEN) — the solver.** Interval Newton (Path Cuts) recommended; Specular Polynomials if undecided boxes are
-  ever counted.
+- **M11 (ACCEPTED 2026-11-06) — the solver: Specular Polynomials** (Fan et al. 2024), every root by resultants, no
+  enclosure to overestimate. Interval Newton (Path Cuts) leaves too many cells undecided (T1 above: 79% at the 512-box
+  budget, 44% with the division-free map; the enclosures' overestimation the cause, not precision: double changed 1,300
+  to 1,250).
+- **M11b (ACCEPTED 2026-11-06) — M11's solver amended: Specular Polynomials' formulation, solved by Bernstein
+  subdivision.** T2 above: the polynomial form (MikkTSpace's normal, the slope in the vertex frame) is what makes a
+  cell exact, but its resultant underflows and loses about a fifth of the roots in fp32, while Bernstein subdivision
+  with Krawczyk's test on the same polynomials found every root in float32 with no box undecided. Alternatives: the
+  resultant in double (the GPU's fp64 is 1/64 of its fp32 here), or the resultant on subdivided cells (Nakatsukasa,
+  Noferini and Townsend 2015's remedy; the dynamic range comes from the cell's own geometry, so it is unclear that it
+  shrinks). Recommended: Bernstein subdivision.
+- **M13 (ACCEPTED 2026-11-06) — MikkTSpace's normal mapping in both renderers.** `normalize(tn.x vT + tn.y vB + tn.z
+  vN)` from the interpolated vectors as they are, the bitangent per vertex, in the G-buffer, the tracer's hit and the
+  pass alike. It is the convention glTF's normal maps are baked against (today's per-pixel Gram-Schmidt is not), and
+  T2 needs it. Moves every normal-mapped golden (by how much, measured before the change). Recommended: yes.
 
 ## Tests
 
@@ -320,11 +444,15 @@ Closed forms first; each case fails before its code exists.
   (`OHAO_PT_CLASS`) against the quadrature split at `θcore`.
 - **m3_sum** (2a): camera side alone (step 2 off) against step 2 on, at high spp, on m2's scene and the showcase's crop:
   means within 1% (every term counted once).
-- **m4_slab_seen** (2b): step 1's glass slab caustic (`c3_slab`'s closed form), seen in a mirror: the closed form times
-  the mirror's Fresnel, within 2%.
-- **m5_ball_seen** (2b): `c3_sphere`'s moved glass ball, its caustic seen after a bounce, against the same numpy ray
-  simulation, 5%.
-- **m6_through_glass** (2b): c4's slab between the camera and step 1's glass slab caustic (`c3_slab`), now found through glass.
+- **m4_slab_seen** (2b): step 1's glass slab caustic (`c3_slab`), seen in a white mirror standing under the slab edge-on
+  to the sun (camera depth 1): the floor's closed form for the two refractions alone, `0.5 / pi E cos 30 (1 - F)^2` (the
+  orders with internal reflections, F^2 of it, are no one's at K = 2), within 2%; without the pass black.
+- **m5_ball_seen** (2b): `c3_sphere`'s moved glass ball seen through a periscope (a 45-degree mirror whose image of the
+  camera is c3's camera, so the picture is c3's upside down; camera depth 1), against the same numpy ray simulation kept
+  to the paths straight through: the energy in the shadow within 5%.
+- **m6_through_glass** (2b): `c3_slab`'s floor seen through a clear pane outside the slab, edge-on to the sun (camera depth
+  2, both refractions crossings): per pixel the floor's closed form times the pane's `(1 - F)^2` at its ray's incidence,
+  within 2%; without the pass black.
 - **m7_showcase**: equal time against the 8192 spp reference: the glint-after-rough class (`OHAO_PT_CLASS=2`) has no
   dot; relMSE no higher than step 1's; dots no more than step 1's 7.
 - **m8_repeat**: two captures in one process identical (integer splats, fixed tuple order).
@@ -398,7 +526,39 @@ Closed forms first; each case fails before its code exists.
   takes to find the same path again. Within 2% at three points of the floor under the ball (+1.7%, -0.05%, -1.8%), 1.1-1.3
   walks to refind a path. With the two fixed seeds and no N, the point under the centre read 18% dark: paths missed on
   the caustic's axis, which the random seeds reach.
-- **M11 (OPEN) — step 2c's solver**: interval Newton recommended; see "Step 2c".
+  **The GPU's form** (T4, `manifoldGlass` in `rt/path_tracer.slang`, 2026-11-05): the certified walk is 3.5 MB of
+  SPIR-V, so the pass walks uncertified (`manifoldWalkPair<S, false>`): a path is where the walk converges, its root
+  polished by two Newton steps in its pair's own parameters (extended past the triangles' edges) and kept only inside
+  both triangles, so every root belongs to one pair. Without the polish the point under the ball read 10% bright: at a
+  caustic's focus |F| < 1e-5 is a region straddling a pair's edges, and a root of the neighbouring pair stopped at on
+  this pair's side was counted in both. The walk also checks `pairPhysical` (a root of F is a path only where light
+  refracts that way: 7-20x bright without it). The weight is the walk's own slope Jacobian, |det dF/dx| / (C1 C2)^2
+  (checked against double central differences), and the BSDFs are OpenPBR's in the camera's roles, the shading cosines
+  inside them and the geometric ones in the area conversions; N counts re-find walks matching the pair and the polished
+  root within 1e-3, capped at 64. On t15's ball (800 draws) within 3% of the traced reference at all three points
+  (+1.2%, +0.3%, -3.0%); over 3,000 draws and two seeds within 2.3%, the reference's own spread. On the GPU the walk's
+  scene is the instance itself: rays forced non-opaque that commit only its triangles (`ManifoldInstanceScene`), its
+  triangles in world space through the instance's matrix (`manifoldTriangleFrom`, the gather's). The slopes' frame is
+  one reference for every walk of a request (a walk crosses clusters, so 2a's cluster frames would make F jump at their
+  edges): perpendicular to the sun and to the solid's direction from X, so its poles are normals the sun grazes or X sees
+  edge-on. A found path is checked as the camera side would trace it (X -> y2 and y2 -> y1 meet the solid first at the
+  walk's distances, the sun visible from y1's outer side), its inside absorbs as the camera side's volume does, and a
+  dispersive solid draws the wavelength the path does not have yet (that channel alone, x3). The walk evaluates the
+  dual-number map at one call site and the three BSDFs (X's rough part, the two refractions) at one OpenPBR site:
+  manifoldConnect is 34,168 SPIR-V instructions (2a alone 19,997; three walk sites and two OpenPBR sites made it 46,739).
+  On by default since m4-m6 hold it on the GPU (2026-11-06: 1.09%, 0.18%, 0.59%; `docs/changes/2026-11-06-caustics-step2b.md`);
+  **Opt-in since 2026-11-08 (`OHAO_MANIFOLD_GLASS=1`):** the re-find trials made some frames' dispatches run for seconds
+  (m9 at 2,048 spp: over 15 minutes, 41.7 s without step 2b); it goes back on once that work is bounded per dispatch with the
+  estimator unchanged. The pass's counters add walks, paths and connections. **Corrected by the review
+  before it went on (2026-11-06):** the walk takes a whole instance, so it runs for one draw of each (instance, material),
+  or a merged model's runs of one glass count its light once each (`m7_split_ball`); it refracts at the BSDF's IOR
+  (`modulatedIor` of the specular IOR and weight), and a coat or a specular-weight texture, which have no single one, is
+  refused (`m9_ball_weight`); under NRD the manifold pass is off (its light never reaches NRD's packed inputs).
+- **M11 (ACCEPTED 2026-11-06) — step 2c's solver**: Specular Polynomials (interval Newton leaves 44% of cells undecided); see "Step 2c".
+- **M11b (ACCEPTED 2026-11-06) — M11 amended**: Specular Polynomials' formulation, solved by Bernstein subdivision (its
+  resultant loses a fifth of the roots in fp32); see "Step 2c", T2.
+- **M13 (ACCEPTED 2026-11-06) — MikkTSpace's normal mapping in both renderers** (glTF's convention; step 2c's polynomial
+  form needs it); see "Step 2c", T2.
 
 ## Licences
 

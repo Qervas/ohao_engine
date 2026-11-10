@@ -1,4 +1,6 @@
 #include "rt_direct_technique.hpp"
+#include "render/shader_bindings/rt_di_denoise.hpp"
+#include "render/shader_bindings/rt_restir_di.hpp"
 #include "render/rt/emissive_lights.hpp"
 #include "core/log.hpp"
 #include <algorithm>
@@ -9,8 +11,6 @@ namespace shared = gpu::shared;
 
 namespace {
 
-using rtc::descriptorWrite;
-using rtc::layoutBinding;
 
 constexpr VkFormat kReservoirFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 constexpr VkFormat kLightFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -25,7 +25,6 @@ constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 constexpr VkAccessFlags kReadWrite = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 
 constexpr uint32_t kFlagReference = 1u;
-constexpr uint32_t kDenoiseBindings[] = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13};
 constexpr uint32_t kFlagHistory = 2u;
 
 // A full memory dependency between compute dispatches (and from earlier frames' readers).
@@ -122,27 +121,22 @@ bool RTDirectTechnique::ensureReferenceImages() {
 }
 
 bool RTDirectTechnique::createDescriptorResources() {
-    constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;   // the pool's sizes
     constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     constexpr VkDescriptorType buffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     // The resampling passes (rt/restir_di.slang and rt/lights.slang's bindings).
-    std::vector<VkDescriptorSetLayoutBinding> sample = {
-        layoutBinding(0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
-        layoutBinding(1, sampled), layoutBinding(2, sampled), layoutBinding(3, sampled),
-        layoutBinding(4, sampled), layoutBinding(5, sampled), layoutBinding(6, sampled),
-        layoutBinding(7, buffer),
-        layoutBinding(8, storage), layoutBinding(9, storage),
-        layoutBinding(10, buffer), layoutBinding(11, buffer),
-        VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_textureCapacity,
-                                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-    };
-    for (uint32_t b = 13; b <= 25; ++b) sample.push_back(layoutBinding(b, storage));
-    sample.push_back(layoutBinding(42, buffer));
-    sample.push_back(layoutBinding(43, sampled));
-    sample.push_back(layoutBinding(44, buffer));
-    sample.push_back(layoutBinding(45, sampled));   // the G-buffer's OpenPBR layers
+    namespace R = shader::rt_restir_di;
+    std::vector<VkDescriptorSetLayoutBinding> sample;
+    for (const shader::Binding& b : {R::scene, R::gPosition, R::gNormal, R::gAlbedo, R::gSpecular, R::gOpenPBR,
+                                     R::gVelocity, R::openpbrTables, R::prevA, R::prevB, R::materials, R::lightData,
+                                     R::midA, R::midB, R::outA, R::outB, R::noisyDiffuse, R::noisySpecular,
+                                     R::meanDiffuse, R::meanSpecular, R::surfA, R::surfB, R::prevSurfA, R::prevSurfB,
+                                     R::guide, R::emissiveLights, R::emissivePower, R::emissiveRanges, R::gLayers})
+        sample.push_back(shader::layoutBinding(b));
+    // The bindless textures, sized to the renderer's table and partially bound (a frame without textures writes none).
+    sample.push_back({R::textures.binding, R::textures.type, m_textureCapacity, VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
     std::vector<VkDescriptorBindingFlags> flags(sample.size(), 0);
-    flags[12] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;   // a frame without textures writes none
+    flags.back() = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     flagsInfo.bindingCount = static_cast<uint32_t>(flags.size());
     flagsInfo.pBindingFlags = flags.data();
@@ -154,8 +148,7 @@ bool RTDirectTechnique::createDescriptorResources() {
 
     // The denoiser (rt/di_denoise.slang): the noisy light 0-1, the guides 2-3, the velocity 4, the
     // accumulations and outputs 6-11, the mean square luminances and frames 12-13.
-    std::vector<VkDescriptorSetLayoutBinding> denoise;
-    for (const uint32_t b : kDenoiseBindings) denoise.push_back(layoutBinding(b, b == 4 ? sampled : storage));
+    const auto denoise = shader::layoutBindings(shader::rt_di_denoise::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
     li.pNext = nullptr;
     li.bindingCount = static_cast<uint32_t>(denoise.size());
     li.pBindings = denoise.data();
@@ -193,7 +186,8 @@ bool RTDirectTechnique::createPipelines() {
     if (!m_alphaTablesLayout || !m_texturesLayout) return false;
     const VkDescriptorSetLayout sets[] = {m_sampleSetLayout, m_alphaTablesLayout, m_texturesLayout};
     // The second pipeline of each pair makes its own layout, identical to the first's (so the first's
-    // binds both) and destroyed at once.
+    // binds both), kept until teardown: NVIDIA's Linux driver (615.78) crashed binding a pipeline whose layout was
+    // destroyed, maintenance4 or not.
     VkPipelineLayout spatialLayout = VK_NULL_HANDLE, shadeLayout = VK_NULL_HANDLE, atrousLayout = VK_NULL_HANDLE,
                      layeredLayout = VK_NULL_HANDLE;
     const bool ok = rtc::createComputePipeline(m_device, "rt_restir_di.slang.initial.spv", "initial", sets,
@@ -209,7 +203,7 @@ bool RTDirectTechnique::createPipelines() {
                     rtc::createComputePipeline(m_device, "rt_di_denoise.slang.atrous.spv", "atrous", m_denoiseSetLayout,
                                                sizeof(shared::DIPush), atrousLayout, m_atrous);
     for (VkPipelineLayout l : {spatialLayout, shadeLayout, atrousLayout, layeredLayout})
-        if (l) vkDestroyPipelineLayout(m_device, l, nullptr);
+        if (l) m_extraLayouts.push_back(l);
     return ok;
 }
 
@@ -236,44 +230,49 @@ void RTDirectTechnique::writeSampleSet(const DirectInput& input) {
                                  reference ? m_meanSpecular.view : m_meanDummy.view};
     // 8-9 last frame's reservoirs, 13-16 this frame's, 17-20 the light, 21-24 the surfaces (this
     // frame's, last frame's), 25 the denoiser's guide.
-    const std::pair<uint32_t, VkImageView> storageViews[] = {
-        {8, m_resA[prev].view},   {9, m_resB[prev].view},   {13, m_midA.view},           {14, m_midB.view},
-        {15, m_resA[m_cur].view}, {16, m_resB[m_cur].view}, {17, m_noisyDiffuse.view},   {18, m_noisySpecular.view},
-        {19, mean[0]},            {20, mean[1]},            {21, m_surfA[m_cur].view},   {22, m_surfB[m_cur].view},
-        {23, m_surfA[prev].view}, {24, m_surfB[prev].view}, {25, m_guide[m_cur].view},
+    namespace R = shader::rt_restir_di;
+    const std::pair<shader::Binding, VkImageView> storageViews[] = {
+        {R::prevA, m_resA[prev].view},     {R::prevB, m_resB[prev].view},     {R::midA, m_midA.view},
+        {R::midB, m_midB.view},            {R::outA, m_resA[m_cur].view},     {R::outB, m_resB[m_cur].view},
+        {R::noisyDiffuse, m_noisyDiffuse.view}, {R::noisySpecular, m_noisySpecular.view},
+        {R::meanDiffuse, mean[0]},         {R::meanSpecular, mean[1]},        {R::surfA, m_surfA[m_cur].view},
+        {R::surfB, m_surfB[m_cur].view},   {R::prevSurfA, m_surfA[prev].view}, {R::prevSurfB, m_surfB[prev].view},
+        {R::guide, m_guide[m_cur].view},
     };
     std::vector<VkDescriptorImageInfo> images;
     images.reserve(16);
     std::vector<VkWriteDescriptorSet> writes;
     writes.reserve(24);
-    VkWriteDescriptorSet w = descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+    VkWriteDescriptorSet w = shader::write(shader::rt_restir_di::scene, set);
     w.pNext = &asWrite;
     writes.push_back(w);
+    const shader::Binding gbufBindings[6] = {R::gPosition, R::gNormal, R::gAlbedo, R::gSpecular, R::gOpenPBR, R::gVelocity};
     for (uint32_t i = 0; i < 6; ++i) {
-        w = descriptorWrite(set, 1 + i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+        w = shader::write(gbufBindings[i], set);
         w.pImageInfo = &gbuf[i];
         writes.push_back(w);
     }
-    for (auto [binding, info] : {std::pair{7u, &tables}, std::pair{10u, &materials}, std::pair{11u, &lights},
-                                 std::pair{42u, &emissiveLights}, std::pair{44u, &emissiveRanges}}) {
-        w = descriptorWrite(set, binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    for (auto [binding, info] : {std::pair{R::openpbrTables, &tables}, std::pair{R::materials, &materials},
+                                 std::pair{R::lightData, &lights}, std::pair{R::emissiveLights, &emissiveLights},
+                                 std::pair{R::emissiveRanges, &emissiveRanges}}) {
+        w = shader::write(binding, set);
         w.pBufferInfo = info;
         writes.push_back(w);
     }
-    w = descriptorWrite(set, 43, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    w = shader::write(shader::rt_restir_di::emissivePower, set);
     w.pImageInfo = &power;
     writes.push_back(w);
-    w = descriptorWrite(set, 45, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    w = shader::write(shader::rt_restir_di::gLayers, set);
     w.pImageInfo = &layers;
     writes.push_back(w);
     for (const auto& [binding, view] : storageViews) images.push_back({VK_NULL_HANDLE, view, kGeneral});
     for (size_t i = 0; i < std::size(storageViews); ++i) {
-        w = descriptorWrite(set, storageViews[i].first, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        w = shader::write(storageViews[i].first, set);
         w.pImageInfo = &images[i];
         writes.push_back(w);
     }
     if (!m_textureInfos.empty() && m_slotTextureVersion[m_slot] != m_textureVersion) {
-        w = descriptorWrite(set, 12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        w = shader::write(shader::rt_restir_di::textures, set);
         w.descriptorCount = static_cast<uint32_t>(m_textureInfos.size());
         w.pImageInfo = m_textureInfos.data();
         writes.push_back(w);
@@ -374,15 +373,16 @@ void RTDirectTechnique::shade(VkCommandBuffer cmd) {
 void RTDirectTechnique::denoise(VkCommandBuffer cmd) {
     if (!denoises()) return;
     const uint32_t prev = m_cur ^ 1u;
-    // Writes every binding of `set` (views[b] is binding b, kDenoiseBindings') and dispatches
-    // `pipeline` with a-trous step `step`.
-    const auto run = [&](VkPipeline pipeline, VkDescriptorSet set, const std::array<VkImageView, 15>& views, uint32_t step) {
-        std::array<VkDescriptorImageInfo, 15> infos{};
-        std::array<VkWriteDescriptorSet, 15> writes{};
+    namespace D = shader::rt_di_denoise;
+    using Views = std::array<std::pair<shader::Binding, VkImageView>, D::kSet0.size()>;
+    // Writes every binding of `set` and dispatches `pipeline` with a-trous step `step`.
+    const auto run = [&](VkPipeline pipeline, VkDescriptorSet set, const Views& views, uint32_t step) {
+        std::array<VkDescriptorImageInfo, D::kSet0.size()> infos{};
+        std::array<VkWriteDescriptorSet, D::kSet0.size()> writes{};
         uint32_t n = 0;
-        for (const uint32_t b : kDenoiseBindings) {
-            infos[n] = {VK_NULL_HANDLE, views[b], b == 4 ? kReadOnly : kGeneral};
-            writes[n] = descriptorWrite(set, b, b == 4 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        for (const auto& [b, view] : views) {
+            infos[n] = {VK_NULL_HANDLE, view, b.type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ? kReadOnly : kGeneral};
+            writes[n] = shader::write(b, set);
             writes[n].pImageInfo = &infos[n];
             ++n;
         }
@@ -397,11 +397,19 @@ void RTDirectTechnique::denoise(VkCommandBuffer cmd) {
     const auto& sets = m_denoiseSets[m_slot];
     // The views every pass binds: the noisy light, the guides, the velocity, the accumulations.
     const auto views = [&](VkImageView in0, VkImageView in1, VkImageView out0, VkImageView out1) {
-        return std::array<VkImageView, 15>{m_noisyDiffuse.view,      m_noisySpecular.view,      m_guide[prev].view,
-                                           m_guide[m_cur].view,      m_velocityView,            VK_NULL_HANDLE,
-                                           m_histDiffuse[prev].view, m_histSpecular[prev].view, in0,
-                                           in1,                      out0,                      out1,
-                                           m_moments[prev].view,     m_moments[m_cur].view};
+        return Views{{{D::noisyDiffuse, m_noisyDiffuse.view},
+                      {D::noisySpecular, m_noisySpecular.view},
+                      {D::prevGuide, m_guide[prev].view},
+                      {D::guide, m_guide[m_cur].view},
+                      {D::gVelocity, m_velocityView},
+                      {D::histPrevDiffuse, m_histDiffuse[prev].view},
+                      {D::histPrevSpecular, m_histSpecular[prev].view},
+                      {D::inDiffuse, in0},
+                      {D::inSpecular, in1},
+                      {D::outDiffuse, out0},
+                      {D::outSpecular, out1},
+                      {D::prevMoments, m_moments[prev].view},
+                      {D::moments, m_moments[m_cur].view}}};
     };
     // temporal: noisy + last frame's accumulation (guided by last frame's guides) -> this frame's.
     run(m_temporal, sets[0],
@@ -448,6 +456,8 @@ void RTDirectTechnique::destroy() {
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_sampleLayout, &m_denoiseLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
+    for (VkPipelineLayout l : m_extraLayouts) vkDestroyPipelineLayout(m_device, l, nullptr);
+    m_extraLayouts.clear();
     if (m_pool) { vkDestroyDescriptorPool(m_device, m_pool, nullptr); m_pool = VK_NULL_HANDLE; }
     for (VkDescriptorSetLayout* l : {&m_sampleSetLayout, &m_denoiseSetLayout})
         if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }

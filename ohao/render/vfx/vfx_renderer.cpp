@@ -1,4 +1,9 @@
 #include "render/vfx/vfx_renderer.hpp"
+#include "render/scene/vertex_input.hpp"
+#include "render/shader_bindings/vfx_expand.hpp"
+#include "render/shader_bindings/vfx_sort.hpp"
+#include "render/shader_bindings/vfx_particle.hpp"
+#include "render/shader_bindings/vfx_transparent_mesh.hpp"
 
 #include "vfx/tracer_math.hpp"
 
@@ -215,31 +220,17 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
     constexpr VkShaderStageFlags kDraw = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     constexpr VkShaderStageFlags kFrag = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    const std::array<VkDescriptorSetLayoutBinding, 10> expand{{
-        rtc::layoutBinding(0, kStorage), rtc::layoutBinding(1, kStorage), rtc::layoutBinding(2, kStorage),
-        rtc::layoutBinding(3, kStorage), rtc::layoutBinding(4, kStorage), rtc::layoutBinding(5, kStorage),
-        rtc::layoutBinding(6, kTlas), rtc::layoutBinding(7, kSampled), rtc::layoutBinding(8, kSampled),
-        rtc::layoutBinding(9, kSampler),
-    }};
-    const std::array<VkDescriptorSetLayoutBinding, 2> sort{{rtc::layoutBinding(0, kStorage), rtc::layoutBinding(1, kStorage)}};
-    const std::array<VkDescriptorSetLayoutBinding, 4> draw{{
-        rtc::layoutBinding(0, kStorage, kDraw), rtc::layoutBinding(1, kStorage, kDraw),
-        rtc::layoutBinding(2, kStorage, kDraw), rtc::layoutBinding(3, kSampled, kDraw),
-    }};
-    const std::array<VkDescriptorSetLayoutBinding, 12> forward{{
-        rtc::layoutBinding(0, kStorage, kFrag), rtc::layoutBinding(1, kStorage, kFrag),
-        rtc::layoutBinding(2, kSampled, kFrag), rtc::layoutBinding(3, kSampled, kFrag),
-        rtc::layoutBinding(4, kSampler, kFrag), rtc::layoutBinding(5, kTlas, kFrag),
-        rtc::layoutBinding(6, kSampled, kFrag), rtc::layoutBinding(7, kStorage, kFrag),   // 7: OpenPBR's tables
-        rtc::layoutBinding(8, kSampled, kFrag),                                           // 8: the refraction source
-        // 9-11: the scene's meshes, indices and vertices (glass finds its far side's normal)
-        rtc::layoutBinding(9, kStorage, kFrag), rtc::layoutBinding(10, kStorage, kFrag),
-        rtc::layoutBinding(11, kStorage, kFrag),
-    }};
-    m_expandLayout = makeLayout(m_device, expand, 6);
+    const auto expand = shader::layoutBindings(shader::vfx_expand::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
+    const auto sort = shader::layoutBindings(shader::vfx_sort::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
+    const auto draw = shader::layoutBindings(shader::vfx_particle::kSet0, kDraw);   // particles and tracers
+    // The forward (transparent mesh) pass's own set: the light loop's inputs, OpenPBR's tables, the refraction
+    // source, and the scene's meshes, indices and vertices (glass finds its far side's normal).
+    const auto forward = shader::layoutBindings(shader::vfx_transparent_mesh::kSet2, kFrag);
+    // The TLAS is partially bound: a frame without one writes none (positions are bindings: the sets run 0..n).
+    m_expandLayout = makeLayout(m_device, expand, static_cast<int>(shader::vfx_expand::scene.binding));
     m_sortLayout = makeLayout(m_device, sort);
     m_drawLayout = makeLayout(m_device, draw);
-    m_forwardLayout = makeLayout(m_device, forward, 5);
+    m_forwardLayout = makeLayout(m_device, forward, static_cast<int>(shader::vfx_transparent_mesh::scene.binding));
     if (!m_expandLayout || !m_sortLayout || !m_drawLayout || !m_forwardLayout) return false;
 
     constexpr uint32_t n = MAX_FRAMES_IN_FLIGHT;
@@ -350,7 +341,7 @@ bool VfxRenderer::createRenderPass() {
 }
 
 bool VfxRenderer::createPipelines() {
-    if (!rtc::createComputePipeline(m_device, "vfx_expand.slang.spv", "expand", m_expandLayout,
+    if (!rtc::createComputePipeline(m_device, "vfx_expand.slang.spv", "expandParticles", m_expandLayout,
                                     sizeof(shared::VfxExpandPush), m_expandPipelineLayout, m_expandPipeline) ||
         !rtc::createComputePipeline(m_device, "vfx_sort.slang.spv", "sort", m_sortLayout, sizeof(shared::VfxSortPush),
                                     m_sortPipelineLayout, m_sortPipeline))
@@ -432,8 +423,8 @@ bool VfxRenderer::createPipelines() {
     // Blended meshes: core/gbuffer.slang's vertex input, straight alpha by coverage; [0] one-sided
     // (back faces culled, as the G-buffer culls them), [1] double-sided.
     if (ok) {
-        const auto bindingDescs = Vertex::getBindingDescriptions();
-        const auto attributeDescs = Vertex::getAttributeDescriptions();
+        const auto bindingDescs = render::vertexBindings();
+        const auto attributeDescs = render::vertexAttributes();
         VkPipelineVertexInputStateCreateInfo vi{};
         vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vi.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());
@@ -711,19 +702,24 @@ void VfxRenderer::writeExpandSet(uint32_t slot, const Lighting& lighting) {
     as.pAccelerationStructures = &lighting.tlas;
 
     std::vector<VkWriteDescriptorSet> w;
+    namespace E = shader::vfx_expand;
+    const shader::Binding bufferBindings[] = {E::emitters, E::batches, E::particles, E::order, E::lights, E::clusters};
+    static_assert(std::size(bufferBindings) == decltype(buffers){}.size());
     for (uint32_t i = 0; i < buffers.size(); ++i) {
-        w.push_back(rtc::descriptorWrite(s.expandSet, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        w.push_back(shader::write(bufferBindings[i], s.expandSet));
         w.back().pBufferInfo = &buffers[i];
     }
     if (lighting.tlas != VK_NULL_HANDLE) {
-        w.push_back(rtc::descriptorWrite(s.expandSet, 6, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
+        w.push_back(shader::write(E::scene, s.expandSet));
         w.back().pNext = &as;
     }
+    const shader::Binding imageBindings[] = {E::giRadiance, E::envIrradiance};
+    static_assert(std::size(imageBindings) == decltype(images){}.size());
     for (uint32_t i = 0; i < images.size(); ++i) {
-        w.push_back(rtc::descriptorWrite(s.expandSet, 7 + i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
+        w.push_back(shader::write(imageBindings[i], s.expandSet));
         w.back().pImageInfo = &images[i];
     }
-    w.push_back(rtc::descriptorWrite(s.expandSet, 9, VK_DESCRIPTOR_TYPE_SAMPLER));
+    w.push_back(shader::write(E::linearSampler, s.expandSet));
     w.back().pImageInfo = &sampler;
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
@@ -755,30 +751,23 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting, const
     as.pAccelerationStructures = &lighting.tlas;
 
     std::vector<VkWriteDescriptorSet> w;
-    for (uint32_t i = 0; i < buffers.size(); ++i) {
-        w.push_back(rtc::descriptorWrite(s.forwardSet, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
-        w.back().pBufferInfo = &buffers[i];
-    }
-    w.push_back(rtc::descriptorWrite(s.forwardSet, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
-    w.back().pImageInfo = &irradiance;
-    w.push_back(rtc::descriptorWrite(s.forwardSet, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
-    w.back().pImageInfo = &prefiltered;
-    w.push_back(rtc::descriptorWrite(s.forwardSet, 4, VK_DESCRIPTOR_TYPE_SAMPLER));
-    w.back().pImageInfo = &sampler;
-    if (lighting.tlas != VK_NULL_HANDLE) {
-        w.push_back(rtc::descriptorWrite(s.forwardSet, 5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
-        w.back().pNext = &as;
-    }
-    w.push_back(rtc::descriptorWrite(s.forwardSet, 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
-    w.back().pImageInfo = &gi;
-    w.push_back(rtc::descriptorWrite(s.forwardSet, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
-    w.back().pBufferInfo = &tables;
-    w.push_back(rtc::descriptorWrite(s.forwardSet, 8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
-    w.back().pImageInfo = &refraction;
-    for (uint32_t i = 0; i < geometry.size(); ++i) {
-        w.push_back(rtc::descriptorWrite(s.forwardSet, 9 + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
-        w.back().pBufferInfo = &geometry[i];
-    }
+    namespace F = shader::vfx_transparent_mesh;
+    const auto add = [&](const shader::Binding& b) -> VkWriteDescriptorSet& {
+        w.push_back(shader::write(b, s.forwardSet));
+        return w.back();
+    };
+    add(F::lights).pBufferInfo = &buffers[0];
+    add(F::clusters).pBufferInfo = &buffers[1];
+    add(F::envIrradiance).pImageInfo = &irradiance;
+    add(F::envPrefiltered).pImageInfo = &prefiltered;
+    add(F::linearSampler).pImageInfo = &sampler;
+    if (lighting.tlas != VK_NULL_HANDLE) add(F::scene).pNext = &as;
+    add(F::giRadiance).pImageInfo = &gi;
+    add(F::openpbrTables).pBufferInfo = &tables;
+    add(F::refraction).pImageInfo = &refraction;
+    add(F::meshes).pBufferInfo = &geometry[0];
+    add(F::indices).pBufferInfo = &geometry[1];
+    add(F::vertices).pBufferInfo = &geometry[2];
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
 
@@ -851,8 +840,8 @@ void VfxRenderer::sort(VkCommandBuffer cmd, uint32_t slot) {
     Slot& s = m_slots[slot];
     const std::array<VkDescriptorBufferInfo, 2> buffers{{{m_particles.buffer, 0, VK_WHOLE_SIZE},
                                                          {m_order.buffer, 0, VK_WHOLE_SIZE}}};
-    std::array<VkWriteDescriptorSet, 2> w{rtc::descriptorWrite(s.sortSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                          rtc::descriptorWrite(s.sortSet, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)};
+    std::array<VkWriteDescriptorSet, 2> w{shader::write(shader::vfx_sort::particles, s.sortSet),
+                                          shader::write(shader::vfx_sort::order, s.sortSet)};
     w[0].pBufferInfo = &buffers[0];
     w[1].pBufferInfo = &buffers[1];
     vkUpdateDescriptorSets(m_device, 2, w.data(), 0, nullptr);
@@ -925,11 +914,13 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
                                                              {s.emitters.buffer, 0, VK_WHOLE_SIZE}}};
         const VkDescriptorImageInfo depth{VK_NULL_HANDLE, m_depthView, kDepthReadOnly};
         std::array<VkWriteDescriptorSet, 4> w{};
+        namespace P = shader::vfx_particle;
+        const shader::Binding bufferBindings[3] = {P::particles, P::order, P::emitters};
         for (uint32_t i = 0; i < 3; ++i) {
-            w[i] = rtc::descriptorWrite(s.drawSet, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            w[i] = shader::write(bufferBindings[i], s.drawSet);
             w[i].pBufferInfo = &buffers[i];
         }
-        w[3] = rtc::descriptorWrite(s.drawSet, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+        w[3] = shader::write(P::sceneDepth, s.drawSet);
         w[3].pImageInfo = &depth;
         vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
     }

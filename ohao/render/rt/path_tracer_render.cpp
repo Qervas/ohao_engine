@@ -3,6 +3,7 @@
 // Push-constant flag constants (kPTFlag*) moved here since this TU is their sole consumer.
 
 #include "path_tracer.hpp"
+#include "render/shader_bindings/rt_path_tracer.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <string_view>
 #include <vector>
 #include "core/log.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
@@ -24,6 +26,7 @@
 #endif
 
 namespace ohao {
+namespace P = shader::rt_path_tracer;
 
 namespace {
 constexpr uint32_t kPTFlagEnableAOVs = 1u << 0;
@@ -44,6 +47,7 @@ constexpr uint32_t kPTFlagCaustics = 1u << 10;
 // writes the pass's requests); bits 11-18 are OHAO_PT_CLASS.
 constexpr uint32_t kPTFlagManifold = 1u << 19;
 constexpr uint32_t kPTFlagManifoldRequests = 1u << 20;
+constexpr uint32_t kPTFlagManifoldGlass = 1u << 23;   // step 2b: the sun through owned solids
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
@@ -54,8 +58,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
         !m_instances || !m_materialRefs || !m_lightBuffer || !m_emissive) return;   // the renderer's tables
     const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
-    // Path guiding's buffers before this frame's set is written (the first guided frame allocates them).
-    const bool guideOn = m_renderSettings.guiding && m_guiding.ensure(m_width * m_height);
     // Caustics (sub-project 24): offline only (the realtime profile's paths end in the radiance
     // cache), on its own program (raygenCaustics; the default raygen has none of its code), when a
     // directional light and a smooth-capable caster are in the scene. OHAO_CAUSTICS_SPLIT_ONLY=1
@@ -64,14 +66,23 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (causticsWanted && m_scene) m_caustics.setScene(*m_scene, gpu::shared::kCausticRough);
     const bool causticsOn = causticsWanted && m_caustics.active() && m_caustics.ensure(m_width * m_height) &&
                             ensureCausticsPipeline();
+    // Path guiding's buffers before this frame's set is written (the first guided frame allocates them), and its
+    // program beside the one this frame traces with (raygenGuided or raygenCausticsGuided).
+    const bool guideOn = m_renderSettings.guiding && m_guiding.ensure(m_width * m_height) &&
+                         ensureGuidedProgram(causticsOn);
     static const bool causticsSplitOnly = std::getenv("OHAO_CAUSTICS_SPLIT_ONLY") != nullptr;
     // Caustics step 2 (docs/specs/2026-11-04-caustics-step2-design.md): with caustics, whenever an owned caster is
     // in the scene. OHAO_MANIFOLD_OFF=1 leaves step 1 alone (check_caustics' m3_sum); OHAO_MANIFOLD_SPLIT_ONLY=1 drops
     // the pass's terms without running it.
     static const bool manifoldOff = std::getenv("OHAO_MANIFOLD_OFF") != nullptr;
     static const bool manifoldSplitOnly = std::getenv("OHAO_MANIFOLD_SPLIT_ONLY") != nullptr;
-    if (causticsOn && !manifoldOff && m_scene) m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
-    const bool manifoldOn = causticsOn && !manifoldOff && m_scene && m_manifold.active() &&
+    // The manifold pass adds its light to the running mean after raygenCaustics has packed the denoiser's diffuse and
+    // specular inputs, so a denoiser that builds the frame from those (NRD) would never show it, while the camera side
+    // dropped step 2a's share: under NRD the pass stays off and the camera side keeps those terms.
+    const bool manifoldFrame = !denoiseNeedsDiffSpecSplit(m_renderSettings.denoiseMode);
+    if (causticsOn && !manifoldOff && manifoldFrame && m_scene)
+        m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
+    const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_scene && m_manifold.active() &&
                             m_manifold.ensureRequests(m_width * m_height) && (manifoldSplitOnly || ensureManifoldPipeline());
     const bool manifoldPass = manifoldOn && !manifoldSplitOnly;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
@@ -196,26 +207,26 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 0;
+    writes[writeCount].dstBinding = P::scene.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     writes[writeCount].pNext = &asWrite;
     writeCount++;
 
-    addImage(1, &accumInfo);
-    addImage(2, &outputInfo);
-    addImage(3, &accumHistoryInfo);
-    addImage(6, &albedoAOVInfo);
-    addImage(7, &normalAOVInfo);
+    addImage(P::accumBuffer.binding, &accumInfo);
+    addImage(P::outputImage.binding, &outputInfo);
+    addImage(P::accumHistory.binding, &accumHistoryInfo);
+    addImage(P::albedoAOV.binding, &albedoAOVInfo);
+    addImage(P::normalAOV.binding, &normalAOVInfo);
     const VkDescriptorImageInfo emissionInfo{VK_NULL_HANDLE, m_emissionAOVView, VK_IMAGE_LAYOUT_GENERAL};
-    addImage(13, &emissionInfo);
+    addImage(P::emissionAOV.binding, &emissionInfo);
     // Binding 43: the emissive lights' power image, every level, sampled (read with Load).
     const VkDescriptorImageInfo powerInfo{VK_NULL_HANDLE, m_emissive->powerView(), VK_IMAGE_LAYOUT_GENERAL};
     {
         VkWriteDescriptorSet& w = writes[writeCount++];
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.dstSet = set;
-        w.dstBinding = 43;
+        w.dstBinding = P::emissivePower.binding;
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         w.pImageInfo = &powerInfo;
@@ -224,13 +235,13 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // RenderScene buffers: 4 vertex arena, 5 index arena, 8 mesh table, 9 triangle
     // material slots, 10 material table, 11 RT lights, 36 instances, 37 material refs.
     const struct { uint32_t binding; VkBuffer buffer; } sceneBuffers[] = {
-        {4, m_vertexArena}, {5, m_indexArena}, {8, m_meshTable}, {9, m_triangleSlots},
-        {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
-        {38, m_openpbrTables.buffer()}, {39, m_radianceCache.keys()}, {40, m_radianceCache.accum()},
-        {41, m_radianceCache.resolved()}, {42, m_emissive->lightBuffer()}, {44, m_emissive->rangeBuffer(frameSlot)},
-        {45, m_emissive->firstBuffer(frameSlot)}, {46, m_guiding.states()}, {49, m_guiding.proposals()},
-        {50, m_guiding.pixel()}, {51, m_caustics.table()}, {52, m_caustics.splat()}, {53, m_caustics.stats()},
-        {54, m_manifold.tris()}, {55, m_manifold.nodes()}, {56, m_manifold.draws(frameSlot)}, {57, m_manifold.requests()},
+        {P::vertices.binding, m_vertexArena}, {P::indices.binding, m_indexArena}, {P::meshes.binding, m_meshTable}, {P::triangleSlots.binding, m_triangleSlots},
+        {P::materials.binding, m_materialTable}, {P::lightData.binding, m_lightBuffer}, {P::instances.binding, m_instances}, {P::materialRefs.binding, m_materialRefs},
+        {P::openpbrTables.binding, m_openpbrTables.buffer()}, {P::cacheKeys.binding, m_radianceCache.keys()}, {P::cacheAccum.binding, m_radianceCache.accum()},
+        {P::cacheResolved.binding, m_radianceCache.resolved()}, {P::emissiveLights.binding, m_emissive->lightBuffer()}, {P::emissiveRanges.binding, m_emissive->rangeBuffer(frameSlot)},
+        {P::emissiveFirst.binding, m_emissive->firstBuffer(frameSlot)}, {P::guideStates.binding, m_guiding.states()}, {P::guideProposals.binding, m_guiding.proposals()},
+        {P::guidePixel.binding, m_guiding.pixel()}, {P::causticCasters.binding, m_caustics.table()}, {P::causticSplat.binding, m_caustics.splat()}, {P::causticStats.binding, m_caustics.stats()},
+        {P::manifoldTris.binding, m_manifold.tris()}, {P::manifoldNodes.binding, m_manifold.nodes()}, {P::manifoldDraws.binding, m_manifold.draws(frameSlot)}, {P::manifoldRequests.binding, m_manifold.requests()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -259,7 +270,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (textureCount > 0) {
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = set;
-        writes[writeCount].dstBinding = 12;
+        writes[writeCount].dstBinding = P::textures.binding;
         writes[writeCount].descriptorCount = textureCount;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[writeCount].pImageInfo = texInfos.data();
@@ -274,7 +285,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         envCdfInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = set;
-        writes[writeCount].dstBinding = 17;
+        writes[writeCount].dstBinding = P::envCdf.binding;
         writes[writeCount].descriptorCount = 1;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[writeCount].pBufferInfo = &envCdfInfo;
@@ -287,7 +298,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     motionVectorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet = set;
-    writes[writeCount].dstBinding = 19;
+    writes[writeCount].dstBinding = P::motionVector.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo = &motionVectorInfo;
@@ -299,7 +310,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 20;
+    writes[writeCount].dstBinding      = P::depthAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &depthInfo;
@@ -311,7 +322,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     roughInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 21;
+    writes[writeCount].dstBinding      = P::roughnessAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &roughInfo;
@@ -323,7 +334,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     diffRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 22;
+    writes[writeCount].dstBinding      = P::diffuseRadiance.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &diffRadianceInfo;
@@ -335,7 +346,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     specRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 23;
+    writes[writeCount].dstBinding      = P::specularRadiance.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &specRadianceInfo;
@@ -347,7 +358,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     diffAlbedoInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 24;
+    writes[writeCount].dstBinding      = P::diffuseAlbedoAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &diffAlbedoInfo;
@@ -359,7 +370,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     specColorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 25;
+    writes[writeCount].dstBinding      = P::specColorAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &specColorInfo;
@@ -371,7 +382,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     normalRoughnessInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
-    writes[writeCount].dstBinding      = 26;
+    writes[writeCount].dstBinding      = P::normalRoughnessAOV.binding;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[writeCount].pImageInfo      = &normalRoughnessInfo;
@@ -596,6 +607,14 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         if (manifoldPass) pc.control.x |= kPTFlagManifoldRequests;
         static const char* stage = std::getenv("OHAO_MANIFOLD_STAGE");   // profiling: where manifoldConnect stops
         if (stage) pc.control.x |= (uint32_t(std::atoi(stage)) & 3u) << 21u;
+        // Step 2b (manifoldGlass), the sun through owned solids: opt-in, OHAO_MANIFOLD_GLASS=1. Its re-find walks run
+        // for seconds in a few lanes of some frames (check_caustics m9: 2,048 spp over 15 minutes with it, 42 s without),
+        // a GPU dispatch the driver cannot preempt, until its work is bounded per dispatch.
+        static const bool glassOn = [] {
+            const char* v = std::getenv("OHAO_MANIFOLD_GLASS");
+            return v != nullptr && std::string_view(v) != "0";
+        }();
+        if (glassOn) pc.control.x |= kPTFlagManifoldGlass;
         m_manifoldRan = true;
     }
     // The frames already in the running mean (0: this frame's sample alone, which a temporal
@@ -628,7 +647,13 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     if (cacheOn) timePass("pt.trace");
     if (guideOn) m_guiding.recordBeginFrame(cmd);
     if (causticsOn) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_causticsPipeline);
+        // Caustics' program, or with guiding its guided twin (the same groups and regions).
+        const GuidedProgram& cg = m_guided[1];
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, guideOn ? cg.pipeline : m_causticsPipeline);
+        const VkStridedDeviceAddressRegionKHR* cRgen = guideOn ? &cg.rgen : &m_causticsRgenRegion;
+        const VkStridedDeviceAddressRegionKHR* cMiss = guideOn ? &cg.miss : &m_causticsMissRegion;
+        const VkStridedDeviceAddressRegionKHR* cHit = guideOn ? &cg.hit : &m_causticsHitRegion;
+        const VkStridedDeviceAddressRegionKHR* cTrace = guideOn ? &cg.extra : &m_causticTraceRegion;
         m_caustics.recordBeginFrame(cmd);
         if (!causticsSplitOnly) {
             // kCausticRaysPerPixel light paths a pixel; OHAO_CAUSTIC_RAYS (any positive number) overrides it for
@@ -639,13 +664,11 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 return v > 0.0f ? v : float(gpu::shared::kCausticRaysPerPixel);
             }();
             const uint32_t rows = std::max(1u, uint32_t(std::lround(double(m_height) * raysPerPixel)));
-            vkCmdTraceRaysKHR(cmd, &m_causticTraceRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
-                              m_width, rows, 1);
+            vkCmdTraceRaysKHR(cmd, cTrace, cMiss, cHit, &m_callRegion, m_width, rows, 1);
             m_caustics.recordAfterTrace(cmd);
         }
         timePass("pt.trace");
-        vkCmdTraceRaysKHR(cmd, &m_causticsRgenRegion, &m_causticsMissRegion, &m_causticsHitRegion, &m_callRegion,
-                          m_width, m_height, 1);
+        vkCmdTraceRaysKHR(cmd, cRgen, cMiss, cHit, &m_callRegion, m_width, m_height, 1);
         if (manifoldPass) {
             // Caustics step 2: the requests raygenCaustics wrote, answered into the running mean it wrote (the same
             // layout, set and push constants: one program to the next).
@@ -659,6 +682,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
             vkCmdTraceRaysKHR(cmd, &m_manifoldRgenRegion, &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
                               m_width, m_height, 1);
         }
+    } else if (guideOn) {
+        const GuidedProgram& g = m_guided[0];
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, g.pipeline);
+        vkCmdTraceRaysKHR(cmd, &g.rgen, &g.miss, &g.hit, &m_callRegion, m_width, m_height, 1);
     } else {
         vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                           m_width, m_height, 1);

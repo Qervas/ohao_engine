@@ -1,9 +1,21 @@
 #include "bloom_pass.hpp"
+#include "render/shader_bindings/postprocess_bloom_downsample.hpp"
+#include "render/shader_bindings/postprocess_bloom_input.hpp"
+#include "render/shader_bindings/postprocess_bloom_upsample.hpp"
 #include <algorithm>
 #include <cmath>
 #include "core/log.hpp"
 
 namespace ohao {
+
+namespace {
+// The bloom input, downsample and upsample shaders read one image at the same binding: one layout serves all three.
+constexpr shader::Binding kInput = shader::postprocess_bloom_downsample::inputTexture;
+static_assert(shader::postprocess_bloom_upsample::inputTexture.binding == kInput.binding &&
+              shader::postprocess_bloom_upsample::inputTexture.type == kInput.type &&
+              shader::postprocess_bloom_input::hdrInput.binding == kInput.binding &&
+              shader::postprocess_bloom_input::hdrInput.type == kInput.type);
+} // namespace
 
 BloomPass::~BloomPass() {
     cleanup();
@@ -87,8 +99,8 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstSet = m_inputSets[frameIndex];
-    write.dstBinding = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.dstBinding = kInput.binding;
+    write.descriptorType = kInput.type;
     write.descriptorCount = 1;
     write.pImageInfo = &imageInfo;
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
@@ -309,12 +321,8 @@ bool BloomPass::createFramebuffers() {
 }
 
 bool BloomPass::createDescriptors() {
-    // Simple input sampler layout
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // One input image, the layout all three bloom shaders share.
+    const VkDescriptorSetLayoutBinding binding = shader::layoutBinding(kInput, VK_SHADER_STAGE_FRAGMENT_BIT);
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -380,8 +388,8 @@ bool BloomPass::createDescriptors() {
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = m_descriptorSets[i + 1];
-        write.dstBinding = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.dstBinding = kInput.binding;
+        write.descriptorType = kInput.type;
         write.descriptorCount = 1;
         write.pImageInfo = &imageInfo;
 

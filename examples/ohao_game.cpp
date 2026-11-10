@@ -4,12 +4,13 @@
 // Spin turns the cube, its PlayerController walks. No host code moves anything.
 //
 //   ohao_game [scene] [--present immediate|mailbox|fifo] [--vsync] [--latency] [--frames N] [--resize-at F]
-//             [--mode deferred|rt_realtime|rt_offline] [--mute]
+//             [--mode deferred|rt_realtime|rt_offline] [--mute] [--fps N]
 //
 //   --present: how the window presents (default mailbox; immediate tears for the least latency,
 //   fifo waits for the display; a surface without the mode falls back down that list); --vsync
 //   is --present fifo. --latency draws the measured latency and frame time top left (the same
-//   numbers render.stats reports; sub-project 9).
+//   numbers render.stats reports; sub-project 9). --fps caps the frame rate (default: the display's
+//   refresh rate; 0 uncapped; off under fifo, which the display paces).
 //   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
 //   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
 //   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
@@ -31,6 +32,7 @@
 //
 // Exit codes: 0 ok; 1 no window or GPU; 2 the scene did not load; 3 a readback; 4 validation.
 
+#include "game/loader.hpp"
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/scene_types.hpp"
@@ -64,16 +66,20 @@ bool argFlag(int argc, char** argv, const char* name) {
 std::string sceneArg(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--frames" || a == "--resize-at" || a == "--mode" || a == "--present") { ++i; continue; }
+        if (a == "--frames" || a == "--resize-at" || a == "--mode" || a == "--present" || a == "--fps") { ++i; continue; }
         if (a.rfind("--", 0) == 0) continue;
         return a;
     }
     return "assets/scenes/helmet_game.scene.json";
 }
 
+// The game: the slice, loaded from beside the executable (game/loader.hpp).
+std::shared_ptr<const ohao::game::LoadedModule> g_slice;
+
+// The engine's types and the game's.
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), g_slice->module->registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -81,8 +87,15 @@ const reflect::TypeRegistry& engineTypes() {
 } // namespace
 
 int main(int argc, char** argv) {
+    std::string gameError;
+    g_slice = ohao::game::loadModule(ohao::game::executableDir() / "libohao_slice.so", gameError);
+    if (!g_slice) {
+        std::cerr << "[ohao_game] " << gameError << std::endl;
+        return 1;
+    }
     LiveConfig cfg;
     cfg.window.title = "OHAO";
+    cfg.game = g_slice;
     if (argFlag(argc, argv, "--vsync")) cfg.present = PresentMode::Fifo;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--present") != 0) continue;
@@ -95,6 +108,7 @@ int main(int argc, char** argv) {
     }
     cfg.latencyReadout = argFlag(argc, argv, "--latency");
     cfg.frameLimit = argInt(argc, argv, "--frames", 0);
+    cfg.maxFps = argInt(argc, argv, "--fps", -1);
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
     cfg.timeMode = TimeMode::realtime;
     cfg.sound = !argFlag(argc, argv, "--mute");   // the world's sounds through the default audio device
@@ -163,6 +177,7 @@ int main(int argc, char** argv) {
     if (r.validationEnabled)
         std::cout << "validation including teardown: " << validationTotal << " messages" << std::endl;
 
+    if (!r.error.empty()) return 1;
     if (cfg.frameLimit > 0) {
         if (r.readbackCopies != 0) return 3;
         if (r.validationEnabled && validationTotal != 0) return 4;

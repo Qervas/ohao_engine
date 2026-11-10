@@ -1,19 +1,20 @@
 #pragma once
 // Effects from the step (sub-project 12, docs/specs/2026-10-28-vfx-design.md, "The step: spawn
-// records"): the `vfx` simulate system, after combat, impact_marks and the animation step, before
+// records"): the `vfx` simulate system, after combat and the animation step, before
 // audio_schedule. Each step it:
 //   1. loads the world's set (its VfxSet's .vfx.json, else the default set);
-//   2. reads the combat log after the step's last `restart`: a shot spawns its muzzle effect at the
-//      logical muzzle (the eye, kMuzzleAhead along the round) and, at the set's cadence, a tracer to
-//      the round's hit or 60 m; a hit spawns its surface's impact effect and decal; an explode the
-//      boom, the smoke and the scorch decal straight down;
+//   2. reads the step's events of the channels its set binds (`events`, by name: a game's, through their cues,
+//      ecs/events.hpp), in the order they happened: the slice's shot spawns its muzzle effect ahead of the eye
+//      and, at the set's cadence, a tracer to where the round stopped or 60 m; a hit its surface's impact
+//      effect and decal; an explode the boom, the smoke and the scorch decal straight down;
 //   3. steps placed VfxEmitters by step count (rate records a second, or one when activated);
 //   4. drops records past their life, and the oldest of a kind over its cap (counted).
-// Records are plain data, runtime only: carried by snapshots (the World's SnapshotHook, chained with
-// physics' and the audio schedule's), never saved or hashed. The same steps give the same records in
+// Records are plain data, runtime only: carried by snapshots and covered by world.hash (the World's snapshot
+// hooks), never saved to a file. The same steps give the same records in
 // every host. A record's look is a closed form of its seed and age (vfx/particle_math.hpp), drawn by
 // the renderer; nothing here is drawn.
 
+#include "ecs/snapshot_hook.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "vfx/vfx_set.hpp"
 
@@ -32,7 +33,6 @@ namespace ohao::ecs {
 
 class World;
 
-inline constexpr float kMuzzleAhead = 0.5f;     // m along the round from the eye: the logical muzzle
 inline constexpr float kTracerMiss = 60.0f;     // m: a tracer for a miss runs this far
 
 struct VfxRecord {
@@ -40,10 +40,10 @@ struct VfxRecord {
     static constexpr std::size_t kKinds = 4;
     Kind kind{Kind::Effect};
     uint16_t effect{0};             // index into the set's effects (Effect, Light), tracers or decals
-    uint32_t seed{0};               // vfxHash of the event's seq and kind, or of a placed emitter's seed and count
+    uint32_t seed{0};               // vfxHash of the event's identity and part, or of a placed emitter's seed and count
     uint64_t seq{0};                // the record's own, in write order (vfx.info's cursor)
     uint64_t spawnStep{0};          // the vfx step it was written in (1 = the first)
-    uint64_t sourceSeq{0};          // the combat event's seq (0: a placed emitter)
+    uint64_t sourceSeq{0};          // the event's seq in the World's log (0: a placed emitter)
     entt::entity source{entt::null};   // who caused it (the shooter, the thrower, the emitter's entity)
     entt::entity on{entt::null};    // a decal: what it is attached to (null: the world)
     glm::mat4 pose{1.0f};           // world pose (origin; -Z the throw or the surface normal); a decal's local to `on`
@@ -86,7 +86,7 @@ public:
     [[nodiscard]] const std::string& setPath() const;
     // Changes whenever the set in use does (a VfxSet read, setSet).
     [[nodiscard]] uint64_t setVersion() const noexcept;
-    // The last step's dt (1/60 s before any step): a record's age is (steps - spawnStep - 1 + alpha) of them.
+    // The World's dt: a record's age is (steps - spawnStep - 1 + alpha) of them.
     [[nodiscard]] float stepDt() const noexcept;
     // The set to use instead of the VfxSet's (tests, benches); a VfxSet change reads its file again.
     void setSet(vfx::VfxSet set);
@@ -97,9 +97,10 @@ public:
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;
 
-    // The state a snapshot carries (installVfx chains them into the SnapshotHook).
+    // The state a snapshot carries (installVfx's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
+    void hashState(StateHash& h) const;   // what saveState keeps (world.hash)
 
     struct Impl;
 
@@ -107,8 +108,8 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `vfx` simulate system (before audio_schedule, else last) and chains its state into the
-// World's SnapshotHook. Returns the installed system if there is one.
+// Installs the `vfx` simulate system (after animation and the writers of what it binds) and its snapshot hook.
+// Returns the installed system if there is one.
 VfxSystem& installVfx(World& world, AssetResolver& assets);
 [[nodiscard]] VfxSystem* vfxSystem(World& world);
 [[nodiscard]] const VfxSystem* vfxSystem(const World& world);

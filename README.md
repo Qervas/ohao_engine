@@ -125,7 +125,7 @@ The engine is built to be developed by agents too. [AGENTS.md](AGENTS.md) is the
 
 ## Quick start
 
-You need Windows with MSVC (the platform in daily use), CMake 3.20 or newer, the Vulkan SDK 1.3 with `slangc` (pinned in `shaders/slangc.version`), Python 3, and a GPU with Vulkan ray tracing for the RT paths. Use a real CMake: if conda's `cmake` comes first on your PATH, call the real one by its full path.
+You need Linux with GCC and Ninja (the platform in daily use) or Windows with MSVC, CMake 3.20 or newer, the Vulkan SDK 1.3, `slangc` from Slang's own release at the versions pinned in `shaders/slangc.version` (SPIR-V) and `shaders/slangc_cpp.version` (the CPU twins' C++), on Linux unpacked into `~/.local/opt/slang-<version>`, where configure finds them, Python 3, and a GPU with Vulkan ray tracing for the RT paths. Use a real CMake: if conda's `cmake` comes first on your PATH, call the real one by its full path.
 
 ```console
 $ cmake -B build -S .
@@ -177,7 +177,7 @@ OHAO implements these published techniques. Each one is our own code unless the 
 
 ### Libraries
 
-[Jolt Physics](https://github.com/jrouwe/JoltPhysics) 5.1 · [EnTT](https://github.com/skypjack/entt) 3.13 · [miniaudio](https://github.com/mackron/miniaudio) 0.11.21 · [simdjson](https://github.com/simdjson/simdjson) · [fast_float](https://github.com/fastfloat/fast_float) · [nlohmann/json](https://github.com/nlohmann/json) · [Assimp](https://github.com/assimp/assimp) 5.4.3 · [ufbx](https://github.com/ufbx/ufbx) · [GLFW](https://github.com/glfw/glfw) 3.4 · [glm](https://github.com/g-truc/glm) · [stb](https://github.com/nothings/stb) · [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) · [unordered_dense](https://github.com/martinus/unordered_dense) · [Slang](https://github.com/shader-slang/slang) (from the Vulkan SDK) · [NVIDIA NRD](https://github.com/NVIDIAGameWorks/RayTracingDenoiser) 4.17 with NRI (fetched at configure time) · [Intel Open Image Denoise](https://github.com/RenderKit/oidn) (optional) · [GoogleTest](https://github.com/google/googletest) and [Boost.PFR](https://github.com/boostorg/pfr) (tests only). Each one is used under its own licence.
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) 5.1 · [EnTT](https://github.com/skypjack/entt) 3.13 · [miniaudio](https://github.com/mackron/miniaudio) 0.11.21 · [simdjson](https://github.com/simdjson/simdjson) · [fast_float](https://github.com/fastfloat/fast_float) · [nlohmann/json](https://github.com/nlohmann/json) · [Assimp](https://github.com/assimp/assimp) 5.4.3 · [ufbx](https://github.com/ufbx/ufbx) · [GLFW](https://github.com/glfw/glfw) 3.4 · [glm](https://github.com/g-truc/glm) · [stb](https://github.com/nothings/stb) · [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) · [unordered_dense](https://github.com/martinus/unordered_dense) · [Slang](https://github.com/shader-slang/slang) (from the Vulkan SDK) · [NVIDIA NRD](https://github.com/NVIDIAGameWorks/RayTracingDenoiser) 4.17 with NRI (fetched at configure time) · [Intel Open Image Denoise](https://github.com/RenderKit/oidn) (optional). Each one is used under its own licence.
 
 **NVIDIA DLSS** Ray Reconstruction is used under the NVIDIA RTX SDKs licence. It is never committed to this repository: `tools/fetch_dlss.py` downloads the pinned SDK into the git-ignored `external/DLSS`. NVIDIA, DLSS and the DLSS logo are trademarks of NVIDIA Corporation.
 

@@ -27,7 +27,22 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/NVIDIAGameWorks/RayTracingDenoiser.git
     GIT_TAG        v4.17.2
 )
+# NRD's CMakeLists writes Shaders/NRDConfig.hlsli at every configure, and every NRD shader includes it: each
+# configure would recompile NRD's shaders and library and relink every program (a shader edit reconfigures). The
+# header gets its old time back when its text is unchanged (file(COPY) keeps a file's time).
+set(OHAO_NRD_CONFIG "${FETCHCONTENT_BASE_DIR}/nrd-src/Shaders/NRDConfig.hlsli")
+set(OHAO_NRD_CONFIG_KEPT "${CMAKE_BINARY_DIR}/nrd_config_kept")
+if(EXISTS "${OHAO_NRD_CONFIG}")
+    file(COPY "${OHAO_NRD_CONFIG}" DESTINATION "${OHAO_NRD_CONFIG_KEPT}")
+endif()
 FetchContent_MakeAvailable(NRD)
+if(EXISTS "${OHAO_NRD_CONFIG_KEPT}/NRDConfig.hlsli")
+    file(READ "${OHAO_NRD_CONFIG}" OHAO_NRD_CONFIG_NOW)
+    file(READ "${OHAO_NRD_CONFIG_KEPT}/NRDConfig.hlsli" OHAO_NRD_CONFIG_BEFORE)
+    if(OHAO_NRD_CONFIG_NOW STREQUAL OHAO_NRD_CONFIG_BEFORE)
+        file(COPY "${OHAO_NRD_CONFIG_KEPT}/NRDConfig.hlsli" DESTINATION "${FETCHCONTENT_BASE_DIR}/nrd-src/Shaders")
+    endif()
+endif()
 
 if(TARGET NRD)
     message(STATUS "NRD: target 'NRD' available (pinned tag v4.17.2)")

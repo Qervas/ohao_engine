@@ -5,6 +5,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
+#include "game/module.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "reflect/json_writer.hpp"
 
@@ -267,6 +268,20 @@ void shaderChecks(const Options& o, std::vector<Check>& out) {
 
 // ---- assets, tools ------------------------------------------------------------------------
 
+// Every reflected type registers without a mistake (a unit on a non-numeric field, a name taken twice, ...): the
+// registry records them and nothing else reads them, and a game's reload refuses a build whose types do not register.
+void typesCheck(const Options& o, std::vector<Check>& out) {
+    reflect::TypeRegistry types;
+    ecs::registerSceneTypes(types);
+    if (o.game) o.game->registerTypes(types);
+    const std::string which = o.game ? "the engine's and " + std::string(o.game->name()) + "'s" : "the engine's";
+    if (types.errors().empty())
+        out.push_back(pass("types.register", "error", std::to_string(types.types().size()) + " types (" + which + ")"));
+    else
+        out.push_back(fail("types.register", "error", listCapped(types.errors()),
+                           "fix the registration (ecs/scene_types.cpp, ecs/event_types.cpp, a game's registerTypes)"));
+}
+
 void assetCheck(const Options& o, std::vector<Check>& out) {
     const fs::path scenes = o.root / "assets" / "scenes";
     std::error_code ec;
@@ -317,10 +332,14 @@ void assetCheck(const Options& o, std::vector<Check>& out) {
                            "restore the files (git checkout, or git lfs pull for large assets)"));
 }
 
-// slangc where shaders/CMakeLists.txt looks: $VULKAN_SDK/Bin, the newest C:/VulkanSDK/*/Bin,
-// then PATH. Its version against shaders/slangc.version: the pin the SPIR-V was made with.
+// The slangc this build compiled its shaders with (OHAO_SLANGC, from the configure step), else $VULKAN_SDK/Bin, the
+// newest C:/VulkanSDK/*/Bin, then PATH. Its version against shaders/slangc.version: the pin the SPIR-V was made
+// with (the CPU twins' slangc, shaders/slangc_cpp.version, is the configure step's to check).
 fs::path findSlangc() {
     std::error_code ec;
+#ifdef OHAO_SLANGC
+    if (fs::is_regular_file(OHAO_SLANGC, ec)) return fs::path(OHAO_SLANGC);
+#endif
 #ifdef _WIN32
     const char* exe = "slangc.exe";
 #else
@@ -362,7 +381,8 @@ void slangcCheck(const Options& o, std::vector<Check>& out) {
     const fs::path slangc = findSlangc();
     if (slangc.empty()) {
         out.push_back(fail("tools.slangc", "error", "slangc not in $VULKAN_SDK, C:/VulkanSDK nor on PATH",
-                           "install the Vulkan SDK (it ships slangc)"));
+                           "unpack Slang's own release at shaders/slangc.version's version into "
+                           "~/.local/opt/slang-<version> and configure again"));
         return;
     }
 #ifdef _WIN32   // cmd /c strips one outer pair of quotes
@@ -378,7 +398,9 @@ void slangcCheck(const Options& o, std::vector<Check>& out) {
     if (!pinned.empty() && version.rfind(pinned, 0) != 0)
         out.push_back(fail("tools.slangc", "warn",
                            detail + ", not the pinned " + pinned + ": the SPIR-V may differ from the goldens' build",
-                           "install the Vulkan SDK whose slangc is " + pinned + " (shaders/slangc.version)"));
+                           "configure with -DSLANGC naming Slang " + pinned +
+                               "'s slangc (shaders/slangc.version; on Linux ~/.local/opt/slang-" + pinned +
+                               "/bin/slangc)"));
     else
         out.push_back(pass("tools.slangc", "error", detail));
 }
@@ -396,19 +418,8 @@ void toolChecks(const Options& o, std::vector<Check>& out) {
                            "tools/check.py refuses conda's"));
     else
         out.push_back(pass("tools.cmake", "warn", cmake.generic_string()));
-
-#ifdef _WIN32
-    const char* quiet = " >NUL 2>&1";
-#else
-    const char* quiet = " >/dev/null 2>&1";
-#endif
-    const int rc = std::system((std::string("python -c \"import numpy, PIL, jsonschema\"") + quiet).c_str());
-    if (rc == 0)
-        out.push_back(pass("python.deps", "warn", "python with numpy, Pillow and jsonschema"));
-    else
-        out.push_back(fail("python.deps", "warn",
-                           "python with numpy, Pillow and jsonschema not found: the test harnesses need them",
-                           "pip install numpy Pillow jsonschema"));
+    // The harnesses' Python modules are checked by tools/check.py, on the interpreter CTest runs them with (the
+    // configured Python3_EXECUTABLE): `python` on PATH is often another one.
 }
 
 } // namespace
@@ -520,6 +531,7 @@ std::vector<Check> run(const Options& options) {
     std::vector<Check> out;
     if (!o.cpuOnly) vulkanChecks(out);
     shaderChecks(o, out);
+    typesCheck(o, out);
     assetCheck(o, out);
     toolChecks(o, out);
     if (!o.cpuOnly) gpuCheck(out);

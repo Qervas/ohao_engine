@@ -1,14 +1,6 @@
 #pragma once
 
-// Render Technique Interfaces — pluggable rendering methods.
-//
-// Each feature (shadows, GI, reflections) has an interface.
-// Multiple implementations exist per interface:
-//   IGITechnique      →  SSGI, RTGI, PathTracedGI
-//   IReflectionTech   →  SSR, RTReflections
-//
-// The renderer holds one active technique per feature.
-// Swap at runtime: renderer.setGITechnique(std::make_unique<RTGI>());
+// The hybrid frame's quality and RT GI's inputs and outputs (render/rt/rt_gi_technique.hpp).
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
@@ -19,9 +11,6 @@
 namespace ohao::render { struct LightDesc; }
 
 namespace ohao {
-
-class Scene;
-class Camera;
 
 // The hybrid frame's quality (sub-project 2b spec, "Reference quality"). Realtime is the
 // budgeted frame; reference resamples and traces without reuse or denoising (RT direct light,
@@ -68,59 +57,6 @@ struct GIOutput {
     VkImage indirectLight;         // RGBA16F, full resolution: rgb incoming radiance (no albedo), a the environment's visibility
     VkImageView indirectLightView;
     VkImageView reflectionView;    // RGBA16F, full resolution: rgb the radiance over the GGX lobe (no albedo), a roughness
-};
-
-class IGITechnique {
-public:
-    virtual ~IGITechnique() = default;
-
-    virtual const char* getName() const = 0;
-    virtual bool needsRT() const = 0;
-
-    virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-                      uint32_t width, uint32_t height) = 0;
-    virtual void resize(uint32_t width, uint32_t height) = 0;
-    virtual void render(VkCommandBuffer cmd, const GIInput& input) = 0;
-    virtual GIOutput getOutput() const = 0;
-    virtual void destroy() = 0;
-};
-
-// ─── Reflection Technique ────────────────────────────────────────────
-
-struct ReflectionInput {
-    VkImageView positionBuffer;
-    VkImageView normalBuffer;
-    VkImageView albedoBuffer;      // for metallic reflections
-    VkImageView depthBuffer;
-    VkImageView litSceneBuffer;    // current frame lighting (for SSR)
-    glm::mat4 view;
-    glm::mat4 proj;
-    glm::vec3 cameraPos;
-    uint32_t width;
-    uint32_t height;
-    float roughnessThreshold;      // skip reflections above this roughness
-
-    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-};
-
-struct ReflectionOutput {
-    VkImage reflections;           // RGBA16F — reflected color + confidence
-    VkImageView reflectionsView;
-};
-
-class IReflectionTechnique {
-public:
-    virtual ~IReflectionTechnique() = default;
-
-    virtual const char* getName() const = 0;
-    virtual bool needsRT() const = 0;
-
-    virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-                      uint32_t width, uint32_t height) = 0;
-    virtual void resize(uint32_t width, uint32_t height) = 0;
-    virtual void render(VkCommandBuffer cmd, const ReflectionInput& input) = 0;
-    virtual ReflectionOutput getOutput() const = 0;
-    virtual void destroy() = 0;
 };
 
 } // namespace ohao

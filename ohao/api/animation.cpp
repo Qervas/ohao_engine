@@ -1,5 +1,5 @@
 // animation.info (sub-project 10, step 1; docs/specs/2026-10-28-animation-design.md, "The agent-facing
-// surface"): every Animator's layers, and the clip events since a cursor.
+// surface"): every Animator's layers. Its clip events are events.read's anim.clip_event (step 3c).
 //
 // The session reaches animation through what installAnimation left on the World
 // (ecs::animationSystem); a World without it answers E_STATE. Reading changes nothing, so it does not
@@ -40,7 +40,7 @@ std::string nameOf(const Session::Impl& s, entt::entity e) {
 // One layer: its state, the clip that times it and the time into that clip (the newest step's,
 // wrapped or clamped as the pose samples it), and the fade.
 void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState& a, const anim::Params& params,
-                JsonWriter& out) {
+                float dt, JsonWriter& out) {
     const anim::BoundLayer& l = g.layers[static_cast<std::size_t>(index)];
     out.beginObject();
     out.key("state"); out.string(a.state.empty() ? l.stateNames[static_cast<std::size_t>(l.initial)] : a.state);
@@ -50,7 +50,7 @@ void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState&
         const int clip = st.clip >= 0 ? st.clip : (st.points.empty() ? -1 : st.points.front().first);
         if (clip >= 0) {
             const anim::BoundClip& c = g.clips[static_cast<std::size_t>(clip)];
-            const float t = anim::stateTime(g, st, clip, static_cast<float>(a.steps), params);
+            const float t = anim::stateTime(g, st, clip, static_cast<float>(a.steps), dt, params);
             out.key("clip"); out.string(c.name);
             out.key("t"); out.float32(r3(anim::clipTime(c.clip.duration, t, c.loop)));
         }
@@ -92,7 +92,7 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
     }
 
     out.beginObject();
-    out.key("steps"); out.uint64(anim->steps());
+    out.key("steps"); out.uint64(s.world.steps());
     out.key("animators");
     out.beginArray();
     for (std::size_t i = 0; i < animators.size() && i < kMaxAnimators; ++i) {
@@ -115,7 +115,7 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
             for (std::size_t li = 0; li < g->layers.size(); ++li) {
                 // Before its first step an animator has no layers: each at its initial state.
                 const ecs::AnimLayerState st = li < a.layers.size() ? a.layers[li] : ecs::AnimLayerState{};
-                writeLayer(*g, static_cast<int>(li), st, values, out);
+                writeLayer(*g, static_cast<int>(li), st, values, s.world.stepDt(), out);
             }
         }
         out.endArray();
@@ -124,26 +124,6 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
     out.endArray();
     if (animators.size() > kMaxAnimators) { out.key("more"); out.uint64(animators.size() - kMaxAnimators); }
 
-    // The clip events after the cursor, as combat.events: numbered from 1.
-    const auto since = static_cast<uint64_t>(p.since);
-    uint64_t dropped = 0;
-    const std::vector<ecs::AnimEvent> events = anim->eventsSince(since, static_cast<std::size_t>(p.max), dropped);
-    out.key("events");
-    out.beginArray();
-    for (const ecs::AnimEvent& ev : events) {
-        if (p.entity && ev.entity != *p.entity) continue;
-        out.beginObject();
-        out.key("seq"); out.uint64(ev.seq + 1);
-        out.key("step"); out.uint64(ev.step);
-        out.key("entity"); out.string(hex16(ev.entity));
-        out.key("layer"); out.uint64(ev.layer);
-        out.key("clip"); out.string(ev.clip);
-        out.key("name"); out.string(utf8Prefix(ev.name, 32));
-        out.endObject();
-    }
-    out.endArray();
-    out.key("next"); out.uint64(events.empty() ? std::min(since, anim->nextEventSeq()) : events.back().seq + 1);
-    if (dropped) { out.key("dropped"); out.uint64(dropped); }
     out.endObject();
     return true;
 }

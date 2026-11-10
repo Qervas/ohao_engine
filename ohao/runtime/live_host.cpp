@@ -1,15 +1,18 @@
 #include "runtime/live_host.hpp"
+#include "game/install.hpp"
+#include "game/loader.hpp"
+#include "engine/install.hpp"
+#include "runtime/sleep_until.hpp"
 
 #include "core/log.hpp"
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/combat.hpp"
-#include "ecs/combat_hud.hpp"
-#include "ecs/instantiate.hpp"
+#include "world_render/present.hpp"
+#include "world_render/instantiate.hpp"
 #include "ecs/physics_scene.hpp"
-#include "ecs/render_extract.hpp"
-#include "ecs/vfx_draw.hpp"
+#include "world_render/render_extract.hpp"
+#include "world_render/vfx_draw.hpp"
 #include "ecs/scene_view.hpp"
 #include "level/level_system.hpp"
 #include "render/deferred/deferred_renderer.hpp"
@@ -65,6 +68,12 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
         return false;
     }
     m_renderer->setRenderMode(RenderMode::Deferred);
+    m_maxFps = cfg.maxFps < 0 ? (m_window.refreshRate() > 0 ? m_window.refreshRate() : 60) : cfg.maxFps;
+    if (m_renderer->presentMode() == PresentMode::Fifo) m_maxFps = 0;
+    m_framePeriod = m_maxFps > 0 ? std::chrono::nanoseconds(1'000'000'000LL / m_maxFps) : std::chrono::nanoseconds(0);
+    OHAO_LOG(Info, runtime, "live host: frame rate {}", m_maxFps > 0 ? std::format("capped at {} fps", m_maxFps)
+                                                      : std::string(m_renderer->presentMode() == PresentMode::Fifo
+                                                                        ? "paced by the display (fifo)" : "uncapped"));
     if (auto* deferred = m_renderer->getDeferredRenderer())
         if (auto* pp = deferred->getPostProcessing()) {
             m_defaultEv100 = pp->ev100();
@@ -79,19 +88,10 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_liveMode = m_renderer->getRenderMode();
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
-    ecs::installRenderExtract(*m_world, m_renderer->renderScene());
-    ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
-    level::installLevels(*m_world, *m_assets, types);   // before instantiate: Level components expand into entities
-    ecs::installPhysics(*m_world, *m_assets);            // after transform: colliders become bodies
-    ecs::installCombat(*m_world);                        // weapons fire after physics steps
-    ecs::installAnimation(*m_world, *m_assets);          // animators step after combat; pose before the extract
-    // The audio schedule: the step's last. OHAO_AUDIO_TRACE=1 logs its commands (check_live compares
-    // a window's with a headless host's).
-    ecs::installAudio(*m_world, *m_assets).setTrace(audioTraceRequested());
-    ecs::installVfx(*m_world, *m_assets);   // effects' spawn records (inserted before the schedule)
-    // The step's effect records into the frame (age at this frame's alpha), as every host draws them.
-    ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
-    m_session = std::make_unique<api::Session>(*m_world, types);
+    engine::installEngine(*m_world, {*m_assets, types});
+    if (cfg.game) game::installGame(*m_world, *cfg.game->module);
+    engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
+    m_session = std::make_unique<api::Session>(*m_world, types, cfg.game);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);
     m_session->setHost(this);
@@ -119,8 +119,8 @@ void LiveHost::renderFrame() {
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
     if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
     m_liveSamples = changed ? 1 : m_liveSamples + 1;
-    // The window always draws the combat HUD (empty without a player: no pass).
-    render::HudList hud = ecs::combatHud(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
+    // The window always draws the game's HUDs (empty without one: no pass).
+    render::HudList hud = ecs::drawHuds(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
     if (m_cfg.latencyReadout) drawLatencyReadout(hud);
     m_renderer->setHud(hud);
     m_renderer->render();
@@ -134,11 +134,18 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
 
     auto last = Clock::now();
     uint64_t frame = 0;
+    std::string error;
+    // What escapes a frame ends the loop in order (the report says what); a GPU fault never returns here
+    // (gpu::reportFault exits the process).
+    try {
     while (!m_quit && !m_window.shouldClose()) {
         if (m_cfg.frameLimit > 0 && frame >= static_cast<uint64_t>(m_cfg.frameLimit)) break;
         if (static_cast<int64_t>(frame) == m_cfg.resizeAtFrame)
             m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
+        // The frame-rate cap: sleep before the poll, so the poll is as fresh as uncapped; the frame starts later.
+        if (m_framePeriod.count() > 0 && m_time.running() && m_lastFrameStart != FrameTime{})
+            sleepUntil(m_lastFrameStart + m_framePeriod);
         const FrameTime frameStart = Clock::now();
         // Late input sampling (spec "Present mode and late input sampling"): the input is polled
         // only once the frames queued ahead are few enough, so it goes into the very next frame.
@@ -262,6 +269,10 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         if (pump && pump->flush) pump->flush();   // replies after the frame they caused
         ++frame;
     }
+    } catch (const std::exception& e) {
+        error = e.what();
+        OHAO_LOG(Error, runtime, "live host: frame {} ended the loop: {}", frame, error);
+    }
     if (pump && pump->flush) pump->flush();
 
     RunReport r;
@@ -274,6 +285,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
     r.avgFrameMs = m_stats.avgCpuMs();
     r.avgGpuMs = m_stats.avgGpuMs();
     r.fps = m_stats.fps();
+    r.error = std::move(error);
     return r;
 }
 
@@ -356,6 +368,7 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
         out.p99Ms = p->p99Ms;
         out.steps = p->steps;
         out.discardedSteps = p->discardedSteps;
+        out.maxFps = m_maxFps;
         st->pacing = out;
     }
     return st;
@@ -363,12 +376,12 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
 
 std::optional<api::RenderSettings> LiveHost::renderSettings() {
     if (!m_renderer) return std::nullopt;
-    return readRenderSettings(*m_renderer);
+    return m_renderer->renderSettings();
 }
 
 void LiveHost::setRenderSettings(const api::RenderSettings& settings) {
     if (!m_renderer) return;
-    applyRenderSettings(*m_renderer, settings);
+    m_renderer->setRenderSettings(settings);
     m_needRender = true;
 }
 

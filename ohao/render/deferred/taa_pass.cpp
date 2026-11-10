@@ -1,4 +1,5 @@
 #include "taa_pass.hpp"
+#include "render/shader_bindings/postprocess_taa_resolve.hpp"
 #include <array>
 
 namespace ohao {
@@ -212,69 +213,26 @@ void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
     if (fallbackView == VK_NULL_HANDLE) fallbackView = m_historyViews[historyIdx];
     if (fallbackView == VK_NULL_HANDLE) return;  // No valid view at all
 
-    // ALWAYS write all 5 bindings — uninitialized descriptors cause SEGV on NVIDIA
-    std::array<VkDescriptorImageInfo, 5> imageInfos{};
-    std::array<VkWriteDescriptorSet, 5> writes{};
-
-    // Binding 0: Current frame
-    imageInfos[0].sampler = m_sampler;
-    imageInfos[0].imageView = m_currentFrameView != VK_NULL_HANDLE ? m_currentFrameView : fallbackView;
-    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descriptorSets[slot];
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &imageInfos[0];
-
-    // Binding 1: History frame (opposite buffer)
-    imageInfos[1].sampler = m_sampler;
-    imageInfos[1].imageView = m_historyViews[historyIdx] != VK_NULL_HANDLE ? m_historyViews[historyIdx] : fallbackView;
-    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descriptorSets[slot];
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &imageInfos[1];
-
-    // Binding 2: Velocity (fallback to current frame — shader uses flags to skip)
-    imageInfos[2].sampler = m_sampler;
-    imageInfos[2].imageView = m_velocityView != VK_NULL_HANDLE ? m_velocityView : fallbackView;
-    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descriptorSets[slot];
-    writes[2].dstBinding = 2;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[2].descriptorCount = 1;
-    writes[2].pImageInfo = &imageInfos[2];
-
-    // Binding 3: Depth (fallback to current frame)
-    imageInfos[3].sampler = m_sampler;
-    imageInfos[3].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
+    // Every binding is written, the fallback where a view is missing: an unwritten descriptor crashed NVIDIA's driver.
+    namespace T = shader::postprocess_taa_resolve;
+    constexpr VkImageLayout kRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const auto pick = [&](VkImageView v) { return v != VK_NULL_HANDLE ? v : fallbackView; };
     // G-buffer depth stays DEPTH_STENCIL_READ_ONLY from the G-buffer pass to frame end.
-    imageInfos[3].imageLayout = m_depthView != VK_NULL_HANDLE
-        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_descriptorSets[slot];
-    writes[3].dstBinding = 3;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[3].descriptorCount = 1;
-    writes[3].pImageInfo = &imageInfos[3];
-
-    // Binding 4: the transparency mask (fallback to current frame; flag bit 2 says it is bound)
-    imageInfos[4].sampler = m_sampler;
-    imageInfos[4].imageView = m_maskView != VK_NULL_HANDLE ? m_maskView : fallbackView;
-    imageInfos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = m_descriptorSets[slot];
-    writes[4].dstBinding = 4;
-    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[4].descriptorCount = 1;
-    writes[4].pImageInfo = &imageInfos[4];
-
-    vkUpdateDescriptorSets(m_device, 5, writes.data(), 0, nullptr);
+    const VkImageLayout depthLayout =
+        m_depthView != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : kRead;
+    const std::array<std::pair<shader::Binding, VkDescriptorImageInfo>, T::kSet0.size()> images{{
+        {T::currentFrame, {m_sampler, pick(m_currentFrameView), kRead}},
+        {T::historyFrame, {m_sampler, pick(m_historyViews[historyIdx]), kRead}},   // the opposite buffer
+        {T::velocityBuffer, {m_sampler, pick(m_velocityView), kRead}},          // the shader's flags skip a fallback
+        {T::depthBuffer, {m_sampler, pick(m_depthView), depthLayout}},
+        {T::transparencyMask, {m_sampler, pick(m_maskView), kRead}},            // flag bit 2 says it is bound
+    }};
+    std::array<VkWriteDescriptorSet, T::kSet0.size()> writes{};
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        writes[i] = shader::write(images[i].first, m_descriptorSets[slot]);
+        writes[i].pImageInfo = &images[i].second;
+    }
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 bool TAAPass::createHistoryBuffers() {
@@ -430,14 +388,7 @@ bool TAAPass::createRenderPass() {
 }
 
 bool TAAPass::createDescriptors() {
-    // Bindings: 0 = current frame, 1 = history frame, 2 = velocity, 3 = depth, 4 = transparency mask
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
-    for (uint32_t i = 0; i < 5; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    }
+    const auto bindings = shader::layoutBindings(shader::postprocess_taa_resolve::kSet0, VK_SHADER_STAGE_FRAGMENT_BIT);
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

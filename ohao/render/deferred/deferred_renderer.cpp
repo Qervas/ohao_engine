@@ -812,7 +812,7 @@ void DeferredRenderer::configureCSM(uint32_t cascades, uint32_t size) {
 void DeferredRenderer::importGraphTextures() {
     // Reinitialize the graph to clear previous imported handles.
     m_renderGraph.shutdown();
-    m_renderGraph.initialize(m_device, m_physicalDevice);
+    m_renderGraph.initialize(m_device);
 
     // Reset handles
     m_graphDepthHandle   = TextureHandle::invalid();
@@ -868,44 +868,6 @@ void DeferredRenderer::importGraphTextures() {
     }
 
     OHAO_LOG(Debug, render, "DeferredRenderer: RenderGraph re-imported textures ({}x{})", w, h);
-}
-
-// ---------------------------------------------------------------------------
-// Hot-reload — runtime shader swap for MCP AI agents
-// ---------------------------------------------------------------------------
-
-bool DeferredRenderer::reloadShaderForPass(std::string_view passName, std::string_view spvPath) {
-    // Map pass names to pass pointers
-    struct PassEntry {
-        const char* name;
-        RenderPassBase* pass;
-    };
-
-    PassEntry entries[] = {
-        {"GBuffer",          m_gbufferPass.get()},
-        {"CSM",              m_csmPass.get()},
-        {"DeferredLighting", m_lightingPass.get()},
-    };
-
-    for (const auto& e : entries) {
-        if (passName == e.name) {
-            if (!e.pass) {
-                OHAO_LOG(Error, render, "DeferredRenderer::reloadShader: pass '{}' not initialized", passName);
-                return false;
-            }
-            bool ok = e.pass->reloadShader(spvPath);
-            if (ok) {
-                OHAO_LOG(Info, render, "DeferredRenderer: hot-reloaded shader for {}", passName);
-            } else {
-                OHAO_LOG(Error, render, "DeferredRenderer: hot-reload FAILED for {} (pass doesn't support hot-reload or SPV invalid)",
-                         passName);
-            }
-            return ok;
-        }
-    }
-
-    OHAO_LOG(Error, render, "DeferredRenderer::reloadShader: unknown pass '{}'", passName);
-    return false;
 }
 
 } // namespace ohao

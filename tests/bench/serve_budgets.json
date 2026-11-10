@@ -1,5 +1,5 @@
 {
-  "comment": "Sub-project 4 spec 'Performance / Budgets' (serve_bench; medians, Release, reference machine). CPU: ohao serve headless with bench10k. GPU (window_*, reader_*): ohao serve --window 1280x720, Cornell deferred, lockstep, no post; window_capture_rt_inline_ms the same window capturing rt_offline at 16 spp without a denoiser (Frank's ruling 2026-10-25: 150 ms, measured 118-128). Changing a budget needs Frank's OK.",
+  "comment": "Sub-project 4 spec 'Performance / Budgets' (serve_bench; medians, Release, reference machine). CPU: ohao serve headless with bench10k. GPU (window_*, reader_*): ohao serve --window 1280x720, Cornell deferred, lockstep, no post; window_capture_rt_inline_ms the same window capturing rt_offline at 16 spp without a denoiser (Frank's ruling 2026-10-25: 150 ms, measured 118-128). events_read_bytes: events.read of the last 16 events, the play scene mid-fight (Frank's ruling 2026-11-09: 2 KB, measured 1,832 B). Changing a budget needs Frank's OK.",
   "budgets": {
     "window_step_present_ms": 8,
     "window_readback_ms": 2,
@@ -18,6 +18,7 @@
     "log_ring_80_ns": 300,
     "tools_list_bytes": 28672,
     "audio_info_bytes": 2048,
+    "events_read_bytes": 2048,
     "vfx_info_bytes": 2048
   },
   "noise": {

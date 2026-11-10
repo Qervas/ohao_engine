@@ -10,7 +10,8 @@
 //     components do not hold (velocities, sleep), so a restore mid-motion replays exactly
 //     (world.hash and world.diff leave it out: they are about the saved state);
 //   - the id generator, the next creation sequence and the caller's frame counter;
-//   - what the World's SnapshotHook keeps (ecs/snapshot_hook.hpp: the physics simulation).
+//   - what the World's snapshot hooks keep (ecs/snapshot_hook.hpp: physics, the audio schedule, vfx);
+//   - the World's step and the events the next step reads (ecs/events.hpp; none for a snapshot taken during a step).
 // Derived runtime components (Children, WorldTransform, render and GPU state) are not
 // captured; their owners rebuild them from the restored components, driven by the same
 // signals as any edit.
@@ -39,6 +40,8 @@ struct Snapshot {
     Snapshot& operator=(const Snapshot&) = delete;
 
     std::vector<uint64_t> ids;         // row -> EntityId; rows are in creation order
+    std::vector<entt::entity> handles; // row -> the entity's handle: a restore recreates a missing one with it, so
+                                       // references held as handles (Joint::other, systems' states) stay valid
     std::vector<uint64_t> order;       // row -> CreationOrder
     std::vector<uint32_t> parent;      // row -> parent row, or kNoRow
     std::vector<uint32_t> childBegin;  // children of row r: children[childBegin[r] .. childBegin[r + 1])
@@ -51,7 +54,10 @@ struct Snapshot {
     World::IdGenState idGen{};
     uint64_t nextSeq{0};
     uint64_t frame{0};
-    std::shared_ptr<const void> systems;   // the SnapshotHook's state, or null (not counted in bytes())
+    std::vector<InputMap> inputs;          // the World's input streams: held keys and axes carry across a step
+    uint64_t steps{0};                     // the World's step
+    std::shared_ptr<const void> events;    // the next step's events (EventLog::saveWindow), or null
+    std::shared_ptr<const void> systems;   // the snapshot hooks' states (SystemStates), or null (not counted in bytes())
 
     [[nodiscard]] std::size_t rows() const noexcept { return ids.size(); }
     [[nodiscard]] std::size_t bytes() const noexcept;   // memory held by the snapshot
@@ -67,13 +73,17 @@ struct RestoreStats {
 // Captures over an existing snapshot, reusing its memory: recapturing allocates nothing
 // once the world has stopped growing (an agent re-snapshotting "base" every step).
 void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapshot& into, uint64_t frame = 0);
-// `snapshot` must come from a world with the same registrations. Never fails. The components
-// first, then the SnapshotHook's state.
-RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot);
+// What a restore puts back besides the components and the hooks' states: the World's input too (world.restore, a
+// replay), or not (a round's restart: the player's keys are where their hands are now).
+enum class RestoreInput : uint8_t { Yes, No };
+// `snapshot` must come from a world with the same registrations. The components first, then the input, the World's
+// step, the snapshot hooks' states, a `world.restore` event (history: no step reads it), and the snapshot's next-step
+// events. Between steps only, as takeSnapshot: during a step it throws std::logic_error (ask with World::defer).
+RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot, RestoreInput input = RestoreInput::Yes);
 
-// Puts the World's RoundHook (ecs/round_hook.hpp) in its context: a round's start is a snapshot of
+// Puts the World's WorldSnapshots (ecs/world_snapshots.hpp) in its context: a round's start is a snapshot of
 // the world taken with these types, a restart restores it. The world and types must outlive it.
-void installRoundHook(World& world, const reflect::TypeRegistry& types);
+void installWorldSnapshots(World& world, const reflect::TypeRegistry& types);
 
 // The parts of a capture, for code that reads the world in snapshot order without copying
 // its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;

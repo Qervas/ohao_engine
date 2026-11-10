@@ -1,4 +1,6 @@
 #include "gpu_culling.hpp"
+#include "render/shader_bindings/cull_instances.hpp"
+#include "render/shader_bindings/cull_hiz.hpp"
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 
@@ -53,12 +55,8 @@ bool GpuCulling::initialize(VkDevice device, VkPhysicalDevice physicalDevice, bo
     }
     m_taskMeshStages =
         m_meshShaderSupported ? VK_PIPELINE_STAGE_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_MESH_SHADER_BIT_EXT : 0;
-    using rtc::layoutBinding;
-
-    // cull/instances.slang: bindings 0-11 (5 the pyramid, the rest storage buffers)
-    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
-    for (uint32_t i = 0; i < bindings.size(); ++i)
-        bindings[i] = layoutBinding(i, i == 5 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    // cull/instances.slang's set 0: the tables, the lists and the Hi-Z pyramid.
+    const auto bindings = shader::layoutBindings(shader::cull_instances::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -95,8 +93,10 @@ bool GpuCulling::initialize(VkDevice device, VkPhysicalDevice physicalDevice, bo
         VkPipelineLayout layout = VK_NULL_HANDLE;
         ok = ok && rtc::createComputePipeline(m_device, e.spirv, e.name, m_setLayout, sizeof(shared::CullPush), layout,
                                               *e.pipeline);
+        // The layouts are identical, so the first binds them all. Every pipeline keeps the layout it was made with until teardown: NVIDIA's
+        //  Linux driver (615.78) crashed binding a pipeline whose layout was destroyed, maintenance4 or not.
         if (m_layout == VK_NULL_HANDLE) m_layout = layout;
-        else if (layout) vkDestroyPipelineLayout(m_device, layout, nullptr);
+        else if (layout) m_extraLayouts.push_back(layout);
     }
     if (!ok) {
         OHAO_LOG(Error, render, "GpuCulling: culling pipelines failed");
@@ -104,9 +104,9 @@ bool GpuCulling::initialize(VkDevice device, VkPhysicalDevice physicalDevice, bo
     }
 
     // cull/hiz.slang: 0 the depth (sampled), 1 the level written, 2 the level read
-    const VkDescriptorSetLayoutBinding hiz[] = {layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-                                                layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-                                                layoutBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+    const VkDescriptorSetLayoutBinding hiz[] = {shader::layoutBinding(shader::cull_hiz::depth),
+                                                shader::layoutBinding(shader::cull_hiz::dst),
+                                                shader::layoutBinding(shader::cull_hiz::src)};
     li.bindingCount = 3;
     li.pBindings = hiz;
     if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &m_hizSetLayout) != VK_SUCCESS) return false;
@@ -115,7 +115,7 @@ bool GpuCulling::initialize(VkDevice device, VkPhysicalDevice physicalDevice, bo
                                                   sizeof(shared::HiZPush), m_hizLayout, m_fromDepth) &&
                        rtc::createComputePipeline(m_device, "cull_hiz.slang.downsample.spv", "downsample",
                                                   m_hizSetLayout, sizeof(shared::HiZPush), downLayout, m_downsample);
-    if (downLayout) vkDestroyPipelineLayout(m_device, downLayout, nullptr);
+    if (downLayout) m_extraLayouts.push_back(downLayout);
     if (!hizOk) {
         OHAO_LOG(Error, render, "GpuCulling: Hi-Z pipelines failed");
         return false;
@@ -135,6 +135,8 @@ void GpuCulling::cleanup() {
         if (*p) vkDestroyPipeline(m_device, *p, nullptr), *p = VK_NULL_HANDLE;
     for (VkPipelineLayout* l : {&m_layout, &m_hizLayout})
         if (*l) vkDestroyPipelineLayout(m_device, *l, nullptr), *l = VK_NULL_HANDLE;
+    for (VkPipelineLayout l : m_extraLayouts) vkDestroyPipelineLayout(m_device, l, nullptr);
+    m_extraLayouts.clear();
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
     m_pool = VK_NULL_HANDLE;
     m_sets = {};
@@ -301,9 +303,9 @@ bool GpuCulling::resize(uint32_t width, uint32_t height, VkImageView depth) {
         const VkDescriptorImageInfo depthInfo{VK_NULL_HANDLE, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
         const VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, m_hizLevelViews[l], VK_IMAGE_LAYOUT_GENERAL};
         const VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, m_hizLevelViews[l == 0 ? 0 : l - 1], VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w[3] = {rtc::descriptorWrite(m_hizSets[l], 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-                                     rtc::descriptorWrite(m_hizSets[l], 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-                                     rtc::descriptorWrite(m_hizSets[l], 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        VkWriteDescriptorSet w[3] = {shader::write(shader::cull_hiz::depth, m_hizSets[l]),
+                                     shader::write(shader::cull_hiz::dst, m_hizSets[l]),
+                                     shader::write(shader::cull_hiz::src, m_hizSets[l])};
         w[0].pImageInfo = &depthInfo;
         w[1].pImageInfo = &dstInfo;
         w[2].pImageInfo = &srcInfo;
@@ -366,7 +368,7 @@ bool GpuCulling::beginFrame(VkCommandBuffer cmd, uint32_t slot, const render::Re
     const VkDescriptorImageInfo hizInfo{VK_NULL_HANDLE, m_hiz.view, VK_IMAGE_LAYOUT_GENERAL};
     std::array<VkWriteDescriptorSet, 12> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
-        writes[i] = rtc::descriptorWrite(m_set, i, i == 5 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writes[i] = shader::write(shader::cull_instances::kSet0[i], m_set);
         if (i == 5) writes[i].pImageInfo = &hizInfo;
         else writes[i].pBufferInfo = &infos[i];
     }

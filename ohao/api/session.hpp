@@ -1,8 +1,7 @@
 #pragma once
 // The one API for humans and agents. Every authoring operation is a method with a JSON
-// params object and a JSON result; the CLI, the JSON-RPC/MCP server (ohao_rpc), the
-// C ABI and the editor all dispatch through Session::call, so each operation has exactly
-// one implementation.
+// params object and a JSON result; the CLI and the JSON-RPC/MCP server (ohao_rpc) dispatch
+// through Session::call, so each operation has exactly one implementation.
 #include "api/params.hpp"
 #include "api/paths.hpp"
 #include "core/input.hpp"
@@ -25,6 +24,11 @@
 #include <string_view>
 #include <vector>
 
+namespace ohao::game {
+class Module;
+struct LoadedModule;
+}
+
 namespace ohao::api {
 
 // The engine version engine.info reports (the CMake project version).
@@ -32,9 +36,8 @@ inline constexpr std::string_view kEngineVersion = "0.1.0";
 // OHAO's own protocol version: additive changes keep it.
 inline constexpr int kProtocolVersion = 1;
 
-// Every method Session::call answers; exported in the catalogue (ohao_schema.json). Each
-// one's params are a struct of paramsRegistry() (api/params.hpp).
-[[nodiscard]] std::span<const reflect::MethodDoc> methods();
+// A world's event channels, for the catalogue (its `events`), in the log's order.
+[[nodiscard]] std::vector<reflect::ChannelDoc> channelDocs(const ecs::World& world, const reflect::TypeRegistry& types);
 
 // The exit class of an error code, shared by the CLI's exit status and the JSON-RPC error
 // code of a domain error: 1 a validation, usage or input error; 2 an asset or instantiate
@@ -181,6 +184,7 @@ struct RenderStats {
         double medianMs{0.0}, p95Ms{0.0}, p99Ms{0.0};
         std::array<uint64_t, 4> steps{};   // frames that ran 0, 1, 2, 3+ steps
         uint64_t discardedSteps{0};
+        int maxFps{0};             // the window's frame-rate cap (0: none, or paced by fifo)
     };
     std::optional<Latency> latency;
     std::optional<Pacing> pacing;
@@ -252,7 +256,10 @@ public:
 
 class Session {
 public:
-    Session(ecs::World& world, const reflect::TypeRegistry& types);
+    // `game`: the game the world plays (game/loader.hpp; installed with game::installGame), whose methods follow the
+    // engine's, and which game.reload loads again from its file; null: none. `types` holds the game's types too.
+    Session(ecs::World& world, const reflect::TypeRegistry& types,
+            std::shared_ptr<const game::LoadedModule> game = nullptr);
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -292,6 +299,9 @@ public:
     // window's look lead draws them before that step runs.
     void injectedLookDue(glm::vec2& sum, std::vector<std::chrono::steady_clock::time_point>& queuedAt) const;
     [[nodiscard]] uint64_t schemaHash() const noexcept;
+    // Every method call answers, in catalogue order: the engine's (their params are paramsRegistry()'s structs,
+    // api/params.hpp), then the game's.
+    [[nodiscard]] std::span<const reflect::MethodDoc> methods() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;
     // The host render.capture renders through (without one it is E_COMMAND); also sets the

@@ -52,7 +52,7 @@ public:
     [[nodiscard]] static bool isYUp(const Model& model);
 
     // The FrameResult's lights become entities through ecs::spawnFramedLights
-    // (ecs/framing.hpp).
+    // (world_render/framing.hpp).
 
     // Apply camera settings from a FrameResult
     static void applyCamera(Camera& camera, const FrameResult& result);

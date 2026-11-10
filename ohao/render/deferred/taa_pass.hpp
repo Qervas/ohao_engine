@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/shader_bindings/postprocess_taa_resolve.hpp"
 #include "render/frame/frame_resources.hpp"
 #include <array>
 
@@ -107,8 +108,9 @@ private:
         float blendFactor;
         float motionScale;
         uint32_t flags; // Bit 0: use motion vectors, Bit 1: use variance clipping
-        float padding[3];
+        uint32_t pad{0};  // the shader's block is 24 bytes
     };
+    OHAO_CHECK_PUSH(TAAParams, postprocess_taa_resolve)   // postprocess/taa_resolve.slang's
 };
 
 } // namespace ohao

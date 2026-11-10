@@ -1,4 +1,6 @@
 #include "render/rt/rt_alpha_tables.hpp"
+#include "render/shader_bindings/rt_restir_di.hpp"
+#include "render/shader_bindings/rt_gi_trace.hpp"
 
 #include "gpu/shared_layout.hpp"
 #include "render/rt/rt_compute.hpp"
@@ -9,6 +11,9 @@
 #include <cstring>
 
 namespace ohao::rtc {
+// The alpha tables are set 1 of every trace that tests alpha (rt/alpha_test.slang): each declares it alike.
+static_assert(shader::rt_gi_trace::kSet1 == shader::rt_restir_di::kSet1);
+
 
 namespace {
 
@@ -18,11 +23,12 @@ static_assert(sizeof(gpu::shared::SmokeSphereGpu) == gpu::shared::kSmokeSphereSt
 } // namespace
 
 bool AlphaTables::init(VkDevice device, VkPhysicalDevice physicalDevice) {
+    static_assert(shader::rt_gi_trace::kSet1.size() == kBindings);
     m_device = device;
     m_physical = physicalDevice;
     std::array<VkDescriptorSetLayoutBinding, kBindings> b{};
     for (uint32_t i = 0; i < kBindings; ++i)
-        b[i] = layoutBinding(i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+        b[i] = shader::layoutBinding(shader::rt_gi_trace::kSet1[i], VK_SHADER_STAGE_COMPUTE_BIT);
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindings;
@@ -94,7 +100,7 @@ bool AlphaTables::update(uint32_t slot, const render::RenderScene& scene, bool s
     }
     infos[kSceneBindings] = {m_smoke[slot].buffer, 0, VK_WHOLE_SIZE};
     for (uint32_t i = 0; i < kBindings; ++i) {
-        writes[i] = descriptorWrite(m_sets[slot], i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writes[i] = shader::write(shader::rt_gi_trace::kSet1[i], m_sets[slot]);
         writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, kBindings, writes.data(), 0, nullptr);

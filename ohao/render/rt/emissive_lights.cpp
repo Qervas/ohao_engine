@@ -1,4 +1,6 @@
 #include "render/rt/emissive_lights.hpp"
+#include "render/shader_bindings/rt_emissive_collect.hpp"
+#include "render/shader_bindings/rt_emissive_reduce.hpp"
 
 #include "core/log.hpp"
 
@@ -44,18 +46,18 @@ bool EmissiveLights::initialize(VkDevice device, VkPhysicalDevice physicalDevice
     if (texturesLayout == VK_NULL_HANDLE) return false;
 
     const VkDescriptorSetLayoutBinding collect[] = {
-        rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        rtc::layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::layoutBinding(9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        shader::layoutBinding(shader::rt_emissive_collect::vertices), shader::layoutBinding(shader::rt_emissive_collect::indices),
+        shader::layoutBinding(shader::rt_emissive_collect::meshes), shader::layoutBinding(shader::rt_emissive_collect::triangleSlots),
+        shader::layoutBinding(shader::rt_emissive_collect::materials), shader::layoutBinding(shader::rt_emissive_collect::instances),
+        shader::layoutBinding(shader::rt_emissive_collect::materialRefs), shader::layoutBinding(shader::rt_emissive_collect::ranges),
+        shader::layoutBinding(shader::rt_emissive_collect::lights), shader::layoutBinding(shader::rt_emissive_collect::power),
     };
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = 10;
     li.pBindings = collect;
     if (vkCreateDescriptorSetLayout(device, &li, nullptr, &m_collectSetLayout) != VK_SUCCESS) return false;
-    const VkDescriptorSetLayoutBinding reduce[] = {rtc::layoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-                                                   rtc::layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+    const VkDescriptorSetLayoutBinding reduce[] = {shader::layoutBinding(shader::rt_emissive_reduce::below),
+                                                   shader::layoutBinding(shader::rt_emissive_reduce::above)};
     li.bindingCount = 2;
     li.pBindings = reduce;
     if (vkCreateDescriptorSetLayout(device, &li, nullptr, &m_reduceSetLayout) != VK_SUCCESS) return false;
@@ -180,8 +182,8 @@ bool EmissiveLights::createPower(uint32_t side) {
         for (uint32_t l = 1; l < levels; ++l) {
             const VkDescriptorImageInfo below{VK_NULL_HANDLE, m_levelViews[l - 1], VK_IMAGE_LAYOUT_GENERAL};
             const VkDescriptorImageInfo above{VK_NULL_HANDLE, m_levelViews[l], VK_IMAGE_LAYOUT_GENERAL};
-            VkWriteDescriptorSet w[2] = {rtc::descriptorWrite(m_reduceSets[l - 1], 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-                                         rtc::descriptorWrite(m_reduceSets[l - 1], 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+            VkWriteDescriptorSet w[2] = {shader::write(shader::rt_emissive_reduce::below, m_reduceSets[l - 1]),
+                                         shader::write(shader::rt_emissive_reduce::above, m_reduceSets[l - 1])};
             w[0].pImageInfo = &below;
             w[1].pImageInfo = &above;
             vkUpdateDescriptorSets(m_device, 2, w, 0, nullptr);
@@ -317,11 +319,11 @@ void EmissiveLights::record(VkCommandBuffer cmd, uint32_t frameSlot, const Scene
     };
     VkWriteDescriptorSet w[10];
     for (uint32_t i = 0; i < 9; ++i) {
-        w[i] = rtc::descriptorWrite(set, i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        w[i] = shader::write(shader::rt_emissive_collect::kSet0[i], set);
         w[i].pBufferInfo = &infos[i];
     }
     const VkDescriptorImageInfo level0{VK_NULL_HANDLE, m_levelViews[0], VK_IMAGE_LAYOUT_GENERAL};
-    w[9] = rtc::descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    w[9] = shader::write(shader::rt_emissive_collect::power, set);
     w[9].pImageInfo = &level0;
     vkUpdateDescriptorSets(m_device, 10, w, 0, nullptr);
 

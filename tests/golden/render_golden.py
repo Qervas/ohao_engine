@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """
-render-golden — OHAO Engine golden-image regression harness (renovation Phase 0).
+render-golden -- the render goldens (requirement 3, no visual accident).
 
-Renders each scene in a manifest with the existing engine, then compares the
-output to a committed golden PNG using a TOLERANCE compare (not bit-exact hash).
-
-Why tolerance, not hash: the offline path tracer is deterministic up to an
-irreducible GPU floating-point floor (~6 pixels at 1 LSB on a 1920x1080 frame,
-from non-associative reduction order). Bit-exact hashing would flag that ghost;
-a tight tolerance absorbs it while still catching any real regression (which
-shifts many pixels by many LSB). This is what PBRT/Mitsuba test suites do.
+Renders each scene of a manifest through one `ohao serve` process (tests/common/ohao_serve.py: one device, the
+programs compiled once, the scenes loaded in turn), at the size it is compared at, and compares the PNG with the
+committed golden. A golden is a hash of an unchanged renderer, not an image-quality gate.
 
 A scene PASSES when BOTH hold:
   - max per-channel abs diff <= max_abs_diff      (catches large-magnitude changes)
@@ -21,9 +16,10 @@ Usage (run from repo root):
   python3 tests/golden/render_golden.py tests/golden/manifest.json --selftest # render 2x, compare to each other
   ... [--only NAME]   # any mode, one scene; --only may come before or after the mode flag
 
-Exit code: 0 if all scenes pass, 1 otherwise. Suitable for a git pre-push hook.
+Each manifest scene: `name`, `scene` (a scene file), `capture` (render.capture's parameters: mode, size, frames,
+spp, post, ev100, ...), `golden`, `max_abs_diff`, `max_diff_frac`. Exit code: 0 if all scenes pass, 1 otherwise.
 """
-import sys, os, json, shlex, subprocess, tempfile
+import sys, os, json, shutil
 
 try:
     import numpy as np
@@ -31,70 +27,23 @@ try:
 except ImportError:
     sys.exit("render-golden needs numpy + Pillow:  pip install numpy Pillow")
 
-DEFAULT_MAX_ABS_DIFF = 4       # per-channel LSB at compare-res; absorbs the FP floor with margin
-DEFAULT_MAX_DIFF_FRAC = 0.01   # 1% of (downscaled) pixels; a real regression shifts far more
-DOWNSCALE_WIDTH = 640          # compare at reduced res: averages the FP ghost away + tiny goldens
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+from ohao_serve import ROOT, Serve  # noqa: E402
+
+DEFAULT_MAX_ABS_DIFF = 4
+DEFAULT_MAX_DIFF_FRAC = 0.01
+OUT = "build/golden_render"   # where the renders go (the directory `ohao serve` may write)
 
 
-def downscale(im):
-    w, h = im.size
-    if w > DOWNSCALE_WIDTH:
-        im = im.resize((DOWNSCALE_WIDTH, max(1, round(h * DOWNSCALE_WIDTH / w))), Image.BILINEAR)
-    return im
-
-
-# Manifests name the binary the way a single-config generator lays it out
-# (./build/cornell_box). A multi-config generator (Visual Studio, Xcode) puts it
-# under a per-configuration subdirectory with a platform suffix instead, so the
-# literal path in the manifest does not exist and subprocess raises
-# FileNotFoundError before any comparison happens. Resolving here keeps the
-# manifest generator-agnostic rather than encoding one layout into the corpus.
-_CONFIG_DIRS = ("", "Release", "RelWithDebInfo", "Debug")
-_SUFFIXES = ("", ".exe")
-
-
-def resolve_exe(argv0):
-    # isfile, not exists: ./build/ohao is also the binary directory of the ohao/ tree.
-    if os.path.isfile(argv0):
-        return argv0
-    head, tail = os.path.split(argv0)
-    for cfg in _CONFIG_DIRS:
-        for sfx in _SUFFIXES:
-            cand = os.path.join(head, cfg, tail + sfx)
-            if os.path.isfile(cand):
-                return cand
-    return argv0          # let subprocess report it, with the manifest's own spelling
-
-
-def render(command, out_path):
-    # Split FIRST, substitute after. shlex.split defaults to POSIX mode, where a
-    # backslash is an escape character: passing an already-substituted Windows
-    # path through it silently turns
-    #   C:\Users\me\Temp\x.png  ->  C:UsersmeTempx.png
-    # and the renderer then writes that as a relative filename in the current
-    # directory. The harness saw no file at the path it asked for and reported
-    # "render produced no output", which reads like a renderer failure and is
-    # not one -- it left two stray PNGs in the repository root instead. Keeping
-    # the path out of shlex entirely is the fix.
-    argv = [a.replace("{out}", out_path) for a in shlex.split(command)]
-    cmd = " ".join(argv)
-    argv[0] = resolve_exe(argv[0])
+def render(serve, sc, out):
+    """Renders scene `sc` into `out` (relative to the repo) -> None, or what went wrong."""
     try:
-        # Capture stderr instead of discarding it. It used to go to DEVNULL, so
-        # when a scene failed the harness could say "exit 2" and nothing else,
-        # while the renderer had printed the actual cause -- a missing asset, a
-        # shader that would not compile -- into a pipe nobody read.
-        r = subprocess.run(argv, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.PIPE, text=True, errors="replace")
-    except OSError as e:
-        return f"could not launch {argv[0]!r}: {e}"
-    if r.returncode != 0:
-        why = (r.stderr or "").strip().splitlines()
-        sep = chr(10) + "        "
-        tail = (sep + sep.join(why[-4:])) if why else ""
-        return f"render command failed (exit {r.returncode}): {cmd}{tail}"
-    if not os.path.exists(out_path):
-        return f"render produced no output at {out_path}: {cmd}"
+        serve.load(sc["scene"])
+        serve.call("render.capture", {"path": out, **sc["capture"]})
+    except RuntimeError as e:
+        return str(e)[-600:]
+    if not os.path.exists(os.path.join(ROOT, out)):
+        return f"render produced no output at {out}"
     return None
 
 
@@ -110,7 +59,7 @@ def degenerate(path):
     that is uniformly one colour is the loudest version of that failure and
     costs one std() to catch.
     """
-    a = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64)
+    a = np.asarray(Image.open(os.path.join(ROOT, path)).convert("RGB"), dtype=np.float64)
     sd = float(a.std())
     if sd < 1.0:
         return f"rendered frame is nearly uniform (std {sd:.3f} over 0-255) -- not a scene"
@@ -118,7 +67,7 @@ def degenerate(path):
 
 
 def load(path):
-    return np.asarray(downscale(Image.open(path).convert("RGB")), dtype=np.int16)
+    return np.asarray(Image.open(os.path.join(ROOT, path)).convert("RGB"), dtype=np.int16)
 
 
 def diff_stats(a, b):
@@ -308,7 +257,7 @@ def main():
         print(f"[FAIL]  {name}: {err}")
         records.append({"name": name, "mode": mode.lstrip("-"), "pass": False, "error": err})
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with Serve(OUT) as serve:
         for sc in manifest["scenes"]:
             if only is not None and sc["name"] != only:
                 continue
@@ -318,30 +267,31 @@ def main():
             mdf = sc.get("max_diff_frac", DEFAULT_MAX_DIFF_FRAC)
 
             if mode == "--update":
-                full = os.path.join(tmp, name + ".full.png")
+                full = f"{OUT}/{name}.full.png"
                 # Guard --update too, and hardest: writing a golden is the one
                 # operation that cannot be caught later. A blank frame baked in
                 # here becomes the thing every future run is measured against.
-                err = render(sc["command"], full) or degenerate(full)
+                err = render(serve, sc, full) or degenerate(full)
                 if err:
                     print(f"[update] {name}: FAILED — {err}")
                     records.append({"name": name, "mode": "update", "pass": False, "error": err})
                     continue
-                downscale(Image.open(full).convert("RGB")).save(golden)
+                # Re-encoded, the same pixels: the engine's PNG writer favours speed over size.
+                Image.open(os.path.join(ROOT, full)).convert("RGB").save(os.path.join(ROOT, golden), optimize=True)
                 print(f"[update] {name}: golden written -> {golden}")
                 records.append({"name": name, "mode": "update", "pass": True})
                 continue
 
-            actual = os.path.join(tmp, name + ".actual.png")
-            err = render(sc["command"], actual) or degenerate(actual)
+            actual = f"{OUT}/{name}.actual.png"
+            err = render(serve, sc, actual) or degenerate(actual)
             if err:
                 failed(name, err)
                 continue
 
             if mode == "--selftest":
                 # render a second time, compare the two renders to each other: the run-to-run floor
-                actual2 = os.path.join(tmp, name + ".actual2.png")
-                err2 = render(sc["command"], actual2)
+                actual2 = f"{OUT}/{name}.actual2.png"
+                err2 = render(serve, sc, actual2)
                 if err2:
                     failed(name, err2)
                     continue
@@ -353,7 +303,7 @@ def main():
                 continue
 
             # default: compare against committed golden
-            if not os.path.exists(golden):
+            if not os.path.exists(os.path.join(ROOT, golden)):
                 failed(name, f"golden missing ({golden}) — run with --update first")
                 continue
             rec = scene_record(name, "check", load(golden), load(actual), mad, mdf, o["diff_dir"], o["heatmaps"])
@@ -368,7 +318,7 @@ def main():
                   f"diff_px={rec['diff_px']} rmse={rec['rmse']:.4f}")
             if not ok:
                 drift = golden.replace(".png", ".actual.png")
-                Image.open(actual).save(drift)
+                shutil.copyfile(os.path.join(ROOT, actual), os.path.join(ROOT, drift))
                 print(f"        drift written -> {drift}")
                 for r in rec["regions"]:
                     print(f"        region x={r['x']} y={r['y']} {r['w']}x{r['h']}: max_abs {r['max_abs']}, {r['px']} px")

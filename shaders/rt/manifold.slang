@@ -24,6 +24,32 @@ struct ManifoldTri
     float3 c;            // the frame's reference: its cluster's, unit, perpendicular to the cluster's normal cone
 };
 
+// A triangle in world space from its object-space corners and vertex normals and its instance's world matrix (columns
+// m0..m3, as InstanceGpu stores them): normals by the inverse transpose, unnormalised (fillHit's direction). c is 0.
+ManifoldTri manifoldTriangleFrom(float4 m0, float4 m1, float4 m2, float4 m3, float3 p0, float3 p1, float3 p2, float3 o0,
+                                 float3 o1, float3 o2)
+{
+    ManifoldTri tri;
+    const float3 w0 = (m0 * p0.x + m1 * p0.y + m2 * p0.z + m3).xyz;
+    const float3 w1 = (m0 * p1.x + m1 * p1.y + m2 * p1.z + m3).xyz;
+    const float3 w2 = (m0 * p2.x + m1 * p2.y + m2 * p2.z + m3).xyz;
+    // The inverse transpose: columns (c1 x c2, c2 x c0, c0 x c1) / det.
+    const float3 x = m0.xyz, y = m1.xyz, z = m2.xyz;
+    const float det = dot(x, cross(y, z));
+    const float3 ix = cross(y, z) / det, iy = cross(z, x) / det, iz = cross(x, y) / det;
+    const float3 n0 = ix * o0.x + iy * o0.y + iz * o0.z;
+    const float3 n1 = ix * o1.x + iy * o1.y + iz * o1.z;
+    const float3 n2 = ix * o2.x + iy * o2.y + iz * o2.z;
+    tri.p0 = w0;
+    tri.e1 = w1 - w0;
+    tri.e2 = w2 - w0;
+    tri.n0 = n0;
+    tri.a1 = n1 - n0;
+    tri.a2 = n2 - n0;
+    tri.c = float3(0.0);
+    return tri;
+}
+
 // sigma at (u, v) and its derivatives (du: d sigma / du, dv: d sigma / dv); y the point, n its oriented shading
 // normal. False where the map is undefined: p on the triangle's plane, a degenerate normal or frame, or H not above
 // the normal (no reflection can have it as half vector).
@@ -129,6 +155,23 @@ float manifoldSlopeDensity(float2 alphas, float2 core, float2 sigma)
     const bool b = alphas.x > 0.0, c = alphas.y > 0.0;
     if (b && c) return 0.5 * (manifoldSlopeLobe(alphas.x, core, sigma) + manifoldSlopeLobe(alphas.y, core, sigma));
     return manifoldSlopeLobe(b ? alphas.x : alphas.y, core, sigma);
+}
+
+// GGX's slopes at alpha untruncated (step 2b: the camera side renders none of the sun through a solid, so the pass draws
+// the whole lobe): P22 and a draw from it.
+float manifoldGgxSlopeDensity(float a, float2 sigma)
+{
+    const float a2 = a * a;
+    const float k = 1.0 + dot(sigma, sigma) / a2;
+    return 1.0 / (kManifoldPi * a2 * k * k);
+}
+
+float2 manifoldGgxSlope(float a, float2 u)
+{
+    const float xi = min(u.x, 1.0 - 1.0 / 16777216.0);
+    const float r = a * sqrt(xi / (1.0 - xi));
+    const float phi = 2.0 * kManifoldPi * u.y;
+    return float2(r * cos(phi), r * sin(phi));
 }
 
 float2 manifoldDrawSlope(float2 alphas, float2 core, float3 u)

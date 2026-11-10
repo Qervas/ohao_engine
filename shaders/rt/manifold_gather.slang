@@ -128,26 +128,9 @@ void clusters(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
         const uint v1 = a.z + meshletVertices[range.x + ((packed >> 8u) & 0xFFu)];
         const uint v2 = a.z + meshletVertices[range.x + ((packed >> 16u) & 0xFFu)];
         const uint stride = kInstanceGpuStride / 16u;
-        const float4 c0 = instances[a.w * stride], c1 = instances[a.w * stride + 1u];
-        const float4 c2 = instances[a.w * stride + 2u], c3 = instances[a.w * stride + 3u];
-        const float3 p0 = vertexF3(v0, 0u), p1 = vertexF3(v1, 0u), p2 = vertexF3(v2, 0u);
-        const float3 w0 = (c0 * p0.x + c1 * p0.y + c2 * p0.z + c3).xyz;
-        const float3 w1 = (c0 * p1.x + c1 * p1.y + c2 * p1.z + c3).xyz;
-        const float3 w2 = (c0 * p2.x + c1 * p2.y + c2 * p2.z + c3).xyz;
-        // The inverse transpose: columns (c1 x c2, c2 x c0, c0 x c1) / det.
-        const float3 x = c0.xyz, y = c1.xyz, z = c2.xyz;
-        const float det = dot(x, cross(y, z));
-        const float3 ix = cross(y, z) / det, iy = cross(z, x) / det, iz = cross(x, y) / det;
-        const float3 o0 = vertexF3(v0, 6u), o1 = vertexF3(v1, 6u), o2 = vertexF3(v2, 6u);
-        const float3 n0 = ix * o0.x + iy * o0.y + iz * o0.z;
-        const float3 n1 = ix * o1.x + iy * o1.y + iz * o1.z;
-        const float3 n2 = ix * o2.x + iy * o2.y + iz * o2.z;
-        tri.p0 = w0;
-        tri.e1 = w1 - w0;
-        tri.e2 = w2 - w0;
-        tri.n0 = n0;
-        tri.a1 = n1 - n0;
-        tri.a2 = n2 - n0;
+        tri = manifoldTriangleFrom(instances[a.w * stride], instances[a.w * stride + 1u], instances[a.w * stride + 2u],
+                                   instances[a.w * stride + 3u], vertexF3(v0, 0u), vertexF3(v1, 0u), vertexF3(v2, 0u),
+                                   vertexF3(v0, 6u), vertexF3(v1, 6u), vertexF3(v2, 6u));
         tri.c = float3(1.0, 0.0, 0.0);
         float3 lo, hi, axis;
         float half;

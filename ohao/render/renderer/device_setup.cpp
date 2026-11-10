@@ -1,4 +1,5 @@
 #include "vulkan_renderer_impl.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "core/log.hpp"
 #include "render/rt/rt_compute.hpp"
 #ifdef _WIN32
@@ -346,6 +347,21 @@ bool VulkanRenderer::createLogicalDevice() {
         pipelineStats = statsVar && *statsVar && std::strcmp(statsVar, "0") != 0 &&
                         extSupported(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
         if (pipelineStats) m_enabledDeviceExtensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+
+        // Fault containment (system design 4.7): pass breadcrumbs by VK_AMD_buffer_marker (NVIDIA, Intel and AMD
+        // expose it), the driver's own fault report by VK_EXT_device_fault.
+        m_bufferMarkerEnabled = extSupported(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+        if (m_bufferMarkerEnabled) m_enabledDeviceExtensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+        if (extSupported(VK_EXT_DEVICE_FAULT_EXTENSION_NAME)) {
+            VkPhysicalDeviceFaultFeaturesEXT faultProbe{};
+            faultProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 probe{};
+            probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            probe.pNext = &faultProbe;
+            vkGetPhysicalDeviceFeatures2(m_physicalDevice, &probe);
+            m_deviceFaultEnabled = faultProbe.deviceFault == VK_TRUE;
+            if (m_deviceFaultEnabled) m_enabledDeviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+        }
     }
 
     // A window's presents can be confirmed (sub-project 9: when each frame was presented) with
@@ -413,6 +429,10 @@ bool VulkanRenderer::createLogicalDevice() {
     features13.pNext = &features12;
     features13.shaderDemoteToHelperInvocation = VK_TRUE;
     features13.synchronization2 = VK_TRUE;   // NRD's NRI records vkCmdPipelineBarrier2 (core in 1.3)
+    // Pipelines outlive the layouts they were created with (GpuCulling keeps one of several identical layouts; others
+    // destroy theirs once created): legal with maintenance4, mandatory in 1.3. Without it NVIDIA's Linux driver
+    // crashed binding such a pipeline (VUID-vkCmdBindPipeline-pipeline-parameter).
+    features13.maintenance4 = VK_TRUE;
 
     // Acceleration structure features
     VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
@@ -479,6 +499,15 @@ bool VulkanRenderer::createLogicalDevice() {
         optionalChainTail = &presentIdFeatures;
     }
 
+    // VK_EXT_device_fault (fault reports). Same conditional-chain rule.
+    VkPhysicalDeviceFaultFeaturesEXT faultFeatures{};
+    if (m_deviceFaultEnabled) {
+        faultFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+        faultFeatures.deviceFault = VK_TRUE;
+        faultFeatures.pNext = optionalChainTail;
+        optionalChainTail = &faultFeatures;
+    }
+
     VkPhysicalDeviceFeatures2 deviceFeatures2{};
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     deviceFeatures2.pNext = optionalChainTail;
@@ -514,6 +543,10 @@ bool VulkanRenderer::createLogicalDevice() {
     }
 
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
+    gpu::setFaultDevice(m_device, m_deviceFaultEnabled);
+    OHAO_LOG(Info, gpu, "caps: fault reports: breadcrumbs {}, device fault info {}",
+             m_bufferMarkerEnabled ? "by buffer markers" : "off (no VK_AMD_buffer_marker)",
+             m_deviceFaultEnabled ? "on" : "off (no VK_EXT_device_fault)");
     rtc::setPipelineStats(pipelineStats);
     if (m_presentWaitEnabled) {
         m_waitForPresent = reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(m_device, "vkWaitForPresentKHR"));

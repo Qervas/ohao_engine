@@ -1,10 +1,11 @@
 #include "ecs/snapshot.hpp"
 
 #include "ecs/components.hpp"
-#include "ecs/round_hook.hpp"
+#include "ecs/world_snapshots.hpp"
 #include "ecs/scene_types.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <cstring>
 
 namespace ohao::ecs {
@@ -29,18 +30,19 @@ const T& at(const S& s, std::size_t i) {
 } // namespace
 
 std::size_t Snapshot::bytes() const noexcept {
-    std::size_t n = ids.size() * 8 + order.size() * 8 + parent.size() * 4 + childBegin.size() * 4 + children.size() * 4;
+    std::size_t n = ids.size() * 8 + handles.size() * sizeof(entt::entity) + order.size() * 8 + parent.size() * 4 +
+                    childBegin.size() * 4 + children.size() * 4;
     for (const SnapshotColumn& c : columns) n += c.rows.size() * 4 + c.valueBytes;
     return n;
 }
 
-void installRoundHook(World& world, const reflect::TypeRegistry& types) {
-    RoundHook hook;
+void installWorldSnapshots(World& world, const reflect::TypeRegistry& types) {
+    WorldSnapshots hook;
     hook.save = [&world, &types]() -> std::shared_ptr<const void> {
         return std::make_shared<const Snapshot>(takeSnapshot(world, types));
     };
     hook.restore = [&world](const std::shared_ptr<const void>& s) {
-        if (s) restoreSnapshot(world, *static_cast<const Snapshot*>(s.get()));
+        if (s) restoreSnapshot(world, *static_cast<const Snapshot*>(s.get()), RestoreInput::No);
     };
     world.registry().ctx().insert_or_assign(std::move(hook));
 }
@@ -54,6 +56,7 @@ Snapshot takeSnapshot(const World& world, const reflect::TypeRegistry& types, ui
 }
 
 void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapshot& s, uint64_t frame) {
+    if (world.events().inStep()) throw std::logic_error("takeSnapshot during a step: ask for it with World::defer");
     thread_local std::vector<uint32_t> rowOf;
     captureEntityTable(world, s, rowOf);
     const entt::registry& reg = world.registry();
@@ -76,8 +79,10 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     }
     s.columns.resize(used);
     s.frame = frame;
-    const auto* hook = reg.ctx().find<SnapshotHook>();
-    s.systems = hook && hook->save ? hook->save() : nullptr;
+    s.inputs.assign(world.inputs().begin(), world.inputs().end());
+    s.steps = world.steps();
+    s.events = world.events().saveWindow();
+    s.systems = saveSystems(reg);
 }
 
 std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types, bool runtime) {
@@ -117,11 +122,13 @@ void captureEntityTable(const World& world, Snapshot& s, std::vector<uint32_t>& 
 
     rowOf.assign(entitySlots(reg), kNoRow);
     s.ids.resize(n);
+    s.handles.resize(n);
     s.order.resize(n);
     for (std::size_t r = 0; r < n; ++r) {
         const uint32_t i = pos[r];
         rowOf[entityIndex(es[i])] = static_cast<uint32_t>(r);
         s.ids[r] = at<EntityId>(*idStore, i).value;
+        s.handles[r] = es[i];
         s.order[r] = seq[i];
     }
     const auto rowOfEntity = [&](entt::entity e) {
@@ -175,9 +182,14 @@ namespace {
 RestoreStats restoreComponents(World& world, const Snapshot& s);
 } // namespace
 
-RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
+RestoreStats restoreSnapshot(World& world, const Snapshot& s, RestoreInput input) {
+    if (world.events().inStep()) throw std::logic_error("restoreSnapshot during a step: ask for it with World::defer");
     const RestoreStats stats = restoreComponents(world, s);
-    if (const auto* hook = world.registry().ctx().find<SnapshotHook>(); hook && hook->restore) hook->restore(s.systems);
+    if (input == RestoreInput::Yes) world.setInputs(s.inputs);
+    world.setSteps(s.steps);
+    restoreSystems(world.registry(), s.systems);
+    world.events().writer<RestoreEvent>(kRestoreChannel, "world").emit(RestoreEvent{s.steps});
+    world.events().restoreWindow(s.events);   // the restore's event is history now; the snapshot's come back
     return stats;
 }
 
@@ -270,7 +282,8 @@ RestoreStats restoreComponents(World& world, const Snapshot& s) {
             if (live[r] != entt::null) continue;
             const std::string_view name = nameAt[r] != kNoRow ? std::string_view((*names)[nameAt[r]].value) : "";
             const Transform local = transformAt[r] != kNoRow ? (*transforms)[transformAt[r]] : Transform{};
-            const entt::entity e = world.createWithId(s.ids[r], name, local);
+            const entt::entity e =
+                world.createWithId(s.ids[r], name, local, r < s.handles.size() ? s.handles[r] : entt::entity{entt::null});
             reg.get<CreationOrder>(e).seq = s.order[r];
             // One allocation for its children instead of growing per child.
             if (const uint32_t kids = s.childBegin[r + 1] - s.childBegin[r]) childLists.get(e).entities.reserve(kids);

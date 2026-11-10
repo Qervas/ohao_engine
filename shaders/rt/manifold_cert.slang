@@ -278,7 +278,55 @@ int manifoldOrientation(ManifoldTri tri, float3 p, float2 uv)
     return d > 0.0 ? 1 : (d < 0.0 ? -1 : 0);
 }
 
-// ---- Krawczyk on a triangle ---------------------------------------------------------------------------
+// ---- the certifier's maps ----------------------------------------------------------------------------------
+// A slope map on a 2-D input (2a: a triangle's barycentrics (u, v); 2c: a normal map cell's bilinear parameters (s, t)):
+// the half vector's components in its frame (A = H.t, B = H.b, C = H.n) in any number type, as manifoldFrameT returns
+// them (0 a guard undecided, 2 the orientation undecided, 1 defined); the vertex normal's orientation at a point; the
+// domain a root must lie in; whether a box of the input lies wholly outside it.
+interface ISlopeMap
+{
+    int frame<T : INum>(T u, T v, out T A, out T B, out T C, int branch);
+    int orientation(float2 x);
+    bool inDomain(float2 x);
+    bool outside(float4 box);
+}
+
+// The constraint the certifier solves on any map, as manifoldConstraintT on 2a's.
+int slopeConstraint<M : ISlopeMap, T : INum>(M map, float2 target, T u, T v, out T fx, out T fy, int branch)
+{
+    T A, B, C;
+    const int def = map.frame<T>(u, v, A, B, C, branch);
+    fx = A.sub(C.mul(T.cst(target.x)));
+    fy = B.sub(C.mul(T.cst(target.y)));
+    if (def != 1) return def;
+    if (C.signOf() < 0) return -1;
+    return 1;
+}
+
+// 2a's map: a triangle of normals interpolated from its vertices, seen from p, lit from L.
+struct TriangleSlopeMap : ISlopeMap
+{
+    ManifoldTri tri;
+    float3 p, L;
+    int frame<T : INum>(T u, T v, out T A, out T B, out T C, int branch)
+    {
+        return manifoldFrameT<T>(tri, p, L, u, v, A, B, C, branch);
+    }
+    int orientation(float2 x) { return manifoldOrientation(tri, p, x); }
+    bool inDomain(float2 x) { return x.x >= 0.0 && x.y >= 0.0 && x.x + x.y <= 1.0; }
+    bool outside(float4 box) { return box.x + box.y > 1.0; }   // wholly past the hypotenuse
+}
+
+TriangleSlopeMap triangleSlopeMap(ManifoldTri tri, float3 p, float3 L)
+{
+    TriangleSlopeMap m;
+    m.tri = tri;
+    m.p = p;
+    m.L = L;
+    return m;
+}
+
+// ---- Krawczyk on a map -----------------------------------------------------------------------------------
 typealias MDualF2 = MDual<MFloat, 2>;
 typealias MDualI2 = MDual<MIval, 2>;
 
@@ -296,11 +344,11 @@ struct CertResult
 }
 
 // F and its Jacobian at a point. False where undefined.
-bool certAt(ManifoldTri tri, float3 p, float3 L, float2 target, float2 uv, int branch, out float2 f, out float2x2 J)
+bool certAt<Map : ISlopeMap>(Map map, float2 target, float2 uv, int branch, out float2 f, out float2x2 J)
 {
     MDualF2 fx, fy;
-    const int ok = manifoldConstraintT<MDualF2>(tri, p, L, target, MDualF2.variable(MFloat.cst(uv.x), 0),
-                                                MDualF2.variable(MFloat.cst(uv.y), 1), fx, fy, branch);
+    const int ok = slopeConstraint<Map, MDualF2>(map, target, MDualF2.variable(MFloat.cst(uv.x), 0),
+                                               MDualF2.variable(MFloat.cst(uv.y), 1), fx, fy, branch);
     f = float2(fx.v.v, fy.v.v);
     J = float2x2(fx.d[0].v, fx.d[1].v, fy.d[0].v, fy.d[1].v);   // rows: d F.x, d F.y
     return ok == 1 || ok == -1;
@@ -309,11 +357,17 @@ bool certAt(ManifoldTri tri, float3 p, float3 L, float2 target, float2 uv, int b
 // Every root of sigma(u, v) = target on the triangle (u, v >= 0, u + v <= 1), certified.
 CertResult manifoldCertify(ManifoldTri tri, float3 p, float3 L, float2 target)
 {
-    return manifoldCertifyBox(tri, p, L, target, float4(0.0, 0.0, 1.0, 1.0));
+    return manifoldCertifyMap<TriangleSlopeMap>(triangleSlopeMap(tri, p, L), target, float4(0.0, 0.0, 1.0, 1.0));
 }
 
 // The same from a box of (u, v): (u0, v0, u1, v1).
 CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target, float4 start)
+{
+    return manifoldCertifyMap<TriangleSlopeMap>(triangleSlopeMap(tri, p, L), target, start);
+}
+
+// Every root of a map's sigma = target in its domain, from a box of its input: (x0, y0, x1, y1).
+CertResult manifoldCertifyMap<Map : ISlopeMap>(Map map, float2 target, float4 start)
 {
     CertResult res;
     res.roots = 0u;
@@ -335,7 +389,7 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
             break;
         }
         ++res.boxes;
-        if (B.x + B.y > 1.0) continue;   // wholly past the triangle's hypotenuse
+        if (map.outside(B)) continue;
         const float2 cuv = 0.5 * (B.xy + B.zw);
         // The test runs on B grown by a tenth a side (epsilon inflation): a root on a split line, or within float of
         // one, lies inside some grown box, where the plain box's K(B) could never fit in its interior.
@@ -345,9 +399,8 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
         {
             const float4 Bt = float4(cuv - half, cuv + half);
             MDualI2 fx, fy;
-            const int def = manifoldConstraintT<MDualI2>(tri, p, L, target,
-                                                         MDualI2.variable(MIval.make(Bt.x, Bt.z), 0),
-                                                         MDualI2.variable(MIval.make(Bt.y, Bt.w), 1), fx, fy, branch);
+            const int def = slopeConstraint<Map, MDualI2>(map, target, MDualI2.variable(MIval.make(Bt.x, Bt.z), 0),
+                                                        MDualI2.variable(MIval.make(Bt.y, Bt.w), 1), fx, fy, branch);
             if (def < 0)
             {
                 decided = true;   // C certainly negative over Bt: no root of sigma
@@ -378,11 +431,11 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
             // F at the centre as an interval (its own rounding bounded), then the mean-value form
             // F(Bt) in F(c) + J(Bt) (Bt - c): its excess shrinks with the box's square, the natural one's with its width.
             MIval fcx, fcy;
-            const int defc = manifoldConstraintT<MIval>(tri, p, L, target, MIval.cst(cuv.x), MIval.cst(cuv.y), fcx,
-                                                        fcy, branch);
+            const int defc = slopeConstraint<Map, MIval>(map, target, MIval.cst(cuv.x), MIval.cst(cuv.y), fcx, fcy,
+                                                       branch);
             float2 fc;
             float2x2 Jc;
-            if (!(defc == 1 || defc == -1) || !certAt(tri, p, L, target, cuv, branch, fc, Jc))
+            if (!(defc == 1 || defc == -1) || !certAt<Map>(map, target, cuv, branch, fc, Jc))
             {
                 split = true;
                 break;
@@ -431,7 +484,7 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
                 {
                     float2 f;
                     float2x2 J;
-                    if (!certAt(tri, p, L, target, uv, branch, f, J)) break;
+                    if (!certAt<Map>(map, target, uv, branch, f, J)) break;
                     const float dj = J[0][0] * J[1][1] - J[0][1] * J[1][0];
                     if (!(abs(dj) > 1e-30)) break;
                     const float2 step = mul(float2x2(J[1][1], -J[0][1], -J[1][0], J[0][0]) / dj, f);
@@ -442,18 +495,17 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
                 // meets the target there (F also vanishes where H does: the direction to p opposite the light), and,
                 // on a forced branch, the normal's own orientation is the branch's.
                 MFloat A, Bc, C;
-                const bool framed = manifoldFrameT<MFloat>(tri, p, L, MFloat.cst(uv.x), MFloat.cst(uv.y), A, Bc, C,
-                                                           branch) == 1;
+                const bool framed = map.frame<MFloat>(MFloat.cst(uv.x), MFloat.cst(uv.y), A, Bc, C, branch) == 1;
                 const float2 sigmaAt = framed && C.v > 0.0 ? float2(A.v, Bc.v) / C.v : float2(3.0e38);
                 const bool above = framed && C.v > 0.0 &&
                                    all(abs(sigmaAt - target) <= 1e-3 * max(1.0, length(target))) &&
-                                   (branch == 0 || manifoldOrientation(tri, p, uv) == branch);
+                                   (branch == 0 || map.orientation(uv) == branch);
                 // Bt holds exactly one root: one already recorded inside Bt is this one (a neighbour's grown box
                 // certified it first).
                 bool seen = false;
                 for (uint q = 0u; q < res.roots; ++q)
                     seen = seen || all(res.uv[q] >= Bt.xy && res.uv[q] <= Bt.zw) || all(abs(res.uv[q] - uv) <= 1e-6);
-                if (above && !seen && uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)
+                if (above && !seen && map.inDomain(uv))
                 {
                     if (res.roots < kCertMaxRoots)
                     {
@@ -507,6 +559,148 @@ CertResult manifoldCertifyBox(ManifoldTri tri, float3 p, float3 L, float2 target
         }
     }
     return res;
+}
+
+// ---- step 2c: a normal-mapped triangle, cell by cell ----------------------------------------------------------
+// The shading normal as the tracer builds it with a normal map (rt/pt_hit.slang fillHitAt): the vertex normal n
+// (interpolated, turned to the side seen), the tangent T (the vertex tangents interpolated, made perpendicular to n),
+// B = n x T times the tangent's sign, tn the map's normal in that frame, n' = normalize(T tn.x + B tn.y + n tn.z), lifted
+// to 1e-3 above the geometric plane where it dips below it. On one cell of the map (the square between four texel
+// centres) tn is the bilinear blend of its four texels in the cell's (s, t) in [0, 1]^2, and (s, t) is affine in the
+// triangle's (u, v): the map takes (s, t), so a cell is the box [0, 1]^2 and the triangle its domain. The slope's frame
+// is 2a's (t from c, b = n' x t), the half vector's slope drawn there.
+struct ManifoldMappedTri
+{
+    ManifoldTri tri;
+    float3 t0, ta1, ta2;   // world vertex tangents (unnormalised): t0, t1 - t0, t2 - t0
+    float sign;            // the bitangent's sign (vertex 0's tangent w)
+    float2 uv0, uvA, uvB;  // texture coordinates: uv0 + uvA u + uvB v
+};
+
+struct CellSlopeMap : ISlopeMap
+{
+    ManifoldMappedTri m;
+    float3 p, L;
+    float3 c00, c10, c01, c11;   // the cell's texels' normals, tangent space: (s, t) = (0, 0), (1, 0), (0, 1), (1, 1)
+    float2 o, ds, dt;            // (u, v) = o + ds s + dt t
+
+    float2 uvAt(float2 x) { return o + ds * x.x + dt * x.y; }
+
+    // Without a division (each one through an interval's own dependency widened the centre's rounding to 400 ulps):
+    // every unit vector is kept at a positive scale, and the slope (A / C, B / C) is formed with one denominator.
+    // H' = (p - y) + L |p - y| (= |p - y| H); the tangent frame from the unnormalised vertex normal N (|N| = nu):
+    // T' = nu^2 Tw - N (N . Tw), so the mapped normal times nu |T'| is M = nu T' tn.x + sign (N x T') tn.y + |T'| N tn.z;
+    // its lift, M + geo (1e-3 |M| - M . geo), the lifted normal times a positive factor. With m the mapped normal at any
+    // positive scale, t' = m x (c x m) and b' = m x c are along the frame's t and b, |t'| = |m| |m x c|, so
+    // sigma = (H' . t', |m| H' . b') / (|m x c| H' . m): A, B and C below.
+    int frame<T : INum>(T s, T t, out T A, out T B, out T C, int branch)
+    {
+        A = T.cst(0.0);
+        B = A;
+        C = A;
+        const T u = T.cst(o.x).add(T.cst(ds.x).mul(s)).add(T.cst(dt.x).mul(t));
+        const T v = T.cst(o.y).add(T.cst(ds.y).mul(s)).add(T.cst(dt.y).mul(t));
+        const ManifoldTri tri = m.tri;
+        const MV3<T> y = MV3<T>.of(tri.p0).add(MV3<T>.of(tri.e1).scale(u)).add(MV3<T>.of(tri.e2).scale(v));
+        const MV3<T> d = MV3<T>.of(p).sub(y);
+        const T rr = d.lengthSq();
+        if (rr.signOf() <= 0) return 0;
+        const MV3<T> H = d.add(MV3<T>.of(L).scale(rr.sqrtOf()));
+        const MV3<T> N0 = MV3<T>.of(tri.n0).add(MV3<T>.of(tri.a1).scale(u)).add(MV3<T>.of(tri.a2).scale(v));
+        const T nn = N0.lengthSq();
+        if (nn.signOf() <= 0) return 0;
+        // Turned to the side p sees, as 2a's (the tracer turns it toward the ray before the map).
+        const float3 g = cross(tri.e1, tri.e2);
+        const float side = dot(g, p - tri.p0) >= 0.0 ? 1.0 : -1.0;
+        int sgn = branch;
+        if (sgn == 0)
+        {
+            sgn = N0.dotWith(MV3<T>.of(g * side)).signOf();
+            if (sgn == 0) return 2;
+        }
+        const MV3<T> N = N0.scale(T.cst(sgn < 0 ? -1.0 : 1.0));
+        const MV3<T> Tw = MV3<T>.of(m.t0).add(MV3<T>.of(m.ta1).scale(u)).add(MV3<T>.of(m.ta2).scale(v));
+        const MV3<T> Tp = Tw.scale(nn).sub(N.scale(N.dotWith(Tw)));
+        const T tp = Tp.lengthSq();
+        if (tp.signOf() <= 0) return 0;
+        // The map's normal, its four texels blended as the tracer blends them: lerp(lerp(c00, c10, s), lerp(c01, c11, s), t).
+        const MV3<T> r0 = MV3<T>.of(c00).add(MV3<T>.of(c10).sub(MV3<T>.of(c00)).scale(s));
+        const MV3<T> r1 = MV3<T>.of(c01).add(MV3<T>.of(c11).sub(MV3<T>.of(c01)).scale(s));
+        const MV3<T> tn = r0.add(r1.sub(r0).scale(t));
+        const T tpl = tp.sqrtOf();
+        MV3<T> M = Tp.scale(nn.sqrtOf().mul(tn.x))
+                       .add(N.crossWith(Tp).scale(tn.y.mul(T.cst(m.sign < 0.0 ? -1.0 : 1.0))))
+                       .add(N.scale(tpl.mul(tn.z)));
+        const T mm = M.lengthSq();
+        if (mm.signOf() <= 0) return 0;
+        // Lifted to 1e-3 above the geometric plane where it dips below (each side of that is smooth; a box across it is
+        // split).
+        const float3 geo = normalize(g) * side;
+        const T ml = mm.sqrtOf();
+        const T lift = T.cst(1e-3).mul(ml).sub(M.dotWith(MV3<T>.of(geo)));
+        const int below = lift.signOf();
+        if (below == 0) return 0;
+        T mlen = ml;
+        if (below > 0)
+        {
+            M = M.add(MV3<T>.of(geo).scale(lift));
+            const T mq = M.lengthSq();
+            if (mq.signOf() <= 0) return 0;
+            mlen = mq.sqrtOf();
+        }
+        const MV3<T> c = MV3<T>.of(tri.c);
+        const MV3<T> mc = M.crossWith(c);
+        const T mcl = mc.lengthSq();
+        if (mcl.signOf() <= 0) return 0;
+        A = H.dotWith(M.crossWith(c.crossWith(M)));
+        B = H.dotWith(mc).mul(mlen);
+        C = H.dotWith(M).mul(mcl.sqrtOf());
+        return 1;
+    }
+
+    int orientation(float2 x) { return manifoldOrientation(m.tri, p, uvAt(x)); }
+
+    bool inDomain(float2 x)
+    {
+        const float2 uv = uvAt(x);
+        return all(x >= 0.0) && all(x <= 1.0) && uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0;
+    }
+
+    // A box wholly off the triangle (u, v affine in the box: its extremes at the corners), with a margin for the
+    // corners' rounding.
+    bool outside(float4 box)
+    {
+        const float2 a = uvAt(box.xy), b = uvAt(box.zy), c = uvAt(box.xw), d = uvAt(box.zw);
+        const float2 hi = max(max(a, b), max(c, d));
+        const float sumLo = min(min(a.x + a.y, b.x + b.y), min(c.x + c.y, d.x + d.y));
+        return hi.x < -1e-6 || hi.y < -1e-6 || sumLo > 1.0 + 1e-6;
+    }
+}
+
+// The map of one cell: its texels' tangent-space normals at (s, t) = (0, 0), (1, 0), (0, 1), (1, 1), the texture
+// coordinates of its (0, 0) (a texel centre) and a texel's size. False when the triangle's texture coordinates are
+// degenerate (no (u, v) for a (s, t)).
+bool cellSlopeMap(ManifoldMappedTri m, float3 p, float3 L, float3 c00, float3 c10, float3 c01, float3 c11,
+                  float2 origin, float2 size, out CellSlopeMap map)
+{
+    map.m = m;
+    map.p = p;
+    map.L = L;
+    map.c00 = c00;
+    map.c10 = c10;
+    map.c01 = c01;
+    map.c11 = c11;
+    map.o = float2(0.0);
+    map.ds = float2(0.0);
+    map.dt = float2(0.0);
+    const float det = m.uvA.x * m.uvB.y - m.uvB.x * m.uvA.y;
+    if (!(abs(det) > 1e-20)) return false;
+    // (u, v) = inverse([uvA uvB]) (uv - uv0), uv = origin + size (s, t).
+    const float2x2 inv = float2x2(m.uvB.y, -m.uvB.x, -m.uvA.y, m.uvA.x) / det;
+    map.o = mul(inv, origin - m.uv0);
+    map.ds = float2(inv[0][0], inv[1][0]) * size.x;
+    map.dt = float2(inv[0][1], inv[1][1]) * size.y;
+    return true;
 }
 
 // ---- step 2b: the sun through a solid, two refractions -------------------------------------------------
@@ -590,9 +784,10 @@ int manifoldPairT<T : INum>(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, 
 typealias MDualF4 = MDual<MFloat, 4>;
 typealias MDualI4 = MDual<MIval, 4>;
 
-// F and its Jacobian at a point (rows: F's components, columns: u1, v1, u2, v2). False where undefined.
-bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
-            out float4x4 J)
+// F and its Jacobian at a point (rows: F's components, columns: u1, v1, u2, v2), and C1, C2 (each vertex's h . n).
+// False where undefined.
+bool pairAtC(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
+             out float4x4 J, out float2 c)
 {
     MDualF4 f0, f1, f2, f3, c1, c2;
     const int ok = manifoldPairT<MDualF4>(t1, t2, X, L, eta, target, MDualF4.variable(MFloat.cst(x.x), 0),
@@ -601,7 +796,15 @@ bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float
     f = float4(f0.v.v, f1.v.v, f2.v.v, f3.v.v);
     J = float4x4(f0.d[0].v, f0.d[1].v, f0.d[2].v, f0.d[3].v, f1.d[0].v, f1.d[1].v, f1.d[2].v, f1.d[3].v,
                  f2.d[0].v, f2.d[1].v, f2.d[2].v, f2.d[3].v, f3.d[0].v, f3.d[1].v, f3.d[2].v, f3.d[3].v);
+    c = float2(c1.v.v, c2.v.v);
     return ok == 1;
+}
+
+bool pairAt(ManifoldTri t1, ManifoldTri t2, float3 X, float3 L, float eta, float4 target, float4 x, out float4 f,
+            out float4x4 J)
+{
+    float2 c;
+    return pairAtC(t1, t2, X, L, eta, target, x, f, J, c);
 }
 
 // The inverse of a 4 x 4 matrix by Gauss-Jordan with partial pivoting; false when a pivot is under 1e-30.
@@ -905,18 +1108,22 @@ struct ManifoldWalkResult
     uint steps;          // Newton steps taken
     uint roots;          // the certified roots of the final pair (the found one among them)
     uint undecided;      // boxes the certification left undecided
+    // |det d(s1, s2) / d(u1, v1, u2, v2)| at the path: the slopes' Jacobian over the two triangles' parameters. At a root
+    // F = (h . t - s C) is 0, so dF/dx = C ds/dx row by row (C = h . n at that vertex): det(ds/dx) = det(dF/dx) / (C1 C2)^2.
+    float slopeDet;
 }
 
-static const uint kWalkSteps = 32u;
-static const float kWalkTol = 1e-5;
+static const uint kManifoldWalkSteps = 32u;
+static const float kManifoldWalkTol = 1e-5;
 
 float3 manifoldPoint(ManifoldTri t, float2 uv) { return t.p0 + t.e1 * uv.x + t.e2 * uv.y; }
 
 // The path X <- exit <- entry <- sun through a solid of relative index eta with slopes target.xy (entry) and target.zw
 // (exit), walked from a seed: the line from X along seedDir meets the exit first, then the entry (the shadow ray's,
-// seedDir = L, is MNEE's).
-ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float3 L, float eta, float4 target,
-                                                        float3 seedDir)
+// seedDir = L, is MNEE's). CERTIFY: the final pair's roots certified (the CPU twin's t14); without it a path is where
+// the walk converges (Zeltner et al. 2020's estimate needs no more, and the 4-D interval walk is 3.5 MB of SPIR-V).
+ManifoldWalkResult manifoldWalkPair<S : IManifoldScene, let CERTIFY : bool>(S scene, float3 X, float3 L, float eta,
+                                                                          float4 target, float3 seedDir)
 {
     ManifoldWalkResult res;
     res.found = false;
@@ -926,61 +1133,130 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
     res.steps = 0u;
     res.roots = 0u;
     res.undecided = 0u;
-    // The seed.
-    uint t2, t1;
-    float2 uv2, uv1;
-    float th;
-    if (!scene.trace(X, seedDir, 1e30, t2, uv2, th)) return res;
-    const float3 y2s = manifoldPoint(scene.triangle(t2), uv2);
-    if (!scene.trace(y2s + seedDir * 1e-4, seedDir, 1e30, t1, uv1, th)) return res;
-    float4 x = float4(uv1, uv2);
-    ManifoldTri A = scene.triangle(t1), B = scene.triangle(t2);
-    float4 f;
-    float4x4 J;
-    if (!pairAt(A, B, X, L, eta, target, x, f, J)) return res;
-    float err = max(max(abs(f.x), abs(f.y)), max(abs(f.z), abs(f.w)));
-    for (uint it = 0u; it < kWalkSteps && err > kWalkTol; ++it)
+    res.slopeDet = 0.0;
+    // Every point the walk weighs goes through one evaluation of the pair map, since each call site of the dual-number
+    // map is compiled whole: the seed (mode 0), each damped Newton step re-projected onto the mesh (1) and, uncertified,
+    // each polishing step (2).
+    uint mode = 0u;
+    uint t1 = 0u, t2 = 0u, halving = 0u, polished = 0u;
+    float4 x = float4(0.0), f = float4(0.0), delta = float4(0.0);
+    float4x4 J = float4x4(float4(0.0), float4(0.0), float4(0.0), float4(0.0));
+    float2 cc = float2(0.0);
+    float err = 0.0, beta = 1.0;
+    ManifoldTri A = scene.triangle(0u), B = A;
+    bool converged = false;
+    for (uint guard = 0u; guard < kManifoldWalkSteps * 9u + 4u && !converged; ++guard)
     {
+        // The candidate: its pair and its parameters.
+        uint n1 = t1, n2 = t2;
+        ManifoldTri Ac = A, Bc = B;
+        float4 xc = x + delta;   // polishing: a Newton step in the pair's own parameters, past its edges
+        bool valid = true;
+        if (mode != 2u)
+        {
+            // Onto the mesh: from X toward the stepped exit point, then from there toward the stepped entry point (the
+            // seed: along seedDir, then on along it).
+            const float4 xs = x + beta * delta;
+            float3 o = X;
+            float3 d = mode == 0u ? seedDir : normalize(manifoldPoint(B, xs.zw) - X);
+            for (uint j = 0u; j < 2u && valid; ++j)
+            {
+                uint tri;
+                float2 uv;
+                float th;
+                if (!scene.trace(o, d, 1e30, tri, uv, th))
+                {
+                    valid = false;
+                    break;
+                }
+                const ManifoldTri t = scene.triangle(tri);
+                if (j == 0u)
+                {
+                    n2 = tri;
+                    Bc = t;
+                    xc.zw = uv;
+                    const float3 y2 = manifoldPoint(t, uv);
+                    const float3 toward = mode == 0u ? seedDir : manifoldPoint(A, xs.xy) - y2;
+                    valid = dot(toward, toward) > 0.0;
+                    d = normalize(toward);
+                    o = y2 + d * 1e-4;
+                }
+                else
+                {
+                    n1 = tri;
+                    Ac = t;
+                    xc.xy = uv;
+                }
+            }
+        }
+        float4 fc = float4(0.0);
+        float4x4 Jc = J;
+        float2 cc2 = float2(0.0);
+        valid = valid && pairAtC(Ac, Bc, X, L, eta, target, xc, fc, Jc, cc2);
+        const float errc = max(max(abs(fc.x), abs(fc.y)), max(abs(fc.z), abs(fc.w)));
+        if (mode == 1u && !(valid && errc < err))
+        {
+            // Not an improvement: halve the step; when eight halvings reduce nothing, no path from this seed.
+            beta *= 0.5;
+            if (++halving < 8u) continue;
+            ++res.steps;
+            return res;
+        }
+        if (!valid) return res;   // the seed, or a polishing step, undefined
+        x = xc;
+        A = Ac;
+        B = Bc;
+        t1 = n1;
+        t2 = n2;
+        f = fc;
+        J = Jc;
+        cc = cc2;
+        err = errc;
+        if (mode == 2u)
+        {
+            converged = ++polished == 2u;
+            if (converged) break;
+        }
+        else
+        {
+            if (mode == 1u) ++res.steps;
+            if (err <= kManifoldWalkTol)
+            {
+                // Converged. The walk stops where |F| < kManifoldWalkTol, and where the slopes barely move with x (a
+                // caustic's focus: det dF/dx near 0) that region straddles the pair's edges: a root of the neighbouring
+                // pair, stopped at on this pair's side, counted in both (t15's GPU form 10% bright on the axis).
+                // Uncertified, the root is polished in this pair's own parameters (two Newton steps without
+                // re-projection) and kept only inside both triangles: every root belongs to one pair.
+                converged = CERTIFY;
+                if (converged) break;
+                mode = 2u;
+            }
+            else
+            {
+                if (res.steps >= kManifoldWalkSteps) return res;
+                mode = 1u;
+            }
+        }
         float4x4 Ji;
         if (!invert4(J, Ji)) return res;
-        const float4 delta = -mul(Ji, f);
-        float beta = 1.0;
-        bool moved = false;
-        for (uint halving = 0u; halving < 8u && !moved; ++halving, beta *= 0.5)
-        {
-            const float4 xs = x + beta * delta;
-            // Re-project onto the mesh: X toward the stepped exit point, then from there toward the stepped entry point.
-            const float3 p2 = manifoldPoint(B, xs.zw), p1 = manifoldPoint(A, xs.xy);
-            uint n2, n1;
-            float2 q2, q1;
-            float tt;
-            if (!scene.trace(X, normalize(p2 - X), 1e30, n2, q2, tt)) continue;
-            const float3 y2 = manifoldPoint(scene.triangle(n2), q2);
-            const float3 toward = p1 - y2;
-            if (!(dot(toward, toward) > 0.0)) continue;
-            const float3 dir = normalize(toward);
-            if (!scene.trace(y2 + dir * 1e-4, dir, 1e30, n1, q1, tt)) continue;
-            const ManifoldTri A2 = scene.triangle(n1), B2 = scene.triangle(n2);
-            const float4 x2 = float4(q1, q2);
-            float4 f2;
-            float4x4 J2;
-            if (!pairAt(A2, B2, X, L, eta, target, x2, f2, J2)) continue;
-            const float err2 = max(max(abs(f2.x), abs(f2.y)), max(abs(f2.z), abs(f2.w)));
-            if (!(err2 < err)) continue;
-            x = x2;
-            t1 = n1;
-            t2 = n2;
-            A = A2;
-            B = B2;
-            f = f2;
-            J = J2;
-            err = err2;
-            moved = true;
-        }
-        ++res.steps;
-        if (!moved) return res;   // no step reduced the error: no path from this seed
+        delta = -mul(Ji, f);
+        beta = 1.0;
+        halving = 0u;
     }
-    if (!(err <= kWalkTol)) return res;
+    if (!converged) return res;
+    res.entry = t1;
+    res.exit = t2;
+    const float c12 = cc.x * cc.x * cc.y * cc.y;
+    res.slopeDet = c12 > 0.0 ? abs(determinant(J)) / c12 : 0.0;
+    if (!CERTIFY)
+    {
+        // A root of F is a path only where it refracts as light does (pairPhysical: each half vector on its normal's
+        // side, the light outside then inside at y1, inside then outside at y2): without that check the walk took
+        // roots no light follows (t15's GPU form read 7-20x bright).
+        res.found = all(x >= 0.0) && x.x + x.y <= 1.0 && x.z + x.w <= 1.0 && pairPhysical(A, B, X, L, eta, target, x);
+        res.x = x;
+        return res;
+    }
     // Certify the final pair: every root in it, the walked one among them.
     const ManifoldPairResult c = manifoldCertifyPair(A, B, X, L, eta, target);
     res.roots = c.roots;
@@ -993,7 +1269,5 @@ ManifoldWalkResult manifoldWalkPair<S : IManifoldScene>(S scene, float3 X, float
             res.x = c.uv[q];
         }
     }
-    res.entry = t1;
-    res.exit = t2;
     return res;
 }

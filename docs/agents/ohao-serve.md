@@ -3,7 +3,7 @@
 For an agent that builds games with OHAO: connect to one running engine, orient, edit,
 play, look, record and replay, read its logs. Every method and its params are in
 [ohao-cli.md](ohao-cli.md) ("Methods", "Edit commands", "Error codes"); this guide is the
-session. `python tests/docs/check_docs.py` runs every `console` command here.
+session.
 
 ## Connect
 
@@ -121,9 +121,9 @@ Without a scene, `ohao level <file>` prints a file's `level_info` (the CLI guide
 substeps), writes awake dynamic bodies back to their `Transform`s and records what happened:
 `contact_begin`/`contact_end` per body pair and `trigger_enter`/`trigger_exit` for a
 `Collider` with `trigger` (hint `"trig": 1`). Move a dynamic body with `world_apply` and it
-starts from rest there; read what followed with `physics_events {since?, max?}` (pass the
-reply's `next` as `since` to read on; `step` is the physics scene's own step count). Sleeping
-bodies keep their contacts and cost nothing.
+starts from rest there; read what followed with `events_read {names: ["physics.*"]}` (pass the
+reply's `next` as `since` to read on; `step` is the world's step that read it). Sleeping bodies keep their
+contacts and cost nothing.
 
 Lift the blockout's crates (CrateA 1 m, CrateB 2 m), step 90 frames, read the landings and
 where they came to rest:
@@ -133,8 +133,8 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --script doc
 {"method":"scene.load","result":{"entities":5}}
 {"method":"world.apply","result":{"applied":2,"results":[null,null],"inverse":[{"op":"field.set","id":"506f14503a54ecba","path":"/Transform/position","value":[1.3,0.8,-1.7]},{"op":"field.set","id":"5cfbb21776b390b8","path":"/Transform/position","value":[1.3,0.3,-1.7]}]}}
 {"method":"world.step","result":{"frame":90}}
-{"method":"physics.events","result":{"events":[{"seq":1,"step":28,"kind":"contact_begin","a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
-{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.78999555,-1.700009]}}],"count":2}}
+{"method":"events.read","result":{"events":[{"seq":2,"step":28,"event":"physics.contact_begin","a":"5cfbb21776b390b8","aName":"CrateA","b":"fb31dd4d0994b3f6","bName":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":3,"step":39,"event":"physics.contact_begin","a":"506f14503a54ecba","aName":"CrateB","b":"5cfbb21776b390b8","bName":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":3}}
+{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.7899956,-1.700009]}}],"count":2}}
 ```
 
 A 1 m fall lands at 4.57 m/s in step 28 (0.45 s), the 2 m one at 6.19 m/s in step 39. Resting
@@ -156,9 +156,9 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,0,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
 ```
 
-The walk's footsteps are in `physics_events` as kind `footstep` (one every 0.75 m walked, 0.95 m
+The walk's footsteps are `events_read`'s `physics.footstep` (one every 0.75 m walked, 0.95 m
 sprinting) with the ground's `surface` (the blockout: `concrete` floor, `metal` step, platform
-and ramp, `wood` crates), and a fall of more than 0.3 m ends in a `land`. Only `ohao_game`
+and ramp, `wood` crates), and a fall of more than 0.3 m ends in a `physics.land`. Only `ohao_game`
 sounds them; a server's window stays silent.
 
 `player_info {entity?}` says where the player is without a query: its feet (`pos`), facing and
@@ -180,11 +180,11 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 00000
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
-{"method":"world.hash","result":{"hash":"e874acfb6fdb10fc","frame":30}}
+{"method":"world.hash","result":{"hash":"45ac1f54bcd712ef","frame":30}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":22,"frame":0}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
-{"method":"world.hash","result":{"hash":"e874acfb6fdb10fc","frame":30}}
+{"method":"world.hash","result":{"hash":"45ac1f54bcd712ef","frame":30}}
 {"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
 {"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
 ```
@@ -220,23 +220,25 @@ at its start; both enemies dead, it is won and waits for `restart` (Enter). `gre
 a test grenade that does no damage: it lands about 9 m along the look and goes off 2.5 s after
 the throw as an `explode` event and sound at its place, a source to listen to (audio spec ruling
 23). Three tools read and drive it, beside `input.inject` (fire with `fire` down and up,
-`reload`, `restart`, `grenade`):
+`reload`, `restart`, `grenade`); `combat_info` and `combat_damage` are the slice's own (a game's methods, after the
+engine's in `tools/list`; a server started with `--game none` has neither):
 
 - `combat_info {}`: the combat steps, the round (`phase` playing, dead or won, `restartIn` while
   dead, `restarts`) and every combatant in id order: `health`, `max`, `dead`, `pos` (its feet),
   `weapon` (`ammo`, `magazine`, `reloading`, `bloomDeg`, `kickDeg`, `shots`), `enemy` (`state`
   idle, chase, attack or dead; `lastSeen`, where it last saw the player). Aim with
   `player_teleport {pos: its own pos, yawDeg}` toward an enemy's `pos`, then fire.
-- `combat_events {since, max}`: shots (eye, `dir`, `coneDeg`), hits (what, where, `surface`),
-  damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`,
-  `explode` (`point`);
-  read on with the reply's `next`, as `physics_events`.
+- `events_read {names: ["slice.*"]}`: the slice's events: `slice.shot` (its eye, `dir`, `coneDeg`, `hit`
+  where it stopped), `slice.hit` (what, where, `surface`), `slice.damage` (`amount`, `health` after),
+  `slice.death`, `slice.reload` / `slice.reloaded` (`ammo`), `slice.round_start`, `slice.restart`,
+  `slice.win`, `slice.explode` (`point`); read on with the reply's `next`.
 - `combat_damage {entity, amount, source?}`: takes hit points as a round would, from the
   entity's `Health` or its nearest ancestor's (an enemy's body or head entity is fine); a dead
   enemy plays its death clip from the next step, its `Transform` upright where it stood. 0 to
-  10,000; `E_NOT_FOUND` for what has no `Health`.
-- `animation_info {entity?, since?, max?}`: every `Animator`'s layers (each state, its clip and
-  the time into it, the fade) and the animation events after a cursor. The enemies' body layer
+  10,000; `E_NOT_FOUND` for what has no `Health`. Between steps, its damage and death are the next
+  step's events (that step's sounds and clips hear them, as a round's).
+- `animation_info {entity?}`: every `Animator`'s layers (each state, its clip and the time into it,
+  the fade); its clip events are `events_read`'s `anim.clip_event`. The enemies' body layer
   is `move`, `combat`, `death` or `dead`, with additive `aim`, `fire`, `reload`, `hit`; the
   player's arms (`Arms`, below the view model) are `ready` (the hip-to-sights blend by `aim`),
   `sprint` or `reload`, with an additive `fire`. Events: `mag_out`, `mag_in`, `bolt`,
@@ -257,11 +259,12 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"combat.damage","result":{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"taken":100}}
 {"method":"world.step","result":{"frame":2}}
 {"method":"combat.info","result":{"steps":2,"round":{"started":true,"phase":"won","restarts":0},"combatants":[{"entity":"5c0b1a7e00000001","name":"Player","player":true,"health":100,"max":100,"dead":false,"pos":[1.5,0,2.2],"weapon":{"ammo":30,"magazine":30,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0}},{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"pos":[-2.5,0.3,-2],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}},{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"pos":[3,0.506,-1.999],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}}]}}
-{"method":"combat.events","result":{"events":[{"seq":1,"step":1,"kind":"round_start"},{"seq":2,"step":1,"kind":"damage","source":"5c0b1a7e00000001","sn":"Player","target":"5c0b1a7e00000010","tn":"EnemyA","amount":60,"health":40},{"seq":3,"step":1,"kind":"damage","target":"5c0b1a7e00000010","tn":"EnemyA","amount":40,"health":0},{"seq":4,"step":1,"kind":"death","target":"5c0b1a7e00000010","tn":"EnemyA"},{"seq":5,"step":1,"kind":"damage","target":"5c0b1a7e00000020","tn":"EnemyB","amount":100,"health":0},{"seq":6,"step":1,"kind":"death","target":"5c0b1a7e00000020","tn":"EnemyB"},{"seq":7,"step":2,"kind":"win"}],"next":7}}
+{"method":"events.read","result":{"events":[{"seq":3,"step":1,"event":"slice.round_start"},{"seq":6,"step":2,"event":"slice.damage","source":"5c0b1a7e00000001","sourceName":"Player","target":"5c0b1a7e00000010","targetName":"EnemyA","point":[-2.5,0.3,-2],"amount":60,"health":40},{"seq":7,"step":2,"event":"slice.damage","target":"5c0b1a7e00000010","targetName":"EnemyA","point":[-2.5,0.3,-2],"amount":40,"health":0},{"seq":8,"step":2,"event":"slice.death","target":"5c0b1a7e00000010","targetName":"EnemyA","point":[-2.5,0.3,-2]},{"seq":9,"step":2,"event":"slice.damage","target":"5c0b1a7e00000020","targetName":"EnemyB","point":[3,0.506,-1.999],"amount":100,"health":0},{"seq":10,"step":2,"event":"slice.death","target":"5c0b1a7e00000020","targetName":"EnemyB","point":[3,0.506,-1.999]},{"seq":11,"step":2,"event":"slice.win"}],"next":14}}
 ```
 
 Step once before damaging anyone: the round's start is the world at the end of its first step,
-and a restart goes back there. A real fight (`tests/serve/check_live.py`'s `fight`) faces each
+and a restart goes back there. The damage done between steps belongs to the next step (step 2): its sounds
+and clips hear it, as a round's would. A real fight (`tests/replay/replay_test.py`'s `second_half`) faces each
 enemy with `player_teleport` and fires bursts of three (`fire` down for 13 steps) until
 `combat_info` says it is dead; the same fight in a window and headless reaches the same
 `world_hash` and HUD picture.
@@ -286,12 +289,14 @@ Every sound is decided in the step by the voice schedule, from the step's physic
 animation events; a window's player only renders it, a step later. So an agent hears through the
 schedule, in any host:
 
-- `audio_info {since, max}`: the round's snapshot (`default`, `dead`, `won`), the listener's
-  reverb `zone`, every bus in the bank's order (its level in dB when a duck or snapshot moved it,
-  its cap, the voices held), voice and occlusion-ray counts, and the commands after `since`:
-  `play` (the sound, its voice, `pos` unless at the ear, `occl` behind walls, `outcome` when it
-  stole a voice or was dropped), `stop`, `bus` (a duck), `snapshot`, `zone`, `occlusion`,
-  `stop_world` (a restart or restore). Read on with `next`. Headless it says `device: "none"`.
+- `audio_info {}`: the round's snapshot (`default`, `dead`, `won`), the listener's reverb `zone`,
+  every bus in the bank's order (its level in dB when a duck or snapshot moved it, its cap, the
+  voices held), voice and occlusion-ray counts. Headless it says `device: "none"`.
+- `events_read {names: ["audio.*"]}`: the schedule's commands, as events of the world's log:
+  `audio.play` (the sound, its voice, `pos` unless at the ear, `walls`/`occlusionDb` behind walls,
+  `outcome` when it stole a voice or was dropped), `audio.stop`, `audio.bus` (a duck),
+  `audio.snapshot`, `audio.zone`, `audio.occlusion`, `audio.stop_world` (a restart or restore). Read
+  on with `next`.
 - `audio_mix {bus, db | mute | solo}`, `{snapshot}`, `{clear: true}`: listening overrides,
   applied in a window's device only. They never reach the world, the schedule, `world_hash` or a
   snapshot, so they are safe mid-test. A window opens a sound device with `ohao serve --window
@@ -307,13 +312,14 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"world.step","result":{"frame":1}}
 {"method":"input.inject","result":{"queued":2,"firstStep":1,"lastStep":2}}
 {"method":"world.step","result":{"frame":3}}
-{"method":"audio.info","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0},"commands":[{"seq":3,"step":2,"op":"play","sound":"fire","voice":1},{"seq":4,"step":2,"op":"play","sound":"impact_default","voice":2,"pos":[1.52,1.61,-3]},{"seq":5,"step":2,"op":"bus","bus":"foley","db":-3,"blend":1},{"seq":6,"step":2,"op":"bus","bus":"ambience","db":-6,"blend":1}],"next":6}}
-{"method":"audio.mix","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1,"mix":{"mute":true}},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0}}}
+{"method":"audio.info","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blendMs":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0}}}
+{"method":"events.read","result":{"events":[{"seq":4,"step":1,"event":"audio.zone","zone":"room","bed":"bed_room","blendMs":500},{"seq":5,"step":1,"event":"audio.snapshot","snapshot":"default","blendMs":0},{"seq":8,"step":2,"event":"audio.play","sound":"fire","voice":1,"gain":0.85},{"seq":9,"step":2,"event":"audio.play","sound":"impact_default","voice":2,"pos":[1.518,1.614,-3],"gain":0.55},{"seq":10,"step":2,"event":"audio.bus","bus":"foley","db":-3,"blendMs":17},{"seq":11,"step":2,"event":"audio.bus","bus":"ambience","db":-6,"blendMs":17}],"next":11}}
+{"method":"audio.mix","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blendMs":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1,"mix":{"mute":true}},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0}}}
 ```
 
-The player's round plays at the ear (no `pos`); its impact on the north wall, 5 m off, at its
-place; the shot ducks foley by 3 dB and ambience by 6 (the bank's `ducks`). Commands 1 and 2,
-before `since`, were the room's zone with its bed and the default snapshot.
+The room's zone with its bed and the default snapshot come first, at step 1. The player's round plays at the ear
+(no `pos`); its impact on the north wall, 5 m off, at its place; the shot ducks foley by 3 dB and ambience by 6
+(the bank's `ducks`).
 
 ## Record and replay
 
@@ -336,11 +342,11 @@ $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":60}}
 {"method":"world.step","result":{"frame":61,"watch":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,27.53422]}}],"count":1}}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":61,"events":2}}
-{"method":"world.hash","result":{"hash":"3f19245b577e33f4","frame":61}}
+{"method":"world.hash","result":{"hash":"4495a7523295ce81","frame":61}}
 {"method":"world.diff","result":{"changed":[{"id":"0c6901342a294695","name":"MainCamera","fields":{"/Transform/position":[[0,-6.891139,30.534174],[0,-6.891139,27.53422]]}}],"created":[],"destroyed":[],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":2,"frame":0}}
 {"method":"input.replay","result":{"steps":61,"events":2,"checkpoints":2,"frame":61}}
-{"method":"world.hash","result":{"hash":"3f19245b577e33f4","frame":61}}
+{"method":"world.hash","result":{"hash":"4495a7523295ce81","frame":61}}
 ```
 
 ## Look
@@ -440,22 +446,17 @@ Over MCP, `logging/setLevel` also streams records at that level and above as
 
 ## A whole session
 
-`tests/serve/e2e_mcp.py` is a stdlib-only MCP client running one, against a hidden
-window: initialize → load `helmet_game` → summary → an edit → snapshot → record → a
+A session against a hidden window goes: initialize → load `helmet_game` → summary → an edit → snapshot → record → a
 61-step flight → step with `watch` → capture inline and to a file → log read → stop
 recording → restore → replay (every checkpoint matches) → capture again, bit-identical
 to the first → load the blockout level → `level_info` → a ray down at the player spawn →
-`physics_info` → lift and drop the crates → `physics_events` → load the play scene →
+`physics_info` → lift and drop the crates → `events_read` → load the play scene →
 `player_info` → look → snapshot → walk, turn by the mouse and jump → `player_info` and the
 footsteps → look → `player_teleport` → `physics_contacts` → restore → the same walk, to the
 same hash and the same picture → load the play scene again → `combat_info` → shoot EnemyA
-down → `audio_info`'s newest commands, a bus muted and one soloed, `clear` (`world_hash`
-unchanged) → `combat_events` → look with the HUD → `combat_damage` kills the player → the
+down → `events_read`'s newest `audio.*`, a bus muted and one soloed, `clear` (`world_hash`
+unchanged) → `events_read` → look with the HUD → `combat_damage` kills the player → the
 restart → clear the room → won.
-
-```console
-$ python tests/serve/e2e_mcp.py > /dev/null   # gpu
-```
 
 ## Limits
 

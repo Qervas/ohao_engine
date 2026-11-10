@@ -115,6 +115,7 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("fixedDt", &TimeSetParams::fixedDt).doc("Fixed step length, in (0, 1]").unit("s").min(0.0).max(1.0);
 
     r.type<WorldHashParams>("WorldHashParams").doc("world.hash params");
+    r.type<GameReloadParams>("GameReloadParams").doc("game.reload params");
 
     ecs::registerKeyEnum(r);
     r.type<InjectEvent>("InjectEvent").doc("One input event; exactly one of action, axis, key, mouse, focusLost")
@@ -130,8 +131,13 @@ void registerParams(reflect::TypeRegistry& r) {
     r.type<InputInjectParams>("InputInjectParams").doc("input.inject params")
         .field("events", &InputInjectParams::events).doc("Events in order; same-step events apply in this order, "
                                                           "after that step's device events").required()
-            .maxItems(kMaxInjectEvents);
-    r.type<InputStateParams>("InputStateParams").doc("input.state params");
+            .maxItems(kMaxInjectEvents)
+        .field("player", &InputInjectParams::player)
+            .doc("The player (16 hex digits) whose input stream (PlayerController.stream) takes the events; absent: "
+                 "stream 0, a device's");
+    r.type<InputStateParams>("InputStateParams").doc("input.state params")
+        .field("player", &InputStateParams::player)
+            .doc("The player (16 hex digits) whose input stream to read; absent: stream 0, a device's");
     r.type<InputRecordParams>("InputRecordParams").doc("input.record params")
         .field("path", &InputRecordParams::path).doc("JSON-Lines file to write, under the output directory (starts)")
         .field("stop", &InputRecordParams::stop).doc("Stops the recording in progress");
@@ -265,10 +271,13 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("dir", &PhysicsRaycastParams::dir).doc("Direction [x, y, z], any nonzero length").unitless().required()
         .field("max", &PhysicsRaycastParams::max).doc("Farthest hit, in (0, 100000]").unit("m");
     r.type<PhysicsInfoParams>("PhysicsInfoParams").doc("physics.info params");
-    r.type<PhysicsEventsParams>("PhysicsEventsParams").doc("physics.events params")
-        .field("since", &PhysicsEventsParams::since)
-            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &PhysicsEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
+    r.type<EventsReadParams>("EventsReadParams").doc("events.read params")
+        .field("since", &EventsReadParams::since)
+            .doc("Events after this seq: 0 for all the history holds, else the previous reply's next").unitless().min(0)
+        .field("max", &EventsReadParams::max).doc("Events in one reply (0: none, and next is the present)").unitless()
+            .min(0).max(64)
+        .field("names", &EventsReadParams::names)
+            .doc("Channels to read, exact (physics.footstep) or a prefix (physics.*); absent: every channel").maxItems(32);
     r.type<PhysicsContactsParams>("PhysicsContactsParams").doc("physics.contacts params")
         .field("entity", &PhysicsContactsParams::entity).doc("Only the pairs this entity (16 hex digits) is in")
         .field("max", &PhysicsContactsParams::max).doc("Pairs in one reply").unitless().min(1).max(64);
@@ -282,20 +291,9 @@ void registerParams(reflect::TypeRegistry& r) {
             .doc("Facing about +Y from -Z, counter-clockwise seen from above; absent: as it faced").unit("deg")
             .min(-360.0).max(360.0);
 
-    r.type<CombatInfoParams>("CombatInfoParams").doc("combat.info params");
-    r.type<CombatEventsParams>("CombatEventsParams").doc("combat.events params")
-        .field("since", &CombatEventsParams::since)
-            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &CombatEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
     r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
-        .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator")
-        .field("since", &AnimationInfoParams::since)
-            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &AnimationInfoParams::max).doc("Events in one reply (0: none)").unitless().min(0).max(64);
-    r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params")
-        .field("since", &AudioInfoParams::since)
-            .doc("Commands after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
-        .field("max", &AudioInfoParams::max).doc("Commands in one reply (0: none)").unitless().min(0).max(64);
+        .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator");
+    r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params");
     r.type<VfxInfoParams>("VfxInfoParams").doc("vfx.info params")
         .field("since", &VfxInfoParams::since).doc("Records after this seq (the previous next)").unitless().min(0)
         .field("max", &VfxInfoParams::max).doc("Records in one reply").unitless().min(0).max(64);
@@ -307,12 +305,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("solo", &AudioMixParams::solo).doc("Hear only soloed buses (with their parents and children)")
         .field("snapshot", &AudioMixParams::snapshot).doc("Force this snapshot; \"\" gives the schedule's back")
         .field("clear", &AudioMixParams::clear).doc("Drop every override first");
-    r.type<CombatDamageParams>("CombatDamageParams").doc("combat.damage params")
-        .field("entity", &CombatDamageParams::entity).doc("Who takes it, 16 hex digits (its Health or an ancestor's)")
-            .required()
-        .field("amount", &CombatDamageParams::amount).doc("Hit points to take").unitless().min(0.0).max(kMaxDamage)
-            .required()
-        .field("source", &CombatDamageParams::source).doc("Who dealt it, 16 hex digits");
 }
 
 } // namespace

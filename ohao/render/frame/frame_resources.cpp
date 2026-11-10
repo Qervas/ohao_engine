@@ -1,4 +1,5 @@
 #include "frame_resources.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "core/log.hpp"
 #include <cstring>
 #include <stdexcept>
@@ -103,7 +104,7 @@ void FrameResourceManager::shutdown() {
     m_initialized = false;
 }
 
-bool FrameResourceManager::waitForFrame(uint32_t frameIndex, uint64_t timeoutNs) {
+bool FrameResourceManager::waitForFrame(uint32_t frameIndex) {
     if (!m_initialized || frameIndex >= MAX_FRAMES_IN_FLIGHT) {
         return false;
     }
@@ -113,8 +114,8 @@ bool FrameResourceManager::waitForFrame(uint32_t frameIndex, uint64_t timeoutNs)
         return true; // No fence means nothing to wait for
     }
 
-    VkResult result = vkWaitForFences(m_device, 1, &fence, VK_TRUE, timeoutNs);
-    return result == VK_SUCCESS;
+    gpu::waitFence(m_device, fence, "frame fence");   // a hang or a lost device does not return
+    return true;
 }
 
 void FrameResourceManager::resetFrame(uint32_t frameIndex) {

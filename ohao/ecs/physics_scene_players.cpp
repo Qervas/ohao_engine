@@ -298,13 +298,13 @@ void PhysicsScene::Impl::spawnPlayers() {
 auto PhysicsScene::Impl::playerEvent(PhysicsEvent::Kind kind, entt::entity e, const pb::CharacterState& at, float speed) const -> PhysicsEvent {
     PhysicsEvent ev;
     ev.kind = kind;
-    ev.a = e;
     ev.aId = idOf(e);
+    entt::entity ground = entt::null;
     if (const auto it = entityOf.find(at.groundBody); at.groundBody != pb::INVALID_BODY && it != entityOf.end()) {
-        ev.b = it->second;
-        ev.bId = idOf(ev.b);
+        ground = it->second;
+        ev.bId = idOf(ground);
     }
-    const auto* c = ev.b != entt::null && reg.valid(ev.b) ? reg.try_get<Collider>(ev.b) : nullptr;
+    const auto* c = ground != entt::null && reg.valid(ground) ? reg.try_get<Collider>(ground) : nullptr;
     ev.surface = c && !c->surface.empty() ? c->surface : std::string("default");
     ev.point = at.position;
     ev.normal = at.groundNormal;
@@ -314,13 +314,14 @@ auto PhysicsScene::Impl::playerEvent(PhysicsEvent::Kind kind, entt::entity e, co
 
 // Every player, once per step, before the bodies step (spec: the character moves first); its
 // footsteps and landing go into `out`.
-void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out) {
-    spawnPlayers();
+void PhysicsScene::Impl::updatePlayers(std::span<const InputMap> inputs, float dt, std::vector<PhysicsEvent>& out) {
     if (players.empty() || !(dt > 0.0f) || !backend) return;
     const glm::vec3 gravity = backend->getGravity();
-    const glm::vec2 mouse = input.mouseDelta();
+    static const InputMap kNothing;
     for (auto& [e, p] : players) {
         const PlayerController& pc = reg.get<PlayerController>(e);
+        const InputMap& input = pc.stream < inputs.size() ? inputs[pc.stream] : kNothing;   // its player's stream
+        const glm::vec2 mouse = input.mouseDelta();
         const Transform& t = reg.get<Transform>(e);
         // Moved by anything but this system (an edit, a restore): it goes there, at rest (a
         // placement: the step draws from there).
@@ -360,11 +361,9 @@ void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vec
         const MoveIntent* intent = pc.input ? nullptr : reg.try_get<MoveIntent>(e);
         glm::vec2 wish(0.0f);
         bool sprinting = false, jumpPressed = false;
-        // A dead player (Health 0; combat, sub-project 7) neither walks, turns nor jumps: it
-        // stands (or falls) where it died until the round restarts.
-        const auto* health = reg.try_get<Health>(e);
-        const bool dead = health && !(health->current > 0.0f);
-        if (pc.input && !dead) {
+        // A player out of control (the game's rule: setInputControl) neither walks, turns nor jumps: it
+        // stands, or falls, where it is.
+        if (pc.input && controlled(e)) {
             const LookResult look =
                 applyLook(p.yawDeg, p.pitchDeg, mouse + glm::vec2(input.axis(pc.lookX), input.axis(pc.lookY)), pc);
             p.yawDeg = look.yawDeg;
@@ -444,34 +443,37 @@ void PhysicsScene::Impl::updatePlayers(const InputMap& input, float dt, std::vec
     playerMotion.clear();
 }
 
-void PhysicsScene::Impl::step(const InputMap& input, float dt) {
+void PhysicsScene::Impl::step(std::span<const InputMap> inputs, float dt, uint64_t worldStep) {
     using Clock = std::chrono::steady_clock;
     const auto ms = [](Clock::time_point a, Clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
     const auto t0 = Clock::now();
-    ++steps;
+    steps = worldStep;   // the World's (step 3e): a pair's `since`, physics.info's steps
     lastSubsteps = 0;
     timing = {};
     std::vector<PhysicsEvent> fresh;
-    if (bodies.empty() && touched.empty() && pending.empty() && players.empty() && playersTouched.empty() &&
-        reg.view<PhysicsMoved>().empty()) {
-        stepEvents.clear();   // a world without colliders or players: no work at all
+    if (bodies.empty() && touched.empty() && players.empty() && playersTouched.empty() &&
+        reg.view<PhysicsMoved>().empty()) {   // a world without colliders or players: no work at all
         posedExternally.clear();
         return;
     }
     propagateTransforms(reg);
+    // Characters first, as World::sync runs player_spawn before physics: a restore's parked characters are back
+    // before its simulation is matched to the bodies (else a restore across a death, its character parked, misses
+    // the exact path and bodies come back only by their poses).
+    spawnPlayers();
     stepDt = dt;
     sync();
     stepDt = 0.0f;
     for (auto& [e, mv] : movers) mv.moved = false;
     const auto tp = Clock::now();
-    updatePlayers(input, dt, fresh);
+    updatePlayers(inputs, dt, fresh);
     posedExternally.clear();   // the bodies took theirs in the sync, the players in their update
     auto t1 = Clock::now(), t2 = t1, t3 = t1;
     timing.playerMs = ms(tp, t1);
     if (backend && dt > 0.0f) {
-        constexpr float kMaxDt = 1.0f / 60.0f;
+        constexpr float kMaxDt = 1.0f / 60.0f;   // Jolt's largest substep: a solver limit, not the clock
         int n = static_cast<int>(std::ceil(dt / kMaxDt - 1e-4f));
         if (n > PhysicsScene::kMaxSubsteps) {
             if (!warnedLongStep)
@@ -555,8 +557,8 @@ void PhysicsScene::Impl::lookLead(bool between, float alpha, glm::vec2 pending, 
         if (!reg.valid(e)) continue;
         const auto* pc = reg.try_get<PlayerController>(e);
         const auto* t = reg.try_get<Transform>(e);
-        if (!pc || !pc->input || !t) continue;
-        if (const auto* h = reg.try_get<Health>(e); h && !(h->current > 0.0f)) continue;
+        if (!pc || !pc->input || pc->stream != 0 || !t) continue;   // the window's mouse: stream 0's player
+        if (!controlled(e)) continue;
         leadsLook = true;
         if (!lead) continue;
         const LookResult look = applyLook(p.yawDeg, p.pitchDeg, pending, *pc);
@@ -596,16 +598,6 @@ void PhysicsScene::Impl::setDrawn(entt::entity x, const glm::mat4& world, const 
     reg.emplace_or_replace<RenderPose>(x, RenderPose{world, prev});
     reg.emplace_or_replace<RenderDirty>(x);
     drawn.insert(x);
-}
-
-auto PhysicsScene::Impl::since(uint64_t after, std::size_t max, uint64_t& dropped) const -> std::vector<PhysicsEvent> {
-    const uint64_t last = nextSeq - 1;
-    const uint64_t oldest = last > PhysicsScene::kEventLog ? last - PhysicsScene::kEventLog + 1 : 1;
-    const uint64_t first = std::max(after + 1, oldest);
-    dropped = first > after + 1 ? first - (after + 1) : 0;
-    std::vector<PhysicsEvent> out;
-    for (uint64_t s = first; s <= last && out.size() < max; ++s) out.push_back(log[(s - 1) % PhysicsScene::kEventLog]);
-    return out;
 }
 
 } // namespace ohao::ecs

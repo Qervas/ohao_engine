@@ -24,6 +24,10 @@
 #include <string>
 #include <vector>
 
+namespace ohao::game {
+class Module;
+}
+
 namespace ohao::doctor {
 
 struct Options {
@@ -31,6 +35,7 @@ struct Options {
     std::filesystem::path root;        // the project root (scenes, assets)
     std::filesystem::path shaderDir;   // the stage sources (default <root>/shaders)
     std::filesystem::path spirvDir;    // the SPIR-V the engine loads (default <exe dir>/bin/shaders)
+    const game::Module* game{nullptr}; // the game whose types join the engine's (--game)
 };
 
 struct Check {

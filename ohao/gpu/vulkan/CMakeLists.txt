@@ -2,6 +2,7 @@ file(GLOB_RECURSE GPU_VK_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/
 file(GLOB_RECURSE GPU_VK_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
 add_library(ohao_gpu_vulkan STATIC ${GPU_VK_HEADERS} ${GPU_VK_SOURCES})
+add_dependencies(ohao_gpu_vulkan shaders)   # it includes render/shader_bindings/*.hpp, which the shader build writes
 
 target_include_directories(ohao_gpu_vulkan PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -15,6 +16,7 @@ target_compile_features(ohao_gpu_vulkan PUBLIC cxx_std_20)
 
 target_link_libraries(ohao_gpu_vulkan PUBLIC
     ohao_core
+    ohao_stb_image
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}

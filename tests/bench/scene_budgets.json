@@ -1,7 +1,7 @@
 {
-  "comment": "Spec 'Performance / Budgets (gated)'. Medians in ms on bench10k (Release, single thread). Changing a budget needs Frank's OK.",
+  "comment": "Spec 'Performance / Budgets (gated)'. Medians in ms on bench10k (Release, single thread). Changing a budget needs Frank's OK. save_pretty 10 -> 11 (Frank, 2026-11-09): the generic writer alone, the hand per-type writers deleted.",
   "budgetsMs": {
-    "save_pretty": 10,
+    "save_pretty": 11,
     "load": 20,
     "validate": 10,
     "snapshot": 1,

@@ -1,34 +1,38 @@
 #!/usr/bin/env python3
 """check.py -- build OHAO and run its tests from one command, with one verdict.
 
-    python tools/check.py [--labels quick,gpu,docs] [--all] [--changed [REF]] [--jobs 6] [--config Release]
+    python tools/check.py [--labels quick,gpu] [--all] [--changed [REF] | --staged] [--jobs 6] [--config Release]
                           [--no-build] [--no-doctor] [--build-dir build] [--out DIR] [--ctest-jobs 4]
 
 --changed [REF] runs only the tests the files changed since REF (default HEAD: the working tree,
 staged or not, and untracked files) reach, by tools/check_changed.py's rules; a path no rule covers
-runs the default labels. For iterating; close a build step with the full run.
+runs the default labels. For iterating; close a build step with the full run. --staged: the same for the
+files the next commit changes (the pre-commit hook, .githooks/). Either one builds nothing when the files
+reach no test (docs).
+
+Two checks never run at once (<build>/check.lock): a build during another's tests breaks them, and GPU
+jobs run one at a time. A second waits for the first.
 
 Steps (sub-project 4 spec, "One entry point"):
   1. preflight: the CMake to use (never conda's) and the Python modules the harnesses need;
   2. configure, if the build directory has no CMakeCache.txt;
   3. build the `shaders` target first, then everything (at most 6 jobs: heavier parallel
      load has crashed the reference machine);
+     Then the API's methods against docs/agents/ohao-cli.md's Methods table, and no binding number typed in C++
+     (tools/gen_bindings.py --check): either fails the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
-     a test whose summary says "noisy" (a benchmark under outside load) is rerun alone, at
-     most twice, and every attempt is reported;
-  6. the verdict: <out>/check.json, also printed as the last line of stdout.
+  6. the kernel log read for NVIDIA GPU faults (Xid) during the tests: any fails the run
+     (gpuFaults lists them; "unknown" where the log cannot be read);
+  7. the verdict: <out>/check.json, also printed as the last line of stdout.
 
 check.json: {ok, labels, build: {ok, seconds, tail?}, doctor, tests: [{name, labels, ok,
-seconds, passed?, failed?, failures?, noisy?, attempts?, tail?}], counts: {tests, passed,
-failed}}. passed / failed / failures come from the suite's own JSON summary line; tail is
-the last 40 lines of a failing test's output, so no failure is ever reported without what
-it printed. attempts lists a rerun noisy test's runs, [{ok, noisy, seconds}].
+seconds, passed?, failed?, failures?, tail?}], counts: {tests, passed, failed}, gpuFaults}. passed /
+failed / failures come from the suite's own JSON summary line; tail is the last 40 lines of a
+failing test's output, so no failure is ever reported without what it printed.
 
-Labels (cmake/ohao_tests.cmake): quick, gpu, docs (the default set); --all adds golden,
-bench and slow. selftest is only for this script's own test; monograph (site/'s checks, frozen
-during the frontier renderer work) runs only when asked for.
+Labels (cmake/ohao_tests.cmake): quick and gpu (the default set); --all adds golden and slow.
 
 Exit code: 0 when the build and every selected test pass, 1 otherwise, 2 on a usage or
 environment error (wrong cmake, missing module).
@@ -46,9 +50,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LABELS = ["quick", "gpu", "docs"]
-ALL_LABELS = DEFAULT_LABELS + ["golden", "bench", "slow"]
-KNOWN_LABELS = ALL_LABELS + ["selftest", "monograph"]
+DEFAULT_LABELS = ["quick", "gpu", "golden"]
+ALL_LABELS = DEFAULT_LABELS + ["golden", "slow"]
+KNOWN_LABELS = ALL_LABELS
 MAX_JOBS = int(os.environ.get("OHAO_MAX_JOBS", "6"))
 TAIL_LINES = 40
 # Modules the harnesses import, by the label whose tests need them.
@@ -172,11 +176,56 @@ def build(cmake, build_dir, config, jobs, out):
     return {"ok": True, "seconds": round(time.perf_counter() - t0, 1)}
 
 
+def hold_lock(path):
+    """Waits for, then holds, the lock on `path` until this process exits: two checks never overlap."""
+    f = open(path, "a+")
+    try:
+        import fcntl
+    except ImportError:   # Windows
+        import msvcrt
+        said = False
+        while True:
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                return f
+            except OSError:
+                if not said:
+                    print("check: another check is running; waiting for it", flush=True)
+                    said = True
+                time.sleep(0.5)
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("check: another check is running; waiting for it", flush=True)
+        fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
 def ohao_exe(build_dir, config):
     for c in (build_dir / config / "ohao.exe", build_dir / config / "ohao", build_dir / "ohao.exe"):
         if c.is_file():
             return c
     return None
+
+
+def check_method_docs(build_dir, config, out):
+    """The API's methods (the catalogue, from the one method table) against the Methods table of
+    docs/agents/ohao-cli.md: two places that must agree (system design 4.2). -> a list of problems."""
+    exe = ohao_exe(build_dir, config)
+    if not exe.exists():
+        return [f"{exe} is missing"]
+    dest = out / "catalogue"
+    r = subprocess.run([str(exe), "schema", "-o", str(dest)], capture_output=True, text=True)
+    if r.returncode != 0:
+        return [f"ohao schema failed (exit {r.returncode}): {r.stderr.strip()[-400:]}"]
+    catalogue = json.loads((dest / "ohao_schema.json").read_text(encoding="utf-8"))
+    code = {m["name"] for m in catalogue["methods"]}
+    text = (ROOT / "docs/agents/ohao-cli.md").read_text(encoding="utf-8")
+    section = text.split("\n## Methods\n", 1)[1].split("\n## ", 1)[0]
+    documented = set(re.findall(r"^\| `([a-z]+\.[a-z]+)` \|", section, re.M))
+    return ([f"{n}: a method docs/agents/ohao-cli.md does not list" for n in sorted(code - documented)] +
+            [f"{n}: listed in docs/agents/ohao-cli.md, no such method" for n in sorted(documented - code)])
 
 
 def run_doctor(build_dir, config, labels, out):
@@ -227,8 +276,6 @@ def summarize(junit, labels):
             entry["failed"] = s.get("failed")
             if s.get("failures"):
                 entry["failures"] = s["failures"][:20]
-            if s.get("noisy"):
-                entry["noisy"] = True   # a benchmark run under outside load: no verdict
         if failed:
             entry["status"] = status
             entry["tail"] = tail(output)
@@ -239,44 +286,26 @@ def summarize(junit, labels):
 # The summary line is a suite's last: keep the end of long outputs, not the start.
 OUTPUT_FLAGS = ["--output-on-failure", "--test-output-size-passed", "65536",
                 "--test-output-size-failed", "1048576", "--test-output-truncation", "head"]
-MAX_NOISY_RERUNS = 2
 
-
-def rerun_noisy(ctest, build_dir, config, out, tests, labels):
-    """A test that reports itself noisy (a benchmark under outside load) is rerun alone, at
-    most twice; its entry becomes the last attempt's, with every attempt in `attempts`. One
-    still noisy after that has not passed (ok false) and keeps `noisy`, so the verdict tells
-    "the machine was busy" from a regression."""
-    for i, entry in enumerate(tests):
-        if entry["ok"] or not entry.get("noisy"):
-            continue
-        name = entry["name"]
-        attempts = [{"ok": False, "noisy": True, "seconds": entry["seconds"]}]
-        latest = entry
-        for k in range(1, MAX_NOISY_RERUNS + 1):
-            print(f"check: {name} was noisy; rerun {k}/{MAX_NOISY_RERUNS}", flush=True)
-            junit = out / f"rerun_{name}_{k}.xml"
-            if junit.exists():
-                junit.unlink()
-            run_logged([str(ctest), "--test-dir", str(build_dir), "-C", config, "-R", "^" + re.escape(name) + "$",
-                        "--output-junit", str(junit)] + OUTPUT_FLAGS, out / f"rerun_{name}_{k}.log", True)
-            again = summarize(junit, labels)
-            if not again:
-                break
-            latest = again[0]
-            attempts.append({"ok": latest["ok"], "noisy": bool(latest.get("noisy")), "seconds": latest["seconds"]})
-            if latest["ok"] or not latest.get("noisy"):
-                break
-        latest = dict(latest)
-        latest["attempts"] = attempts
-        tests[i] = latest
+def gpu_faults_since(t0):
+    """NVIDIA's GPU faults (Xid lines) the kernel logged since t0 (epoch seconds), or None when the
+    kernel log cannot be read (not Linux, no journalctl, no permission). A test can pass while the GPU
+    faults under it (a hung channel the driver recovered, a firmware error before a crash), so a run
+    with any fault fails whatever the tests said."""
+    if not sys.platform.startswith("linux") or shutil.which("journalctl") is None:
+        return None
+    r = subprocess.run(["journalctl", "-k", "--no-pager", "-o", "short-iso", "--since", "@%d" % int(t0)],
+                       capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:
+        return None
+    return [line for line in r.stdout.splitlines() if "NVRM: Xid" in line]
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build OHAO and run its tests; one JSON verdict.")
     ap.add_argument("--labels", default=",".join(DEFAULT_LABELS),
-                    help="comma-separated CTest labels (default: quick,gpu,docs)")
-    ap.add_argument("--all", action="store_true", help="every label but selftest and monograph")
+                    help="comma-separated CTest labels (default: quick,gpu)")
+    ap.add_argument("--all", action="store_true", help="every label")
     ap.add_argument("--jobs", type=int, default=MAX_JOBS, help=f"build parallelism (at most {MAX_JOBS})")
     ap.add_argument("--ctest-jobs", type=int, default=4, help="tests run at once (GPU tests never overlap)")
     ap.add_argument("--config", default="Release")
@@ -286,13 +315,18 @@ def main(argv=None):
     ap.add_argument("--out", default=None, help="where check.json, junit.xml and logs go (default <build>/check)")
     ap.add_argument("--changed", nargs="?", const="HEAD", default=None, metavar="REF",
                     help="only the tests the files changed since REF (default HEAD) reach (tools/check_changed.py)")
+    ap.add_argument("--staged", action="store_true", help="only the tests the staged files reach (the pre-commit hook)")
     args = ap.parse_args(argv)
+    if args.staged and args.changed is not None:
+        ap.error("--changed and --staged are one or the other")
 
     labels = ALL_LABELS if args.all else [l for l in args.labels.split(",") if l]
     unknown = [l for l in labels if l not in KNOWN_LABELS]
     build_dir = (ROOT / args.build_dir).resolve()
     out = Path(args.out).resolve() if args.out else build_dir / "check"
     out.mkdir(parents=True, exist_ok=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    held = hold_lock(build_dir / "check.lock")   # noqa: F841 -- held until the process exits
     jobs = max(1, min(args.jobs, MAX_JOBS))
 
     result = {"ok": False, "labels": labels, "build": None, "doctor": None, "tests": [],
@@ -318,6 +352,27 @@ def main(argv=None):
         print(f"check: {e}", file=sys.stderr)
         return finish(result, out, code=2)
 
+    paths = None
+    if args.changed is not None or args.staged:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import check_changed
+        try:
+            paths = check_changed.staged_paths(ROOT) if args.staged else check_changed.changed_paths(ROOT, args.changed)
+        except RuntimeError as e:
+            result["error"] = str(e)
+            return finish(result, out, code=2)
+        before, why = check_changed.select(paths, test_labels(ctest, build_dir, args.config), DEFAULT_LABELS, ROOT)
+        if not before:   # nothing a test reads (docs, the hooks): nothing to build either
+            result["changed"] = {"ref": "staged" if args.staged else args.changed, "paths": why, "tests": []}
+            print(f"check: {len(paths)} changed file(s) reach no test: nothing to build or run", flush=True)
+            result["ok"] = True
+            return finish(result, out)
+        if args.staged:
+            loose = check_changed.unstaged_paths(ROOT)
+            if loose:
+                print(f"check: the working tree is built and tested; {len(loose)} tracked file(s) differ from what is "
+                      f"staged: {' '.join(loose[:8])}{' ...' if len(loose) > 8 else ''}", flush=True)
+
     if args.no_build:
         result["build"] = {"ok": True, "skipped": True}
     else:
@@ -326,19 +381,21 @@ def main(argv=None):
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
+        problems = check_method_docs(build_dir, args.config, out)
+        gen = subprocess.run([sys.executable, str(ROOT / "tools/gen_bindings.py"), "--check"], capture_output=True, text=True)
+        if gen.returncode != 0:
+            problems += [l for l in gen.stdout.splitlines() if l] or [f"gen_bindings --check failed: {gen.stderr[-400:]}"]
+        if problems:
+            result["build"]["ok"] = False
+            result["build"]["tail"] = "\n".join(problems)
+            print("check: generated or checked facts disagree with their source:\n  " + "\n  ".join(problems), flush=True)
+            return finish(result, out)
 
     selected = None
-    if args.changed is not None:
-        sys.path.insert(0, str(ROOT / "tools"))
-        import check_changed
+    if paths is not None:   # chosen again after the build: a test the change registers exists now
         labels_of = test_labels(ctest, build_dir, args.config)
-        try:
-            paths = check_changed.changed_paths(ROOT, args.changed)
-        except RuntimeError as e:
-            result["error"] = str(e)
-            return finish(result, out, code=2)
         selected, why = check_changed.select(paths, labels_of, DEFAULT_LABELS, ROOT)
-        result["changed"] = {"ref": args.changed, "paths": why, "tests": selected}
+        result["changed"] = {"ref": "staged" if args.staged else args.changed, "paths": why, "tests": selected}
         for p, t in why.items():
             print(f"check: changed {p} -> {'every default test (no rule)' if t == 'unmapped' else ', '.join(t) or 'nothing'}",
                   flush=True)
@@ -370,14 +427,20 @@ def main(argv=None):
     cmd = [str(ctest), "--test-dir", str(build_dir), "-C", args.config, *select_args,
            "--output-junit", str(junit), "--no-tests=error", "-j", str(max(1, args.ctest_jobs))] + OUTPUT_FLAGS
     print(f"check: ctest {' '.join(select_args[:1])} '{regex}'", flush=True)
+    started = time.time() - 1.0
     run_logged(cmd, out / "ctest.log", True)
     labels_of = test_labels(ctest, build_dir, args.config)
     result["tests"] = summarize(junit, labels_of)
-    rerun_noisy(ctest, build_dir, args.config, out, result["tests"], labels_of)
     n = len(result["tests"])
     passed = sum(1 for t in result["tests"] if t["ok"])
     result["counts"] = {"tests": n, "passed": passed, "failed": n - passed}
-    result["ok"] = result["build"]["ok"] and n > 0 and passed == n
+    faults = gpu_faults_since(started)
+    result["gpuFaults"] = faults if faults is not None else "unknown: the kernel log could not be read"
+    if faults:
+        print(f"check: {len(faults)} GPU fault(s) in the kernel log during the run:", flush=True)
+        for line in faults[:20]:
+            print("  " + line, flush=True)
+    result["ok"] = result["build"]["ok"] and n > 0 and passed == n and not faults
     return finish(result, out)
 
 

@@ -69,6 +69,9 @@ struct FieldAttrs {
     // other field is written (a variant alternative's value): a field added later keeps
     // older files' bytes and worlds' hashes. The catalogue lists it only when set.
     bool omitDefault{false};
+    // A UInt64 holding an entity's EntityId (an event's: it outlives the entity it names). The API writes it as
+    // the id and, while the entity lives, its name.
+    bool entity{false};
     // An array field (or free JSON given as an array): at most this many elements, checked
     // before any element is read (E_RANGE) and given as the schema's maxItems.
     std::optional<uint32_t> maxItems;
@@ -125,6 +128,7 @@ struct SkippedField {
 enum class TypeRole : uint8_t {
     Component,   // stored on entities; a top-level block in scene files
     Struct,      // nested value inside components
+    Event,       // an event's payload (ecs/events.hpp): never stored on entities or in files
 };
 
 struct TypeInfo {
@@ -142,6 +146,7 @@ struct TypeInfo {
 
     std::size_t size{0};
     std::size_t align{0};
+    uint64_t layout{0};       // core/layout_key.hpp: equal in two builds when their values are interchangeable
     bool triviallyCopyable{false};
     void (*construct)(void* at){nullptr};
     void (*destroy)(void* at){nullptr};
@@ -191,6 +196,9 @@ void hashStruct(const void* object, Hasher& h, const TypeInfo& t);
 // their defaults. A member named `ignoredKey` (if given) is skipped, not reported.
 void readStruct(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx,
                 std::string_view ignoredKey = {});
+// A method's params, as the API decodes every method's (a game's too): readStruct with MCP's "_meta" skipped, then
+// each required member present (E_COMMAND). False when anything was reported.
+bool readParams(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx);
 // Decodes one member of `object` (a `t`) from `n` and checks its limits, exactly as
 // readStruct does per member. False when it reported an error.
 bool readField(void* object, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx);

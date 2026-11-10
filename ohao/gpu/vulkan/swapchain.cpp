@@ -1,4 +1,5 @@
 #include "gpu/vulkan/swapchain.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include <algorithm>
 #include <utility>
 #include "core/log.hpp"
@@ -133,9 +134,11 @@ bool Swapchain::recreate(VkExtent2D desired) {
 
 Swapchain::Acquire Swapchain::acquire(VkSemaphore imageAcquired, uint32_t& imageIndex) {
     if (!valid()) return Acquire::OutOfDate;
-    const VkResult r = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX, imageAcquired,
-                                             VK_NULL_HANDLE, &imageIndex);
+    const auto timeout = static_cast<uint64_t>(std::chrono::nanoseconds(gpu::kGpuTimeout).count());
+    const VkResult r = gpu::checkResult(
+        vkAcquireNextImageKHR(m_device, m_swapchain, timeout, imageAcquired, VK_NULL_HANDLE, &imageIndex), "acquire");
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return Acquire::OutOfDate;
+    if (r == VK_TIMEOUT || r == VK_NOT_READY) return Acquire::Timeout;
     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) return Acquire::Ok;
     return Acquire::Error;
 }
@@ -154,7 +157,7 @@ VkResult Swapchain::present(VkQueue queue, uint32_t imageIndex, uint64_t present
     pi.pSwapchains        = &m_swapchain;
     pi.pImageIndices      = &imageIndex;
     std::lock_guard lock(m_hostMutex);
-    return vkQueuePresentKHR(queue, &pi);
+    return gpu::checkResult(vkQueuePresentKHR(queue, &pi), "present");
 }
 
 void Swapchain::destroySemaphores() {

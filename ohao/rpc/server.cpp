@@ -195,7 +195,7 @@ struct Server::Impl {
     };
 
     Impl(api::Session& s, Transport& t, ServerOptions o) : session(s), transport(t), options(o) {
-        for (const auto& m : api::methods()) toolToMethod.emplace(toolName(m.name), std::string(m.name));
+        for (const auto& m : s.methods()) toolToMethod.emplace(toolName(m.name), std::string(m.name));
     }
     ~Impl() {
         if (sink) log::removeSink(sink.get());
@@ -412,7 +412,7 @@ struct Server::Impl {
         }
         queueSpace.notify_all();
         while (!readerDone) {   // the client still holds the input open: interrupt the read
-            transport.interruptRead(reader.native_handle());
+            transport.interruptRead(reinterpret_cast<void*>(reader.native_handle()));
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         reader.join();
@@ -533,7 +533,7 @@ struct Server::Impl {
         w.beginObject();
         w.key("tools");
         w.beginArray();
-        for (const auto& m : api::methods()) {
+        for (const auto& m : session.methods()) {
             w.beginObject();
             w.key("name"); w.string(toolName(m.name));
             w.key("description"); w.string(m.doc);

@@ -49,8 +49,6 @@ void PhysicsScene::Impl::drainContacts(std::vector<PhysicsEvent>& out) {
         p.normal = n > 0.0f ? (swap ? -ce.contactNormal : ce.contactNormal) / n : glm::vec3(0.0f);
         PhysicsEvent ev;
         ev.kind = p.trigger ? PhysicsEvent::Kind::TriggerEnter : PhysicsEvent::Kind::ContactBegin;
-        ev.a = p.a;
-        ev.b = p.b;
         ev.aId = p.aId;
         ev.bId = p.bId;
         ev.point = p.point;
@@ -130,14 +128,33 @@ void PhysicsScene::Impl::publish(std::vector<PhysicsEvent>& fresh) {
         if (kx != ky) return kx < ky;
         return x.aId != y.aId ? x.aId < y.aId : x.bId < y.bId;
     });
-    stepEvents.clear();
-    stepEvents.swap(pending);   // removals first: they happened before the step
-    stepEvents.insert(stepEvents.end(), fresh.begin(), fresh.end());
-    if (log.size() < PhysicsScene::kEventLog) log.resize(PhysicsScene::kEventLog);
-    for (PhysicsEvent& ev : stepEvents) {
-        ev.step = steps;
-        ev.seq = nextSeq++;
-        log[(ev.seq - 1) % PhysicsScene::kEventLog] = ev;
+    for (const PhysicsEvent& ev : fresh) emit(ev);   // after the removals' ends, emitted as they happened
+}
+
+void PhysicsScene::Impl::emit(const PhysicsEvent& ev) {
+    using K = PhysicsEvent::Kind;
+    switch (ev.kind) {
+        case K::ContactBegin:
+        case K::ContactEnd: {
+            const auto& w = ev.kind == K::ContactBegin ? out.contactBegin : out.contactEnd;
+            if (w) w.emit(ContactEvent{ev.aId, ev.bId, ev.point, ev.normal, ev.speed});
+            break;
+        }
+        case K::TriggerEnter:
+        case K::TriggerExit: {
+            const auto& w = ev.kind == K::TriggerEnter ? out.triggerEnter : out.triggerExit;
+            if (w) w.emit(TriggerEvent{ev.aId, ev.bId, ev.point, ev.normal, ev.speed});
+            break;
+        }
+        case K::Footstep:
+        case K::Land: {
+            const auto& w = ev.kind == K::Footstep ? out.footstep : out.land;
+            if (w) w.emit(FootEvent{ev.aId, ev.bId, ev.point, ev.normal, ev.speed, ev.surface});
+            break;
+        }
+        case K::JointBreak:
+            if (out.jointBreak) out.jointBreak.emit(JointBreakEvent{ev.aId, ev.bId, ev.point});
+            break;
     }
 }
 

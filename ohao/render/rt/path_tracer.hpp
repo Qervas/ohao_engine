@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/display/display.hpp"
+#include "render/shader_bindings/rt_path_tracer.hpp"
 #include "render/rt/emissive_lights.hpp"
 
 // Path Tracer — full Vulkan RT pipeline that replaces rasterization entirely.
@@ -82,6 +83,11 @@ struct PathTracerShaderSet {
     // Caustics step 2: the manifold pass, a program of its own.
     const char* manifoldSpv{"bin/shaders/rt_path_tracer.slang.manifoldConnect.spv"};
     const char* manifoldEntry{"manifoldConnect"};
+    // Path guiding (sub-project 23): raygen and raygenCaustics with guiding compiled in.
+    const char* raygenGuidedSpv{"bin/shaders/rt_path_tracer.slang.raygenGuided.spv"};
+    const char* raygenGuidedEntry{"raygenGuided"};
+    const char* raygenCausticsGuidedSpv{"bin/shaders/rt_path_tracer.slang.raygenCausticsGuided.spv"};
+    const char* raygenCausticsGuidedEntry{"raygenCausticsGuided"};
 };
 
 class PathTracer {
@@ -244,6 +250,9 @@ private:
     [[nodiscard]] bool ensureCausticsPipeline();
     // Caustics step 2's program (manifoldConnect), made the first time a frame runs the manifold pass.
     [[nodiscard]] bool ensureManifoldPipeline();
+    // Path guiding's program beside the default one's raygen (caustics false: raygenGuided) or caustics' (true:
+    // raygenCausticsGuided with causticTrace), made the first time a frame guides.
+    [[nodiscard]] bool ensureGuidedProgram(bool caustics);
 public:
     // Caustics' counters once a frame has run the light pass (render.stats `caustics`).
     [[nodiscard]] std::optional<render::CausticsStats> causticsStats() const {
@@ -481,6 +490,16 @@ private:
     VkStridedDeviceAddressRegionKHR m_causticsMissRegion{};
     VkStridedDeviceAddressRegionKHR m_causticsHitRegion{};
     VkStridedDeviceAddressRegionKHR m_causticTraceRegion{};
+    // Path guiding's programs (ensureGuidedProgram): [0] raygenGuided alone (the radiance cache's update stays the
+    // default program's), [1] raygenCausticsGuided and causticTrace. Neither default raygen carries guiding's code.
+    struct GuidedProgram {
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        bool failed = false;
+        VkBuffer sbtBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory sbtMemory = VK_NULL_HANDLE;
+        VkStridedDeviceAddressRegionKHR rgen{}, miss{}, hit{}, extra{};
+    };
+    GuidedProgram m_guided[2];
     // Caustics step 2's program (ensureManifoldPipeline): manifoldConnect.
     VkPipeline m_manifoldPipeline = VK_NULL_HANDLE;
     bool m_manifoldPipelineFailed = false;
@@ -506,7 +525,7 @@ private:
         glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
         glm::vec4 jitter;               // xy=Halton(2,3) pixel offset (0 without NRD or DLSS RR), zw=0
     };  // total = 256 bytes
-    OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);
+    OHAO_CHECK_PUSH(PTPushConstants, rt_path_tracer)   // rt/path_tracer.slang's
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 

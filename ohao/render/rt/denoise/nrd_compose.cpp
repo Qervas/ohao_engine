@@ -2,6 +2,7 @@
 // NRD's denoised radiance with demod albedo+F0.
 
 #include "render/rt/denoise/nrd_compose.hpp"
+#include "render/shader_bindings/rt_nrd_compose.hpp"
 
 #ifdef OHAO_NRD_ENABLED
 
@@ -65,14 +66,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     m_impl->width          = width;
     m_impl->height         = height;
 
-    // 1. Descriptor set layout: 7 storage-image bindings, all COMPUTE stage.
-    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
-    for (uint32_t i = 0; i < bindings.size(); ++i) {
-        bindings[i].binding         = i;
-        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
+    // 1. Descriptor set layout: rt/nrd_compose.slang's set 0.
+    const auto bindings = shader::layoutBindings(shader::rt_nrd_compose::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -192,13 +187,10 @@ void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs
     imageInfos[6].imageView   = inputs.outputLdr;
     for (auto& ii : imageInfos) ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 7> writes{};
+    std::array<VkWriteDescriptorSet, shader::rt_nrd_compose::kSet0.size()> writes{};
+    static_assert(writes.size() == decltype(imageInfos){}.size());
     for (uint32_t i = 0; i < writes.size(); ++i) {
-        writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = m_impl->descriptorSets[m_impl->slot];
-        writes[i].dstBinding      = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[i] = shader::write(shader::rt_nrd_compose::kSet0[i], m_impl->descriptorSets[m_impl->slot]);
         writes[i].pImageInfo      = &imageInfos[i];
     }
     vkUpdateDescriptorSets(m_impl->device, static_cast<uint32_t>(writes.size()), writes.data(),
@@ -208,7 +200,7 @@ void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_impl->pipelineLayout, 0, 1,
                              &m_impl->descriptorSets[m_impl->slot], 0, nullptr);
 
-    const struct { float exposure; uint32_t curve; } display{inputs.exposure, inputs.curve};
+    const shader::rt_nrd_compose::PushConstants display{inputs.exposure, inputs.curve};
     vkCmdPushConstants(cmd, m_impl->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(display), &display);
 
     const uint32_t gx = (m_impl->width  + 7u) / 8u;

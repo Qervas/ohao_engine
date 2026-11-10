@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/shader_bindings/postprocess_tonemap.hpp"
 #include "bloom_pass.hpp"
 #include "taa_pass.hpp"
 #include "auto_exposure.hpp"
@@ -152,6 +153,7 @@ private:
         uint32_t autoExposure; // 1: the metered EV100
         float frameWeight;     // the frame x this: 1 - the strength (energy moves, none is added)
     };
+    OHAO_CHECK_PUSH(TonemapParams, postprocess_tonemap)
 
 };
 

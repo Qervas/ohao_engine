@@ -34,20 +34,28 @@ it draws candidates by power and resamples them. Until 2026-10-29 the bounce saw
 import json
 import math
 import os
-import subprocess
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+from ohao_serve import ROOT, Serve  # noqa: E402
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from check_parity import read_pfm  # noqa: E402
-
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe")
 OUT = "build/analytic"
+SERVE = None   # one serve process renders every case (one device, the programs compiled once)
+NO_CAUSTICS = "--no-caustics" in sys.argv   # without caustics' light pass (sub-project 24); the bars unchanged
+
+
+def render(scene_dict, stem, mode, **params):
+    """Loads the scene and captures it: the HDR image, or None (the error appended to `errors`)."""
+    with open(os.path.join(ROOT, stem + ".scene.json"), "w", newline="\n") as f:
+        json.dump(scene_dict, f, indent=1)
+    if NO_CAUSTICS and mode == "rt_offline":
+        params["caustics"] = False
+    SERVE.load(stem + ".scene.json")
+    return SERVE.capture("%s.%s" % (stem, mode), mode=mode, width=W, height=H, **params)
 ALBEDO = 0.5
 CAMERA_H = 3.0
 FOV = 30.0
-W, H = 320, 180
+W, H = 128, 72
 TOLERANCE = 0.05
 BOUNCE_TOLERANCE = 0.01
 BOUNCE_I = 60.0
@@ -83,7 +91,8 @@ def probe(img, x):
     h, w, _ = img.shape
     half = CAMERA_H * math.tan(math.radians(FOV / 2)) * w / h
     cx = w // 2 + int(round(x / half * (w / 2)))
-    return float(img[h // 2 - 3:h // 2 + 3, cx - 3:cx + 3].reshape(-1, 3).mean())
+    r = max(1, round(3 * h / 180))   # the same patch of floor at any size: 6x6 pixels at 320x180
+    return float(img[h // 2 - r:h // 2 + r, cx - r:cx + r].reshape(-1, 3).mean())
 
 
 def corner_factor(x, y):
@@ -149,17 +158,14 @@ def bounce_floor(name, spots, failures):
                           "MeshSource": {"source": {"BoxPrim": {"lo": [-50, 0, -2.1], "hi": [50, 10, -2],
                                                                  "color": [0.8, 0.8, 0.8]}}},
                           "Material": {"base_color": [0.8, 0.8, 0.8], "specular_roughness": 1.0}}] + spots
-    rel = "%s/%s" % (OUT, name)
-    with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
-        json.dump(s, f, indent=1)
-    cmd = [OHAO, "run", rel + ".scene.json", "--render", rel + ".png", "--hdr", rel + ".pfm", "--mode", "deferred",
-           "--size", "%dx%d" % (W, H), "--frames", "32", "--quality", "reference"]
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    if r.returncode != 0:
-        failures.append("%s: exit %d" % (name, r.returncode))
+    try:
+        img = render(s, "%s/%s" % (OUT, name), "deferred", frames=32, quality="reference")
+    except RuntimeError as e:
+        failures.append("%s: %s" % (name, str(e)[-200:]))
         return None
-    img = read_pfm(os.path.join(ROOT, rel + ".pfm"))
-    return float(img[H // 2 - 30:H // 2 + 30, W // 2 - 30:W // 2 + 30].mean())
+    h, w, _ = img.shape   # the middle third of the height, square
+    r = h // 6
+    return float(img[h // 2 - r:h // 2 + r, w // 2 - r:w // 2 + r].mean())
 
 
 def bounce_check(name, got, expected, tolerance, what, failures, results):
@@ -194,27 +200,23 @@ def bounce_checks(failures, results):
 
 
 def main():
+    global SERVE
     os.makedirs(os.path.join(ROOT, OUT), exist_ok=True)
     failures, results, checks = [], {}, 0
+    SERVE = Serve(OUT)
     for name, x, light, expected in cases():
-        rel = "%s/%s" % (OUT, name)
-        with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
-            json.dump(scene(light), f, indent=1)
         results[name] = {"expected": round(expected, 5)}
         # The emissive rectangle reaches deferred's floor through RT GI's rays only: at reference quality
         # (realtime GI's denoiser keeps 85% of so small and bright a source: frontier F5's to fix).
-        deferred = ["--frames", "32"] + (["--quality", "reference"] if name == "emissive_quad" else [])
-        for mode, args in (("deferred", deferred), ("rt_offline", ["--spp", "256", "--denoise", "none"])):
-            cmd = [OHAO, "run", rel + ".scene.json", "--render", "%s.%s.png" % (rel, mode), "--hdr",
-                   "%s.%s.pfm" % (rel, mode), "--mode", mode, "--size", "%dx%d" % (W, H)] + args
-            if "--no-caustics" in sys.argv and mode == "rt_offline":
-                cmd.append("--no-caustics")   # without caustics' light pass (sub-project 24); the bars unchanged
-            r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+        deferred = {"frames": 32, **({"quality": "reference"} if name == "emissive_quad" else {})}
+        for mode, params in (("deferred", deferred), ("rt_offline", {"spp": 64, "denoise": "none"})):
             checks += 1
-            if r.returncode != 0:
-                failures.append("%s %s: exit %d" % (name, mode, r.returncode))
+            try:
+                img = render(scene(light), "%s/%s" % (OUT, name), mode, **params)
+            except RuntimeError as e:
+                failures.append("%s %s: %s" % (name, mode, str(e)[-200:]))
                 continue
-            got = probe(read_pfm(os.path.join(ROOT, "%s.%s.pfm" % (rel, mode))), x)
+            got = probe(img, x)
             ratio = got / expected
             results[name][mode] = round(ratio, 4)
             ok = abs(ratio - 1.0) <= TOLERANCE
@@ -224,6 +226,7 @@ def main():
                 failures.append("%s %s: x%.3f of the closed form (tolerance %d%%)" % (name, mode, ratio,
                                                                                     TOLERANCE * 100))
     checks += bounce_checks(failures, results)
+    SERVE.close()
     with open(os.path.join(ROOT, OUT, "analytic.json"), "w", newline="\n") as f:
         json.dump(results, f, indent=2)
     print(json.dumps({"suite": "check_analytic", "passed": checks - len(failures), "failed": len(failures),

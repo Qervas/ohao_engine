@@ -55,9 +55,10 @@ public:
 
     // Splats that did not fit their word since the last clear (a reset).
     [[nodiscard]] uint32_t clamped() const;
-    // The manifold pass's counters since the last clear (words 1-7 of the stats): requests, triangles solved, roots,
-    // connections that carried light, and the pruning's cluster, sub-cluster and triangle tests.
-    [[nodiscard]] std::array<uint32_t, 7> manifoldCounts() const;
+    // The manifold pass's counters since the last clear (words 1-11 of the stats): requests, triangles solved, roots,
+    // connections that carried light, the pruning's cluster, sub-cluster and triangle tests, and step 2b's walks, paths
+    // found, connections through solids and paths at the re-find trials' ceiling.
+    [[nodiscard]] std::array<uint32_t, 11> manifoldCounts() const;
     void clearCounts() noexcept { m_clearCounts = true; }
 
     [[nodiscard]] VkBuffer table() const noexcept { return m_table.buffer; }
@@ -66,6 +67,8 @@ public:
 
     // The packed table (float4 rows), as rt/caustics.slang reads it; at most kRows rows.
     static constexpr uint32_t kRows = 4096;
+    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters.
+    static constexpr uint32_t kStatsBytes = 64;
     [[nodiscard]] static std::vector<glm::vec4> pack(const CausticCasters& c, glm::vec3 sceneCenter, float sceneRadius);
 
 private:

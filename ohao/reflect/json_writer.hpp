@@ -7,6 +7,9 @@
 
 namespace ohao::reflect {
 
+// An id as the API writes it, 16 lower-case hex digits (JsonWriter::hex64 writes it quoted).
+[[nodiscard]] std::string hex16(uint64_t v);
+
 // Maps a raw engine entity value to its stable 64-bit EntityId (nullopt: dead / no id).
 // Supplied by the ECS when writing scenes; reflect itself knows nothing about EnTT.
 class EntityIdMapper {

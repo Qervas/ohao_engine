@@ -1,4 +1,5 @@
 #include "vulkan_renderer_impl.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
@@ -91,6 +92,7 @@ std::span<const uint8_t> VulkanRenderer::readback() {
 void VulkanRenderer::renderDeferred() {
     if (!m_deferredRenderer) return;
     log::setFrame(++m_framesStarted);
+    gpu::setFaultFrame(m_framesStarted);
     // A request belongs to this frame; a frame that is not rendered leaves no readback.
     const bool wantReadback = std::exchange(m_readbackRequested, false);
     const std::optional<PreviewRequest> preview = std::exchange(m_previewRequest, std::nullopt);
@@ -113,6 +115,7 @@ void VulkanRenderer::renderDeferred() {
     if (m_swapchain) {
         const auto acq = m_swapchain->acquire(m_imageAcquired[m_currentFrame], imageIndex);
         if (acq == Swapchain::Acquire::OutOfDate) { m_swapchainDirty = true; return; }
+        if (acq == Swapchain::Acquire::Timeout) return;   // the presentation engine holds every image: skip
         if (acq == Swapchain::Acquire::Error) {
             OHAO_LOG(Error, gpu, "present: vkAcquireNextImageKHR failed");
             return;
@@ -217,7 +220,7 @@ void VulkanRenderer::renderDeferred() {
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &renderFinished;
     }
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+    gpu::submit(m_graphicsQueue, submitInfo, frame.renderFence, "frame", m_framesStarted);
     m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
     m_lastSubmitAt = std::chrono::steady_clock::now();
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
@@ -302,6 +305,7 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer || !isRTSupported()) return;
     log::setFrame(++m_framesStarted);
+    gpu::setFaultFrame(m_framesStarted);
     // A preview request reads back in full here: the path tracer has no capture.preview.
     const bool wantReadback = std::exchange(m_readbackRequested, false);
     m_previewRequest.reset();
@@ -321,6 +325,7 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     if (m_swapchain) {
         const auto acq = m_swapchain->acquire(m_imageAcquired[m_currentFrame], imageIndex);
         if (acq == Swapchain::Acquire::OutOfDate) { m_swapchainDirty = true; return; }
+        if (acq == Swapchain::Acquire::Timeout) return;   // the presentation engine holds every image: skip
         if (acq == Swapchain::Acquire::Error) {
             OHAO_LOG(Error, gpu, "present: vkAcquireNextImageKHR failed");
             return;
@@ -410,7 +415,7 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &renderFinished;
     }
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+    gpu::submit(m_graphicsQueue, submitInfo, frame.renderFence, "frame", m_framesStarted);
     m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
     m_lastSubmitAt = std::chrono::steady_clock::now();
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
@@ -666,8 +671,7 @@ bool VulkanRenderer::readImageRGBA(VkImage image, bool half, VkImageLayout layou
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, si, "image readback");
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);

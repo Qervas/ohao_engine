@@ -1,9 +1,0 @@
-add_executable(runtime_tests runtime_tests.cpp)
-target_include_directories(runtime_tests PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
-target_compile_features(runtime_tests PRIVATE cxx_std_20)
-target_compile_definitions(runtime_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")   # the footstep sounds
-target_link_libraries(runtime_tests PRIVATE ohao_runtime ohao_gpu_vulkan ${Vulkan_LIBRARIES} ohao_test_harness)
-if(MSVC)
-    target_link_options(runtime_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
-endif()
-ohao_add_test(runtime_tests LABEL quick COMMAND runtime_tests)

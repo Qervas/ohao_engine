@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "skeleton": {
     "file": "tests/anim/fixtures/rig.glb",
     "skin": "RigSkin"
@@ -78,7 +79,7 @@
             "op": "==",
             "value": 1
           },
-          "fade": 6
+          "fade": 0.1
         },
         {
           "from": "raise",
@@ -96,7 +97,7 @@
             "op": "==",
             "value": 0
           },
-          "fade": 12
+          "fade": 0.2
         },
         {
           "from": "wave",
@@ -106,7 +107,7 @@
             "op": ">",
             "value": 0.5
           },
-          "fade": 6
+          "fade": 0.1
         },
         {
           "from": "moves",
@@ -116,7 +117,7 @@
             "op": "<=",
             "value": 0.5
           },
-          "fade": 6
+          "fade": 0.1
         }
       ]
     },

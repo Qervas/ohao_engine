@@ -1,8 +1,8 @@
 #include "ecs/vfx.hpp"
 
 #include "core/log.hpp"
-#include "ecs/combat.hpp"
 #include "ecs/components.hpp"
+#include "ecs/player.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "vfx/particle_math.hpp"
@@ -110,11 +110,6 @@ struct VfxInstalled {
     VfxSystem* system{nullptr};
 };
 
-// The hook chained in front of what was there (physics' and the audio schedule's): both states.
-struct ChainedState {
-    std::shared_ptr<const void> previous, vfx;
-};
-
 std::size_t kindIndex(VfxRecord::Kind k) { return static_cast<std::size_t>(k); }
 
 } // namespace
@@ -140,7 +135,6 @@ struct VfxSystem::Impl {
     struct State {
         std::vector<VfxRecord> records;   // live, in seq order
         uint64_t nextSeq{1};
-        uint64_t steps{0};
         std::array<uint64_t, VfxRecord::kKinds> dropped{};
         uint64_t written{0};
         std::map<uint64_t, EmitterState> emitters;   // by entity id
@@ -154,11 +148,18 @@ struct VfxSystem::Impl {
     std::string namedPath;   // what the world's VfxSet names (read once per path)
     std::string setPath;     // where the set in use came from ("" for the default)
     uint64_t setVersion{1};  // changes whenever the set does (the renderer copies it then)
-    float dt{1.0f / 60.0f};  // the last step's (records' ages are counted in it)
     State st;
     std::vector<VfxWarning> warnings;
     std::set<std::pair<std::string, std::string>> warned;   // (code, what): once each
     double lastMs{0.0};
+    // The set's event bindings by channel index (again when the set or the channels change).
+    struct Bound {
+        const vfx::EventBinding* binding{nullptr};
+        uint32_t channel{0};   // the channel's name, hashed: part of an event's seed
+    };
+    std::vector<Bound> bound;
+    uint64_t boundVersion{0};
+    std::size_t boundChannels{0};
 
     Impl(World& w, AssetResolver& a) : world(w), assets(a) {}
 
@@ -226,7 +227,7 @@ struct VfxSystem::Impl {
             --live;
         }
         r.seq = st.nextSeq++;
-        r.spawnStep = st.steps;
+        r.spawnStep = world.steps();
         ++st.written;
         st.records.push_back(r);
     }
@@ -252,15 +253,6 @@ struct VfxSystem::Impl {
         }
     }
 
-    entt::entity inputPlayer() const {
-        entt::entity best = entt::null;
-        uint64_t bestId = UINT64_MAX;
-        for (auto [e, pc] : world.registry().view<const PlayerController>().each()) {
-            const uint64_t id = world.idOf(e);
-            if (pc.input && id < bestId) bestId = id, best = e;
-        }
-        return best;
-    }
 
     bool under(entt::entity e, entt::entity ancestor) const {
         const auto& reg = world.registry();
@@ -272,74 +264,82 @@ struct VfxSystem::Impl {
         return false;
     }
 
-    // Seeds: a function of the step and the event's place among the step's events (after its last
-    // restart), so the same fight, a restore and a restarted round draw the same particles.
-    uint32_t seedFor(uint32_t eventIndex, uint32_t part) const {
-        return vfx::vfxHash(static_cast<uint32_t>(st.steps), eventIndex * 8u + part, 0xEF7u);
+    // Seeds: a function of the event's identity (its step, its channel, its place among the step's events of the
+    // channel), so the same fight, a restore and a restarted round draw the same particles.
+    uint32_t seedFor(uint32_t channel, uint32_t place, uint32_t part) const {
+        return vfx::vfxHash(static_cast<uint32_t>(world.steps()), place * 8u + part, 0xEF7u ^ channel);
     }
 
-    void onShot(const CombatEvent& e, uint32_t index, std::span<const CombatEvent> events, std::size_t at, entt::entity player) {
-        const glm::vec3 dir = glm::length(e.normal) > 1e-6f ? glm::normalize(e.normal) : glm::vec3(0.0f, 0.0f, -1.0f);
-        const glm::vec3 muzzle = e.point + dir * kMuzzleAhead;
-        const glm::mat4 pose = poseAlong(muzzle, dir);
-        uint32_t part = 0;
-        for (const std::string& name : set.shot.effects) {
-            const int fx = vfx::resolveEffect(set, name, "default", set.shot.fallback);
-            if (fx < 0) warn(e.source, "W_VFX_EFFECT", name, "no effect '" + name + "' for a shot");
-            addEffect(fx, pose, seedFor(index, part++), e.source, e.seq);
-        }
-        if (set.shot.tracer.empty()) return;
-        const int ti = set.tracer(set.shot.tracer);
-        if (ti < 0) return;
-        const vfx::TracerDesc& td = set.tracers[static_cast<std::size_t>(ti)];
-        const auto* ws = world.registry().try_get<WeaponState>(e.source);
-        const uint32_t every = e.source == player ? td.everyPlayer : td.everyEnemy;
-        if (!ws || every == 0 || ws->shots % every != 0) return;
-        // The round's hit, if any, follows its shot in the same step.
-        glm::vec3 end = e.point + dir * kTracerMiss;
-        float distance = kTracerMiss;
-        for (std::size_t h = at + 1; h < events.size(); ++h)
-            if (events[h].kind == CombatEvent::Kind::Hit && events[h].sourceId == e.sourceId) {
-                end = events[h].point;
-                distance = events[h].amount;
-                break;
+    static uint32_t nameHash(std::string_view s) {   // FNV-1a
+        uint32_t h = 2166136261u;
+        for (const char c : s) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+        return h;
+    }
+
+    void bindEvents() {
+        const EventLog& log = world.events();
+        if (boundVersion == setVersion && boundChannels == log.channels().size()) return;
+        boundVersion = setVersion;
+        boundChannels = log.channels().size();
+        bound.assign(boundChannels, {});
+        for (const vfx::EventBinding& b : set.events)
+            if (const EventChannelBase* c = log.find(b.on)) {
+                bound[c->index()] = {&b, nameHash(b.on)};
+                world.events().addReader(b.on, "vfx");
             }
-        if (distance < td.minDistance) return;
-        VfxRecord r;
-        r.kind = VfxRecord::Kind::Tracer;
-        r.effect = static_cast<uint16_t>(ti);
-        r.seed = seedFor(index, 7);
-        r.sourceSeq = e.seq;
-        r.source = e.source;
-        r.pose = pose;
-        r.a = muzzle;
-        r.b = end;
-        r.life = (glm::length(end - muzzle) + td.length) / td.speed;
-        add(r);
     }
 
-    void onHit(const CombatEvent& e, uint32_t index, std::span<const CombatEvent> events, std::size_t at, entt::entity player) {
-        const std::string surface = e.surface.empty() ? std::string("default") : e.surface;
-        const glm::mat4 pose = poseAlong(e.point, e.normal);
-        uint32_t part = 0;
-        for (const std::string& name : set.hit.effects) {
-            const int fx = vfx::resolveEffect(set, name, surface, set.hit.fallback);
-            if (fx < 0) warn(e.source, "W_VFX_EFFECT", name + "/" + surface, "no effect '" + name + "' for a hit on " + surface);
-            addEffect(fx, pose, seedFor(index, part++), e.source, e.seq);
-        }
-        if (set.hit.decal.empty()) return;
-        if (player != entt::null && under(e.target, player)) return;   // the player is never marked
-        const int di = vfx::resolveDecal(set, set.hit.decal, surface, set.hit.fallback);
-        if (di < 0) return;
+    // What a bound event spawns: its effects at its place (ahead along its direction), facing its normal, else
+    // its direction, else up; a tracer from there to where it ended (else kTracerMiss on), at the set's cadence
+    // on the cue's count; a decal on what it reached (the player never), or on the world.
+    void spawn(const vfx::EventBinding& b, uint32_t channel, uint32_t place, uint64_t seq, const Cue& e, entt::entity player) {
         const auto& reg = world.registry();
-        // What it hit, and where on it: a character's on the mesh box the round crossed (along the
-        // shooter's round this step, else nothing), anything else's on its own pose.
+        const entt::entity source = world.findById(e.source);
+        const std::string surface = e.tag.empty() ? std::string("default") : std::string(e.tag);
+        const bool moving = glm::length(e.dir) > 1e-6f;
+        const glm::vec3 dir = moving ? glm::normalize(e.dir) : glm::vec3(0.0f, 0.0f, -1.0f);
+        const glm::vec3 facing = glm::length(e.normal) > 1e-6f ? e.normal : moving ? dir : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::vec3 from = e.at + (moving ? dir * b.ahead : glm::vec3(0.0f));
+        const glm::mat4 pose = poseAlong(from, facing);
+        uint32_t part = 0;
+        for (const std::string& name : b.effects) {
+            const int fx = vfx::resolveEffect(set, name, surface, b.fallback);
+            if (fx < 0) warn(source, "W_VFX_EFFECT", b.on + "/" + name + "/" + surface, "no effect '" + name + "' for " + b.on + " on " + surface);
+            addEffect(fx, pose, seedFor(channel, place, part++), source, seq);
+        }
+        if (!b.tracer.empty())
+            if (const int ti = set.tracer(b.tracer); ti >= 0) {
+                const vfx::TracerDesc& td = set.tracers[static_cast<std::size_t>(ti)];
+                const uint32_t every = source != entt::null && source == player ? td.everyPlayer : td.everyEnemy;
+                const glm::vec3 end = e.to ? *e.to : e.at + dir * kTracerMiss;
+                const float distance = e.to ? glm::length(*e.to - e.at) : kTracerMiss;
+                if (every != 0 && e.n % every == 0 && distance >= td.minDistance) {
+                    VfxRecord r;
+                    r.kind = VfxRecord::Kind::Tracer;
+                    r.effect = static_cast<uint16_t>(ti);
+                    r.seed = seedFor(channel, place, 7);
+                    r.sourceSeq = seq;
+                    r.source = source;
+                    r.pose = pose;
+                    r.a = from;
+                    r.b = end;
+                    r.life = (glm::length(end - from) + td.length) / td.speed;
+                    add(r);
+                }
+            }
+        if (b.decal.empty()) return;
+        const entt::entity target = world.findById(e.target);
+        if (player != entt::null && target != entt::null && under(target, player)) return;   // the player is never marked
+        const int di = vfx::resolveDecal(set, b.decal, surface, b.fallback);
+        if (di < 0) return;
+        // What it reached, and where on it: a character's on the mesh box its direction crossed, anything else's on
+        // its own pose; nothing reached: the world.
         entt::entity on = entt::null;
         glm::mat4 hitPose = pose;
-        if (e.target != entt::null && reg.valid(e.target)) {
+        if (target != entt::null && reg.valid(target)) {
             // The character the target belongs to (the target itself, or the entity it is a part of).
             entt::entity character = entt::null;
-            for (entt::entity up = e.target; up != entt::null && reg.valid(up);) {
+            for (entt::entity up = target; up != entt::null && reg.valid(up);) {
                 if (reg.try_get<PlayerController>(up)) {
                     character = up;
                     break;
@@ -348,52 +348,24 @@ struct VfxSystem::Impl {
                 up = p ? p->entity : entt::null;
             }
             if (character != entt::null) {
-                glm::vec3 dir = -e.normal;
-                for (std::size_t h = at; h-- > 0;)
-                    if (events[h].kind == CombatEvent::Kind::Shot && events[h].sourceId == e.sourceId) {
-                        if (glm::length(events[h].normal) > 1e-6f) dir = glm::normalize(events[h].normal);
-                        break;
-                    }
+                const glm::vec3 in = moving ? dir : -e.normal;
                 BoxHit best;
-                hitBoxes(reg, character, e.point - dir * 0.05f, dir, best, 0);
+                hitBoxes(reg, character, e.at - in * 0.05f, in, best, 0);
                 if (best.box == entt::null) return;
                 on = best.box;
                 hitPose = poseAlong(best.point, best.normal);
             } else {
-                on = e.target;
+                on = target;
             }
         }
         VfxRecord r;
         r.kind = VfxRecord::Kind::Decal;
         r.effect = static_cast<uint16_t>(di);
-        r.seed = seedFor(index, 6);
-        r.sourceSeq = e.seq;
-        r.source = e.source;
+        r.seed = seedFor(channel, place, 6);
+        r.sourceSeq = seq;
+        r.source = source;
         r.on = on;
         r.pose = on != entt::null ? glm::inverse(stepWorld(reg, on)) * hitPose : hitPose;
-        r.life = set.decals[static_cast<std::size_t>(di)].life;
-        add(r);
-    }
-
-    void onExplode(const CombatEvent& e, uint32_t index) {
-        const glm::vec3 up(0.0f, 1.0f, 0.0f);
-        const glm::mat4 pose = poseAlong(e.point, up);
-        uint32_t part = 0;
-        for (const std::string& name : set.explode.effects) {
-            const int fx = vfx::resolveEffect(set, name, "default", set.explode.fallback);
-            if (fx < 0) warn(e.source, "W_VFX_EFFECT", name, "no effect '" + name + "' for an explode");
-            addEffect(fx, pose, seedFor(index, part++), e.source, e.seq);
-        }
-        if (set.explode.decal.empty()) return;
-        const int di = vfx::resolveDecal(set, set.explode.decal, "default", set.explode.fallback);
-        if (di < 0) return;
-        VfxRecord r;   // projected straight down: its -Z along the ground's normal
-        r.kind = VfxRecord::Kind::Decal;
-        r.effect = static_cast<uint16_t>(di);
-        r.seed = seedFor(index, 6);
-        r.sourceSeq = e.seq;
-        r.source = e.source;
-        r.pose = pose;
         r.life = set.decals[static_cast<std::size_t>(di)].life;
         add(r);
     }
@@ -423,12 +395,12 @@ struct VfxSystem::Impl {
             };
             if (!es.active) {   // it became active this step
                 es.active = true;
-                es.since = st.steps;
+                es.since = world.steps();
                 es.emitted = 0;
                 if (em.rate <= 0.0f) spawn();
             }
             if (em.rate > 0.0f) {
-                const double s = static_cast<double>(st.steps - es.since + 1);
+                const double s = static_cast<double>(world.steps() - es.since + 1);
                 const auto due = static_cast<uint64_t>(std::floor(s * static_cast<double>(em.rate) * static_cast<double>(dt) + 1e-6));
                 while (es.emitted < due) spawn();
             }
@@ -439,30 +411,23 @@ struct VfxSystem::Impl {
 
     void expire(float dt) {
         std::erase_if(st.records, [&](const VfxRecord& r) {
-            return r.life > 0.0f && static_cast<float>(st.steps - r.spawnStep) * dt > r.life;
+            return r.life > 0.0f && static_cast<float>(world.steps() - r.spawnStep) * dt > r.life;
         });
     }
 
     void step(float dt) {
         const auto t0 = std::chrono::steady_clock::now();
         refreshSet();
-        this->dt = dt;
-        ++st.steps;
-        const auto events = combatEvents(world);
-        std::size_t after = 0;   // the step's events after its last restart
-        for (std::size_t i = 0; i < events.size(); ++i)
-            if (events[i].kind == CombatEvent::Kind::Restart) after = i + 1;
-        const entt::entity player = inputPlayer();
-        for (std::size_t i = after; i < events.size(); ++i) {
-            const CombatEvent& e = events[i];
-            const auto index = static_cast<uint32_t>(i - after);
-            switch (e.kind) {
-            case CombatEvent::Kind::Shot: onShot(e, index, events, i, player); break;
-            case CombatEvent::Kind::Hit: onHit(e, index, events, i, player); break;
-            case CombatEvent::Kind::Explode: onExplode(e, index); break;
-            default: break;
-            }
-        }
+        // A game's events, in the order they happened, as the set binds them.
+        bindEvents();
+        const entt::entity player = playerOf(world);
+        world.events().visitWindow([&](const EventChannelBase& c, std::size_t i) {
+            if (c.index() >= bound.size() || !bound[c.index()].binding) return;
+            Cue cue;
+            if (!c.cue(i, cue)) return;
+            spawn(*bound[c.index()].binding, bound[c.index()].channel, static_cast<uint32_t>(i - c.windowBegin()),
+                  c.meta(i).seq, cue, player);
+        });
         stepEmitters(dt);
         expire(dt);
         lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -481,7 +446,7 @@ VfxStats VfxSystem::stats() const noexcept {
     for (const VfxRecord& r : m->st.records) ++s.live[kindIndex(r.kind)];
     s.dropped = m->st.dropped;
     s.written = m->st.written;
-    s.steps = m->st.steps;
+    s.steps = m->world.steps();
     return s;
 }
 
@@ -500,7 +465,7 @@ std::vector<VfxRecord> VfxSystem::recordsSince(uint64_t since, std::size_t max, 
 const vfx::VfxSet& VfxSystem::set() const { return m->set; }
 const std::string& VfxSystem::setPath() const { return m->setPath; }
 uint64_t VfxSystem::setVersion() const noexcept { return m->setVersion; }
-float VfxSystem::stepDt() const noexcept { return m->dt; }
+float VfxSystem::stepDt() const noexcept { return m->world.stepDt(); }
 
 void VfxSystem::addRecordForTest(VfxRecord record) { m->add(record); }
 
@@ -513,7 +478,7 @@ void VfxSystem::setSet(vfx::VfxSet set) {
 }
 
 const std::vector<VfxWarning>& VfxSystem::warnings() const noexcept { return m->warnings; }
-uint64_t VfxSystem::steps() const noexcept { return m->st.steps; }
+uint64_t VfxSystem::steps() const noexcept { return m->world.steps(); }
 double VfxSystem::lastStepMs() const noexcept { return m->lastMs; }
 
 std::shared_ptr<const void> VfxSystem::saveState() const { return std::make_shared<Impl::State>(m->st); }
@@ -522,28 +487,48 @@ void VfxSystem::restoreState(const std::shared_ptr<const void>& state) {
     if (const auto* s = static_cast<const Impl::State*>(state.get())) m->st = *s;
 }
 
+void VfxSystem::hashState(StateHash& h) const {
+    const Impl::State& s = m->st;
+    h.u64(s.records.size());
+    for (const VfxRecord& r : s.records) {
+        h.u32(static_cast<uint32_t>(r.kind));
+        h.u32(r.effect);
+        h.u32(r.seed);
+        h.u64(r.seq);
+        h.u64(r.spawnStep);   // r.sourceSeq is the combat log's, which is history: not hashed
+        h.entity(r.source);
+        h.entity(r.on);
+        for (int c = 0; c < 4; ++c)
+            for (int k = 0; k < 4; ++k) h.f32(r.pose[c][k]);
+        h.vec3(r.a);
+        h.vec3(r.b);
+        h.f32(r.life);
+    }
+    h.u64(s.nextSeq);
+    for (const uint64_t d : s.dropped) h.u64(d);
+    h.u64(s.written);
+    h.u64(s.emitters.size());
+    for (const auto& [id, em] : s.emitters) {
+        h.u64(id);
+        h.boolean(em.active);
+        h.u64(em.since);
+        h.u64(em.emitted);
+    }
+}
+
 VfxSystem& installVfx(World& world, AssetResolver& assets) {
     auto& reg = world.registry();
     if (const auto* installed = reg.ctx().find<VfxInstalled>()) return *installed->system;
     auto system = std::make_shared<VfxSystem>(world, assets);
     reg.ctx().emplace<VfxInstalled>(VfxInstalled{system.get()});
-    // After combat, impact_marks and the animation step; before the audio schedule (the step's last).
-    world.addSimulateBefore("audio_schedule", "vfx", [system](World&, float dt) { system->step(dt); });
+    // Effects ride the poses the step's animation left, and spawn from the cues its set binds.
+    world.addSimulate("vfx", [system](World&, float dt) { system->step(dt); }, {.after = {"animation"}, .readsCues = true});
     VfxSystem* raw = system.get();
-    SnapshotHook previous;
-    if (const auto* hook = reg.ctx().find<SnapshotHook>()) previous = *hook;
-    SnapshotHook chained{[previous, raw]() -> std::shared_ptr<const void> {
-                             auto both = std::make_shared<ChainedState>();
-                             if (previous.save) both->previous = previous.save();
-                             both->vfx = raw->saveState();
-                             return both;
-                         },
-                         [previous, raw](const std::shared_ptr<const void>& state) {
-                             const auto* both = static_cast<const ChainedState*>(state.get());
-                             if (previous.restore) previous.restore(both ? both->previous : nullptr);
-                             if (both) raw->restoreState(both->vfx);
-                         }};
-    reg.ctx().insert_or_assign<SnapshotHook>(std::move(chained));
+    addSnapshotHook(reg, SnapshotHook{"vfx", [raw] { return raw->saveState(); },
+                                      [raw](const std::shared_ptr<const void>& s) {
+                                          if (s) raw->restoreState(s);
+                                      },
+                                      [raw](StateHash& h) { raw->hashState(h); }});
     return *system;
 }
 

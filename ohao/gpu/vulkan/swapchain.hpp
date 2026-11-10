@@ -20,7 +20,7 @@ namespace ohao {
 // destroy, vkWaitForPresentKHR) holds hostMutex(), as Vulkan requires.
 class Swapchain {
 public:
-    enum class Acquire { Ok, OutOfDate, Error };
+    enum class Acquire { Ok, OutOfDate, Timeout, Error };   // Timeout: no image within gpu::kGpuTimeout
 
     Swapchain() = default;
     ~Swapchain() { destroy(); }

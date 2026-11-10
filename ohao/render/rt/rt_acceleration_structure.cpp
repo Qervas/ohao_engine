@@ -1,4 +1,5 @@
 #include "rt_acceleration_structure.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "core/log.hpp"
 #include <cstring>
 #include <mutex>
@@ -178,8 +179,7 @@ void RTAccelerationStructure::endSingleTimeCommands(VkCommandBuffer cmd) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
 
-    vkQueueSubmit(m_queue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_queue);
+    gpu::submitAndWait(m_device, m_queue, submitInfo, "acceleration structure build");
 
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
 }

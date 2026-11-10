@@ -1,0 +1,10 @@
+#!/bin/sh
+# Light CI on this machine, 1 of 2 (AGENTS.md, "Light CI"): every commit runs what its staged files reach, in
+# seconds: tools/check.py --staged builds, then runs only those gates (a docs commit builds and runs nothing).
+# A failure blocks the commit. On once per clone: git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel) || exit 1
+for py in "$root/.venv/bin/python" "$root/.venv/Scripts/python.exe"; do
+    if [ -x "$py" ]; then exec "$py" "$root/tools/check.py" --staged; fi
+done
+if command -v python3 >/dev/null 2>&1; then exec python3 "$root/tools/check.py" --staged; fi
+exec python "$root/tools/check.py" --staged

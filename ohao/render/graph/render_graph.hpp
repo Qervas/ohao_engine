@@ -1,274 +1,106 @@
 #pragma once
-
-#include "resource_handle.hpp"
-#include "render_pass.hpp"
+// The deferred frame's pass list (system design 4.6: the frame graph that replaces it is step 4a). Passes run in
+// the order added; each declares which imported textures it reads and writes, and the graph puts the layout
+// transitions between them and times each pass. It allocates nothing, aliases nothing and culls nothing.
 #include <vulkan/vulkan.h>
-#include <vector>
+
+#include <cstdint>
+#include <functional>
+#include <limits>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <functional>
-#include <memory>
+#include <vector>
 
 namespace ohao::render { class GpuPassTimer; }
 
 namespace ohao {
 
-class GpuAllocator;
-
-/**
- * Physical resource backing for a texture handle
- */
-struct PhysicalTexture {
-    VkImage image{VK_NULL_HANDLE};
-    VkImageView view{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    VkFormat format{VK_FORMAT_UNDEFINED};
-    uint32_t width{0};
-    uint32_t height{0};
-    VkImageLayout currentLayout{VK_IMAGE_LAYOUT_UNDEFINED};
-    bool ownsMemory{true}; // False for external/aliased resources
+struct TextureHandle {
+    uint32_t index{std::numeric_limits<uint32_t>::max()};
+    [[nodiscard]] constexpr bool isValid() const noexcept { return index != std::numeric_limits<uint32_t>::max(); }
+    [[nodiscard]] constexpr bool operator==(const TextureHandle&) const noexcept = default;
+    [[nodiscard]] static constexpr TextureHandle invalid() noexcept { return {}; }
 };
 
-/**
- * Physical resource backing for a buffer handle
- */
-struct PhysicalBuffer {
-    VkBuffer buffer{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    VkDeviceSize size{0};
-    void* mapped{nullptr};
-    bool ownsMemory{true};
+class RenderGraph;
+
+// Declares what a pass does to the graph's textures.
+class PassBuilder {
+public:
+    PassBuilder(RenderGraph& graph, uint32_t passIndex) : m_graph(graph), m_passIndex(passIndex) {}
+    // Sampled (SHADER_READ_ONLY_OPTIMAL) at `stage`.
+    void readTexture(TextureHandle handle, VkPipelineStageFlags stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    void readComputeTexture(TextureHandle handle) { readTexture(handle, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT); }
+    // Written as an attachment by the pass's own render pass, which leaves it in `finalLayout`.
+    void declareColorWrite(TextureHandle handle, VkImageLayout finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    void declareDepthWrite(TextureHandle handle,
+                           VkImageLayout finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+private:
+    RenderGraph& m_graph;
+    uint32_t m_passIndex;
 };
 
-/**
- * Barrier to insert between passes
- */
-struct ResourceBarrier {
-    TextureHandle texture;
-    BufferHandle buffer;
-    VkPipelineStageFlags srcStage{0};
-    VkPipelineStageFlags dstStage{0};
-    VkAccessFlags srcAccess{0};
-    VkAccessFlags dstAccess{0};
-    VkImageLayout oldLayout{VK_IMAGE_LAYOUT_UNDEFINED};
-    VkImageLayout newLayout{VK_IMAGE_LAYOUT_UNDEFINED};
-};
-
-/**
- * Compiled pass ready for execution
- */
-struct CompiledPass {
-    uint32_t passIndex{0};
-    std::vector<ResourceBarrier> barriers;
-};
-
-/**
- * Render Graph - Frame Graph style rendering abstraction
- *
- * The render graph allows declarative definition of render passes and their
- * resource dependencies. The graph is compiled each frame to:
- * - Deduce resource lifetimes
- * - Alias transient resource memory
- * - Generate optimal barriers
- * - Sort passes in correct execution order
- *
- * Usage:
- *   RenderGraph graph(device, allocator);
- *
- *   // Setup phase - declare passes and resources
- *   graph.addPass("ShadowPass", [](PassBuilder& builder) {
- *       auto shadowMap = builder.createDepthAttachment("ShadowMap", 2048, 2048);
- *   }, [](VkCommandBuffer cmd) {
- *       // Render shadow casters
- *   });
- *
- *   graph.addPass("MainPass", [](PassBuilder& builder) {
- *       builder.sampleTexture(shadowMap);
- *       auto color = builder.createColorAttachment("Color", 1920, 1080);
- *   }, [](VkCommandBuffer cmd) {
- *       // Render scene
- *   });
- *
- *   // Compile and execute
- *   graph.compile();
- *   graph.execute(commandBuffer);
- *   graph.reset(); // Prepare for next frame
- */
 class RenderGraph {
 public:
-    RenderGraph() = default;
-    ~RenderGraph();
+    void initialize(VkDevice device) { m_device = device; }
+    void shutdown();   // forgets every texture and pass
+    [[nodiscard]] bool isInitialized() const { return m_device != VK_NULL_HANDLE; }
 
-    // Non-copyable
-    RenderGraph(const RenderGraph&) = delete;
-    RenderGraph& operator=(const RenderGraph&) = delete;
+    // `selfTimed`: the pass times its own parts under their registry names (one open timer at a time).
+    void addPass(std::string_view name, std::function<void(PassBuilder&)> setup,
+                 std::function<void(VkCommandBuffer)> execute, bool selfTimed = false);
+    void addComputePass(std::string_view name, std::function<void(PassBuilder&)> setup,
+                        std::function<void(VkCommandBuffer)> execute) {
+        addPass(name, std::move(setup), std::move(execute));
+    }
 
-    /**
-     * Initialize the render graph
-     *
-     * @param device Vulkan device
-     * @param physicalDevice Physical device for memory queries
-     * @param allocator Optional GPU allocator (uses VMA if provided)
-     */
-    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
-                                  GpuAllocator* allocator = nullptr);
-
-    /**
-     * Shutdown and cleanup all resources
-     */
-    void shutdown();
-
-    /**
-     * Add a render pass to the graph
-     *
-     * @param name Pass name for debugging
-     * @param setup Setup function to declare resources
-     * @param execute Execute function to record commands
-     */
-    // `selfTimed`: the pass times its own parts under their registry names (the graph does
-    // not time it: one open timer at a time).
-    void addPass(std::string_view name,
-                 std::function<void(PassBuilder&)> setup,
-                 std::function<void(VkCommandBuffer)> execute,
-                 bool selfTimed = false);
-
-    /**
-     * Add a compute pass to the graph
-     */
-    void addComputePass(std::string_view name,
-                        std::function<void(PassBuilder&)> setup,
-                        std::function<void(VkCommandBuffer)> execute);
-
-    /**
-     * Import an external texture (e.g., swapchain image)
-     *
-     * @param name Resource name
-     * @param image Existing Vulkan image
-     * @param view Existing image view
-     * @param format Image format
-     * @param width Image width
-     * @param height Image height
-     * @param currentLayout Current image layout
-     * @return Handle to the imported texture
-     */
-    [[nodiscard]] TextureHandle importTexture(std::string_view name, VkImage image, VkImageView view,
-                                              VkFormat format, uint32_t width, uint32_t height,
+    // A texture the renderer owns, in `currentLayout` (each frame starts it from UNDEFINED: reset()).
+    [[nodiscard]] TextureHandle importTexture(std::string_view name, VkImage image, VkImageView view, VkFormat format,
+                                              uint32_t width, uint32_t height,
                                               VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED);
 
-    /**
-     * Import an external buffer
-     */
-    [[nodiscard]] BufferHandle importBuffer(std::string_view name, VkBuffer buffer,
-                                            VkDeviceSize size, void* mapped = nullptr);
-
-    /**
-     * Set the final output texture (for presentation or readback)
-     */
-    void setOutput(TextureHandle handle);
-
-    /**
-     * Compile the graph for execution
-     * - Validates dependencies
-     * - Computes execution order
-     * - Allocates resources
-     * - Generates barriers
-     */
-    [[nodiscard]] bool compile();
-
-    /**
-     * Execute all passes in order
-     *
-     * @param cmd Command buffer to record into
-     */
+    // Works out the barriers between the passes, in the order they were added.
+    void compile();
+    // Records every pass with its barriers, each timed under its name (a render/frame/pass_registry.hpp name).
     void execute(VkCommandBuffer cmd);
-
-    // Times each pass (its barriers included) under its name, which must be a
-    // render/frame/pass_registry.hpp name. Null: untimed.
     void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
-
-    /**
-     * Reset the graph for next frame
-     * Clears pass list but keeps allocated resources
-     */
+    // Clears the passes for the next frame; the textures stay, their layouts back to UNDEFINED.
     void reset();
-
-    /**
-     * Get the physical texture for a handle (valid after compile)
-     */
-    [[nodiscard]] PhysicalTexture* getPhysicalTexture(TextureHandle handle);
-
-    /**
-     * Get the physical buffer for a handle (valid after compile)
-     */
-    [[nodiscard]] PhysicalBuffer* getPhysicalBuffer(BufferHandle handle);
-
-    /**
-     * Check if initialized
-     */
-    [[nodiscard]] bool isInitialized() const { return m_device != VK_NULL_HANDLE; }
 
 private:
     friend class PassBuilder;
 
-    // Internal resource creation (called by PassBuilder)
-    TextureHandle createTexture(const TextureDesc& desc);
-    BufferHandle createBuffer(const BufferDesc& desc);
-
-    // Add resource access to a pass
-    void addPassRead(uint32_t passIndex, const ResourceAccess& access);
-    void addPassWrite(uint32_t passIndex, const ResourceAccess& access);
-
-    // Compilation steps
-    void buildDependencyGraph();
-    void topologicalSort();
-    void allocateResources();
-    void computeBarriers();
-    void createRenderPasses();
-    void createFramebuffers();
-
-    // Resource allocation helpers
-    [[nodiscard]] bool allocateTexture(TextureHandle handle);
-    [[nodiscard]] bool allocateBuffer(BufferHandle handle);
-    void freeTexture(TextureHandle handle);
-    void freeBuffer(BufferHandle handle);
-
-    // Helper to find memory type
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-    // Convert usage flags to Vulkan equivalents
-    VkImageUsageFlags toVkImageUsage(TextureUsage usage);
-    VkBufferUsageFlags toVkBufferUsage(BufferUsage usage);
-    VkImageLayout getOptimalLayout(TextureUsage usage);
+    struct Access {
+        TextureHandle texture;
+        bool write{false};
+        VkPipelineStageFlags stage{0};
+        VkAccessFlags access{0};
+        VkImageLayout layout{VK_IMAGE_LAYOUT_UNDEFINED};
+    };
+    struct Texture {
+        VkImage image{VK_NULL_HANDLE};
+        VkFormat format{VK_FORMAT_UNDEFINED};
+        VkImageLayout layout{VK_IMAGE_LAYOUT_UNDEFINED};
+    };
+    struct Barrier {
+        TextureHandle texture;
+        VkPipelineStageFlags srcStage{0}, dstStage{0};
+        VkAccessFlags srcAccess{0}, dstAccess{0};
+        VkImageLayout oldLayout{VK_IMAGE_LAYOUT_UNDEFINED}, newLayout{VK_IMAGE_LAYOUT_UNDEFINED};
+    };
+    struct Pass {
+        std::string name;
+        bool selfTimed{false};
+        std::vector<Access> reads, writes;
+        std::vector<Barrier> barriers;   // before the pass (compile)
+        std::function<void(VkCommandBuffer)> execute;
+    };
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
-    GpuAllocator* m_allocator{nullptr};
-
-    // Resource descriptions (indexed by handle)
-    std::vector<TextureDesc> m_textureDescs;
-    std::vector<BufferDesc> m_bufferDescs;
-
-    // Physical resources (indexed by handle)
-    std::vector<PhysicalTexture> m_physicalTextures;
-    std::vector<PhysicalBuffer> m_physicalBuffers;
-
-    // Pass definitions
-    std::vector<RenderPassDef> m_passes;
-
-    // Compiled execution order
-    std::vector<CompiledPass> m_compiledPasses;
-
-    // Output handle
-    TextureHandle m_outputHandle{TextureHandle::invalid()};
-
-    // Compilation state
-    bool m_compiled{false};
+    std::vector<Texture> m_textures;
+    std::vector<Pass> m_passes;
     render::GpuPassTimer* m_passTimer{nullptr};
-
-    // Name to handle mapping for debugging
-    std::unordered_map<std::string, TextureHandle> m_textureNameMap;
-    std::unordered_map<std::string, BufferHandle> m_bufferNameMap;
 };
 
 } // namespace ohao

@@ -41,12 +41,13 @@
 #include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/audio_schedule.hpp"
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/scene_view.hpp"
+#include "slice/module.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
@@ -69,6 +70,32 @@
 using namespace ohao;
 
 namespace {
+
+// One audio event of the World's log as a line (the recordings' "command"): its channel and what it says.
+std::string describeAudio(const ecs::EventChannelBase& c, std::size_t i) {
+    char text[256];
+    const uint64_t step = c.meta(i).step;
+    const auto* p = dynamic_cast<const ecs::EventChannel<ecs::AudioPlay>*>(&c);
+    if (p) {
+        const ecs::AudioPlay& e = p->at(i).value;
+        const glm::vec3 at = e.pos.value_or(glm::vec3(0.0f));
+        std::snprintf(text, sizeof text, "play step %llu %s variant %u voice %u gain %.3f %s (%.2f %.2f %.2f) walls %u %s",
+                      static_cast<unsigned long long>(step), e.sound.c_str(), e.variant, e.voice, e.gain,
+                      e.pos ? "at" : "ear", at.x, at.y, at.z, e.walls,
+                      e.outcome == ecs::AudioOutcome::Played ? "played" : e.outcome == ecs::AudioOutcome::Stole ? "stole" : "dropped");
+        return text;
+    }
+    std::snprintf(text, sizeof text, "%s step %llu", c.name().c_str(), static_cast<unsigned long long>(step));
+    return text;
+}
+
+// The audio events the World's log gained after `cursor` (which moves on): f(channel, i).
+template <class F>
+void audioEventsSince(const ecs::World& w, uint64_t& cursor, F&& f) {
+    cursor = w.events().visit(cursor, SIZE_MAX, [&](const ecs::EventChannelBase& c, std::size_t i) {
+        if (c.name().starts_with("audio.")) f(c, i);
+    });
+}
 
 constexpr uint32_t kVoices = 32;
 constexpr uint32_t kPeriod = 480;   // 10 ms at 48 kHz
@@ -201,7 +228,7 @@ constexpr float kDt = 1.0f / 60.0f;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -255,10 +282,10 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    (void)ecs::installCombat(w);
-    ecs::installRoundHook(w, engineTypes());
+    ecs::installWorldSnapshots(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    slice::module().install(w);   // combat, the animation drivers, its presentation
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) return out;
     for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
     entt::entity player = entt::null;
@@ -266,7 +293,7 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
         if (pc.input) player = e;
     const entt::entity enemy = w.findById(0x5c0b1a7e00000010ull);
     if (player == entt::null || enemy == entt::null) return out;
-    if (!rec) w.registry().replace<ecs::Health>(player, ecs::Health{1.0e6f, 1.0e6f});
+    if (!rec) w.registry().replace<slice::Health>(player, slice::Health{1.0e6f, 1.0e6f});
     const glm::vec3 me = physics.playerInfo(player)->pos, it = w.registry().get<ecs::Transform>(enemy).position;
     physics.teleportPlayer(player, me, glm::degrees(std::atan2(-(it.x - me.x), -(it.z - me.z))));
     AudioSystem device;
@@ -274,6 +301,7 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     runtime::AudioPlayer player2;
     player2.initialize(OHAO_SOURCE_DIR, device);
     std::vector<float> period(std::size_t(800) * 2);
+    uint64_t cursor = w.events().nextSeq() - 1;
     for (int i = 0; i < steps; ++i) {
         w.stepInput(fightScript(i));
         w.update(kDt);
@@ -284,8 +312,9 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
         (void)device.render(period, 800);
         if (!rec) continue;
         rec->wav.insert(rec->wav.end(), period.begin(), period.end());
-        for (const ecs::AudioCommand& c : ecs::audioCommands(w))
-            rec->commands.push_back({{"runStep", i + 1}, {"step", audio.steps()}, {"command", ecs::describeAudioCommand(c, audio.bank())}});
+        audioEventsSince(w, cursor, [&](const ecs::EventChannelBase& c, std::size_t k) {
+            rec->commands.push_back({{"runStep", i + 1}, {"step", audio.steps()}, {"command", describeAudio(c, k)}});
+        });
         const AudioBank& bank = audio.bank();
         if (rec->busCsv.empty()) {
             rec->busCsv = "step,seconds,out_rms_db";
@@ -322,7 +351,7 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    (void)ecs::installCombat(w);
+    (void)slice::installCombat(w);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
     audio.setBank(bank);
     auto& reg = w.registry();
@@ -330,29 +359,29 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     reg.emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/levels/blockout_room.glb", {}}});
     const entt::entity player = w.createWithId(0xb1a7e2, "Player");
     reg.emplace<ecs::PlayerController>(player);
-    reg.emplace<ecs::Health>(player, ecs::Health{1.0e6f, 1.0e6f});
+    reg.emplace<slice::Health>(player, slice::Health{1.0e6f, 1.0e6f});
     for (int i = 0; i < 16; ++i) {
         const entt::entity e = w.createWithId(0x100 + static_cast<uint64_t>(i), "Enemy");
         ecs::PlayerController pc;
         pc.input = false;
         pc.walkSpeed = 2.5f;
         reg.emplace<ecs::PlayerController>(e, pc);
-        reg.emplace<ecs::Health>(e, ecs::Health{1.0e6f, 1.0e6f});
-        ecs::Weapon gun;
+        reg.emplace<slice::Health>(e, slice::Health{1.0e6f, 1.0e6f});
+        slice::Weapon gun;
         gun.damage = 8.0f;
         gun.fireRate = 4.0f;
         gun.magazine = 12;
         gun.recoilPitchDeg = gun.recoilYawDeg = 0.0f;
-        reg.emplace<ecs::Weapon>(e, gun);
+        reg.emplace<slice::Weapon>(e, gun);
         // An ellipse about the player on the room's clear south half (0.88 m apart, nothing between
         // any of them and the player), each facing it and 0.6 m out of its attack range: all see it at
         // once, run the same 0.6 m in and fire on the same steps.
         const float a = 6.2831853f * float(i) / 16.0f;
         const glm::vec3 at(-0.5f + 3.0f * std::sin(a), 0.0f, 1.4f + 1.3f * std::cos(a));
-        ecs::Enemy ai;   // the AI's range is from its eye to the player's chest (0.65 of its height)
+        slice::Enemy ai;   // the AI's range is from its eye to the player's chest (0.65 of its height)
         const float rise = pc.eyeHeight - 0.65f * ecs::PlayerController{}.height;
         ai.attackRange = glm::length(glm::vec2(glm::length(glm::vec2(at.x + 0.5f, at.z - 1.4f)) - 0.6f, rise));
-        reg.emplace<ecs::Enemy>(e, ai);
+        reg.emplace<slice::Enemy>(e, ai);
         const float yaw = std::atan2(-(-0.5f - at.x), -(1.4f - at.z));
         ecs::Transform t{at};
         t.rotation = glm::angleAxis(yaw, glm::vec3(0, 1, 0));
@@ -362,11 +391,11 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     physics.teleportPlayer(player, {-0.5f, 0.0f, 1.4f}, 0.0f);
     uint64_t rays = 0;
     for (int i = 0; i < steps; ++i) {
+        const uint64_t before = w.events().nextSeq() - 1;
         w.update(kDt);
         if (i >= 20) out.stepMs.push_back(audio.lastStepMs());
-        uint64_t shots = 0;
-        for (const ecs::CombatEvent& e : ecs::combatEvents(w))
-            if (e.kind == ecs::CombatEvent::Kind::Shot) ++shots;
+        const auto* shotsIn = w.events().find<slice::ShotEvent>(slice::slice_events::kShot);
+        const uint64_t shots = shotsIn ? shotsIn->since(before).size() : 0;
         out.shots += shots;
         out.mostShots = std::max(out.mostShots, shots);
         out.mostRays = std::max(out.mostRays, audio.stats().raysCast - rays);
@@ -407,10 +436,10 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     w.seedIds(7);
     level::installLevels(w, files, engineTypes());
     ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
-    (void)ecs::installCombat(w);
-    ecs::installRoundHook(w, engineTypes());
+    ecs::installWorldSnapshots(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    slice::module().install(w);   // combat, the animation drivers, its presentation
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) {
         error = "grenade-spatial: the play scene did not load";
         return false;
@@ -424,10 +453,10 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
         return false;
     }
     // A level throw from standing lands this far ahead of the thrower's feet (combat::kGrenade*).
-    const float eye = w.registry().get<ecs::PlayerController>(player).eyeHeight, g = -ecs::combat::kGrenadeGravity;
-    const float lift = ecs::combat::kGrenadeLift;
+    const float eye = w.registry().get<ecs::PlayerController>(player).eyeHeight, g = -slice::combat::kGrenadeGravity;
+    const float lift = slice::combat::kGrenadeLift;
     const float flight = (lift + std::sqrt(lift * lift + 2.0f * g * eye)) / g;
-    const float reach = ecs::combat::kGrenadeAhead + ecs::combat::kGrenadeSpeed * flight;
+    const float reach = slice::combat::kGrenadeAhead + slice::combat::kGrenadeSpeed * flight;
 
     AudioSystem device;
     if (!device.initialize(true)) {
@@ -443,6 +472,7 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     std::vector<float> wav, period(std::size_t(800) * 2);
     nlohmann::json commands = nlohmann::json::array(), windows = nlohmann::json::array();
     int step = 0;
+    uint64_t cursor = w.events().nextSeq() - 1;
     const auto run = [&](int n, const std::vector<InputEvent>& first = {}) {
         for (int i = 0; i < n; ++i, ++step) {
             w.stepInput(i == 0 ? first : std::vector<InputEvent>{});
@@ -450,32 +480,32 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
             out.update(w, true);
             (void)device.render(period, 800);
             wav.insert(wav.end(), period.begin(), period.end());
-            for (const ecs::AudioCommand& c : ecs::audioCommands(w)) {
-                // The schedule reads the scene's bank at its first step: names, not indices, from here.
-                const bool play = c.op == ecs::AudioCommand::Op::Play && c.sound < audio.bank().sounds.size();
-                const std::string sound = play ? audio.bank().sounds[c.sound].name : std::string();
-                nlohmann::json j{{"runStep", step + 1}, {"op", int(c.op)}, {"command", ecs::describeAudioCommand(c, audio.bank())}};
-                if (play) j["sound"] = sound;
+            audioEventsSince(w, cursor, [&](const ecs::EventChannelBase& ch, std::size_t k) {
+                const auto* plays = dynamic_cast<const ecs::EventChannel<ecs::AudioPlay>*>(&ch);
+                const ecs::AudioPlay* c = plays ? &plays->at(k).value : nullptr;
+                nlohmann::json j{{"runStep", step + 1}, {"event", ch.name()}, {"command", describeAudio(ch, k)}};
+                if (c) j["sound"] = c->sound;
                 commands.push_back(std::move(j));
-                if (sound == "explode" && !windows.empty() && !windows.back().contains("pos")) {
+                if (c && c->sound == "explode" && !windows.empty() && !windows.back().contains("pos")) {
                     nlohmann::json& b = windows.back();
                     b["runStep"] = step + 1;
-                    b["pos"] = {c.pos.x, c.pos.y, c.pos.z};
-                    b["walls"] = c.occl.walls;
+                    const glm::vec3 at = c->pos.value_or(glm::vec3(0.0f));
+                    b["pos"] = {at.x, at.y, at.z};
+                    b["walls"] = c->walls;
                     b["startFrame"] = std::size_t(step) * 800;   // the start of the step that wrote it
                     b["frames"] = std::size_t(kWindowSteps) * 800;
                     if (const auto view = ecs::resolveSceneView(w).camera) {
                         const float p = glm::radians(view->pitchDeg), y = glm::radians(view->yawDeg);
                         const glm::vec3 f(std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p));
                         const glm::vec3 right = glm::normalize(glm::cross(f, glm::vec3(0, 1, 0)));
-                        const glm::vec3 to = c.pos - view->position;
+                        const glm::vec3 to = at - view->position;
                         b["ears"] = {view->position.x, view->position.y, view->position.z};
                         b["forward"] = {f.x, f.y, f.z};
                         b["distance"] = glm::length(to);
                         b["azimuthDeg"] = glm::degrees(std::atan2(glm::dot(to, right), glm::dot(to, f)));
                     }
                 }
-            }
+            });
         }
     };
     physics.teleportPlayer(player, kListen, 0.0f);

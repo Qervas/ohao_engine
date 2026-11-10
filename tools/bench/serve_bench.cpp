@@ -16,7 +16,8 @@
 //   log_below_threshold      OHAO_LOG below the threshold, per call               <= 5 ns
 //   log_ring_80              OHAO_LOG into the ring, an 80-character message      <= 300 ns
 //   tools_list_bytes         the tools/list result                                <= 28 KB
-//   audio_info_bytes         audio.info, max 16, the play scene mid-fight         <= 2 KB
+//   audio_info_bytes         audio.info, the play scene mid-fight                 <= 2 KB
+//   events_read_bytes        events.read, max 16, the same fight                  <= 2 KB
 //   vfx_info_bytes           vfx.info, max 16, the play scene mid-fight           <= 2 KB
 // Recorded, not gated: process start to the initialize reply, scene.load of bench10k over
 // stdio, the initialize and instructions sizes.
@@ -521,9 +522,10 @@ int main(int argc, char** argv) {
             if (const auto* text = doc.value().member(*result, "instructions")) instrBytes = text->text.size();
     expect(toolsBytes > 0, "tools/list answers");
 
-    // audio_info_bytes (sub-project 11): audio.info's result, max 16, in the play scene mid-fight (the player
-    // facing EnemyA, holding fire; 120 steps), from a second headless server.
-    std::size_t audioInfoBytes = 0;
+    // audio_info_bytes (sub-project 11): audio.info's result in the play scene mid-fight (the player facing
+    // EnemyA, holding fire; 120 steps), from a second headless server; events_read_bytes: events.read's last 16
+    // events there (step 3c: the schedule's commands moved there).
+    std::size_t audioInfoBytes = 0, eventsReadBytes = 0;
     {
         Child fight;
         if (fight.start(ohaoExe.wstring(), L"serve --out build/serve_bench/out --log-level warn", root, dir / "fight.stderr.txt")) {
@@ -531,20 +533,24 @@ int main(int argc, char** argv) {
             (void)fight.call(request(2, "player.teleport", R"({"pos":[1.5,0,2.2],"yawDeg":43.6})"));
             (void)fight.call(request(3, "input.inject", R"({"events":[{"action":"fire","down":true},{"step":60,"action":"fire","down":false}]})"));
             (void)fight.call(request(4, "world.step", R"({"frames":120})"));
+            const auto bytesOf = [](const std::string& reply) -> std::size_t {
+                if (auto doc = ecs::parseJson(reply))
+                    if (const auto* result = doc.value().member(doc.value().root(), "result")) {
+                        reflect::JsonWriter w(1 << 12);
+                        reflect::writeJson(w, doc.value(), *result);
+                        return w.str().size();
+                    }
+                return 0;
+            };
+            audioInfoBytes = bytesOf(fight.call(request(5, "audio.info", "{}")));
             uint64_t next = 0;
-            const std::string end = fight.call(request(5, "audio.info", R"({"since":1000000000,"max":0})"));
-            if (auto doc = ecs::parseJson(end))
+            if (auto doc = ecs::parseJson(fight.call(request(6, "events.read", R"({"max":0})"))))
                 if (const auto* result = doc.value().member(doc.value().root(), "result"))
                     if (const auto* n = doc.value().member(*result, "next")) next = std::strtoull(std::string(n->text).c_str(), nullptr, 10);
-            const std::string info =
-                fight.call(request(6, "audio.info", "{\"since\":" + std::to_string(next > 16 ? next - 16 : 0) + ",\"max\":16}"));
-            if (auto doc = ecs::parseJson(info))
-                if (const auto* result = doc.value().member(doc.value().root(), "result")) {
-                    reflect::JsonWriter w(1 << 12);
-                    reflect::writeJson(w, doc.value(), *result);
-                    audioInfoBytes = w.str().size();
-                }
-            expect(next > 16 && info.find("\"op\":\"play\"") != std::string::npos, "audio.info mid-fight lists plays");
+            const std::string events =
+                fight.call(request(7, "events.read", "{\"since\":" + std::to_string(next > 16 ? next - 16 : 0) + ",\"max\":16}"));
+            eventsReadBytes = bytesOf(events);
+            expect(next > 16 && events.find("\"event\":\"audio.play\"") != std::string::npos, "events.read mid-fight lists plays");
         }
         expect(audioInfoBytes > 0, "audio.info answers");
     }
@@ -702,6 +708,7 @@ int main(int argc, char** argv) {
         {"log_ring_80", "ns", "log_ring_80_ns", stats(ops[8].samples), {}},
         {"tools_list_bytes", "B", "tools_list_bytes", {static_cast<double>(toolsBytes), static_cast<double>(toolsBytes)}, {}},
         {"audio_info_bytes", "B", "audio_info_bytes", {static_cast<double>(audioInfoBytes), static_cast<double>(audioInfoBytes)}, {}},
+        {"events_read_bytes", "B", "events_read_bytes", {static_cast<double>(eventsReadBytes), static_cast<double>(eventsReadBytes)}, {}},
         {"vfx_info_bytes", "B", "vfx_info_bytes", {static_cast<double>(vfxInfoBytes), static_cast<double>(vfxInfoBytes)}, {}},
     };
     if (gpu.ran) {

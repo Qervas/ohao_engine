@@ -1,4 +1,5 @@
 #include "bindless_texture_manager.hpp"
+#include "gpu/vulkan/gpu_fault.hpp"
 #include "../../gpu/vulkan/gpu_allocator.hpp"
 #include <algorithm>
 #include <cmath>
@@ -7,9 +8,7 @@
 #include <string_view>
 #include <span>
 
-// Include stb_image for texture loading
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include <stb_image.h>   // implemented once, external/stb_image.cpp
 
 namespace ohao {
 
@@ -150,7 +149,7 @@ bool BindlessTextureManager::createDescriptorResources() {
     flagsInfo.pBindingFlags = &bindingFlags;
 
     VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
+    binding.binding = kBinding;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     binding.descriptorCount = m_maxTextures;
     binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
@@ -533,8 +532,7 @@ bool BindlessTextureManager::updateTextureFromMemory(BindlessTextureHandle handl
         .commandBufferCount = 1,
         .pCommandBuffers = &cmd,
     };
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
     vkDestroyBuffer(m_device, stagingBuffer, nullptr);
     vkFreeMemory(m_device, stagingMemory, nullptr);
@@ -677,7 +675,7 @@ void BindlessTextureManager::updateDescriptorSet() {
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = m_descriptorSet;
-        write.dstBinding = 0;
+        write.dstBinding = kBinding;
         write.dstArrayElement = i;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -902,8 +900,7 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
         .pCommandBuffers = &cmd,
     };
 
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
+    gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
 
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
     vkDestroyBuffer(m_device, stagingBuffer, nullptr);

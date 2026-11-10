@@ -1,4 +1,6 @@
 #include "csm_pass.hpp"
+#include "render/scene/vertex_input.hpp"
+#include "render/shader_bindings/shadow_shadow_csm.hpp"
 #include "gpu_culling.hpp"
 #include "gpu/shared_layout.hpp"
 #include "core/log.hpp"
@@ -111,15 +113,10 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                            m_renderScene->indexArena() != VK_NULL_HANDLE && m_sceneSets[frameIndex] != VK_NULL_HANDLE;
     if (haveDraws) {
         const VkDescriptorBufferInfo infos[2] = {{instances, 0, VK_WHOLE_SIZE}, {drawTable, 0, VK_WHOLE_SIZE}};
-        VkWriteDescriptorSet writes[2]{};
-        for (uint32_t i = 0; i < 2; ++i) {
-            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = m_sceneSets[frameIndex];
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[i].pBufferInfo = &infos[i];
-        }
+        VkWriteDescriptorSet writes[2]{shader::write(shader::shadow_shadow_csm::instances, m_sceneSets[frameIndex]),
+                                       shader::write(shader::shadow_shadow_csm::draws, m_sceneSets[frameIndex])};
+        writes[0].pBufferInfo = &infos[0];
+        writes[1].pBufferInfo = &infos[1];
         vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
         // Every cascade's list, before the render passes (compute outside them).
         for (uint32_t cascade = 0; cascade < m_cascades; ++cascade)
@@ -177,7 +174,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
         vkCmdEndRenderPass(cmd);
     }
-    // Shadow map layout transition is handled by the RenderGraph barrier system.
+    // The shadow map's layout transition is the render graph's (its barriers between passes).
 }
 
 bool CSMPass::configure(uint32_t cascades, uint32_t size) {
@@ -373,18 +370,12 @@ bool CSMPass::createCascadeBuffer() {
 }
 
 bool CSMPass::createSceneDescriptors() {
-    // 0: the instance table, 1: the draw table
-    VkDescriptorSetLayoutBinding bindings[2]{};
-    for (uint32_t i = 0; i < 2; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    }
+    // The instance table and the draw table.
+    const auto bindings = shader::layoutBindings(shader::shadow_shadow_csm::kSet0, VK_SHADER_STAGE_VERTEX_BIT);
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 2;
-    layoutInfo.pBindings = bindings;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_sceneLayout) != VK_SUCCESS) return false;
 
     const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * MAX_FRAMES_IN_FLIGHT};
@@ -418,8 +409,8 @@ bool CSMPass::createPipeline() {
     shaderStages[0].pName = "main";
 
     // Vertex input - full vertex stride: the scene's vertex arena is shared
-    auto csmBindingDescs = Vertex::getBindingDescriptions();
-    auto csmAttributeDescs = Vertex::getAttributeDescriptions();
+    auto csmBindingDescs = render::vertexBindings();
+    auto csmAttributeDescs = render::vertexAttributes();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

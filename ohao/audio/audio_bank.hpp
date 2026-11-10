@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -52,8 +53,21 @@ struct DuckDesc {
     std::string on;     // the sound that triggers it
     std::string bus;
     float db{0.0f};     // <= 0
-    uint32_t attackSteps{1};
-    uint32_t releaseSteps{15};
+    uint32_t attackMs{17};      // a ramp's time; the schedule turns it into steps of the World's dt
+    uint32_t releaseMs{250};
+};
+
+// What a game's event plays (the bank's `events`; step 3c). A binding names a channel of the World's event log
+// and reads its events' cues (ecs/events.hpp): the first binding of the channel whose `by` and `tag` hold plays.
+struct EventSound {
+    enum class By : uint8_t { Any, Player, Other };
+    std::string on;                  // the channel (slice.shot)
+    By by{By::Any};                  // the cue's source: the listener's player, someone else, or either
+    std::optional<std::string> tag;  // the cue's tag must be this
+    std::vector<std::string> play;   // the sounds, in order; "{tag}" is the cue's tag ("default" when empty)
+    std::string fallback;            // in place of a sound the bank lacks
+    bool ear{false};                 // at the listener (`"at": "ear"`); else at the cue's place
+    bool world{false};               // a world source (`"owner": "none"`): nobody's own, occluded like any
 };
 
 struct SnapshotBus {
@@ -64,8 +78,8 @@ struct SnapshotBus {
 struct SnapshotDesc {
     std::string name;
     std::vector<std::pair<std::string, SnapshotBus>> buses;
-    uint32_t inSteps{0};
-    uint32_t outSteps{0};
+    uint32_t inMs{0};           // the blend into it, and back out to the default
+    uint32_t outMs{0};
 };
 
 // A reverb's character (the Freeverb node's room size, damping and wet level, 0..1) and the
@@ -88,6 +102,7 @@ struct AudioBank {
     std::vector<ShapeDesc> shapes;
     std::vector<SoundDesc> sounds;
     std::vector<DuckDesc> ducks;
+    std::vector<EventSound> events;
     std::vector<SnapshotDesc> snapshots;
     std::vector<ReverbDesc> reverb;
     std::string defaultZone;

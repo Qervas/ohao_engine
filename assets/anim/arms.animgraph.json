@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "skeleton": {"file": "assets/characters/fps_arms/fps_arms.glb", "skin": "ArmsRig"},
   "driver": "arms",
   "clips": {
@@ -23,11 +24,11 @@
         "reload": {"clip": "reload"}
       },
       "transitions": [
-        {"from": "ready", "to": "reload", "when": {"event": "reload"}, "fade": 4},
-        {"from": "sprint", "to": "reload", "when": {"event": "reload"}, "fade": 4},
-        {"from": "ready", "to": "sprint", "when": {"param": "sprinting", "op": "==", "value": 1}, "fade": 10},
-        {"from": "sprint", "to": "ready", "when": {"param": "sprinting", "op": "==", "value": 0}, "fade": 8},
-        {"from": "reload", "to": "ready", "when": {"clipEnd": true}, "fade": 8}
+        {"from": "ready", "to": "reload", "when": {"event": "reload"}, "fade": 0.0667},
+        {"from": "sprint", "to": "reload", "when": {"event": "reload"}, "fade": 0.0667},
+        {"from": "ready", "to": "sprint", "when": {"param": "sprinting", "op": "==", "value": 1}, "fade": 0.1667},
+        {"from": "sprint", "to": "ready", "when": {"param": "sprinting", "op": "==", "value": 0}, "fade": 0.1333},
+        {"from": "reload", "to": "ready", "when": {"clipEnd": true}, "fade": 0.1333}
       ]
     },
     {

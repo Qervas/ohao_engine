@@ -10,7 +10,6 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <vulkan/vulkan_core.h>
 
 namespace ohao{
 
@@ -24,11 +23,7 @@ struct Vertex{
     glm::vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};       // xyz = tangent direction, w = handedness (+1/-1)
     glm::ivec4 boneIndices{0, 0, 0, 0};  // Up to 4 bone influences per vertex
     glm::vec4 boneWeights{1.0f, 0.0f, 0.0f, 0.0f};   // Corresponding weights (sum to 1.0)
-
-    [[nodiscard]] static std::vector<VkVertexInputBindingDescription> getBindingDescriptions();
-    [[nodiscard]] static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions();
-
-};
+};   // a raster pipeline reads it through render/scene/vertex_input.hpp
 static_assert(GpuPod<Vertex>, "Vertex must be GPU-uploadable POD");
 static_assert(offsetof(Vertex, position) == 0, "Vertex.position must be at offset 0");
 static_assert(offsetof(Vertex, color) == sizeof(glm::vec3), "Vertex.color offset");
@@ -55,13 +50,6 @@ struct MaterialData{
     bool isLight{false};
     glm::vec3 lightPosition{0.0f};
     float lightIntensity{1.0f};
-};
-
-// LOD level data - reduced-polygon version of a mesh
-struct LODLevel {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    float maxDistance{0.0f};  // Max camera distance for this LOD (0 = use as last)
 };
 
 class Model{
@@ -149,27 +137,11 @@ public:
     static constexpr int kOcclusionIsRoughMetal = -2;
     std::vector<int> materialOcclusionTexIndex;
 
-    // LOD levels (index 0 = highest detail, each subsequent = lower detail)
-    // Empty means no LOD support (always use main vertices/indices)
-    std::vector<LODLevel> lodLevels;
-
-    // Select appropriate LOD level based on distance to camera
-    // Returns -1 for base mesh, or LOD level index
-    [[nodiscard]] int selectLOD(float distanceToCamera) const {
-        for (int i = 0; i < static_cast<int>(lodLevels.size()); i++) {
-            if (lodLevels[i].maxDistance <= 0.0f || distanceToCamera <= lodLevels[i].maxDistance) {
-                return i;
-            }
-        }
-        return lodLevels.empty() ? -1 : static_cast<int>(lodLevels.size()) - 1;
-    }
-
     [[nodiscard]] bool loadFromOBJ(std::string_view filename);
     [[nodiscard]] bool loadFromFBX(std::string_view filename);  // Assimp-based (FBX, Collada, etc.)
     [[nodiscard]] bool loadMTL(std::string_view filename);
     void setupDefaultMaterial();
 
-    [[nodiscard]] bool hasLOD() const noexcept { return !lodLevels.empty(); }
     [[nodiscard]] bool empty() const noexcept { return vertices.empty() || indices.empty(); }
     [[nodiscard]] std::size_t triangleCount() const noexcept { return indices.size() / 3; }
 

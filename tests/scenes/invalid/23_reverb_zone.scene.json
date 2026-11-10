@@ -1,8 +1,0 @@
-{
-  "format": "ohao.scene",
-  "version": 1,
-  "entities": [
-    { "id": "0000000000000231", "ReverbZone": { "preset": "room", "prority": 1, "size": [4, 1.5, 3] } },
-    { "id": "0000000000000232", "ReverbZone": { "preset": "room", "priority": 1.5, "size": [4, -1, 3] } }
-  ]
-}

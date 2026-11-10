@@ -13,6 +13,12 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 if(NOT MSVC)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    # The GNU counterpart of the /FORCE:MULTIPLE the MSVC targets link with (docs/notes/platform.md: a second VMA inside
+    # NRI_VK): the first definition by link order wins in both. gpu_allocator.cpp keeps NRI's VMA configuration so
+    # either copy serves.
+    add_link_options(LINKER:--allow-multiple-definition)
+    # libstdc++ runs std::execution::par on oneTBB (render/sky/atmosphere.cpp): found here, so every directory sees it.
+    find_package(TBB QUIET)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(MSVC)
@@ -26,16 +32,6 @@ endif()
 
 # Include FetchContent module
 include(FetchContent)
-
-# GoogleTest
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG        v1.14.0
-)
-# Prevent overriding parent project's compiler/linker settings on Windows
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
 
 # Tests: every suite, harness and gate is a CTest test with one label (cmake/ohao_tests.cmake).
 # `python tools/check.py` is the one entry point that builds and runs them.
@@ -77,14 +73,31 @@ option(OHAO_DLSS "Enable NVIDIA DLSS Ray Reconstruction (NGX) integration" ${OHA
 # Find Vulkan package
 find_package(Vulkan REQUIRED)
 
+# FetchContent re-checks every dependency at each configure (a sub-build each, about 0.2 s), and a shader edit
+# reconfigures. Every dependency is pinned, so they are checked again only when their declarations change: this file,
+# external/cmake/, or the options that choose them. The hash is recorded once a configure has populated them all.
+file(GLOB OHAO_DEPENDENCY_FILES ${CMAKE_SOURCE_DIR}/external/cmake/*.cmake ${CMAKE_SOURCE_DIR}/external/CMakeLists.txt)
+set(OHAO_DEPENDENCY_TEXT "${OHAO_NRD} ${OHAO_DLSS} ${CMAKE_GENERATOR} ${CMAKE_CXX_COMPILER}")
+foreach(f ${CMAKE_SOURCE_DIR}/CMakeLists.txt ${OHAO_DEPENDENCY_FILES})
+    file(READ ${f} text)
+    string(APPEND OHAO_DEPENDENCY_TEXT "${text}")
+endforeach()
+string(SHA256 OHAO_DEPENDENCY_HASH "${OHAO_DEPENDENCY_TEXT}")
+if(OHAO_DEPENDENCY_HASH STREQUAL OHAO_DEPENDENCIES_POPULATED)
+    set(FETCHCONTENT_FULLY_DISCONNECTED ON)
+endif()
+
 # Fetch stb (stb_image, stb_image_write, etc.)
 FetchContent_Declare(
   stb
   GIT_REPOSITORY https://github.com/nothings/stb.git
-  GIT_TAG master
+  GIT_TAG 4e9b368bfc071e97206ea5c6adba68dd0cbf8897   # pinned: a branch is fetched from GitHub at every configure
   GIT_SUBMODULES ""
 )
 FetchContent_MakeAvailable(stb)
+# The one stb_image implementation (external/stb_image.cpp): the asset loaders and the texture manager both decode images.
+add_library(ohao_stb_image STATIC ${CMAKE_SOURCE_DIR}/external/stb_image.cpp)
+target_include_directories(ohao_stb_image PUBLIC ${stb_SOURCE_DIR})
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/models)
@@ -107,99 +120,12 @@ add_custom_target(copy_assets ALL
 add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(ohao)
+# The games (step 3i): each a game::Module over the engine's libraries; the hosts link the one they play.
+add_subdirectory(games/slice)
 add_subdirectory(examples)
 
-# Renderer pipeline tests
-option(BUILD_RENDERER_TESTS "Build renderer pipeline tests" ON)
-if(BUILD_RENDERER_TESTS)
-    message(STATUS "Building renderer pipeline tests")
-    add_subdirectory(tests/renderer)
-endif()
-
-# Physics backend tests
-option(BUILD_PHYSICS_TESTS "Build physics backend tests" ON)
-if(BUILD_PHYSICS_TESTS)
-    message(STATUS "Building physics backend tests")
-    add_subdirectory(tests/physics)
-endif()
-
-# Audio system tests
-option(BUILD_AUDIO_TESTS "Build audio system tests" ON)
-if(BUILD_AUDIO_TESTS)
-    message(STATUS "Building audio system tests")
-    add_subdirectory(tests/audio)
-endif()
-
-# Engine subsystem tests (EventBus, CommandHistory, Scene, SceneSerializer)
-option(BUILD_ENGINE_TESTS "Build engine subsystem tests" ON)
-if(BUILD_ENGINE_TESTS)
-    message(STATUS "Building engine subsystem tests")
-    add_subdirectory(tests/engine)
-endif()
-
-option(BUILD_RUNTIME_TESTS "Build runtime host tests (clock, input, swapchain choice)" ON)
-if(BUILD_RUNTIME_TESTS)
-    message(STATUS "Building runtime tests")
-    add_subdirectory(tests/runtime)
-endif()
-
-option(BUILD_ECS_TESTS "Build ECS tests (world, hierarchy, transforms)" ON)
-if(BUILD_ECS_TESTS)
-    add_subdirectory(tests/ecs)
-endif()
-
-option(BUILD_REFLECT_TESTS "Build reflection tests (registry, schema export, dependency rule)" ON)
-option(BUILD_SCENE_TESTS "Build scene tests (entity ids, component registrations; CPU only)" ON)
-if(BUILD_REFLECT_TESTS OR BUILD_SCENE_TESTS)
-    include(${CMAKE_SOURCE_DIR}/external/cmake/pfr.cmake)   # test-only
-endif()
-if(BUILD_REFLECT_TESTS)
-    add_subdirectory(tests/reflect)
-endif()
-if(BUILD_SCENE_TESTS)
-    add_subdirectory(tests/scene)
-endif()
-option(BUILD_API_TESTS "Build API tests (methods, commands, inverses, queries; CPU only)" ON)
-if(BUILD_API_TESTS)
-    add_subdirectory(tests/api)
-endif()
-option(BUILD_SYSTEMS_TESTS "Build engine-provided system tests (spin; CPU only)" ON)
-if(BUILD_SYSTEMS_TESTS)
-    add_subdirectory(tests/systems)
-endif()
-option(BUILD_RPC_TESTS "Build protocol server tests (JSON-RPC, MCP; CPU only)" ON)
-if(BUILD_RPC_TESTS)
-    add_subdirectory(tests/rpc)
-endif()
-option(BUILD_LEVEL_TESTS "Build level tests (collision from levels; CPU only)" ON)
-if(BUILD_LEVEL_TESTS)
-    add_subdirectory(tests/level)
-endif()
-option(BUILD_COMBAT_TESTS "Build combat tests (weapon, health, damage; CPU only)" ON)
-if(BUILD_COMBAT_TESTS)
-    add_subdirectory(tests/combat)
-endif()
-option(BUILD_ANIM_TESTS "Build animation tests (glTF skins and clips, sampling, the step; CPU only)" ON)
-if(BUILD_ANIM_TESTS)
-    add_subdirectory(tests/anim)
-endif()
-option(BUILD_VFX_TESTS "Build VFX tests (the effect set, the closed form, spawn records; CPU only)" ON)
-if(BUILD_VFX_TESTS)
-    add_subdirectory(tests/vfx)
-endif()
-# OpenPBR on the CPU: the energy-table generator and the module's tests (tests/material).
+# OpenPBR's energy-table generator.
 add_subdirectory(tools/material)
-add_subdirectory(tools/sampling)
-add_subdirectory(tools/caustics)
-add_subdirectory(tools/display)
-option(BUILD_MATERIAL_TESTS "Build material tests (OpenPBR's module on the CPU)" ON)
-if(BUILD_MATERIAL_TESTS)
-    add_subdirectory(tests/material)
-endif()
-option(BUILD_LOG_TESTS "Build logger tests (levels, ring, sinks; CPU only)" ON)
-if(BUILD_LOG_TESTS)
-    add_subdirectory(tests/log)
-endif()
 option(BUILD_SCENE_BENCH "Build scene_bench (scene codec/snapshot/API budgets; CPU only)" ON)
 if(BUILD_SCENE_BENCH)
     add_subdirectory(tools/bench)
@@ -209,4 +135,10 @@ add_subdirectory(tools/ohao)
 
 # The harnesses and gates that are not one suite's executable (needs every target above).
 ohao_register_harness_tests()
+
+# Dependencies point down only (system design 4.1): a link or include up a layer fails configure.
+include(cmake/ohao_layers.cmake)
+ohao_check_layers()
+
+set(OHAO_DEPENDENCIES_POPULATED ${OHAO_DEPENDENCY_HASH} CACHE INTERNAL "the dependency declarations last populated")
 

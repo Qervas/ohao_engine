@@ -4,4 +4,4 @@
 {"method":"combat.damage","params":{"entity":"5c0b1a7e00000020","amount":100}}
 {"method":"world.step","params":{"frames":1}}
 {"method":"combat.info"}
-{"method":"combat.events","params":{"since":0,"max":8}}
+{"method":"events.read","params":{"names":["slice.*"],"max":8}}

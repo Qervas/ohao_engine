@@ -31,14 +31,15 @@
 #include "core/log.hpp"
 #include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
-#include "ecs/combat.hpp"
+#include "slice/combat.hpp"
+#include "slice/module.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/vfx_draw.hpp"
+#include "world_render/vfx_draw.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
@@ -66,7 +67,7 @@ constexpr float kDt = 1.0f / 60.0f;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (ecs::registerSceneTypes(r), slice::module().registerTypes(r), true);
     (void)once;
     return r;
 }
@@ -241,8 +242,10 @@ int main(int argc, char** argv) {
             reg.emplace<ecs::Collider>(s, ecs::Collider{ecs::ColliderShape::Sphere, {0.1f, 0.0f, 0.0f}});
             reg.emplace<ecs::RigidBody>(s, ecs::RigidBody{ecs::Motion::Dynamic, 1.0f});
         }
+        const uint64_t before = w.events().nextSeq() - 1;
         w.simulate(kDt);
-        begins = physics.stepEvents().size();
+        const auto* began = w.events().find<ecs::ContactEvent>(ecs::physics_events::kContactBegin);
+        begins = began ? began->since(before).size() : 0;
         if (r > 0) events.push_back(physics.lastStepTiming().eventsMs);
     }
     if (begins != 1000) failures.push_back("1,000 spheres on a floor began " + std::to_string(begins) + " contacts (want 1,000)");
@@ -330,22 +333,22 @@ int main(int argc, char** argv) {
     std::size_t damaged = 0;
     for (int r = 0; r < rounds + 1; ++r) {
         Blockout b;
-        ecs::CombatSystem& combat = ecs::installCombat(b.world);
+        slice::CombatSystem& combat = slice::installCombat(b.world);
         auto& reg = b.world.registry();
         const entt::entity pl = b.world.createWithId(0xb1a7e2, "Player");
         reg.emplace<ecs::PlayerController>(pl);
-        reg.emplace<ecs::Health>(pl);
-        ecs::Weapon w;
+        reg.emplace<slice::Health>(pl);
+        slice::Weapon w;
         w.fireRate = 60.0f;
         w.magazine = 1000;
         // Every round on the target: without an idle interval the kick never recovers and 200
         // rounds would climb the view 70 degrees. The kick is still applied (zero degrees).
         w.spreadDeg = w.bloomPerShotDeg = 0.0f;
         w.recoilPitchDeg = w.recoilYawDeg = 0.0f;
-        reg.emplace<ecs::Weapon>(pl, w);
+        reg.emplace<slice::Weapon>(pl, w);
         const entt::entity target = b.world.create("Target", ecs::Transform{{-2.0f, 1.62f, -1.0f}});
         reg.emplace<ecs::Collider>(target, ecs::Collider{ecs::ColliderShape::Box, {0.4f, 0.4f, 0.4f}});
-        reg.emplace<ecs::Health>(target, ecs::Health{1.0e6f, 1.0e6f});
+        reg.emplace<slice::Health>(target, slice::Health{1.0e6f, 1.0e6f});
         b.world.sync();   // the player spawns, then is placed
         b.world.setTransform(pl, ecs::Transform{{-2.0f, 0.0f, 2.0f}});
         for (int i = 0; i < 10; ++i) {
@@ -357,13 +360,14 @@ int main(int argc, char** argv) {
         fire[0].name = "fire";
         for (int i = 0; i < 210; ++i) {
             b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+            const uint64_t before = b.world.events().nextSeq() - 1;
             b.world.simulate(kDt);
             b.world.sync();
-            bool shot = false;
-            for (const ecs::CombatEvent& e : combat.stepEvents()) {
-                shot |= e.kind == ecs::CombatEvent::Kind::Shot;
-                if (r > 0 && i >= 10 && e.kind == ecs::CombatEvent::Kind::Damage) ++damaged;
-            }
+            const auto& log = b.world.events();
+            const auto* shots = log.find<slice::ShotEvent>(slice::slice_events::kShot);
+            const auto* damage = log.find<slice::DamageEvent>(slice::slice_events::kDamage);
+            const bool shot = shots && !shots->since(before).empty();
+            if (r > 0 && i >= 10 && damage) damaged += damage->since(before).size();
             if (r > 0 && i >= 10 && shot) shotMs.push_back(combat.lastStepMs());
         }
     }
@@ -383,24 +387,24 @@ int main(int argc, char** argv) {
         pc.input = false;
         pc.walkSpeed = 2.5f;
         reg.emplace<ecs::PlayerController>(e, pc);
-        reg.emplace<ecs::Health>(e, ecs::Health{1.0e6f, 1.0e6f});
-        ecs::Weapon w8;
+        reg.emplace<slice::Health>(e, slice::Health{1.0e6f, 1.0e6f});
+        slice::Weapon w8;
         w8.damage = 8.0f;
         w8.fireRate = 4.0f;
         w8.magazine = 12;
         w8.recoilPitchDeg = w8.recoilYawDeg = 0.0f;
-        reg.emplace<ecs::Weapon>(e, w8);
-        ecs::Enemy ai;
+        reg.emplace<slice::Weapon>(e, w8);
+        slice::Enemy ai;
         ai.attackRange = attackRange;
-        reg.emplace<ecs::Enemy>(e, ai);
+        reg.emplace<slice::Enemy>(e, ai);
         if (spawn.empty()) w.setTransform(e, ecs::Transform{at});   // facing -Z, north
 
     };
     const auto addPlayer = [](ecs::World& w, bool firing) {
         const entt::entity pl = w.createWithId(0xb1a7e2, "Player");
         w.registry().emplace<ecs::PlayerController>(pl);
-        w.registry().emplace<ecs::Health>(pl, ecs::Health{1.0e6f, 1.0e6f});
-        if (firing) w.registry().emplace<ecs::Weapon>(pl);
+        w.registry().emplace<slice::Health>(pl, slice::Health{1.0e6f, 1.0e6f});
+        if (firing) w.registry().emplace<slice::Weapon>(pl);
         return pl;
     };
     std::vector<double> combatMs, enemies16Ms;
@@ -408,7 +412,7 @@ int main(int argc, char** argv) {
     float chased = 0.0f;
     for (int r = 0; r < rounds + 1; ++r) {
         Blockout b;
-        ecs::CombatSystem& combat = ecs::installCombat(b.world);
+        slice::CombatSystem& combat = slice::installCombat(b.world);
         (void)addPlayer(b.world, true);
         addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
         addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
@@ -418,16 +422,18 @@ int main(int argc, char** argv) {
         fire[0].name = "fire";
         for (int i = 0; i < 240; ++i) {
             b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+            const uint64_t before = b.world.events().nextSeq() - 1;
             b.world.simulate(kDt);
             b.world.sync();
             if (r > 0 && i >= 40) combatMs.push_back(combat.lastStepMs());
-            for (const ecs::CombatEvent& e : combat.stepEvents())
-                if (r > 0 && e.kind == ecs::CombatEvent::Kind::Shot && (e.sourceId == 0xe1 || e.sourceId == 0xe2)) ++enemyRounds;
+            if (const auto* shots = b.world.events().find<slice::ShotEvent>(slice::slice_events::kShot); shots && r > 0)
+                for (const auto& [meta, e] : shots->since(before))
+                    if (e.shooter == 0xe1 || e.shooter == 0xe2) ++enemyRounds;
         }
     }
     for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
         Blockout b;
-        ecs::CombatSystem& combat = ecs::installCombat(b.world);
+        slice::CombatSystem& combat = slice::installCombat(b.world);
         const entt::entity pl = addPlayer(b.world, false);
         std::vector<entt::entity> hunters;
         for (int i = 0; i < 16; ++i) {
@@ -456,19 +462,19 @@ int main(int argc, char** argv) {
     }
     // 8. The round's restart (step 3): the blockout, the player and two enemies with a Round; after
     // 30 steps of a fight, `restart` pressed: what restoring the round's start takes (the whole
-    // world's snapshot through the RoundHook), 50 restarts after 5, N rounds / 5.
+    // world's snapshot through the WorldSnapshots), 50 restarts after 5, N rounds / 5.
     std::vector<double> restartMs;
     uint32_t restarts = 0;
     for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
         Blockout b;
-        ecs::installCombat(b.world);
-        ecs::CombatSystem& combat = *ecs::combatSystem(b.world);
-        ecs::installRoundHook(b.world, engineTypes());
+        slice::installCombat(b.world);
+        slice::CombatSystem& combat = *slice::combatSystem(b.world);
+        ecs::installWorldSnapshots(b.world, engineTypes());
         (void)addPlayer(b.world, true);
         addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
         addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
         const entt::entity roundEntity = b.world.createWithId(0x40a1d, "Round");
-        b.world.registry().emplace<ecs::Round>(roundEntity);
+        b.world.registry().emplace<slice::Round>(roundEntity);
         b.world.sync();
         std::vector<InputEvent> fire(1), restart(1);
         fire[0].type = InputEvent::Type::ActionDown;
@@ -504,7 +510,7 @@ int main(int argc, char** argv) {
     std::size_t occludedRays = 0, totalRays = 0;
     for (int r = 0; r < rounds + 1; ++r) {
         Blockout b;
-        ecs::installCombat(b.world);
+        slice::installCombat(b.world);
         const entt::entity pl = addPlayer(b.world, false);
         addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
         addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
@@ -578,9 +584,9 @@ int main(int argc, char** argv) {
         w.seedIds(7);
         level::installLevels(w, files, engineTypes());
         ecs::installPhysics(w, files);
-        ecs::installCombat(w);
-        ecs::installRoundHook(w, engineTypes());
+        ecs::installWorldSnapshots(w, engineTypes());
         ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
+        slice::module().install(w);   // combat, the animation drivers, its presentation
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("play scene: blockout_play.scene.json did not load");
@@ -588,7 +594,7 @@ int main(int argc, char** argv) {
         }
         auto& reg = w.registry();
         for (auto [e, pc] : reg.view<const ecs::PlayerController>().each())
-            if (pc.input) reg.replace<ecs::Health>(e, ecs::Health{1e6f, 1e6f});
+            if (pc.input) reg.replace<slice::Health>(e, slice::Health{1e6f, 1e6f});
         w.sync();
         for (int step = 0; step < 300; ++step) {
             w.simulate(kDt);
@@ -617,11 +623,11 @@ int main(int argc, char** argv) {
         w.seedIds(7);
         level::installLevels(w, files, engineTypes());
         ecs::installPhysics(w, files);
-        ecs::installCombat(w);
-        ecs::installRoundHook(w, engineTypes());
+        ecs::installWorldSnapshots(w, engineTypes());
         ecs::installAnimation(w, files);
         ecs::installAudio(w, files);
         ecs::VfxSystem& vfx = ecs::installVfx(w, files);
+        slice::module().install(w);   // combat, the animation drivers, its presentation
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("vfx: blockout_play.scene.json did not load");
@@ -629,7 +635,7 @@ int main(int argc, char** argv) {
         }
         auto& reg = w.registry();
         for (auto [e, pc] : reg.view<const ecs::PlayerController>().each())
-            if (pc.input) reg.replace<ecs::Health>(e, ecs::Health{1e6f, 1e6f});
+            if (pc.input) reg.replace<slice::Health>(e, slice::Health{1e6f, 1e6f});
         w.sync();
         auto drawnSet = std::make_shared<const vfx::VfxSet>(vfx.set());
         const auto action = [](const char* name, bool down) {
@@ -645,9 +651,11 @@ int main(int argc, char** argv) {
             if (step == 20) in.push_back(action("grenade", true));
             if (step == 21) in.push_back(action("grenade", false));
             w.stepInput(in);
+            const uint64_t before = w.events().nextSeq() - 1;
             w.simulate(kDt);
             w.sync();
-            for (const auto& e : ecs::combatEvents(w)) vfxExploded |= e.kind == ecs::CombatEvent::Kind::Explode;
+            if (const auto* booms = w.events().find<slice::ExplodeEvent>(slice::slice_events::kExplode))
+                vfxExploded |= !booms->since(before).empty();
             if (r > 0) vfxMs.push_back(vfx.lastStepMs());
             const auto s0 = std::chrono::steady_clock::now();
             const render::VfxFrame drawn = ecs::vfxFrameOf(w, drawnSet, {});

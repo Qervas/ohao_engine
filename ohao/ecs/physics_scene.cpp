@@ -1,5 +1,7 @@
 #include "ecs/physics_scene_impl.hpp"
 
+#include <algorithm>
+
 namespace ohao::ecs {
 
 
@@ -338,7 +340,7 @@ void PhysicsScene::Impl::endPairsOf(pb::BodyHandle h) {
             continue;
         }
         if (it->second.dormant) --dormant;
-        pending.push_back(endEvent(it->second));
+        emit(endEvent(it->second));
         it = pairs.erase(it);
     }
 }
@@ -346,8 +348,6 @@ void PhysicsScene::Impl::endPairsOf(pb::BodyHandle h) {
 auto PhysicsScene::Impl::endEvent(const Pair& p) const -> PhysicsEvent {
     PhysicsEvent ev;
     ev.kind = p.trigger ? PhysicsEvent::Kind::TriggerExit : PhysicsEvent::Kind::ContactEnd;
-    ev.a = p.a != entt::null && reg.valid(p.a) ? p.a : entt::entity{entt::null};
-    ev.b = p.b != entt::null && reg.valid(p.b) ? p.b : entt::entity{entt::null};
     ev.aId = p.aId;
     ev.bId = p.bId;
     ev.point = p.point;
@@ -535,11 +535,6 @@ auto PhysicsScene::Impl::bodyIdentity() const -> std::vector<std::pair<pb::BodyH
     return out;
 }
 
-void PhysicsScene::Impl::restoreSimulation(const std::shared_ptr<const void>& state) {
-    savedPending = std::static_pointer_cast<const SavedSimulation>(state);
-    restoredSinceSpawn = true;
-}
-
 // Bodies up to date, then the motion a restore wrote: into the bodies (after their
 // teleports); players take theirs in their step, after its own teleport.
 void PhysicsScene::Impl::sync() {
@@ -578,9 +573,75 @@ std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
     s->bodies = bodyIdentity();
     s->joints = jointIdentity();
     for (const auto& [e, p] : players) s->players.push_back(SavedPlayer{idOf(e), idOf(p.head), idOf(p.ground), p});
-    s->pairs.assign(pairs.begin(), pairs.end());
+    s->pairs.assign(pairs.begin(), pairs.end());   // in the map's order: a restore inserts them back in it
     s->dormant = dormant;
     return s;
+}
+
+void PhysicsScene::Impl::restoreSimulation(const std::shared_ptr<const void>& state) {
+    savedPending = std::static_pointer_cast<const SavedSimulation>(state);
+    restoredSinceSpawn = true;
+}
+
+void PhysicsScene::Impl::hashSimulation(StateHash& h) const {
+    std::shared_ptr<const void> live;
+    const SavedSimulation* s = savedPending.get();
+    if (!s) {
+        live = saveSimulation();
+        s = static_cast<const SavedSimulation*>(live.get());
+    }
+    if (!s) {
+        h.u64(0);
+        return;
+    }
+    h.string(s->backend);
+    h.u64(s->bodies.size());
+    for (const auto& [body, id] : s->bodies) {
+        h.u64(body);
+        h.u64(id);
+    }
+    h.u64(s->joints.size());
+    for (const auto& [joint, id] : s->joints) {
+        h.u64(joint);
+        h.u64(id);
+    }
+    h.u64(s->players.size());
+    for (const SavedPlayer& sp : s->players) {
+        const PlayerRecord& p = sp.record;
+        h.u64(sp.id);
+        h.u64(sp.headId);
+        h.u64(sp.groundId);
+        h.u64(p.character);
+        h.u64(p.inner);
+        h.vec3(p.written);
+        h.f32(p.writtenRot.w); h.f32(p.writtenRot.x); h.f32(p.writtenRot.y); h.f32(p.writtenRot.z);
+        h.vec3(p.horizontal);
+        h.f32(p.vy);
+        h.f32(p.yawDeg);
+        h.f32(p.pitchDeg);
+        h.vec3(p.headPos);
+        h.f32(p.headRot.w); h.f32(p.headRot.x); h.f32(p.headRot.y); h.f32(p.headRot.z);
+        h.f32(p.stride);
+        h.f32(p.airTop);
+        h.boolean(p.grounded);
+        h.u64(p.footsteps);
+        h.boolean(p.placed);
+    }
+    std::vector<std::pair<uint64_t, Pair>> pairsByKey = s->pairs;
+    std::sort(pairsByKey.begin(), pairsByKey.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    h.u64(pairsByKey.size());
+    for (const auto& [key, pair] : pairsByKey) {
+        h.u64(key);
+        h.u32(pair.count);
+        h.boolean(pair.trigger);
+        h.boolean(pair.dormant);
+        h.u64(pair.aId);
+        h.u64(pair.bId);
+        h.vec3(pair.point);
+        h.vec3(pair.normal);
+        h.u64(pair.since);
+    }
+    h.u64(s->dormant);
 }
 
 // The saved simulation back in place, when its bodies and players are this world's (the same
@@ -637,6 +698,7 @@ PhysicsScene::PhysicsScene(entt::registry& reg, AssetResolver& assets) : m(std::
 
 std::shared_ptr<const void> PhysicsScene::saveSimulation() const { return m->saveSimulation(); }
 void PhysicsScene::restoreSimulation(const std::shared_ptr<const void>& state) { m->restoreSimulation(state); }
+void PhysicsScene::hashSimulation(StateHash& h) const { m->hashSimulation(h); }
 PhysicsScene::~PhysicsScene() = default;
 
 void PhysicsScene::sync(entt::registry&) { m->sync(); }
@@ -752,36 +814,25 @@ bool PhysicsScene::teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<f
     return m->teleport(e, pos, yawDeg);
 }
 
-void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt); }
+void PhysicsScene::step(World& world, float dt) { m->step(world.inputs(), dt, world.steps()); }
 void PhysicsScene::spawnPlayers() { m->spawnPlayers(); }
+void PhysicsScene::setInputControl(InputControl fn) { m->inputControl = std::move(fn); }
+bool PhysicsScene::hasInputControl() const noexcept { return static_cast<bool>(m->inputControl); }
 void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
 bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }
-std::span<const PhysicsEvent> PhysicsScene::stepEvents() const noexcept { return m->stepEvents; }
-std::vector<PhysicsEvent> PhysicsScene::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
-    return m->since(since, max, dropped);
+void PhysicsScene::setEvents(EventLog& log) {
+    namespace pe = physics_events;
+    m->out.contactBegin = log.writer<ContactEvent>(pe::kContactBegin, "physics");
+    m->out.contactEnd = log.writer<ContactEvent>(pe::kContactEnd, "physics");
+    m->out.triggerEnter = log.writer<TriggerEvent>(pe::kTriggerEnter, "physics");
+    m->out.triggerExit = log.writer<TriggerEvent>(pe::kTriggerExit, "physics");
+    m->out.footstep = log.writer<FootEvent>(pe::kFootstep, "physics");
+    m->out.land = log.writer<FootEvent>(pe::kLand, "physics");
+    m->out.jointBreak = log.writer<JointBreakEvent>(pe::kJointBreak, "physics");
 }
-uint64_t PhysicsScene::nextEventSeq() const noexcept { return m->nextSeq; }
 uint64_t PhysicsScene::steps() const noexcept { return m->steps; }
 int PhysicsScene::lastSubsteps() const noexcept { return m->lastSubsteps; }
 PhysicsScene::StepTiming PhysicsScene::lastStepTiming() const noexcept { return m->timing; }
-
-const char* physicsEventKindName(PhysicsEvent::Kind k) noexcept {
-    switch (k) {
-        case PhysicsEvent::Kind::ContactBegin: return "contact_begin";
-        case PhysicsEvent::Kind::ContactEnd: return "contact_end";
-        case PhysicsEvent::Kind::TriggerEnter: return "trigger_enter";
-        case PhysicsEvent::Kind::TriggerExit: return "trigger_exit";
-        case PhysicsEvent::Kind::JointBreak: return "joint_break";
-        case PhysicsEvent::Kind::Footstep: return "footstep";
-        case PhysicsEvent::Kind::Land: return "land";
-    }
-    return "?";
-}
-
-std::span<const PhysicsEvent> physicsEvents(const World& world) {
-    const PhysicsScene* s = physicsScene(world);
-    return s ? s->stepEvents() : std::span<const PhysicsEvent>{};
-}
 
 physics::backend::IPhysicsBackend& PhysicsScene::backend() { return m->ensureBackend(); }
 
@@ -808,20 +859,19 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
     // Snapshots carry the simulation, so a restore replays exactly (spec "Snapshots and replay").
     PhysicsScene* raw = scene.get();
-    reg.ctx().emplace<SnapshotHook>(SnapshotHook{[raw] { return raw->saveSimulation(); },
-                                                 [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); }});
-    // Players spawn before the transform system, so a play scene's first frame is the spawn's.
-    world.addSyncBefore("transform", "player_spawn", [scene](World&) { scene->spawnPlayers(); });
-    world.addSyncAfter("transform", "physics", [scene](World& w) { scene->sync(w.registry()); });
-    // Render interpolation, before the render extract reads the poses (installRenderExtract
-    // places itself after it when it comes later).
-    const auto names = world.syncNames();
-    const auto interpolate = [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); };
-    if (std::find(names.begin(), names.end(), "render_extract") != names.end())
-        world.addSyncBefore("render_extract", "interpolate", interpolate);
-    else
-        world.addSyncAfter("physics", "interpolate", interpolate);
-    // Once per fixed step, after the simulate systems added so far (spin, fly controller).
+    raw->setEvents(world.events());
+    addSnapshotHook(reg, SnapshotHook{"physics", [raw] { return raw->saveSimulation(); },
+                                      [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); },
+                                      [raw](StateHash& h) { raw->hashSimulation(h); }});
+    // Players spawn, from the entities a level expanded, before the transform system: a play scene's first frame
+    // is the spawn's.
+    world.addSync("player_spawn", [scene](World&) { scene->spawnPlayers(); }, {.after = {"level"}, .before = {"transform"}});
+    // Bodies follow their entities' world transforms.
+    world.addSync("physics", [scene](World& w) { scene->sync(w.registry()); }, {.after = {"transform"}});
+    // Render interpolation between the last two steps, from the bodies as the sync left them.
+    world.addSync("interpolate", [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); },
+                  {.after = {"physics"}});
+    // Once per fixed step; its events order it before their readers.
     world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w, dt); });
     return *scene;
 }

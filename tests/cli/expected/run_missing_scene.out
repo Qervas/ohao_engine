@@ -1,1 +1,0 @@
-{"method":"scene.load","error":{"code":"E_IO","message":"cannot read tests/cli/scenes/no_such.scene.json","data":[{"code":"E_IO","path":"/path","message":"cannot read tests/cli/scenes/no_such.scene.json"}]}}

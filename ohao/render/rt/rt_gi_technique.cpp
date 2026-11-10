@@ -1,4 +1,7 @@
 #include "rt_gi_technique.hpp"
+#include "render/shader_bindings/rt_gi_trace.hpp"
+#include "render/shader_bindings/rt_gi_denoise.hpp"
+#include <span>
 #include "render/scene/render_scene_types.hpp"
 #include "core/log.hpp"
 #include <glm/gtc/constants.hpp>
@@ -11,6 +14,15 @@
 
 namespace ohao {
 
+namespace {
+// The denoiser's kernels (rt/gi_denoise.slang) each bind their own part of its set 0.
+namespace D = shader::rt_gi_denoise;
+constexpr std::array kTemporal{D::tNoisy, D::tGuide, D::tGuidePrev, D::tVelocity,
+                               D::tFastPrev, D::tSlowPrev, D::tFastOut, D::tSlowOut};
+constexpr std::array kAtrous{D::aInput, D::aGuide, D::aOutput};
+constexpr std::array kUpsample{D::uInput, D::uGuide, D::uPosition, D::uNormal, D::uAlbedo, D::uOutput};
+} // namespace
+
 namespace shared = gpu::shared;
 
 // The trace reads a hit's instance row (its mesh and materials) straight from the instance table.
@@ -18,8 +30,6 @@ static_assert(sizeof(render::InstanceGpu) == shared::kInstanceGpuStride);
 
 namespace {
 
-using rtc::descriptorWrite;
-using rtc::layoutBinding;
 
 constexpr VkFormat kRadianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kGuideFormat = VK_FORMAT_R32_UINT;
@@ -213,31 +223,11 @@ bool RTGITechnique::ensureReferenceImage() {
 bool RTGITechnique::createDescriptorResources() {
     constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    constexpr VkDescriptorType buffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    const std::vector<VkDescriptorSetLayoutBinding> trace = {
-        layoutBinding(0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
-        layoutBinding(1, sampled), layoutBinding(2, sampled), layoutBinding(3, sampled),   // G-buffer
-        layoutBinding(4, buffer),                                                          // instance table
-        layoutBinding(5, buffer),                                                          // lights
-        layoutBinding(6, sampled), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLER),           // environment
-        layoutBinding(8, storage), layoutBinding(9, storage), layoutBinding(10, storage),  // radiance, guide, mean
-        layoutBinding(11, buffer),                                                         // OpenPBR's tables
-        layoutBinding(12, buffer), layoutBinding(13, buffer), layoutBinding(14, buffer),   // the radiance cache
-        layoutBinding(15, storage), layoutBinding(16, storage),                            // the reflection, its mean
-        layoutBinding(17, sampled),                                                        // OpenPBR's layers
-    };
-    const std::vector<VkDescriptorSetLayoutBinding> temporal = {
-        layoutBinding(0, sampled), layoutBinding(1, sampled), layoutBinding(2, sampled),
-        layoutBinding(3, sampled), layoutBinding(4, sampled), layoutBinding(5, sampled),
-        layoutBinding(6, storage), layoutBinding(7, storage),
-    };
-    const std::vector<VkDescriptorSetLayoutBinding> atrous = {
-        layoutBinding(8, sampled), layoutBinding(9, sampled), layoutBinding(10, storage),
-    };
-    const std::vector<VkDescriptorSetLayoutBinding> upsample = {
-        layoutBinding(11, sampled), layoutBinding(12, sampled), layoutBinding(13, sampled),
-        layoutBinding(14, sampled), layoutBinding(15, sampled), layoutBinding(16, storage),
-    };
+    constexpr VkDescriptorType buffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the pool's sizes
+    const auto trace = shader::layoutBindings(shader::rt_gi_trace::kSet0, VK_SHADER_STAGE_COMPUTE_BIT);
+    const auto temporal = shader::layoutBindings(kTemporal, VK_SHADER_STAGE_COMPUTE_BIT);
+    const auto atrous = shader::layoutBindings(kAtrous, VK_SHADER_STAGE_COMPUTE_BIT);
+    const auto upsample = shader::layoutBindings(kUpsample, VK_SHADER_STAGE_COMPUTE_BIT);
     for (auto [bindings, layout] : {std::pair{&trace, &m_traceSetLayout}, std::pair{&temporal, &m_temporalSetLayout},
                                     std::pair{&atrous, &m_atrousSetLayout}, std::pair{&upsample, &m_upsampleSetLayout}}) {
         VkDescriptorSetLayoutCreateInfo li{};
@@ -407,18 +397,18 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
                                                  {m_cache.resolved(), 0, VK_WHOLE_SIZE}};
     const VkDescriptorImageInfo layersInfo{VK_NULL_HANDLE, input.layersBuffer, kReadOnly};
     VkWriteDescriptorSet writes[18] = {
-        descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
-        descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLER),
-        descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-        descriptorWrite(set, 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-        descriptorWrite(set, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        descriptorWrite(set, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), descriptorWrite(set, 13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        descriptorWrite(set, 14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        descriptorWrite(set, 15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), descriptorWrite(set, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-        descriptorWrite(set, 17, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        shader::write(shader::rt_gi_trace::scene, set),
+        shader::write(shader::rt_gi_trace::gPosition, set), shader::write(shader::rt_gi_trace::gNormal, set),
+        shader::write(shader::rt_gi_trace::gAlbedo, set),
+        shader::write(shader::rt_gi_trace::instances, set), shader::write(shader::rt_gi_trace::lights, set),
+        shader::write(shader::rt_gi_trace::envMap, set), shader::write(shader::rt_gi_trace::envSampler, set),
+        shader::write(shader::rt_gi_trace::radianceOut, set), shader::write(shader::rt_gi_trace::guideOut, set),
+        shader::write(shader::rt_gi_trace::refMean, set),
+        shader::write(shader::rt_gi_trace::openpbrTables, set),
+        shader::write(shader::rt_gi_trace::cacheKeys, set), shader::write(shader::rt_gi_trace::cacheAccum, set),
+        shader::write(shader::rt_gi_trace::cacheResolved, set),
+        shader::write(shader::rt_gi_trace::specOut, set), shader::write(shader::rt_gi_trace::specRefMean, set),
+        shader::write(shader::rt_gi_trace::gLayers, set),
     };
     writes[0].pNext = &asWrite;
     for (uint32_t i = 0; i < 3; ++i) writes[1 + i].pImageInfo = &gbuf[i];
@@ -485,17 +475,17 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
     pc.params = u4(m_historyValid ? 1u : 0u, 1u, m_shift, spec ? 1u : 0u);
     pc.cameraPos = f4(m_cameraPos, 0.0f);
 
-    // Writes `views` (binding first + i; the last one storage) into `set` and dispatches.
-    const auto run = [&](VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, uint32_t first,
+    // Writes `views` into `set` at the kernel's bindings, in order, and dispatches.
+    const auto run = [&](VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set,
+                         std::span<const shader::Binding> bindings,
                          std::initializer_list<std::pair<VkImageView, VkImageLayout>> views, uint32_t groupsX,
                          uint32_t groupsY) {
         std::array<VkDescriptorImageInfo, 8> infos{};
         std::array<VkWriteDescriptorSet, 8> writes{};
         uint32_t n = 0;
         for (const auto& [view, layoutOf] : views) {
-            const bool last = n + 1 == views.size();
             infos[n] = {VK_NULL_HANDLE, view, layoutOf};
-            writes[n] = descriptorWrite(set, first + n, last ? storage : sampled);
+            writes[n] = shader::write(bindings[n], set);
             writes[n].pImageInfo = &infos[n];
             ++n;
         }
@@ -517,7 +507,7 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
         };
         VkWriteDescriptorSet writes[8];
         for (uint32_t i = 0; i < 8; ++i) {
-            writes[i] = descriptorWrite(set, i, i < 6 ? sampled : storage);
+            writes[i] = shader::write(kTemporal[i], set);
             writes[i].pImageInfo = &infos[i];
         }
         vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
@@ -538,7 +528,7 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
         const VkImageView in = i == 0 ? slow[m_cur].view : (i % 2 == 1 ? atrous.view : noisy.view);
         const VkImageView out = i % 2 == 0 ? atrous.view : noisy.view;
         pc.params[1] = 1u << i;
-        run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][i], 8,
+        run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][i], kAtrous,
             {{in, kGeneral}, {m_guide[m_cur].view, kGeneral}, {out, kGeneral}}, gx, gy);
         barrier(cmd, kCompute);
     }
@@ -547,7 +537,7 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
     // The joint-bilateral upsample into the output lighting reads.
     rtc::transition(cmd, output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,
                     true);
-    run(m_upsamplePipeline, m_upsampleLayout, m_upsampleSets[m_slot][chain], 11,
+    run(m_upsamplePipeline, m_upsampleLayout, m_upsampleSets[m_slot][chain], kUpsample,
         {{noisy.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_positionView, kReadOnly},
          {m_normalView, kReadOnly}, {m_albedoView, kReadOnly}, {output.view, kGeneral}},
         (m_width + 7) / 8, (m_height + 7) / 8);
