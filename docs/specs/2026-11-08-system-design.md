@@ -161,15 +161,20 @@ added and removed, 74 tests built and cut to 10).
 
 ![Game module and hot reload](2026-11-08-system-design/4-game-module.svg)
 
-- `ohao/game` is the public game API: a `GameModule` with `registerTypes`, `registerSystems`, `registerMethods`
-  and `registerEvents`, and the narrow engine services a game may call (spawn, query, raycast, play, effects).
+- `ohao/game` is the public game API: a `game::Module` with `registerTypes` (its components and event payloads),
+  `install` (its systems, channels, drivers, rules, hooks and presentation), `uninstall` (only what the engine cannot
+  see) and `methods`, and one header, `game/api.hpp`, with the engine services a game may call (the World, raycasts
+  and players, animation drivers, the mix, snapshot hooks, presentation). A game includes no other engine header.
 - A game is a shared library under `games/`, built by the same CMake with the same compiler and flags as the engine
-  (no binary ABI promise). The current slice moves to `games/slice`: combat, grenade, rounds, enemy AI, the arms and
+  (no binary ABI promise), and loaded at run time by the host executable, which exports the engine's symbols for it. The current slice moves to `games/slice`: combat, grenade, rounds, enemy AI, the arms and
   enemy drivers, the HUD, the view model, its 9 components and its methods.
 - Audio banks and vfx sets bind sounds and effects to event names as data (`"on": "slice.shot"`); the engine's code
   names no game event.
-- **Hot reload:** build the module, snapshot the world through reflection, unload, load, restore, continue. It works
-  because a module keeps no state outside reflected components and registered state. Target: under 5 s from edit to
+- **Hot reload:** build the module, load the new build beside the old one (EnTT cannot remove a component pool, so
+  the old build stays mapped), and swap the game's behaviour onto its data between steps: its components, its
+  channels' events and its snapshot hooks' states are read by the new build in place, so a build that changes one's
+  layout is refused, and a new session takes it. It works because a module keeps no state outside reflected
+  components and registered state. Target: under 5 s from edit to
   playing for a small change.
 - **Two audiences, two kinds of docs.** Engine developers read a short `AGENTS.md` and `ARCHITECTURE.md`. Game
   developers' agents read the game API's headers and a catalogue generated from the registries (components,
