@@ -259,6 +259,7 @@ bool GpuCulling::beginFrame(const render::Frame& frame, const render::RenderScen
     m_drawCount = 0;
     m_entryCount = 0;
     m_fallbackDrawn = false;
+    m_scene = &scene;
     const uint32_t n = scene.drawCount();
     const uint32_t entries = scene.meshletEntryCount();
     if (n == 0 || slot >= MAX_FRAMES_IN_FLIGHT || !m_hiz || scene.drawTable() == VK_NULL_HANDLE ||
@@ -347,9 +348,10 @@ void GpuCulling::cull(const render::Frame& frame, uint32_t phase, uint32_t first
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cmd, groups, 1, 1);
     };
-    // LEGACY(step 4a): the draw table, the instances and the meshlets are RenderScene's, not tracked yet.
+    const render::RenderScene::Buffers sceneBuffers = m_scene->buffers();
     {   // every draw's membership in the phase's lists, and (late) its visibility
         render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.read(sceneBuffers.draws, BufferUse::Storage).read(sceneBuffers.instances, BufferUse::Storage);
         pass.sampled(m_hiz)
             .readWrite(m_visibility, BufferUse::Storage)
             .write(m_local, BufferUse::Storage)
@@ -395,7 +397,10 @@ void GpuCulling::cullMeshlets(const render::Frame& frame, uint32_t phase, const 
         vkCmdDispatch(cmd, groups, 1, 1);
     };
     {
+        const render::RenderScene::Buffers sceneBuffers = m_scene->buffers();
         render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.read(sceneBuffers.draws, BufferUse::Storage).read(sceneBuffers.instances, BufferUse::Storage);
+        pass.read(sceneBuffers.meshlets, BufferUse::Storage);
         pass.sampled(m_hiz)
             .read(m_local, BufferUse::Storage)
             .write(m_meshletLocal, BufferUse::Storage)

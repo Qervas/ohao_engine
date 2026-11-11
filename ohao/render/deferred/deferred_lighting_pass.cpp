@@ -109,8 +109,11 @@ void DeferredLightingPass::record(const render::Frame& frame) {
         if (m_clusterBuffer) pass.read(*m_clusterBuffer, render::BufferUse::Storage);
         if (m_cascadeBuffer) pass.read(*m_cascadeBuffer, render::BufferUse::Uniform);
         pass.read(m_dummyBuffer, render::BufferUse::Storage);
-        // LEGACY(step 4a): the environment's maps are EnvPrefilter's, RT GI's and RT direct light's outputs their
-        // techniques', the material table RenderScene's, OpenPBR's tables an OpenPBRTablesBuffer: not tracked yet.
+        for (gpu::Image* traced : {m_ssgi, m_giReflection, m_directDiffuse, m_directSpecular})
+            if (traced) pass.sampled(*traced);
+        if (m_materialBuffer) pass.read(*m_materialBuffer, render::BufferUse::Storage);
+        // LEGACY(step 4a): the environment's maps are EnvPrefilter's and OpenPBR's tables an OpenPBRTablesBuffer:
+        // not tracked yet.
         VkClearColorValue noSubsurface{};
         noSubsurface.uint32[0] = noSubsurface.uint32[1] = noSubsurface.uint32[2] = noSubsurface.uint32[3] = 0u;
         pass.color(m_lit, render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}})
@@ -131,11 +134,11 @@ void DeferredLightingPass::record(const render::Frame& frame) {
         // IBL (bit 0): the prefiltered environment and its irradiance are both bound.
         if (m_prefilteredView != VK_NULL_HANDLE && m_irradianceView != VK_NULL_HANDLE)
             m_params.flags |= 1;
-        if (m_directDiffuseView != VK_NULL_HANDLE)
+        if (m_directDiffuse)
             m_params.flags |= 32;  // RT direct light (bit 5)
         else if (shadowMap)
             m_params.flags |= 4;   // CSM fallback (bit 2)
-        if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // RT GI
+        if (m_ssgi) m_params.flags |= 8;       // RT GI
         if (!m_clusterBuffer) m_params.flags |= 64;                  // every light (no froxel lists)
 
         vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -144,11 +147,6 @@ void DeferredLightingPass::record(const render::Frame& frame) {
         // Draw fullscreen triangle
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
-
-    // LEGACY(step 4a): SSSPass and VfxRenderer read both images undeclared (SHADER_READ_ONLY).
-    render::Pass legacy(frame, nullptr, render::Pass::Compute);
-    legacy.sampled(m_lit).sampled(m_subsurfaceDiffuse);
-    legacy.begin();
 }
 
 void DeferredLightingPass::onResize(uint32_t width, uint32_t height) {
@@ -175,16 +173,18 @@ void DeferredLightingPass::setEnvironment(VkImageView prefiltered, VkImageView i
     m_params.envIntensity = intensity;
 }
 
-void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkImageView reflection, VkSampler ssgiSampler) {
-    m_ssgiView = ssgi != VK_NULL_HANDLE && reflection != VK_NULL_HANDLE ? ssgi : VK_NULL_HANDLE;
-    m_giReflectionView = m_ssgiView != VK_NULL_HANDLE ? reflection : VK_NULL_HANDLE;
+void DeferredLightingPass::setSSGITexture(gpu::Image* ssgi, gpu::Image* reflection, VkSampler ssgiSampler) {
+    const bool both = ssgi && *ssgi && reflection && *reflection;
+    m_ssgi = both ? ssgi : nullptr;
+    m_giReflection = both ? reflection : nullptr;
     m_ssgiSampler = ssgiSampler;
 }
 
-void DeferredLightingPass::setDirectLight(VkImageView diffuse, VkImageView specular) {
+void DeferredLightingPass::setDirectLight(gpu::Image* diffuse, gpu::Image* specular) {
     // record() sets the flags from them
-    m_directDiffuseView = diffuse != VK_NULL_HANDLE && specular != VK_NULL_HANDLE ? diffuse : VK_NULL_HANDLE;
-    m_directSpecularView = m_directDiffuseView != VK_NULL_HANDLE ? specular : VK_NULL_HANDLE;
+    const bool both = diffuse && *diffuse && specular && *specular;
+    m_directDiffuse = both ? diffuse : nullptr;
+    m_directSpecular = both ? specular : nullptr;
 }
 
 void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& view,
@@ -195,11 +195,11 @@ void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::m
 }
 
 void DeferredLightingPass::clearPerFrameInputs() {
-    m_ssgiView = VK_NULL_HANDLE;
-    m_giReflectionView = VK_NULL_HANDLE;
+    m_ssgi = nullptr;
+    m_giReflection = nullptr;
     m_ssgiSampler = VK_NULL_HANDLE;
-    m_directDiffuseView = VK_NULL_HANDLE;
-    m_directSpecularView = VK_NULL_HANDLE;
+    m_directDiffuse = nullptr;
+    m_directSpecular = nullptr;
 }
 
 void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
@@ -261,13 +261,14 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     image(L::envPrefiltered, m_prefilteredView, iblSampler);
     // RT GI's diffuse and reflection, RT direct light's diffuse and specular (or stand-ins: their flags clear).
     const VkSampler giSampler = m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler;
-    image(L::ssgiTexture, m_ssgiView, giSampler);
-    image(L::giReflection, m_giReflectionView, giSampler);
-    image(L::directDiffuse, m_directDiffuseView, m_gbufferSampler);
-    image(L::directSpecular, m_directSpecularView, m_gbufferSampler);
+    const auto viewOf = [](const gpu::Image* i) { return i ? i->view : VkImageView{VK_NULL_HANDLE}; };
+    image(L::ssgiTexture, viewOf(m_ssgi), giSampler);
+    image(L::giReflection, viewOf(m_giReflection), giSampler);
+    image(L::directDiffuse, viewOf(m_directDiffuse), m_gbufferSampler);
+    image(L::directSpecular, viewOf(m_directSpecular), m_gbufferSampler);
     // OpenPBR's energy tables and the material table the layers index.
     buffer(L::openpbrTables, m_openpbrTables.buffer());
-    buffer(L::layerMaterials, m_materialBuffer);
+    buffer(L::layerMaterials, tracked(m_materialBuffer));
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }

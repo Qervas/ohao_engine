@@ -79,6 +79,9 @@ public:
     // A texture a shader samples. A depth image is sampled in DEPTH_STENCIL_READ_ONLY_OPTIMAL, the layout
     // depthRead() tests it in; any other in SHADER_READ_ONLY_OPTIMAL.
     Pass& sampled(gpu::Image& image, Sub sub = {});
+    // A texture sampled in GENERAL: one whose levels another pass of the frame writes as storage, one from the
+    // other, and that stays in the one layout for both.
+    Pass& sampledGeneral(gpu::Image& image, Sub sub = {});
     Pass& storageRead(gpu::Image& image, Sub sub = {});
     Pass& storageWrite(gpu::Image& image, Old old = Old::Discard, Sub sub = {});
     Pass& storageReadWrite(gpu::Image& image, Sub sub = {});
@@ -94,7 +97,9 @@ public:
     // --- buffers
     Pass& read(GpuBuffer& buffer, BufferUse use);
     Pass& write(GpuBuffer& buffer, BufferUse use);
-    Pass& readWrite(GpuBuffer& buffer, BufferUse use) { return write(buffer, use); }
+    // Read and written by the pass: a storage buffer updated in place, or (CopySrc, CopyDst) a copy between two
+    // ranges of the one buffer.
+    Pass& readWrite(GpuBuffer& buffer, BufferUse use);
 
     // --- what code with barriers of its own (NRD, DLSS) leaves behind: after end(), `image` is in `layout`.
     Pass& leaves(gpu::Image& image, VkImageLayout layout);
@@ -104,6 +109,7 @@ public:
 
     [[nodiscard]] VkCommandBuffer cmd() const noexcept { return m_frame.cmd; }
     [[nodiscard]] VkExtent2D area() const noexcept { return m_area; }
+    [[nodiscard]] Kind kind() const noexcept { return m_kind; }
 
 private:
     void image(gpu::Image& image, Sub sub, VkImageLayout layout, VkPipelineStageFlags2 stage, VkAccessFlags2 access,

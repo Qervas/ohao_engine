@@ -22,7 +22,8 @@
 #include "render_technique.hpp"
 #include "render/material/openpbr_tables_buffer.hpp"
 #include "render/rt/radiance_cache.hpp"
-#include "rt_compute.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/shared_layout.hpp"
@@ -41,18 +42,17 @@ public:
         m_alphaTablesLayout = tables;
         m_texturesLayout = textures;
     }
-    bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              uint32_t width, uint32_t height);
+    bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator, uint32_t width, uint32_t height);
     void resize(uint32_t width, uint32_t height);
-    // The trace (rt.gi).
-    void render(VkCommandBuffer cmd, const GIInput& input);
+    // The trace (rt.gi). Untimed, as denoise(): the frame times them.
+    void render(const render::Frame& frame, const GIInput& input);
     // The realtime denoiser (rt.gi.denoise), after render() in the same frame; nothing in
     // reference quality or when render() did not trace.
-    void denoise(VkCommandBuffer cmd);
+    void denoise(const render::Frame& frame);
     [[nodiscard]] bool denoises() const noexcept { return m_rendered && m_quality == RenderQuality::Realtime; }
     // The full-resolution indirect light lighting reads, valid once this frame's render()
     // (and denoise()) ran.
-    GIOutput getOutput() const;
+    GIOutput getOutput();
     // True when the last render() traced rays. False means it bailed (no TLAS, no pipeline)
     // and nothing was written this frame: don't sample the output.
     [[nodiscard]] bool rendered() const { return m_rendered; }
@@ -69,32 +69,29 @@ public:
     }
     // Realtime quality's trace (render.settings rtGI): half or full resolution (the denoiser
     // runs at the trace's size and the upsample becomes a copy), and its rays a pixel (1-32).
-    // A resolution change idles the device and rebuilds the realtime images; call it between
-    // frames.
+    // A resolution change rebuilds the realtime images; call it between frames.
     void setRealtime(bool fullResolution, uint32_t rays);
     [[nodiscard]] bool fullResolution() const noexcept { return m_shift == 0u; }
     void destroy();
 
 private:
-    using Image = rtc::Image;
+    using Image = gpu::Image;
 
     bool createScreenImages();
     void destroyScreenImages();
     bool ensureReferenceImage();
     bool createDescriptorResources();
     bool createPipelines();
-    // Every half-resolution image of the realtime chain, created in GENERAL on first use
-    // after init or a resize.
-    void prepareHalfImages(VkCommandBuffer cmd);
     // One denoising chain: `chain` 0 the diffuse (into m_output), 1 the reflection (into m_specOutput).
-    void denoiseChain(VkCommandBuffer cmd, uint32_t chain);
+    void denoiseChain(const render::Frame& frame, uint32_t chain);
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+    GpuAllocator* m_allocator = nullptr;
     uint32_t m_width = 0, m_height = 0;
     uint32_t m_halfWidth = 0, m_halfHeight = 0;
 
-    // Realtime, half resolution, all kept in GENERAL: the trace's radiance (reused as the
+    // Realtime, half resolution, sampled and written in GENERAL: the trace's radiance (reused as the
     // second a-trous output), its guide, the two accumulations (ping-pong pairs: this frame's
     // and last frame's), the first a-trous output.
     Image m_noisy{}, m_atrous{};
@@ -102,7 +99,6 @@ private:
     // The reflection's chain (frontier F5b): the same images, the guide shared.
     Image m_specNoisy{}, m_specAtrous{};
     std::array<Image, 2> m_specFast{}, m_specSlow{};
-    bool m_halfReady = false;
     // Full resolution: the output lighting reads, and (reference, created on first use) the
     // running mean in 32-bit floats.
     Image m_output{}, m_refMean{};
@@ -120,10 +116,10 @@ private:
     bool m_rendered = false;
     RenderQuality m_quality = RenderQuality::Realtime;
     uint32_t m_slot = 0;
-    VkImageView m_velocityView = VK_NULL_HANDLE;
-    VkImageView m_positionView = VK_NULL_HANDLE;
-    VkImageView m_normalView = VK_NULL_HANDLE;
-    VkImageView m_albedoView = VK_NULL_HANDLE;
+    gpu::Image* m_velocity = nullptr;
+    gpu::Image* m_position = nullptr;
+    gpu::Image* m_normal = nullptr;
+    gpu::Image* m_albedo = nullptr;
     glm::vec3 m_cameraPos{0.0f};
     VkExtent2D m_traceExtent{0, 0};
     uint32_t m_rays = 0;
@@ -131,7 +127,7 @@ private:
     uint32_t m_realtimeRays = gpu::shared::kGIRealtimeRays;
 
     // The bounce's lights, a buffer per frame in flight, grown to the frame's count (in GILights).
-    std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_lights{};
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_lights{};
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_lightCapacity{};
     render::OpenPBRTablesBuffer m_openpbrTables;   // the trace's binding 11
     // The bounces past the first (frontier F5a): the trace's bindings 12-14, resolved after it.

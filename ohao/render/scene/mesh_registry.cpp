@@ -1,5 +1,4 @@
 #include "render/scene/mesh_registry.hpp"
-#include "gpu/vulkan/gpu_fault.hpp"
 #include "asset/meshlets.hpp"
 #include "gpu/shared_layout.hpp"
 
@@ -79,7 +78,7 @@ bool MeshRegistry::createArena(Arena& a, VkDeviceSize elemSize, VkDeviceSize cap
     return true;
 }
 
-bool MeshRegistry::reserve(Arena& a, VkDeviceSize count, VkCommandBuffer cmd,
+bool MeshRegistry::reserve(Arena& a, VkDeviceSize count, std::vector<Growth>& growths,
                            std::vector<GpuBuffer>& retired, uint32_t& grown) {
     const VkDeviceSize required = a.used + count;
     if (required <= a.capacity) return true;
@@ -91,10 +90,7 @@ bool MeshRegistry::reserve(Arena& a, VkDeviceSize count, VkCommandBuffer cmd,
         OHAO_LOG(Error, render, "RenderScene: arena growth failed ({} bytes)", a.elemSize * newCapacity);
         return false;
     }
-    if (a.used > 0) {
-        const VkBufferCopy region{0, 0, a.used * a.elemSize};
-        vkCmdCopyBuffer(cmd, a.buf.buffer, bigger.buffer, 1, &region);
-    }
+    if (a.used > 0) growths.push_back(Growth{a.buf, &a, a.used * a.elemSize});
     retired.push_back(a.buf);
     a.buf = bigger;
     a.capacity = newCapacity;
@@ -102,7 +98,19 @@ bool MeshRegistry::reserve(Arena& a, VkDeviceSize count, VkCommandBuffer cmd,
     return true;
 }
 
-bool MeshRegistry::take(Arena& a, VkDeviceSize count, VkCommandBuffer cmd, std::vector<GpuBuffer>& retired,
+void MeshRegistry::recordGrowth(const render::Frame& frame, std::vector<Growth>& growths) {
+    if (growths.empty()) return;
+    render::Pass pass(frame, nullptr, render::Pass::Transfer);
+    for (Growth& g : growths) pass.read(g.from, render::BufferUse::CopySrc).write(g.arena->buf, render::BufferUse::CopyDst);
+    pass.begin();
+    for (const Growth& g : growths) {
+        const VkBufferCopy region{0, 0, g.bytes};
+        vkCmdCopyBuffer(frame.cmd, g.from.buffer, g.arena->buf.buffer, 1, &region);
+    }
+    growths.clear();
+}
+
+bool MeshRegistry::take(Arena& a, VkDeviceSize count, std::vector<Growth>& growths, std::vector<GpuBuffer>& retired,
                         uint32_t& grown, uint32_t& first) {
     first = 0;
     if (count == 0) return true;
@@ -115,7 +123,7 @@ bool MeshRegistry::take(Arena& a, VkDeviceSize count, VkCommandBuffer cmd, std::
         a.live += count;
         return true;
     }
-    if (!reserve(a, count, cmd, retired, grown)) return false;
+    if (!reserve(a, count, growths, retired, grown)) return false;
     first = static_cast<uint32_t>(a.used);
     a.used += count;
     a.live += count;
@@ -142,13 +150,14 @@ void MeshRegistry::give(Arena& a, VkDeviceSize first, VkDeviceSize count) {
     else a.free.emplace(first, count);
 }
 
-bool MeshRegistry::takeIndex(VkCommandBuffer cmd, std::vector<GpuBuffer>& retired, uint32_t& grown, uint32_t& index) {
+bool MeshRegistry::takeIndex(std::vector<Growth>& growths, std::vector<GpuBuffer>& retired, uint32_t& grown,
+                             uint32_t& index) {
     if (!m_freeIndices.empty()) {
         index = m_freeIndices.back();
         m_freeIndices.pop_back();
         return true;
     }
-    if (!reserve(m_meshTable, 1, cmd, retired, grown)) return false;
+    if (!reserve(m_meshTable, 1, growths, retired, grown)) return false;
     index = static_cast<uint32_t>(m_meshTable.used++);
     return true;
 }
@@ -165,13 +174,6 @@ MeshHandle MeshRegistry::place(uint32_t index, MeshInfo&& mesh) {
 }
 
 void MeshRegistry::submit(VkCommandBuffer cmd, GpuBuffer staging, RetiredTlas scratch) {
-    // What a frame submitted after this reads (the arenas, the BLAS) is written.
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     GpuAllocator* allocator = m_ctx.allocator;
     RTAccelerationStructure* rt = m_ctx.rt;
     m_work.submit(cmd, "mesh upload", staging.sizeBytes(), [allocator, rt, staging, scratch]() mutable {
@@ -180,17 +182,16 @@ void MeshRegistry::submit(VkCommandBuffer cmd, GpuBuffer staging, RetiredTlas sc
     });
 }
 
-void MeshRegistry::buildBlas(MeshInfo& mesh, VkCommandBuffer cmd, RetiredTlas& scratch, bool updatable) {
+void MeshRegistry::buildBlas(MeshInfo& mesh, const render::Frame& frame, RetiredTlas& scratch, bool updatable) {
     mesh.blas = INVALID_BLAS;
     if (!m_ctx.rt || !m_ctx.rt->isSupported() || mesh.indexCount < 3) return;
     mesh.blas = m_ctx.rt->createBLAS(
-        m_vertices.buf.buffer, mesh.vertexCount, kVertexStride,
-        m_indices.buf.buffer, mesh.indexCount,
+        frame, m_vertices.buf, mesh.vertexCount, kVertexStride,
+        m_indices.buf, mesh.indexCount,
         static_cast<VkDeviceSize>(mesh.vertexOffset) * kVertexStride,
         static_cast<VkDeviceSize>(mesh.indexOffset) * sizeof(uint32_t),
-        cmd,
         mesh.vertexOffset,       // arena indices are mesh-local
-        updatable, &scratch);
+        updatable, scratch);
 }
 
 MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<GpuBuffer>& retired, uint32_t& grown) {
@@ -212,20 +213,33 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
 
     VkCommandBuffer cmd = m_work.begin();
     if (cmd == VK_NULL_HANDLE) return {};
+    // A load's commands: a frame with no timer.
+    const render::Frame frame{cmd, nullptr, 0};
+    std::vector<Growth> growths;
     uint32_t index = 0, firstCopy = 0;
-    const bool tookVertices = take(m_vertices, mesh.vertexCount, cmd, retired, grown, mesh.vertexOffset);
-    const bool tookMeshlets = tookVertices && take(m_meshlets, meshletCount, cmd, retired, grown, firstCopy);
-    bool ok = tookMeshlets && takeIndex(cmd, retired, grown, index);
+    const bool tookVertices = take(m_vertices, mesh.vertexCount, growths, retired, grown, mesh.vertexOffset);
+    const bool tookMeshlets = tookVertices && take(m_meshlets, meshletCount, growths, retired, grown, firstCopy);
+    bool ok = tookMeshlets && takeIndex(growths, retired, grown, index);
     const bool tookIndex = ok;
+    recordGrowth(frame, growths);
     GpuBuffer staging{};
     if (ok) {
-        // Growth copies (old -> new) land before these reads of the grown buffers.
-        VkMemoryBarrier grownBarrier{};
-        grownBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        grownBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        grownBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &grownBarrier,
-                             0, nullptr, 0, nullptr);
+        const MeshGpu entry{mesh.vertexOffset, mesh.indexOffset, mesh.indexCount, mesh.triangleSlotOffset};
+        staging = m_ctx.allocator->createBuffer(sizeof(MeshGpu), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                AllocationUsage::CpuToGpu, true);
+        ok = staging.isValid() && staging.getMappedData();
+        if (ok) {
+            std::memcpy(staging.getMappedData(), &entry, sizeof(entry));
+            m_ctx.allocator->flushBuffer(staging);
+        }
+    }
+    if (ok) {
+        // The base's vertices and meshlets to the copy's ranges of the same arenas, and the mesh's table row.
+        render::Pass pass(frame, nullptr, render::Pass::Transfer);
+        pass.readWrite(m_vertices.buf, render::BufferUse::CopyDst);
+        if (meshletCount > 0) pass.readWrite(m_meshlets.buf, render::BufferUse::CopyDst);
+        pass.read(staging, render::BufferUse::CopySrc).write(m_meshTable.buf, render::BufferUse::CopyDst);
+        pass.begin();
         const VkBufferCopy vCopy{VkDeviceSize{base->vertexOffset} * kVertexStride,
                                  VkDeviceSize{mesh.vertexOffset} * kVertexStride,
                                  VkDeviceSize{mesh.vertexCount} * kVertexStride};
@@ -244,25 +258,11 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
         mesh.meshletRange = {firstCopy, meshletCount};
         mesh.meshletVertexRange = {};     // the base's
         mesh.meshletTriangleRange = {};
-        const MeshGpu entry{mesh.vertexOffset, mesh.indexOffset, mesh.indexCount, mesh.triangleSlotOffset};
-        staging = m_ctx.allocator->createBuffer(sizeof(MeshGpu), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                AllocationUsage::CpuToGpu, true);
-        ok = staging.isValid() && staging.getMappedData();
-        if (ok) {
-            std::memcpy(staging.getMappedData(), &entry, sizeof(entry));
-            m_ctx.allocator->flushBuffer(staging);
-            const VkBufferCopy eCopy{0, VkDeviceSize{index} * sizeof(MeshGpu), sizeof(MeshGpu)};
-            vkCmdCopyBuffer(cmd, staging.buffer, m_meshTable.buf.buffer, 1, &eCopy);
-        }
+        const VkBufferCopy eCopy{0, VkDeviceSize{index} * sizeof(MeshGpu), sizeof(MeshGpu)};
+        vkCmdCopyBuffer(cmd, staging.buffer, m_meshTable.buf.buffer, 1, &eCopy);
     }
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0,
-                         nullptr, 0, nullptr);
     RetiredTlas scratch;
-    if (ok) buildBlas(mesh, cmd, scratch, true);
+    if (ok) buildBlas(mesh, frame, scratch, true);
     submit(cmd, staging, scratch);
     if (!ok) {
         if (tookVertices) give(m_vertices, mesh.vertexOffset, mesh.vertexCount);
@@ -370,12 +370,15 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         return {};
     }
 
+    // A load's commands: a frame with no timer.
+    const render::Frame frame{cmd, nullptr, 0};
     // Each range as it is taken, so that a failure gives back exactly what was.
+    std::vector<Growth> growths;
     uint32_t index = 0, meshletBase = 0, vertexBase = 0, triangleBase = 0;
     int took = 0;
     bool ok = true;
     const auto takeNext = [&](Arena& a, VkDeviceSize count, uint32_t& first) {
-        ok = ok && take(a, count, cmd, retired, grown, first);
+        ok = ok && take(a, count, growths, retired, grown, first);
         took += ok ? 1 : 0;
     };
     takeNext(m_vertices, vertexCount, mesh.vertexOffset);
@@ -384,8 +387,9 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     takeNext(m_meshlets, meshletCount, meshletBase);
     takeNext(m_meshletVertices, meshletVertexCount, vertexBase);
     takeNext(m_meshletTriangles, meshletTriangleCount, triangleBase);
-    ok = ok && takeIndex(cmd, retired, grown, index);
+    ok = ok && takeIndex(growths, retired, grown, index);
     took += ok ? 1 : 0;
+    recordGrowth(frame, growths);
 
     if (ok) {
         mesh.meshletRange = {meshletBase, meshletCount};
@@ -416,7 +420,15 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
             std::memcpy(dst + meshletAt + mBytes + mvBytes, meshletTriangles.data(), static_cast<std::size_t>(mtBytes));
         m_ctx.allocator->flushBuffer(staging);
 
-        // Growth copies (old -> new) and these writes touch disjoint ranges.
+        render::Pass pass(frame, nullptr, render::Pass::Transfer);
+        pass.read(staging, render::BufferUse::CopySrc);
+        pass.write(m_vertices.buf, render::BufferUse::CopyDst).write(m_indices.buf, render::BufferUse::CopyDst);
+        if (tBytes) pass.write(m_triangleSlots.buf, render::BufferUse::CopyDst);
+        pass.write(m_meshTable.buf, render::BufferUse::CopyDst);
+        if (mBytes) pass.write(m_meshlets.buf, render::BufferUse::CopyDst);
+        if (mvBytes) pass.write(m_meshletVertices.buf, render::BufferUse::CopyDst);
+        if (mtBytes) pass.write(m_meshletTriangles.buf, render::BufferUse::CopyDst);
+        pass.begin();
         const VkBufferCopy vCopy{0, VkDeviceSize{mesh.vertexOffset} * kVertexStride, vBytes};
         vkCmdCopyBuffer(cmd, staging.buffer, m_vertices.buf.buffer, 1, &vCopy);
         const VkBufferCopy iCopy{vBytes, VkDeviceSize{mesh.indexOffset} * sizeof(uint32_t), iBytes};
@@ -441,17 +453,10 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         }
     }
 
-    // Make the arenas visible to every later submission (draws, shaders, BLAS builds).
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         0, 1, &barrier, 0, nullptr, 0, nullptr);
     // A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so
     // existing BLASes survive arena growth untouched.
     RetiredTlas scratch;
-    if (ok) buildBlas(mesh, cmd, scratch);
+    if (ok) buildBlas(mesh, frame, scratch);
     submit(cmd, staging, scratch);
     if (!ok) {
         if (took > 0) give(m_vertices, mesh.vertexOffset, vertexCount);
@@ -472,6 +477,7 @@ BlasHandle MeshRegistry::release(MeshHandle h) {
     MeshInfo& mesh = m_meshes[h.index];
     mesh.released = true;
     const BlasHandle blas = mesh.blas;
+    if (m_ctx.rt && blas != INVALID_BLAS) m_ctx.rt->retireBLAS(blas);
     mesh.blas = INVALID_BLAS;
     mesh.submeshes.clear();
     mesh.submeshes.shrink_to_fit();
@@ -514,20 +520,19 @@ std::vector<Vertex> MeshRegistry::readVertices(MeshHandle h) {
         m_ctx.allocator->destroyBuffer(staging);
         return {};
     }
-    VkMemoryBarrier before{};
-    before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    before.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0,
-                         nullptr, 0, nullptr);
-    const VkBufferCopy copy{VkDeviceSize{mesh->vertexOffset} * kVertexStride, 0, bytes};
-    vkCmdCopyBuffer(cmd, m_vertices.buf.buffer, staging.buffer, 1, &copy);
-    VkMemoryBarrier after{};
-    after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    after.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &after, 0, nullptr, 0,
-                         nullptr);
+    const render::Frame frame{cmd, nullptr, 0};
+    {
+        render::Pass pass(frame, nullptr, render::Pass::Transfer);
+        pass.read(m_vertices.buf, render::BufferUse::CopySrc).write(staging, render::BufferUse::CopyDst);
+        pass.begin();
+        const VkBufferCopy copy{VkDeviceSize{mesh->vertexOffset} * kVertexStride, 0, bytes};
+        vkCmdCopyBuffer(cmd, m_vertices.buf.buffer, staging.buffer, 1, &copy);
+    }
+    {
+        render::Pass pass(frame, nullptr, render::Pass::Transfer);
+        pass.read(staging, render::BufferUse::HostRead);
+        pass.begin();
+    }
     m_work.submit(cmd, "mesh read", 0, {});
     m_work.waitAll();
     m_ctx.allocator->invalidateBuffer(staging);

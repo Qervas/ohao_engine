@@ -62,13 +62,9 @@ public:
     [[nodiscard]] gpu::Image& specular() { return m_gbuffer[kSpecular]; }
     [[nodiscard]] gpu::Image& openpbr() { return m_gbuffer[kOpenPBR]; }
     [[nodiscard]] gpu::Image& layers() { return m_gbuffer[kLayers]; }
-    // LEGACY(step 4a): SSSPass samples these and dispatches over the tiles undeclared.
-    [[nodiscard]] VkImageView getPositionView() const { return m_gbuffer[0].view; }
-    [[nodiscard]] VkImageView getNormalView() const { return m_gbuffer[1].view; }
-    [[nodiscard]] VkImageView getLayersView() const { return m_gbuffer[kLayers].view; }
-    [[nodiscard]] VkBuffer sssTileBuffer() const { return m_sssTiles.buffer; }
+    // The tiles the fragments flagged for subsurface materials: SSSPass's list and its dispatches' arguments.
+    [[nodiscard]] GpuBuffer& sssTileBuffer() { return m_sssTiles; }
     [[nodiscard]] const glm::mat4& projection() const { return m_projection; }
-    [[nodiscard]] VkBuffer materialBuffer() const;   // RenderScene's material table (null without a scene)
 
     // Texture manager for bindless textures
     void setTextureManager(BindlessTextureManager* texManager) { m_textureManager = texManager; }
@@ -87,6 +83,9 @@ public:
     // table) and its layout, for the transparent pass's blended meshes, which reuse gbuffer.slang. A
     // slot's set is written by this frame's record().
     [[nodiscard]] VkDescriptorSetLayout sceneSetLayout() const { return m_sceneLayout; }
+    // What a pass that draws the scene's meshes with the slot's scene set reads: RenderScene's tables, its vertex
+    // and index arenas as bound, and the camera.
+    void declareScene(render::Pass& pass, uint32_t slot);
     [[nodiscard]] VkDescriptorSet sceneSet(uint32_t slot) const {
         return slot < m_sceneSets.size() ? m_sceneSets[slot] : VK_NULL_HANDLE;
     }

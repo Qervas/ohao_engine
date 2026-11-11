@@ -39,8 +39,7 @@ public:
     // The G-buffer's depth and velocity, which TAA reprojects with. Call it as soon as the G-buffer is recreated.
     void setGBufferInputs(gpu::Image* depth, gpu::Image* velocity);
     // The transparent pass's coverage mask, which TAA's history weighs less under (null: none).
-    // LEGACY(step 4a): the mask is VfxRenderer's, a view until that image is tracked.
-    void setTransparencyMask(VkImageView mask);
+    void setTransparencyMask(gpu::Image* mask);
     // Bloom's share of the frame's energy (frontier F2 T4): the display shows (1 - s) frame + s bloom.
     static constexpr float kBloomStrength = 0.04f;
 

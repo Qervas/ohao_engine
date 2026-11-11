@@ -37,11 +37,11 @@ public:
     // The CSM fallback's map (null: none) and the sampler that compares against it.
     void setShadowMap(gpu::Image* shadowMap, VkSampler shadowSampler);
     // RT GI's diffuse (binding 11) and its reflection (binding 22, frontier F5b); both or neither.
-    void setSSGITexture(VkImageView ssgi, VkImageView reflection, VkSampler ssgiSampler);
+    void setSSGITexture(gpu::Image* ssgi, gpu::Image* reflection, VkSampler ssgiSampler);
     // RT direct light's demodulated diffuse and specular (render/rt/rt_direct_technique.hpp):
     // lighting multiplies them by the albedos and leaves every light but flashes out of its loop.
     // Null: none this frame (the loop lights everything; CSM, if bound, shadows the sun).
-    void setDirectLight(VkImageView diffuse, VkImageView specular);
+    void setDirectLight(gpu::Image* diffuse, gpu::Image* specular);
     // The weather the lighting applies (wetness, snow cover, frost cover), for RT direct light's target.
     [[nodiscard]] glm::vec3 weather() const noexcept {
         return {m_params.wetness, m_params.snowCover, m_params.frostCover};
@@ -62,7 +62,7 @@ public:
         m_lightCount = count;
     }
     // The material table (binding 24): OpenPBR's layer rows of each pixel's material.
-    void setMaterials(VkBuffer materials) { m_materialBuffer = materials; }
+    void setMaterials(GpuBuffer* materials) { m_materialBuffer = materials; }
     // The froxel lists (binding 16) and the slice mapping they were built with; a null buffer
     // makes every pixel sum every light.
     void setClusters(GpuBuffer* clusters, float sliceScale, float sliceBias) {
@@ -117,7 +117,7 @@ private:
     GpuBuffer* m_lightBuffer{nullptr};
     uint32_t m_lightCount{0};
     GpuBuffer* m_clusterBuffer{nullptr};
-    VkBuffer m_materialBuffer{VK_NULL_HANDLE};
+    GpuBuffer* m_materialBuffer{nullptr};
     gpu::Image* m_shadowMap{nullptr};
     // The shadow map when one is bound and exists.
     [[nodiscard]] gpu::Image* boundShadowMap() const { return m_shadowMap && *m_shadowMap ? m_shadowMap : nullptr; }
@@ -125,12 +125,12 @@ private:
     VkImageView m_irradianceView{VK_NULL_HANDLE};
     VkImageView m_prefilteredView{VK_NULL_HANDLE};
     VkSampler m_iblSampler{VK_NULL_HANDLE};
-    VkImageView m_ssgiView{VK_NULL_HANDLE};
-    VkImageView m_giReflectionView{VK_NULL_HANDLE};
+    gpu::Image* m_ssgi{nullptr};
+    gpu::Image* m_giReflection{nullptr};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     GpuBuffer* m_cascadeBuffer{nullptr};
-    VkImageView m_directDiffuseView{VK_NULL_HANDLE};
-    VkImageView m_directSpecularView{VK_NULL_HANDLE};
+    gpu::Image* m_directDiffuse{nullptr};
+    gpu::Image* m_directSpecular{nullptr};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB): a 1x1 RGBA8 image and a
     // zeroed buffer

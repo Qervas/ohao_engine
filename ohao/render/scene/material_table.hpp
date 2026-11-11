@@ -61,6 +61,7 @@ public:
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept { return m_dirty.size() * sizeof(Pack); }
     void recordUploads(detail::StagingBatch& batch);   // one copy per contiguous dirty run
 
+    [[nodiscard]] GpuBuffer& table() noexcept { return m_buffer; }
     [[nodiscard]] VkBuffer buffer() const noexcept { return m_buffer.buffer; }
 
 private:

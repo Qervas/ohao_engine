@@ -4,10 +4,11 @@
 #include "render/scene/material_table.hpp"
 #include "render/scene/mesh_registry.hpp"
 #include "render/scene/skin_pass.hpp"
-#include "render/frame/gpu_pass_timer.hpp"
+#include "render/graph/pass.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -126,7 +127,7 @@ struct RenderScene::Impl {
 
     void destroyRetired(Retired& r) {
         allocator.destroyBuffer(r.buf);
-        if (rtAccel && (r.tlas.as != VK_NULL_HANDLE || r.tlas.buffer != VK_NULL_HANDLE))
+        if (rtAccel && (r.tlas.as != VK_NULL_HANDLE || r.tlas.buffer.buffer != VK_NULL_HANDLE))
             rtAccel->destroyRetired(r.tlas);
         if (rtAccel && r.blas != INVALID_BLAS) rtAccel->destroyBLAS(r.blas);
         if (r.mesh != UINT32_MAX) meshes.reclaim(r.mesh);
@@ -210,29 +211,25 @@ struct RenderScene::Impl {
         return rt() && instances.highWater() > tlasCapacity;
     }
 
-    // Grows the device TLAS instance buffer (old -> new copy, old retired), then
-    // records the dirty slots' copies. Returns false (dirty kept) on allocation failure.
-    bool recordTlasUploads(detail::StagingBatch& batch, std::vector<GpuBuffer>& retired) {
-        if (tlasNeedsGrowth()) {
-            uint32_t cap = std::max(tlasCapacity, InstanceTable::kInitialCapacity);
-            while (cap < instances.highWater()) cap *= 2;
-            GpuBuffer bigger = createTlasInstanceBuffer(cap);
-            if (!bigger.isValid()) {
-                OHAO_LOG(Error, render, "RenderScene: TLAS instance buffer allocation failed ({} slots)", cap);
-                return false;
-            }
-            const VkBufferCopy copy{0, 0, VkDeviceSize{tlasCapacity} * kTlasInstanceBytes};
-            vkCmdCopyBuffer(batch.cmd, tlasInstances.buffer, bigger.buffer, 1, &copy);
-            VkMemoryBarrier b{};
-            b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(batch.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 1, &b, 0, nullptr, 0, nullptr);
-            retired.push_back(tlasInstances);
-            tlasInstances = bigger;
-            tlasCapacity = cap;
+    // Replaces the device TLAS instance buffer by a bigger one (its old contents `growths`' to copy, the old
+    // buffer retired). False (dirty kept) on allocation failure.
+    bool growTlasInstances(std::vector<detail::TableGrowth>& growths, std::vector<GpuBuffer>& retired) {
+        uint32_t cap = std::max(tlasCapacity, InstanceTable::kInitialCapacity);
+        while (cap < instances.highWater()) cap *= 2;
+        GpuBuffer bigger = createTlasInstanceBuffer(cap);
+        if (!bigger.isValid()) {
+            OHAO_LOG(Error, render, "RenderScene: TLAS instance buffer allocation failed ({} slots)", cap);
+            return false;
         }
+        growths.push_back({tlasInstances, &tlasInstances, VkDeviceSize{tlasCapacity} * kTlasInstanceBytes});
+        retired.push_back(tlasInstances);
+        tlasInstances = bigger;
+        tlasCapacity = cap;
+        return true;
+    }
+
+    // Records the dirty slots' copies.
+    void recordTlasUploads(detail::StagingBatch& batch) {
         for (auto it = tlasDirty.begin(); it != tlasDirty.end();) {
             const uint32_t first = *it;
             uint32_t last = first;
@@ -241,21 +238,17 @@ struct RenderScene::Impl {
                          VkDeviceSize{last - first + 1} * kTlasInstanceBytes);
         }
         tlasDirty.clear();
-        return true;
     }
 
-    // After the copies and their barrier: Build on a structural change (or no TLAS
-    // yet), Refit on transform-only changes, else nothing.
-    void recordTlas(VkCommandBuffer cmd, bool changed) {
+    // After the copies: Build on a structural change (or no TLAS yet), Refit on transform-only changes, else
+    // nothing.
+    void recordTlas(const Frame& frame, bool changed) {
         stats.lastTlasOp = RenderSceneStats::TlasOp::None;
         const uint32_t count = instances.highWater();
         if (!rt() || count == 0 || count > tlasCapacity) return;
         const bool build = tlasStructural || rtAccel->getTLAS() == VK_NULL_HANDLE;
         if (!build && !changed) return;
-        VkBufferDeviceAddressInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-        ai.buffer = tlasInstances.buffer;
-        const bool recorded = rtAccel->buildTLASFromDevice(cmd, vkGetBufferDeviceAddress(info.device, &ai), count, build);
+        const bool recorded = rtAccel->buildTLASFromDevice(frame, tlasInstances, count, build);
         for (const RetiredTlas& r : rtAccel->takeRetired())
             retireQueue.push_back(Retired{frameCounter + MAX_FRAMES_IN_FLIGHT, GpuBuffer{}, r});
         if (!recorded) {             // allocation failed: the input is uploaded, so a
@@ -317,9 +310,9 @@ struct RenderScene::Impl {
         ++drawsVersion;
     }
 
-    // Grows the device draw table if needed (the old one retired), then records the whole
-    // list's upload. False (version kept stale) on allocation failure.
-    bool recordDrawTable(detail::StagingBatch& batch, std::vector<GpuBuffer>& retired) {
+    // A device draw table that holds the list (the old one retired: the whole list is rewritten). False
+    // (version kept stale) on allocation failure.
+    bool ensureDrawTable(std::vector<GpuBuffer>& retired) {
         const auto n = static_cast<uint32_t>(draws.size());
         if (n > drawTableCapacity) {
             uint32_t cap = std::max(drawTableCapacity, InstanceTable::kInitialCapacity);
@@ -335,6 +328,12 @@ struct RenderScene::Impl {
             drawTable = bigger;
             drawTableCapacity = cap;
         }
+        return true;
+    }
+
+    // Records the whole list's upload.
+    void recordDrawTable(detail::StagingBatch& batch) {
+        const auto n = static_cast<uint32_t>(draws.size());
         drawRecords.resize(n);
         uint32_t entries = 0;
         for (uint32_t i = 0; i < n; ++i) {
@@ -354,7 +353,6 @@ struct RenderScene::Impl {
         meshletEntries = entries;
         batch.upload(drawTable.buffer, 0, drawRecords.data(), VkDeviceSize{n} * sizeof(gpu::shared::DrawRecord));
         uploadedVersion = drawsVersion;
-        return true;
     }
 
     [[nodiscard]] bool drawTableStale() const noexcept { return uploadedVersion != drawsVersion && !draws.empty(); }
@@ -480,15 +478,8 @@ bool RenderScene::initialize(const InitInfo& info) {
         return false;
     }
     if (info.rayTracing) {
-        // TLAS readers: ray tracing pipeline shaders, and -- only when rayQuery is
-        // enabled, else naming them with ACCELERATION_STRUCTURE_READ is invalid
-        // (VUID-vkCmdPipelineBarrier-dstAccessMask-06257) -- compute and fragment
-        // shaders doing inline ray queries.
-        VkPipelineStageFlags consumers = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-        if (info.rayQuery) consumers |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         m->rtAccel = std::make_unique<RTAccelerationStructure>();
-        if (!m->rtAccel->init(info.device, info.physical, info.queue, info.queueFamily, info.commandPool,
-                              consumers)) {
+        if (!m->rtAccel->init(info.device, info.physical, m->allocator)) {
             OHAO_LOG(Warn, render, "RenderScene: ray tracing unavailable: meshes get no BLAS");
             m->rtAccel.reset();
         }
@@ -582,7 +573,7 @@ MeshHandle RenderScene::registerSkinnedInstance(MeshHandle base) {
     if (!m->initialized) return {};
     if (!m->skinPassTried) {
         m->skinPassTried = true;
-        if (!m->skinPass.initialize(m->info.device, m->info.physical)) m->skinPass.shutdown();
+        if (!m->skinPass.initialize(m->info.device, m->allocator)) m->skinPass.shutdown();
     }
     std::vector<GpuBuffer> retired;
     uint32_t grown = 0;
@@ -616,7 +607,9 @@ void RenderScene::setSkinPalette(MeshHandle mesh, std::span<const glm::mat4> cur
     if (m->meshes.setBounds(mesh, boundsMin, boundsMax)) m->drawsDirty = true;
 }
 
-void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPassTimer* timer) {
+void RenderScene::recordSkinning(const Frame& frame) {
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t frameSlot = frame.slot;
     auto& st = m->stats.skinning;
     st.skinned = 0;
     st.vertices = 0;
@@ -639,19 +632,15 @@ void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPas
         m->skinJobMeshes.push_back(index);
     }
     if (m->skinJobs.empty() ||
-        !m->skinPass.prepare(frameSlot, m->skinJobs, m->meshes.vertexArena(), m->meshes.meshletArena(),
-                             m->meshes.meshletVertexArena()))
+        !m->skinPass.prepare(frameSlot, m->skinJobs, m->meshes.vertices(), m->meshes.meshlets(),
+                             m->meshes.meshletVertices()))
         return;
 
-    if (timer) timer->begin(cmd, "skin");
-    m->skinPass.recordSkin(cmd, frameSlot, m->skinJobs);
-    if (timer) timer->end(cmd);
-    if (timer) timer->begin(cmd, "skin.bounds");
-    m->skinPass.recordBounds(cmd, frameSlot, m->skinJobs);
-    if (timer) timer->end(cmd);
+    m->skinPass.recordSkin(frame, m->skinJobs);
+    m->skinPass.recordBounds(frame, m->skinJobs);
 
     if (m->rt()) {
-        if (timer) timer->begin(cmd, "rt.blas.refit");
+        Timed timed(frame, "rt.blas.refit");
         // Every BLAS the frame updates in one build call: side by side on the GPU, not one after
         // another behind a barrier each.
         m->blasUpdates.clear();
@@ -665,8 +654,8 @@ void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPas
             m->blasUpdates.push_back({mesh->blas, s.refits >= kBlasRefitsPerRebuild, false});
             m->blasUpdateMeshes.push_back(index);
         }
-        const bool any = m->rtAccel->recordBlasUpdates(cmd, m->blasUpdates, m->meshes.vertexArena(),
-                                                       m->meshes.indexArena()) > 0;
+        const bool any = m->rtAccel->recordBlasUpdates(frame, m->blasUpdates, m->meshes.vertices(),
+                                                       m->meshes.indices()) > 0;
         for (std::size_t k = 0; k < m->blasUpdates.size(); ++k) {
             if (!m->blasUpdates[k].recorded) continue;
             Impl::Skinned& s = m->skinned[m->blasUpdateMeshes[k]];
@@ -680,17 +669,8 @@ void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPas
         }
         if (any) {
             ++st.blasUpdateCalls;
-            // The BLASes to the TLAS build (recordUpdates) and the ray-query and trace readers.
-            VkMemoryBarrier after{};
-            after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            after.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-            after.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                 VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &after, 0, nullptr, 0,
-                                 nullptr);
             m->skinnedBlasChanged = true;
         }
-        if (timer) timer->end(cmd);
     }
     for (const uint32_t index : m->skinJobMeshes) {
         Impl::Skinned& s = m->skinned[index];
@@ -874,7 +854,9 @@ void RenderScene::setEnvIntensity(float scale) {
     m->lights.setEnvIntensity(scale);
 }
 
-void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
+void RenderScene::recordUpdates(const Frame& frame) {
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t frameSlot = frame.slot;
     if (!m->initialized || cmd == VK_NULL_HANDLE || frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const auto t0 = std::chrono::steady_clock::now();
     m->stats.instanceBytesUploaded = 0;
@@ -892,51 +874,55 @@ void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
                               (drawUpload ? m->draws.size() * sizeof(gpu::shared::DrawRecord) : 0u);
     if (need > 0 || m->instances.needsGpuGrowth() || m->tlasNeedsGrowth()) {
         if (need == 0 || m->ensureStaging(frameSlot, need)) {
+            // The tables that outgrew their device buffers get bigger ones, and what the old ones held.
+            std::vector<detail::TableGrowth> growths;
+            std::vector<GpuBuffer> retired;
+            const bool instancesFit = !m->instances.needsGpuGrowth() || m->instances.growGpu(growths, retired);
+            const bool tlasFits = m->rt() && (!m->tlasNeedsGrowth() || m->growTlasInstances(growths, retired));
+            const bool drawsFit = drawUpload && m->ensureDrawTable(retired);
+            if (!growths.empty()) {
+                Pass pass(frame, nullptr, Pass::Transfer);
+                for (detail::TableGrowth& g : growths) pass.read(g.from, BufferUse::CopySrc).write(*g.to, BufferUse::CopyDst);
+                pass.begin();
+                for (const detail::TableGrowth& g : growths) {
+                    const VkBufferCopy copy{0, 0, g.bytes};
+                    vkCmdCopyBuffer(cmd, g.from.buffer, g.to->buffer, 1, &copy);
+                }
+            }
+
+            // This frame's copies, after the earlier frames' reads of the tables and the growth above.
             detail::StagingBatch batch{};
             batch.cmd = cmd;
             batch.buffer = m->staging[frameSlot].buffer;
             batch.mapped = static_cast<std::byte*>(m->staging[frameSlot].getMappedData());
             batch.capacity = m->stagingCapacity[frameSlot];
-
-            VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-            if (m->rt()) {
-                readers |= VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
-                           VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            {
+                Pass pass(frame, nullptr, Pass::Transfer);
+                pass.read(m->staging[frameSlot], BufferUse::CopySrc);
+                if (m->materials.pendingBytes() > 0) pass.write(m->materials.table(), BufferUse::CopyDst);
+                if (instancesFit && m->instances.pendingBytes() > 0)
+                    pass.write(m->instances.instances(), BufferUse::CopyDst)
+                        .write(m->instances.materialRefs(), BufferUse::CopyDst);
+                if (m->lights.pendingBytes() > 0) pass.write(m->lights.rtLights(), BufferUse::CopyDst);
+                if (tlasFits && !m->tlasDirty.empty()) pass.write(m->tlasInstances, BufferUse::CopyDst);
+                if (drawsFit) pass.write(m->drawTable, BufferUse::CopyDst);
+                pass.begin();
+                m->materials.recordUploads(batch);
+                if (instancesFit) m->stats.instanceBytesUploaded = m->instances.recordUploads(batch);
+                m->stats.lightBytesUploaded = m->lights.recordUploads(batch);
+                m->stats.instanceTableGrowths = m->instances.gpuGrowths();
+                if (tlasFits) m->recordTlasUploads(batch);
+                if (m->rt()) tlasUploaded = tlasFits;
+                if (drawsFit) m->recordDrawTable(batch);
             }
-
-            // Earlier frames read these tables (and earlier copies wrote them): order
-            // this frame's copies after both.
-            VkMemoryBarrier before{};
-            before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            before.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(cmd, readers | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 1, &before, 0, nullptr, 0, nullptr);
-
-            std::vector<GpuBuffer> retired;
-            m->materials.recordUploads(batch);
-            m->stats.instanceBytesUploaded = m->instances.recordUploads(batch, retired);
-            m->stats.lightBytesUploaded = m->lights.recordUploads(batch);
-            m->stats.instanceTableGrowths = m->instances.gpuGrowths();
-            if (m->rt()) tlasUploaded = m->recordTlasUploads(batch, retired);
-            if (drawUpload) (void)m->recordDrawTable(batch, retired);
             if (batch.used > 0) m->allocator.flushBuffer(m->staging[frameSlot], 0, batch.used);
-
-            VkMemoryBarrier after{};
-            after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, readers,
-                                 0, 1, &after, 0, nullptr, 0, nullptr);
             m->retire(retired);
         }
     }
 
     // A failed upload keeps the TLAS input dirty: no build until it lands.
     m->stats.lastTlasOp = RenderSceneStats::TlasOp::None;
-    if (tlasUploaded) m->recordTlas(cmd, tlasChanged);
+    if (tlasUploaded) m->recordTlas(frame, tlasChanged);
 
     m->stats.recordCpuMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -981,6 +967,26 @@ RenderScene::GeometryMemory RenderScene::geometryMemory() const {
         g.blasBytes = b.bytes;
     }
     return g;
+}
+
+RenderScene::Buffers RenderScene::buffers() const {
+    return {m->meshes.vertices(),      m->meshes.indices(),        m->meshes.triangleSlots(), m->meshes.meshes(),
+            m->materials.table(),      m->instances.materialRefs(), m->instances.instances(),  m->lights.rtLights(),
+            m->drawTable,              m->meshes.meshlets(),       m->meshes.meshletVertices(),
+            m->meshes.meshletTriangles()};
+}
+
+void RenderScene::traced(Pass& pass) const {
+    // Outside a ray tracing pipeline a shader reads an acceleration structure only with ray queries.
+    if (m->rt() && (pass.kind() == Pass::RayTracing || m->info.rayQuery)) m->rtAccel->traced(pass);
+}
+
+void RenderScene::readAll(Pass& pass) const {
+    const Buffers b = buffers();
+    for (GpuBuffer* buffer : {&b.vertices, &b.indices, &b.triangleSlots, &b.meshes, &b.materials, &b.materialRefs,
+                              &b.instances, &b.rtLights, &b.draws, &b.meshlets, &b.meshletVertices, &b.meshletTriangles})
+        pass.read(*buffer, BufferUse::Storage);
+    traced(pass);
 }
 
 VkBuffer RenderScene::vertexArena() const { return m->meshes.vertexArena(); }

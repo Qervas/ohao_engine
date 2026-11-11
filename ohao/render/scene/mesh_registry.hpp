@@ -75,6 +75,15 @@ public:
         return m;
     }
 
+    // The arenas with their state, for a pass's declarations (render/graph/pass.hpp).
+    [[nodiscard]] GpuBuffer& vertices() noexcept { return m_vertices.buf; }
+    [[nodiscard]] GpuBuffer& indices() noexcept { return m_indices.buf; }
+    [[nodiscard]] GpuBuffer& triangleSlots() noexcept { return m_triangleSlots.buf; }
+    [[nodiscard]] GpuBuffer& meshes() noexcept { return m_meshTable.buf; }
+    [[nodiscard]] GpuBuffer& meshlets() noexcept { return m_meshlets.buf; }
+    [[nodiscard]] GpuBuffer& meshletVertices() noexcept { return m_meshletVertices.buf; }
+    [[nodiscard]] GpuBuffer& meshletTriangles() noexcept { return m_meshletTriangles.buf; }
+
     [[nodiscard]] VkBuffer vertexArena() const noexcept { return m_vertices.buf.buffer; }
     [[nodiscard]] VkBuffer indexArena() const noexcept { return m_indices.buf.buffer; }
     [[nodiscard]] VkBuffer triangleSlotBuffer() const noexcept { return m_triangleSlots.buf.buffer; }
@@ -94,19 +103,29 @@ private:
         std::map<VkDeviceSize, VkDeviceSize> free;   // released ranges below the mark: first -> count, merged
     };
 
+    // An arena replaced by a bigger one: what was in it is copied over by recordGrowth.
+    struct Growth {
+        GpuBuffer from;
+        Arena* arena;
+        VkDeviceSize bytes;
+    };
+
     [[nodiscard]] bool createArena(Arena& a, VkDeviceSize elemSize, VkDeviceSize capacity, VkBufferUsageFlags usage);
-    // Makes room for `count` more elements: on growth records old -> new on `cmd`.
-    [[nodiscard]] bool reserve(Arena& a, VkDeviceSize count, VkCommandBuffer cmd,
+    // Makes room for `count` more elements: an arena that must grow is replaced (`growths`, `retired`).
+    [[nodiscard]] bool reserve(Arena& a, VkDeviceSize count, std::vector<Growth>& growths,
                                std::vector<GpuBuffer>& retired, uint32_t& grown);
     // A range of `count` elements: a free one that fits, else the arena's end (reserve). False: no room.
-    [[nodiscard]] bool take(Arena& a, VkDeviceSize count, VkCommandBuffer cmd, std::vector<GpuBuffer>& retired,
+    [[nodiscard]] bool take(Arena& a, VkDeviceSize count, std::vector<Growth>& growths, std::vector<GpuBuffer>& retired,
                             uint32_t& grown, uint32_t& first);
     static void give(Arena& a, VkDeviceSize first, VkDeviceSize count);
     // The mesh table's row for a new mesh: a reclaimed index, else the next. False: no room.
-    [[nodiscard]] bool takeIndex(VkCommandBuffer cmd, std::vector<GpuBuffer>& retired, uint32_t& grown, uint32_t& index);
+    [[nodiscard]] bool takeIndex(std::vector<Growth>& growths, std::vector<GpuBuffer>& retired, uint32_t& grown,
+                                 uint32_t& index);
+    // The grown arenas' old contents into the new buffers, one pass, before anything reads or writes them.
+    static void recordGrowth(const render::Frame& frame, std::vector<Growth>& growths);
     MeshHandle place(uint32_t index, MeshInfo&& mesh);
-    // Records the mesh's BLAS build on `cmd` (after its vertices' and indices' copies); `scratch` is the build's.
-    void buildBlas(MeshInfo& mesh, VkCommandBuffer cmd, RetiredTlas& scratch, bool updatable = false);
+    // Records the mesh's BLAS build (after its vertices' and indices' copies); `scratch` is the build's.
+    void buildBlas(MeshInfo& mesh, const render::Frame& frame, RetiredTlas& scratch, bool updatable = false);
     // Submits a registration without waiting; its staging and scratch buffers go when it has run.
     void submit(VkCommandBuffer cmd, GpuBuffer staging, RetiredTlas scratch);
 

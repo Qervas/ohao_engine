@@ -261,6 +261,13 @@ namespace detail {
 // tables append their dirty bytes and record one copy per contiguous run into
 // their device-local buffers. Every GPU struct the tables upload is a multiple of
 // 16 bytes, so runs stay 16-byte aligned without padding.
+// A device table replaced by a bigger one: `bytes` of the old one go to the new before anything else touches it.
+struct TableGrowth {
+    GpuBuffer from;
+    GpuBuffer* to;
+    VkDeviceSize bytes;
+};
+
 struct StagingBatch {
     VkCommandBuffer cmd{VK_NULL_HANDLE};
     VkBuffer buffer{VK_NULL_HANDLE};

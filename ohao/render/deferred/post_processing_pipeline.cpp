@@ -170,7 +170,7 @@ void PostProcessingPipeline::setGBufferInputs(gpu::Image* depth, gpu::Image* vel
     if (m_taaPass) m_taaPass->setGBufferInputs(depth, velocity);
 }
 
-void PostProcessingPipeline::setTransparencyMask(VkImageView mask) {
+void PostProcessingPipeline::setTransparencyMask(gpu::Image* mask) {
     if (m_taaPass) m_taaPass->setTransparencyMask(mask);
 }
 

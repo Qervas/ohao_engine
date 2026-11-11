@@ -38,10 +38,14 @@ public:
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept;
     [[nodiscard]] bool needsGpuGrowth() const noexcept { return m_capacity > m_gpuCapacity; }
     [[nodiscard]] uint32_t gpuGrowths() const noexcept { return m_gpuGrowths; }
-    // Grows the device buffers (old -> new copy recorded, old pushed to `retired`),
-    // then uploads dirty slots. Returns the InstanceGpu bytes uploaded.
-    std::size_t recordUploads(detail::StagingBatch& batch, std::vector<GpuBuffer>& retired);
+    // Replaces the device buffers by bigger ones (their old contents `growths`' to copy, the old buffers pushed
+    // to `retired`). False, with nothing changed, when the allocation fails: the dirty slots wait.
+    [[nodiscard]] bool growGpu(std::vector<detail::TableGrowth>& growths, std::vector<GpuBuffer>& retired);
+    // Uploads the dirty slots. Returns the InstanceGpu bytes uploaded.
+    std::size_t recordUploads(detail::StagingBatch& batch);
 
+    [[nodiscard]] GpuBuffer& instances() noexcept { return m_instanceBuffer; }
+    [[nodiscard]] GpuBuffer& materialRefs() noexcept { return m_refBuffer; }
     [[nodiscard]] VkBuffer instanceBuffer() const noexcept { return m_instanceBuffer.buffer; }
     [[nodiscard]] VkBuffer materialRefBuffer() const noexcept { return m_refBuffer.buffer; }
 

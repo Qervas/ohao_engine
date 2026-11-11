@@ -186,8 +186,7 @@ bool VulkanRenderer::initialize() {
         // The emissive triangle lights, once the device's ray tracing is known.
         if (m_rayQueryEnabled && m_textureManager) {
             m_emissiveLights = std::make_unique<render::EmissiveLights>();
-            if (!m_emissiveLights->initialize(m_device, m_physicalDevice, m_textureManager->getDescriptorSetLayout(),
-                                              m_renderScene->rtSupported())) {
+            if (!m_emissiveLights->initialize(m_device, m_allocator, m_textureManager->getDescriptorSetLayout())) {
                 OHAO_LOG(Warn, gpu, "the emissive light table could not be created: emitters light by bounces only");
                 m_emissiveLights->destroy();
                 m_emissiveLights.reset();

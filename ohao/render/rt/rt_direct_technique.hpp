@@ -17,7 +17,8 @@
 // Lighting reads the output (diffuse(), specular()) and multiplies the lobes' directional albedos back.
 
 #include "render_technique.hpp"
-#include "rt_compute.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "render/material/openpbr_tables_buffer.hpp"
 #include "gpu/shared_layout.hpp"
@@ -25,18 +26,19 @@
 #include <span>
 #include <vector>
 
-namespace ohao::render { class EmissiveLights; }
+namespace ohao::render { class EmissiveLights; class RenderScene; }
+namespace ohao::rtc { class AlphaTables; }
 
 namespace ohao {
 
 struct DirectInput {
-    VkImageView positionBuffer;    // GBuffer0: world position, metallic
-    VkImageView normalBuffer;      // GBuffer1: octahedral normal, roughness
-    VkImageView albedoBuffer;      // GBuffer2: albedo, AO
-    VkImageView specularBuffer;    // the G-buffer's specular_color, specular_weight / 1.5
-    VkImageView openpbrBuffer;     // the G-buffer's base_diffuse_roughness, IOR
-    VkImageView layersBuffer;      // the G-buffer's OpenPBR layers (RG32_UINT)
-    VkImageView velocityBuffer;    // GBuffer3: UV motion
+    gpu::Image* positionBuffer = nullptr;    // GBuffer0: world position, metallic
+    gpu::Image* normalBuffer = nullptr;      // GBuffer1: octahedral normal, roughness
+    gpu::Image* albedoBuffer = nullptr;      // GBuffer2: albedo, AO
+    gpu::Image* specularBuffer = nullptr;    // the G-buffer's specular_color, specular_weight / 1.5
+    gpu::Image* openpbrBuffer = nullptr;     // the G-buffer's base_diffuse_roughness, IOR
+    gpu::Image* layersBuffer = nullptr;      // the G-buffer's OpenPBR layers (RG32_UINT)
+    gpu::Image* velocityBuffer = nullptr;    // GBuffer3: UV motion
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor sets
@@ -49,14 +51,13 @@ struct DirectInput {
     glm::vec3 cameraPos{0.0f};
     glm::vec3 weather{0.0f};       // wetness, snow cover, frost cover (the lighting pass's)
 
-    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-    // Sets 1 and 2 (rt/alpha_test.slang): RenderScene's tables and the bindless textures' set.
-    VkDescriptorSet alphaTables = VK_NULL_HANDLE;
+    // The scene: its TLAS, its lights as the path tracer samples them (rtLights) and its material table.
+    const render::RenderScene* scene = nullptr;
+    // Sets 1 and 2 (rt/alpha_test.slang): RenderScene's tables (this slot's set) and the bindless textures' set.
+    rtc::AlphaTables* alphaTables = nullptr;
     VkDescriptorSet textures = VK_NULL_HANDLE;
-    VkBuffer lightData = VK_NULL_HANDLE;   // RenderScene::rtLightBuffer: the path tracer's lights
-    VkBuffer materials = VK_NULL_HANDLE;   // RenderScene::materialBuffer
     bool layers = true;                    // RenderScene::anyLayeredMaterial: di.shade's layered kernel
-    const render::EmissiveLights* emissive = nullptr;   // this frame's table, recorded before sample()
+    render::EmissiveLights* emissive = nullptr;   // this frame's table, recorded before sample()
 };
 
 class RTDirectTechnique {
@@ -75,21 +76,22 @@ public:
     // Rewritten into a slot's set only when the table changed since that slot last wrote it.
     void setBindlessTextures(std::span<const VkImageView> views, std::span<const VkSampler> samplers);
 
-    bool init(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t width, uint32_t height);
+    bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator, uint32_t width, uint32_t height);
     void resize(uint32_t width, uint32_t height);
     void destroy();
 
-    // di.sample, then (each in its own pass) di.trace, di.shade and, realtime, di.denoise.
-    void sample(VkCommandBuffer cmd, const DirectInput& input);
-    void trace(VkCommandBuffer cmd);
-    void shade(VkCommandBuffer cmd);
-    void denoise(VkCommandBuffer cmd);
+    // di.sample, then (each in its own pass) di.trace, di.shade and, realtime, di.denoise. Untimed: the frame
+    // times them.
+    void sample(const render::Frame& frame, const DirectInput& input);
+    void trace(const render::Frame& frame);
+    void shade(const render::Frame& frame);
+    void denoise(const render::Frame& frame);
     [[nodiscard]] bool denoises() const noexcept { return m_rendered && m_quality == RenderQuality::Realtime; }
     // True when this frame's sample() ran; false: nothing was written, lighting must not read it.
     [[nodiscard]] bool rendered() const noexcept { return m_rendered; }
-    // The light lighting reads (SHADER_READ_ONLY_OPTIMAL once this frame's passes ran).
-    [[nodiscard]] VkImageView diffuse() const noexcept;
-    [[nodiscard]] VkImageView specular() const noexcept;
+    // The light lighting reads, once this frame's passes ran.
+    [[nodiscard]] gpu::Image& diffuse() noexcept;
+    [[nodiscard]] gpu::Image& specular() noexcept;
 
     void resetHistory() noexcept {
         m_historyValid = false;
@@ -97,7 +99,7 @@ public:
     }
 
 private:
-    using Image = rtc::Image;
+    using Image = gpu::Image;
     bool createScreenImages();
     void destroyScreenImages();
     bool ensureReferenceImages();
@@ -105,10 +107,13 @@ private:
     bool createPipelines();
     void writeSampleSet(const DirectInput& input);
 
+    // What every resampling pass reads: the G-buffer, the scene's tables and acceleration structures, the lights.
+    void declareInputs(render::Pass& pass);
     void dispatchSample(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t width, uint32_t height);
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+    GpuAllocator* m_allocator = nullptr;
     uint32_t m_width = 0, m_height = 0;
     // This frame's trace image: the frame's size >> m_shift (the images are the frame's size; half
     // resolution uses their top-left quarter). A changed shift leaves the reservoirs' history.
@@ -130,7 +135,6 @@ private:
     Image m_outDiffuse{}, m_outSpecular{};
     // Reference: the running means (created on first use) and 1x1 stand-ins.
     Image m_meanDiffuse{}, m_meanSpecular{}, m_meanDummy{};
-    bool m_imagesReady = false;
     uint32_t m_cur = 0;
     bool m_historyValid = false;
     uint32_t m_refFrames = 0;
@@ -140,9 +144,8 @@ private:
     RenderQuality m_quality = RenderQuality::Realtime;
     uint32_t m_slot = 0;
     gpu::shared::DIPush m_push{};
-    VkDescriptorSet m_alphaTables = VK_NULL_HANDLE;
+    DirectInput m_input{};   // sample()'s, for the passes after it
     VkDescriptorSet m_textures = VK_NULL_HANDLE;
-    VkImageView m_velocityView = VK_NULL_HANDLE;
 
     // The bindless table (binding 12) and the version each slot's set holds.
     std::vector<VkDescriptorImageInfo> m_textureInfos;

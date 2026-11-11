@@ -103,9 +103,12 @@ void CSMPass::record(const render::Frame& frame) {
     // Render each cascade into its layer
     for (uint32_t cascade = 0; cascade < m_cascades; ++cascade) {
         render::Pass pass(frame, nullptr, render::Pass::Raster);
-        // LEGACY(step 4a): the instance and draw tables and the vertex and index arenas are RenderScene's, not
-        // tracked yet.
-        if (haveDraws) m_culling->declareDraws(pass, false);
+        if (haveDraws) {
+            const render::RenderScene::Buffers b = m_renderScene->buffers();
+            pass.read(b.instances, render::BufferUse::Storage).read(b.draws, render::BufferUse::Storage);
+            pass.read(b.vertices, render::BufferUse::Vertex).read(b.indices, render::BufferUse::Index);
+            m_culling->declareDraws(pass, false);
+        }
         pass.depth(m_shadowMap, render::Load::Clear, 1.0f, cascade);
         pass.begin();
 

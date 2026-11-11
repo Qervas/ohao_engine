@@ -30,10 +30,9 @@ public:
         m_depth = depth;
         m_velocity = velocity;
     }
-    // The transparent pass's coverage (R8, SHADER_READ_ONLY when TAA runs): history weighs less
-    // where it is set (sub-project 12, OPEN ruling 15). Null: none bound.
-    // LEGACY(step 4a): the mask is VfxRenderer's, a view until that image is tracked.
-    void setTransparencyMask(VkImageView mask);
+    // The transparent pass's coverage (R8): history weighs less where it is set (sub-project 12, OPEN
+    // ruling 15). Null: none bound.
+    void setTransparencyMask(gpu::Image* mask);
 
     // The current frame's size when it is smaller than the output (onResize's): the resolve upscales.
     void setInputSize(uint32_t width, uint32_t height) noexcept {
@@ -77,7 +76,7 @@ private:
     gpu::Image* m_currentFrame{nullptr};
     gpu::Image* m_velocity{nullptr};
     gpu::Image* m_depth{nullptr};
-    VkImageView m_maskView{VK_NULL_HANDLE};
+    gpu::Image* m_mask{nullptr};
 
     // Double-buffered history
     static constexpr uint32_t HISTORY_COUNT = 2;

@@ -12,7 +12,7 @@
 
 namespace ohao::render {
 
-class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; class GpuPassTimer;
+class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; class Pass; struct Frame;
 
 // The persistent GPU render world: mesh arenas (one BLAS per mesh), a material
 // table, an instance table and a light table. Host edits mark entries dirty; the
@@ -29,7 +29,7 @@ public:
         // shared with the legacy path, whose rebuild wipes and reuses BLAS indices).
         bool rayTracing;
         // VK_KHR_ray_query's rayQuery feature is enabled: compute and fragment shaders
-        // may read the TLAS, so its post-build barrier must reach those stages too.
+        // may read the TLAS (traced() declares it for them).
         bool rayQuery;
     };
     RenderScene();
@@ -56,9 +56,9 @@ public:
     void setSkinPalette(MeshHandle skinned, std::span<const glm::mat4> current, std::span<const glm::mat4> previous,
                         const glm::vec3& boundsMin, const glm::vec3& boundsMax);
     // Before recordUpdates (its TLAS build reads the refit BLASes): the skin, skin.bounds and
-    // rt.blas.refit passes for the skinned meshes whose pose changed, each timed by `timer`
-    // when given. Nothing is recorded when none changed.
-    void recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPassTimer* timer);
+    // rt.blas.refit passes for the skinned meshes whose pose changed, each timed when the frame
+    // has a timer. Nothing is recorded when none changed.
+    void recordSkinning(const Frame& frame);
     // A mesh's vertices as the arena holds them now (blocking: the queue idles). Tests and tools.
     [[nodiscard]] std::vector<Vertex> readMeshVertices(MeshHandle h);
     MaterialHandle registerMaterial(const MaterialDesc& desc);
@@ -124,8 +124,9 @@ public:
     void setEnvIntensity(float scale);
 
     // Start of a frame's command buffer, after the slot's fence was waited. Records
-    // the table copies, then the TLAS build or refit (stats().lastTlasOp).
-    void recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot);
+    // the table copies, then the TLAS build or refit (stats().lastTlasOp). Untimed: the frame times it
+    // (scene.upload).
+    void recordUpdates(const Frame& frame);
     // Called once per frame after the slot's fence wait (retire queue tick).
     void onFrameRetired();
 
@@ -138,7 +139,20 @@ public:
     // instance table). Null when RT is unavailable.
     [[nodiscard]] RTAccelerationStructure* rtAccel() const noexcept;
 
-    // Buffers the passes bind.
+    // The buffers the passes bind, with their state, for a pass's declarations (render/graph/pass.hpp). `draws`
+    // is empty until the first draw list is uploaded.
+    struct Buffers {
+        GpuBuffer &vertices, &indices, &triangleSlots, &meshes, &materials, &materialRefs, &instances, &rtLights,
+            &draws, &meshlets, &meshletVertices, &meshletTriangles;
+    };
+    [[nodiscard]] Buffers buffers() const;
+    // Declares the TLAS and the BLASes under it as read by `pass`'s ray queries or its ray tracing pipeline.
+    void traced(Pass& pass) const;
+    // Declares every buffer above, the TLAS and the BLASes as read by `pass`'s shaders: for a frame whose passes
+    // do not declare what they read.
+    void readAll(Pass& pass) const;
+
+    // The same buffers' handles.
     [[nodiscard]] VkBuffer vertexArena() const;
     [[nodiscard]] VkBuffer indexArena() const;
     [[nodiscard]] VkBuffer triangleSlotBuffer() const;

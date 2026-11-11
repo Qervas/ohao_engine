@@ -129,13 +129,14 @@ void GBufferPass::record(const render::Frame& frame) {
         if (haveScene) m_culling->cull(frame, shared::kCullPhaseLate, shared::kCullListLate, 4, viewProj, m_cameraPos);
     }
     drawPass(frame, true, haveScene);
+}
 
-    // LEGACY(step 4a): RT direct light, RT GI and SSSPass sample the targets and VfxRenderer tests and samples
-    // the depth, undeclared; SSSPass dispatches over the tiles the fragments flagged.
-    render::Pass legacy(frame, nullptr, render::Pass::Compute);
-    for (gpu::Image& target : m_gbuffer) legacy.sampled(target);
-    legacy.read(m_sssTiles, render::BufferUse::Storage).read(m_sssTiles, render::BufferUse::Indirect);
-    legacy.begin();
+void GBufferPass::declareScene(render::Pass& pass, uint32_t slot) {
+    const render::RenderScene::Buffers b = m_renderScene->buffers();
+    for (GpuBuffer* table : {&b.instances, &b.materials, &b.materialRefs, &b.draws})
+        pass.read(*table, render::BufferUse::Storage);
+    pass.read(b.vertices, render::BufferUse::Vertex).read(b.indices, render::BufferUse::Index);
+    pass.read(m_cameraBuffers[slot], render::BufferUse::Uniform);
 }
 
 VkShaderStageFlags GBufferPass::geometryStages() const noexcept {
@@ -156,10 +157,13 @@ void GBufferPass::drawPass(const render::Frame& frame, bool late, bool draw) {
     for (std::size_t i = 0; i < kColorTargets.size(); ++i) pass.color(m_gbuffer[kColorTargets[i]], load, kColorClears[i]);
     pass.depth(m_gbuffer[kDepth], load, 1.0f);
     if (draw) {
-        // LEGACY(step 4a): the scene's tables and arenas are RenderScene's, the textures the texture manager's:
-        // not tracked yet.
+        // The bindless textures are immutable once uploaded and always SHADER_READ_ONLY: nothing to declare.
+        declareScene(pass, frameIndex);
+        const render::RenderScene::Buffers b = m_renderScene->buffers();
+        for (GpuBuffer* arena : {&b.vertices, &b.meshlets, &b.meshletVertices, &b.meshletTriangles})
+            pass.read(*arena, render::BufferUse::Storage);   // the meshlet path pulls its vertices itself
         m_culling->declareDraws(pass, true);
-        pass.read(m_cameraBuffers[frameIndex], render::BufferUse::Uniform).write(m_sssTiles, render::BufferUse::Storage);
+        pass.write(m_sssTiles, render::BufferUse::Storage);
     }
     pass.begin();
 
@@ -248,10 +252,6 @@ void GBufferPass::resetSSSTiles(const render::Frame& frame) {
     vkCmdUpdateBuffer(frame.cmd, m_sssTiles.buffer, 0, sizeof(header), header);
     vkCmdFillBuffer(frame.cmd, m_sssTiles.buffer, sizeof(header), uint64_t(tiles.width) * tiles.height * sizeof(uint32_t),
                     0u);
-}
-
-VkBuffer GBufferPass::materialBuffer() const {
-    return m_renderScene ? m_renderScene->materialBuffer() : VK_NULL_HANDLE;
 }
 
 bool GBufferPass::updateSceneSet(uint32_t frameIndex) {

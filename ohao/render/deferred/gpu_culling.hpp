@@ -161,6 +161,7 @@ private:
     std::vector<std::array<uint32_t, 2>> m_hizSizes;
     uint32_t m_width{0}, m_height{0};
     gpu::Image* m_depth{nullptr};
+    const render::RenderScene* m_scene{nullptr};   // beginFrame's: the tables the frame's culls read
     VkDescriptorSetLayout m_hizSetLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_hizPool{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> m_hizSets;

@@ -82,6 +82,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize SSS pass (separable subsurface scattering blur)
     m_sssPass = std::make_unique<SSSPass>();
+    m_sssPass->setAllocator(allocator);
     if (m_sssPass->initialize(device, physicalDevice)) {
         m_sssPass->setGBufferPass(m_gbufferPass.get());
         OHAO_LOG(Debug, render, "DeferredRenderer: SSSPass OK");
@@ -122,14 +123,14 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // The RT traces alpha-test candidates (sub-project 12): RenderScene's tables (set 1) and the
     // bindless textures (set 2). Without them neither technique initializes.
-    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device, physicalDevice);
+    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device, allocator);
     const VkDescriptorSetLayout alphaTables = m_alphaTablesReady ? m_alphaTables.layout() : VK_NULL_HANDLE;
     const VkDescriptorSetLayout textures = m_textureManager ? m_textureManager->getDescriptorSetLayout() : VK_NULL_HANDLE;
 
     // RT direct light (inline ray queries)
     m_rtDirect = std::make_unique<RTDirectTechnique>();
     m_rtDirect->setAlphaLayouts(alphaTables, textures);
-    if (!m_rayQuery || !m_alphaTablesReady || !m_rtDirect->init(device, physicalDevice, m_width, m_height)) {
+    if (!m_rayQuery || !m_alphaTablesReady || !m_rtDirect->init(device, physicalDevice, allocator, m_width, m_height)) {
         OHAO_LOG(Warn, render, "DeferredRenderer: RT direct light not available (lighting loops over the lights, CSM for the sun)");
         m_rtDirect.reset();
     }
@@ -137,7 +138,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize RT GI technique (inline ray queries)
     m_rtGI = std::make_unique<RTGITechnique>();
     m_rtGI->setAlphaLayouts(alphaTables, textures);
-    if (m_rayQuery && m_rtGI->init(device, physicalDevice, m_width, m_height)) {
+    if (m_rayQuery && m_rtGI->init(device, physicalDevice, allocator, m_width, m_height)) {
         m_useRTGI = true;
         OHAO_LOG(Debug, render, "DeferredRenderer: RTGI OK");
     } else {
@@ -149,9 +150,8 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // flipbooks and materials the bindless textures.
     if (m_rayQuery && m_textureManager) {
         m_vfx = std::make_unique<VfxRenderer>();
-        if (!m_vfx->initialize(device, physicalDevice, textures, m_gbufferPass->sceneSetLayout()) ||
-            !m_vfx->resize(m_width, m_height, m_lightingPass->lit().view, m_gbufferPass->depth().view,
-                           m_lightingPass->lit().image)) {
+        if (!m_vfx->initialize(device, physicalDevice, allocator, textures, m_gbufferPass->sceneSetLayout()) ||
+            !m_vfx->resize(m_width, m_height, m_lightingPass->lit(), m_gbufferPass->depth())) {
             OHAO_LOG(Warn, render, "DeferredRenderer: VfxRenderer failed (no effects or blended surfaces drawn)");
             m_vfx.reset();
         }
@@ -261,14 +261,14 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_lightingPass) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
-        m_lightingPass->setMaterials(m_renderScene ? m_renderScene->materialBuffer() : VK_NULL_HANDLE);
+        m_lightingPass->setMaterials(m_renderScene ? &m_renderScene->buffers().materials : nullptr);
         m_lightingPass->setLights(m_lightClusters ? &m_lightClusters->lightBuffer(frameIndex) : nullptr,
                                   m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u);
         // RT direct light and GI reach lighting only from a frame that traced them: their passes
         // below hand them over after a successful run. Until then lighting loops over the lights
         // (CSM for the sun) and has no indirect light.
-        m_lightingPass->setDirectLight(VK_NULL_HANDLE, VK_NULL_HANDLE);
-        m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
+        m_lightingPass->setDirectLight(nullptr, nullptr);
+        m_lightingPass->setSSGITexture(nullptr, nullptr, VK_NULL_HANDLE);
     }
 
     // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
@@ -276,7 +276,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
     // The RT traces' alpha tables for this slot (its fence was waited on), and the textures.
     const bool alphaSets = m_alphaTablesReady && m_renderScene && m_alphaTables.update(frameIndex, *m_renderScene, m_smokeInGi);
-    const VkDescriptorSet alphaTablesSet = alphaSets ? m_alphaTables.set(frameIndex) : VK_NULL_HANDLE;
     const VkDescriptorSet texturesSet = m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
     // RT direct light replaces the lighting loop's lights and CSM whenever it runs this frame (a
     // TLAS, and lights or emissive triangles to sample); CSM is the fallback's.
@@ -324,28 +323,26 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 3.7. RT direct light: the emissive triangle table (shared with the path tracer, recorded by
     // the frame that draws), then ReSTIR DI's passes. Lighting reads their output and leaves the
     // lights they sample out of its loop.
-    // LEGACY(step 4a): EmissiveLights and RTDirectTechnique record their own barriers; they sample the
-    // G-buffer as GBufferPass and DecalPass leave it.
     const auto directToLighting = [&]() {
         if (m_lightingPass && m_rtDirect->rendered())
-            m_lightingPass->setDirectLight(m_rtDirect->diffuse(), m_rtDirect->specular());
+            m_lightingPass->setDirectLight(&m_rtDirect->diffuse(), &m_rtDirect->specular());
     };
     if (rtDirect) {
         {
             render::Timed timed(frame, "emissive.lights");
             m_emissiveLights->prepare(frameIndex, *m_renderScene);
-            m_emissiveLights->record(cmd, frameIndex, render::EmissiveLights::buffersOf(*m_renderScene), texturesSet);
+            m_emissiveLights->record(frame, *m_renderScene, texturesSet);
         }
         {
             render::Timed timed(frame, "di.sample");
             DirectInput di{};
-            di.positionBuffer = m_gbufferPass->position().view;
-            di.normalBuffer = m_gbufferPass->normal().view;
-            di.albedoBuffer = m_gbufferPass->albedo().view;
-            di.specularBuffer = m_gbufferPass->specular().view;
-            di.openpbrBuffer = m_gbufferPass->openpbr().view;
-            di.layersBuffer = m_gbufferPass->layers().view;
-            di.velocityBuffer = m_gbufferPass->velocity().view;
+            di.positionBuffer = &m_gbufferPass->position();
+            di.normalBuffer = &m_gbufferPass->normal();
+            di.albedoBuffer = &m_gbufferPass->albedo();
+            di.specularBuffer = &m_gbufferPass->specular();
+            di.openpbrBuffer = &m_gbufferPass->openpbr();
+            di.layersBuffer = &m_gbufferPass->layers();
+            di.velocityBuffer = &m_gbufferPass->velocity();
             di.width = m_width;
             di.height = m_height;
             di.frameSlot = frameIndex;
@@ -357,38 +354,34 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             di.halfResolution = !m_directFull;
             di.cameraPos = m_cameraPos;
             di.weather = m_lightingPass ? m_lightingPass->weather() : glm::vec3(0.0f);
-            di.tlas = sceneTlas;
-            di.alphaTables = alphaTablesSet;
+            di.scene = m_renderScene;
+            di.alphaTables = &m_alphaTables;
             di.textures = texturesSet;
-            di.lightData = m_renderScene->rtLightBuffer();
-            di.materials = m_renderScene->materialBuffer();
             di.layers = m_renderScene->anyLayeredMaterial();
             di.emissive = m_emissiveLights;
-            m_rtDirect->sample(cmd, di);
+            m_rtDirect->sample(frame, di);
         }
         {
             render::Timed timed(frame, "di.trace");
-            m_rtDirect->trace(cmd);
+            m_rtDirect->trace(frame);
         }
         {
             render::Timed timed(frame, "di.shade");
-            m_rtDirect->shade(cmd);
+            m_rtDirect->shade(frame);
             if (!m_rtDirect->denoises()) directToLighting();   // reference: the mean is the output
         }
         if (m_quality == RenderQuality::Realtime) {
             render::Timed timed(frame, "di.denoise");
-            m_rtDirect->denoise(cmd);
+            m_rtDirect->denoise(frame);
             directToLighting();
         }
     }
 
     // 3.8. RT GI — one-bounce diffuse indirect light: the trace, then (realtime) the
     // denoiser. Lighting reads it at binding 11.
-    // LEGACY(step 4a): RTGITechnique records its own barriers; it samples the G-buffer as GBufferPass and
-    // DecalPass leave it.
     const auto giToLighting = [&]() {
         if (m_lightingPass && m_rtGI->rendered())
-            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, m_rtGI->getOutput().reflectionView,
+            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLight, m_rtGI->getOutput().reflection,
                                            VK_NULL_HANDLE);
     };
     const bool giTraced = m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass;
@@ -396,11 +389,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         {
             render::Timed timed(frame, "rt.gi");
             GIInput gi{};
-            gi.positionBuffer = m_gbufferPass->position().view;
-            gi.normalBuffer = m_gbufferPass->normal().view;
-            gi.albedoBuffer = m_gbufferPass->albedo().view;
-            gi.layersBuffer = m_gbufferPass->layers().view;
-            gi.velocityBuffer = m_gbufferPass->velocity().view;
+            gi.positionBuffer = &m_gbufferPass->position();
+            gi.normalBuffer = &m_gbufferPass->normal();
+            gi.albedoBuffer = &m_gbufferPass->albedo();
+            gi.layersBuffer = &m_gbufferPass->layers();
+            gi.velocityBuffer = &m_gbufferPass->velocity();
             gi.cameraPos = m_cameraPos;
             gi.width = m_width;
             gi.height = m_height;
@@ -408,20 +401,19 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             gi.renderSeed = m_renderSeed;
             gi.frameSlot = frameIndex;
             gi.quality = m_quality;
-            gi.tlas = sceneTlas;
-            gi.alphaTables = alphaTablesSet;
+            gi.scene = m_renderScene;
+            gi.alphaTables = alphaSets ? &m_alphaTables : nullptr;
             gi.textures = texturesSet;
-            gi.instances = m_renderScene->instanceBuffer();
             gi.lights = m_renderScene->lights();
             gi.envMap = m_envView;
             gi.envIntensity = m_envIntensity;
             gi.emissionIsDirect = rtDirect;
-            m_rtGI->render(cmd, gi);
+            m_rtGI->render(frame, gi);
             if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output
         }
         if (m_quality == RenderQuality::Realtime) {
             render::Timed timed(frame, "rt.gi.denoise");
-            m_rtGI->denoise(cmd);
+            m_rtGI->denoise(frame);
             giToLighting();
         }
     }
@@ -436,60 +428,44 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     VfxRenderer::Lighting vfxLighting{};
     if (vfxOn) {
         m_vfx->prepare(frameIndex, *m_renderScene, {m_view, jitteredProj, m_cameraPos, m_nearPlane});
-        vfxLighting.lights = m_lightClusters ? m_lightClusters->lightBuffer(frameIndex).buffer : VK_NULL_HANDLE;
+        vfxLighting.lights = m_lightClusters ? &m_lightClusters->lightBuffer(frameIndex) : nullptr;
         vfxLighting.lightCount = m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u;
-        vfxLighting.clusters = clustered ? m_lightClusters->clusterBuffer().buffer : VK_NULL_HANDLE;
+        vfxLighting.clusters = clustered ? &m_lightClusters->clusterBuffer() : nullptr;
         vfxLighting.sliceScale = m_lightClusters ? m_lightClusters->sliceScale() : 0.0f;
         vfxLighting.sliceBias = m_lightClusters ? m_lightClusters->sliceBias() : 0.0f;
         vfxLighting.tlas = sceneTlas;
-        vfxLighting.giRadiance = giTraced && m_rtGI->rendered() ? m_rtGI->getOutput().indirectLightView : VK_NULL_HANDLE;
+        vfxLighting.giRadiance = giTraced && m_rtGI->rendered() ? m_rtGI->getOutput().indirectLight : nullptr;
         vfxLighting.envIrradiance = m_envIrradiance;
         vfxLighting.envPrefiltered = m_envPrefiltered;
         vfxLighting.envIntensity = m_envIntensity;
         if (m_vfx->hasParticles()) {
             {
                 render::Timed timed(frame, "vfx.expand");
-                m_vfx->expand(cmd, frameIndex, vfxLighting);
+                m_vfx->expand(frame, *m_renderScene, vfxLighting);
             }
             render::Timed timed(frame, "vfx.sort");
-            m_vfx->sort(cmd, frameIndex);
+            m_vfx->sort(frame);
         }
     }
 
     // 4.7. SSS — separable subsurface scattering blur, in place on the lit image, over the tiles the G-buffer pass flagged for subsurface materials
-    if (m_sssPass && m_sssWanted && m_lightingPass && m_lightingPass->lit()) {
-        gpu::Image& lit = m_lightingPass->lit();
-        {
-            render::Timed timed(frame, "sss");
-            m_sssPass->setLitImage(lit.image, lit.view);
-            m_sssPass->setSubsurfaceDiffuse(m_lightingPass->subsurfaceDiffuse().view);
-            m_sssPass->setCameraPos(m_cameraPos);
-            m_sssPass->execute(cmd, frameIndex);
-        }
-        // LEGACY(step 4a): SSSPass writes the lit image in compute between barriers of its own, which leave
-        // it SHADER_READ_ONLY for the compute and fragment stages.
-        lit.assume(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    if (m_sssPass && m_sssWanted && m_renderScene && m_lightingPass && m_lightingPass->lit()) {
+        render::Timed timed(frame, "sss");
+        m_sssPass->setLitImage(&m_lightingPass->lit());
+        m_sssPass->setSubsurfaceDiffuse(&m_lightingPass->subsurfaceDiffuse());
+        m_sssPass->setMaterials(&m_renderScene->buffers().materials);
+        m_sssPass->setCameraPos(m_cameraPos);
+        m_sssPass->record(frame);
     }
 
     // 4.9. transparent — the blended surfaces and the effects over the lit image, back to front,
     // each with its own blend state, against the G-buffer's depth (sub-project 12); their
     // coverage goes to a mask TAA lowers its history weight under. Before bloom, so it glows.
     if (vfxOn && m_vfx->hasObjects()) {
-        {
-            render::Timed timed(frame, "transparent");
-            m_vfx->drawTransparent(cmd, frameIndex, *m_renderScene, vfxLighting, texturesSet,
-                                   m_gbufferPass->sceneSet(frameIndex));
-        }
-        // LEGACY(step 4a): VfxRenderer copies the lit image and draws into it by barriers and a render pass of
-        // its own, which leave it SHADER_READ_ONLY for the fragment and compute stages.
-        m_lightingPass->lit().assume(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        render::Timed timed(frame, "transparent");
+        m_vfx->drawTransparent(frame, *m_renderScene, vfxLighting, texturesSet, *m_gbufferPass);
     }
-    if (m_postProcessing) m_postProcessing->setTransparencyMask(vfxOn ? m_vfx->transparencyMask() : VK_NULL_HANDLE);
+    if (m_postProcessing) m_postProcessing->setTransparencyMask(vfxOn ? m_vfx->transparencyMask() : nullptr);
 
     // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
     if (m_postProcessing && m_lightingPass) {
@@ -551,8 +527,7 @@ void DeferredRenderer::onResize(uint32_t outWidth, uint32_t outHeight) {
 
     // The transparent pass draws into the new lit image against the new depth.
     if (m_vfx && m_lightingPass && m_gbufferPass &&
-        !m_vfx->resize(width, height, m_lightingPass->lit().view, m_gbufferPass->depth().view,
-                       m_lightingPass->lit().image))
+        !m_vfx->resize(width, height, m_lightingPass->lit(), m_gbufferPass->depth()))
         OHAO_LOG(Error, render, "DeferredRenderer: the transparent pass's targets failed at {}x{}", width, height);
     if (m_decals && m_gbufferPass &&
         !m_decals->resize(m_gbufferPass->albedo(), m_gbufferPass->normal(), m_gbufferPass->position(),

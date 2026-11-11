@@ -145,6 +145,11 @@ Pass& Pass::sampled(gpu::Image& img, Sub sub) {
     return *this;
 }
 
+Pass& Pass::sampledGeneral(gpu::Image& img, Sub sub) {
+    image(img, sub, VK_IMAGE_LAYOUT_GENERAL, shaderStages(), VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false, false);
+    return *this;
+}
+
 Pass& Pass::storageRead(gpu::Image& img, Sub sub) {
     image(img, sub, VK_IMAGE_LAYOUT_GENERAL, shaderStages(), VK_ACCESS_2_SHADER_STORAGE_READ_BIT, false, false);
     return *this;
@@ -271,6 +276,12 @@ Pass& Pass::write(GpuBuffer& buf, BufferUse use) {
         buffer(buf, shader, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT, true);
         break;
     }
+    return *this;
+}
+
+Pass& Pass::readWrite(GpuBuffer& buf, BufferUse use) {
+    if (use != BufferUse::CopySrc && use != BufferUse::CopyDst) return write(buf, use);
+    buffer(buf, kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
     return *this;
 }
 

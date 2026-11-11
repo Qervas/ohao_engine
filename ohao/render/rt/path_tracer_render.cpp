@@ -88,10 +88,14 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
     timePass("emissive.lights");
-    m_emissive->record(cmd, frameSlot,
-                       {m_vertexArena, m_indexArena, m_meshTable, m_triangleSlots, m_materialTable, m_instances,
-                        m_materialRefs},
-                       m_textureSet);
+    if (m_scene) {
+        const render::Frame frame{cmd, nullptr, frameSlot};
+        m_emissive->record(frame, *m_scene, m_textureSet);
+        // LEGACY(step 4a): this frame's traces sample the power image (in GENERAL) and read the lights undeclared.
+        render::Pass legacy(frame, nullptr, render::Pass::RayTracing);
+        legacy.sampledGeneral(m_emissive->power()).read(m_emissive->lights(), render::BufferUse::Storage);
+        legacy.begin();
+    }
     // Caustics step 2: the owned casters' triangles, clusters and cones, rebuilt every frame the pass runs.
     if (manifoldOn) {
         timePass("pt.manifold.gather");

@@ -185,19 +185,21 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
-    // Skinned poses first: the TLAS build in recordUpdates reads the refit BLASes.
-    m_renderScene->recordSkinning(cmd, m_currentFrame, &m_passTimer);
-    m_passTimer.begin(cmd, "scene.upload");
-    // A spot light's mesh shines toward this frame's camera as the light does (its cone).
+    const render::Frame recording{cmd, &m_passTimer, m_currentFrame};
+    // A spot light's mesh shines toward this frame's camera as the light does (its cone). Before anything is
+    // recorded: a light's first emitter mesh is a load, which the queue runs before this frame.
     if (m_camera) m_renderScene->setViewerPosition(m_camera->getPosition());
-    m_renderScene->recordUpdates(cmd, m_currentFrame);
-    m_passTimer.end(cmd);
+    // Skinned poses first: the TLAS build in recordUpdates reads the refit BLASes.
+    m_renderScene->recordSkinning(recording);
+    {
+        render::Timed timed(recording, "scene.upload");
+        m_renderScene->recordUpdates(recording);
+    }
 
     // Execute deferred rendering pipeline (it times its own passes)
     m_deferredRenderer->render(cmd, m_currentFrame);
 
     // A preview request: only the preview reaches the staging buffer (capture.preview).
-    const render::Frame recording{cmd, &m_passTimer, m_currentFrame};
     const bool previewed = wantReadback && preview && recordPreview(recording, *preview);
     const bool copyFull = wantReadback && !previewed;
 
@@ -341,12 +343,25 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
-    m_renderScene->recordSkinning(cmd, m_currentFrame, &m_passTimer);
-    m_passTimer.begin(cmd, "scene.upload");
-    // A spot light's mesh shines toward this frame's camera as the light does (its cone).
+    const render::Frame recording{cmd, &m_passTimer, m_currentFrame};
+    // A spot light's mesh shines toward this frame's camera as the light does (its cone). Before anything is
+    // recorded: a light's first emitter mesh is a load, which the queue runs before this frame.
     if (m_camera) m_renderScene->setViewerPosition(m_camera->getPosition());
-    m_renderScene->recordUpdates(cmd, m_currentFrame);
-    m_passTimer.end(cmd);
+    m_renderScene->recordSkinning(recording);
+    {
+        render::Timed timed(recording, "scene.upload");
+        m_renderScene->recordUpdates(recording);
+    }
+    // LEGACY(step 4a): the path tracer's frame reads the scene's tables, arenas and acceleration structures
+    // undeclared, in its ray tracing and compute shaders (PathTracer's frame, not moved yet).
+    {
+        render::Pass rays(recording, nullptr, render::Pass::RayTracing);
+        m_renderScene->readAll(rays);
+        rays.begin();
+        render::Pass compute(recording, nullptr, render::Pass::Compute);
+        m_renderScene->readAll(compute);
+        compute.begin();
+    }
     // The traced scene changed (TLAS built or refit, instance data or lights
     // uploaded): treat it like a view change. Accumulating profiles restart; the
     // realtime profile flags the frame and keeps its denoiser history. A still

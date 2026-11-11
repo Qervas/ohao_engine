@@ -2,6 +2,9 @@
 #include "render/shader_bindings/rt_di_denoise.hpp"
 #include "render/shader_bindings/rt_restir_di.hpp"
 #include "render/rt/emissive_lights.hpp"
+#include "render/rt/rt_alpha_tables.hpp"
+#include "render/rt/rt_compute.hpp"
+#include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 #include <algorithm>
 
@@ -18,22 +21,10 @@ constexpr VkFormat kMeanFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 constexpr VkFormat kGuideFormat = VK_FORMAT_R32G32_SFLOAT;
 constexpr VkImageUsageFlags kStorage = VK_IMAGE_USAGE_STORAGE_BIT;
 constexpr VkImageUsageFlags kStorageSampled = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-constexpr VkPipelineStageFlags kCompute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-constexpr VkPipelineStageFlags kFragment = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 constexpr VkImageLayout kGeneral = VK_IMAGE_LAYOUT_GENERAL;
 constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-constexpr VkAccessFlags kReadWrite = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
 constexpr uint32_t kFlagReference = 1u;
 constexpr uint32_t kFlagHistory = 2u;
-
-// A full memory dependency between compute dispatches (and from earlier frames' readers).
-void barrier(VkCommandBuffer cmd, VkPipelineStageFlags src, VkPipelineStageFlags dst = kCompute) {
-    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    b.srcAccessMask = kReadWrite;
-    b.dstAccessMask = kReadWrite;
-    vkCmdPipelineBarrier(cmd, src, dst, 0, 1, &b, 0, nullptr, 0, nullptr);
-}
 
 } // namespace
 
@@ -62,13 +53,15 @@ void RTDirectTechnique::setBindlessTextures(std::span<const VkImageView> views, 
     ++m_textureVersion;
 }
 
-bool RTDirectTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t width, uint32_t height) {
+bool RTDirectTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator, uint32_t width,
+                             uint32_t height) {
     m_device = device;
     m_physicalDevice = physicalDevice;
+    m_allocator = &allocator;
     m_width = std::max(width, 1u);
     m_height = std::max(height, 1u);
-    if (!rtc::createImage(device, physicalDevice, m_meanDummy, kMeanFormat, kStorageSampled, 1, 1) ||
-        !createScreenImages()) {
+    m_meanDummy = allocator.createImage({"di.dummy.mean", kMeanFormat, 1, 1, kStorageSampled});
+    if (!m_meanDummy || !createScreenImages()) {
         OHAO_LOG(Error, render, "RT direct light: failed to create its images");
         return false;
     }
@@ -85,19 +78,29 @@ bool RTDirectTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, u
 }
 
 bool RTDirectTechnique::createScreenImages() {
-    const auto make = [&](Image& img, VkFormat format, VkImageUsageFlags usage) {
-        return rtc::createImage(m_device, m_physicalDevice, img, format, usage, m_width, m_height);
+    const auto make = [&](Image& img, const char* name, VkFormat format, VkImageUsageFlags usage) {
+        img = m_allocator->createImage({name, format, m_width, m_height, usage});
+        return static_cast<bool>(img);
     };
-    bool ok = make(m_midA, kReservoirFormat, kStorage) && make(m_midB, kReservoirFormat, kStorage) &&
-              make(m_noisyDiffuse, kLightFormat, kStorage) && make(m_noisySpecular, kLightFormat, kStorage) &&
-              make(m_tmpDiffuse, kLightFormat, kStorage) && make(m_tmpSpecular, kLightFormat, kStorage) &&
-              make(m_outDiffuse, kLightFormat, kStorageSampled) && make(m_outSpecular, kLightFormat, kStorageSampled);
+    static constexpr const char* kPair[2][8] = {
+        {"di.reservoir.a0", "di.reservoir.b0", "di.history.diffuse0", "di.history.specular0", "di.surface.a0",
+         "di.surface.b0", "di.guide0", "di.moments0"},
+        {"di.reservoir.a1", "di.reservoir.b1", "di.history.diffuse1", "di.history.specular1", "di.surface.a1",
+         "di.surface.b1", "di.guide1", "di.moments1"}};
+    bool ok = make(m_midA, "di.reservoir.mid.a", kReservoirFormat, kStorage) &&
+              make(m_midB, "di.reservoir.mid.b", kReservoirFormat, kStorage) &&
+              make(m_noisyDiffuse, "di.noisy.diffuse", kLightFormat, kStorage) &&
+              make(m_noisySpecular, "di.noisy.specular", kLightFormat, kStorage) &&
+              make(m_tmpDiffuse, "di.tmp.diffuse", kLightFormat, kStorage) &&
+              make(m_tmpSpecular, "di.tmp.specular", kLightFormat, kStorage) &&
+              make(m_outDiffuse, "di.out.diffuse", kLightFormat, kStorageSampled) &&
+              make(m_outSpecular, "di.out.specular", kLightFormat, kStorageSampled);
     for (uint32_t i = 0; i < 2 && ok; ++i)
-        ok = make(m_resA[i], kReservoirFormat, kStorage) && make(m_resB[i], kReservoirFormat, kStorage) &&
-             make(m_histDiffuse[i], kLightFormat, kStorage) && make(m_histSpecular[i], kLightFormat, kStorage) &&
-             make(m_surfA[i], kReservoirFormat, kStorage) && make(m_surfB[i], kReservoirFormat, kStorage) &&
-             make(m_guide[i], kGuideFormat, kStorage) && make(m_moments[i], kMeanFormat, kStorage);
-    m_imagesReady = false;
+        ok = make(m_resA[i], kPair[i][0], kReservoirFormat, kStorage) && make(m_resB[i], kPair[i][1], kReservoirFormat, kStorage) &&
+             make(m_histDiffuse[i], kPair[i][2], kLightFormat, kStorage) &&
+             make(m_histSpecular[i], kPair[i][3], kLightFormat, kStorage) &&
+             make(m_surfA[i], kPair[i][4], kReservoirFormat, kStorage) && make(m_surfB[i], kPair[i][5], kReservoirFormat, kStorage) &&
+             make(m_guide[i], kPair[i][6], kGuideFormat, kStorage) && make(m_moments[i], kPair[i][7], kMeanFormat, kStorage);
     m_historyValid = false;
     m_refFrames = 0;
     return ok;
@@ -106,18 +109,19 @@ bool RTDirectTechnique::createScreenImages() {
 void RTDirectTechnique::destroyScreenImages() {
     for (Image* img : {&m_midA, &m_midB, &m_noisyDiffuse, &m_noisySpecular, &m_tmpDiffuse, &m_tmpSpecular,
                        &m_outDiffuse, &m_outSpecular, &m_meanDiffuse, &m_meanSpecular})
-        rtc::destroyImage(m_device, *img);
+        m_allocator->retire(*img);
     for (uint32_t i = 0; i < 2; ++i)
         for (Image* img : {&m_resA[i], &m_resB[i], &m_histDiffuse[i], &m_histSpecular[i], &m_surfA[i], &m_surfB[i],
                            &m_guide[i], &m_moments[i]})
-            rtc::destroyImage(m_device, *img);
+            m_allocator->retire(*img);
 }
 
 bool RTDirectTechnique::ensureReferenceImages() {
-    if (m_meanDiffuse.image) return true;
+    if (m_meanDiffuse) return true;
     m_refFrames = 0;
-    return rtc::createImage(m_device, m_physicalDevice, m_meanDiffuse, kMeanFormat, kStorageSampled, m_width, m_height) &&
-           rtc::createImage(m_device, m_physicalDevice, m_meanSpecular, kMeanFormat, kStorageSampled, m_width, m_height);
+    m_meanDiffuse = m_allocator->createImage({"di.mean.diffuse", kMeanFormat, m_width, m_height, kStorageSampled});
+    m_meanSpecular = m_allocator->createImage({"di.mean.specular", kMeanFormat, m_width, m_height, kStorageSampled});
+    return m_meanDiffuse && m_meanSpecular;
 }
 
 bool RTDirectTechnique::createDescriptorResources() {
@@ -213,19 +217,20 @@ void RTDirectTechnique::writeSampleSet(const DirectInput& input) {
     const bool reference = m_quality == RenderQuality::Reference;
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
     asWrite.accelerationStructureCount = 1;
-    asWrite.pAccelerationStructures = &input.tlas;
+    const VkAccelerationStructureKHR tlas = input.scene->tlas();
+    asWrite.pAccelerationStructures = &tlas;
     const VkDescriptorImageInfo gbuf[6] = {
-        {VK_NULL_HANDLE, input.positionBuffer, kReadOnly}, {VK_NULL_HANDLE, input.normalBuffer, kReadOnly},
-        {VK_NULL_HANDLE, input.albedoBuffer, kReadOnly},   {VK_NULL_HANDLE, input.specularBuffer, kReadOnly},
-        {VK_NULL_HANDLE, input.openpbrBuffer, kReadOnly},  {VK_NULL_HANDLE, input.velocityBuffer, kReadOnly},
+        {VK_NULL_HANDLE, input.positionBuffer->view, kReadOnly}, {VK_NULL_HANDLE, input.normalBuffer->view, kReadOnly},
+        {VK_NULL_HANDLE, input.albedoBuffer->view, kReadOnly},   {VK_NULL_HANDLE, input.specularBuffer->view, kReadOnly},
+        {VK_NULL_HANDLE, input.openpbrBuffer->view, kReadOnly},  {VK_NULL_HANDLE, input.velocityBuffer->view, kReadOnly},
     };
     const VkDescriptorBufferInfo tables{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo materials{input.materials, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo lights{input.lightData, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo emissiveLights{input.emissive->lightBuffer(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo emissiveRanges{input.emissive->rangeBuffer(m_slot), 0, VK_WHOLE_SIZE};
-    const VkDescriptorImageInfo power{VK_NULL_HANDLE, input.emissive->powerView(), kGeneral};
-    const VkDescriptorImageInfo layers{VK_NULL_HANDLE, input.layersBuffer, kReadOnly};
+    const VkDescriptorBufferInfo materials{input.scene->materialBuffer(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo lights{input.scene->rtLightBuffer(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo emissiveLights{input.emissive->lights().buffer, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo emissiveRanges{input.emissive->ranges(m_slot).buffer, 0, VK_WHOLE_SIZE};
+    const VkDescriptorImageInfo power{VK_NULL_HANDLE, input.emissive->power().view, kGeneral};
+    const VkDescriptorImageInfo layers{VK_NULL_HANDLE, input.layersBuffer->view, kReadOnly};
     const VkImageView mean[2] = {reference ? m_meanDiffuse.view : m_meanDummy.view,
                                  reference ? m_meanSpecular.view : m_meanDummy.view};
     // 8-9 last frame's reservoirs, 13-16 this frame's, 17-20 the light, 21-24 the surfaces (this
@@ -281,21 +286,37 @@ void RTDirectTechnique::writeSampleSet(const DirectInput& input) {
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
-void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
+void RTDirectTechnique::declareInputs(render::Pass& pass) {
+    const DirectInput& in = m_input;
+    for (gpu::Image* g : {in.positionBuffer, in.normalBuffer, in.albedoBuffer, in.specularBuffer, in.openpbrBuffer,
+                          in.velocityBuffer, in.layersBuffer})
+        pass.sampled(*g);
+    in.alphaTables->declare(pass, m_slot, *in.scene);
+    const render::RenderScene::Buffers scene = in.scene->buffers();
+    pass.read(scene.rtLights, render::BufferUse::Storage);   // the materials are among the alpha tables
+    pass.read(in.emissive->lights(), render::BufferUse::Storage).read(in.emissive->ranges(m_slot), render::BufferUse::Storage);
+    pass.sampledGeneral(in.emissive->power());
+    // LEGACY(step 4a): OpenPBR's tables are an OpenPBRTablesBuffer, not tracked yet.
+    // The bindless textures are immutable once uploaded and always SHADER_READ_ONLY: nothing to declare.
+}
+
+void RTDirectTechnique::sample(const render::Frame& frame, const DirectInput& input) {
     m_rendered = false;
-    if (!m_initial || input.tlas == VK_NULL_HANDLE || input.alphaTables == VK_NULL_HANDLE ||
-        input.textures == VK_NULL_HANDLE || input.lightData == VK_NULL_HANDLE || input.materials == VK_NULL_HANDLE ||
-        !input.emissive || input.frameSlot >= MAX_FRAMES_IN_FLIGHT || input.velocityBuffer == VK_NULL_HANDLE ||
-        input.layersBuffer == VK_NULL_HANDLE)
+    if (!m_initial || !input.scene || input.scene->tlas() == VK_NULL_HANDLE || !input.alphaTables ||
+        input.alphaTables->set(input.frameSlot) == VK_NULL_HANDLE || input.textures == VK_NULL_HANDLE ||
+        input.scene->rtLightBuffer() == VK_NULL_HANDLE || input.scene->materialBuffer() == VK_NULL_HANDLE ||
+        !input.emissive || input.frameSlot >= MAX_FRAMES_IN_FLIGHT)
         return;
+    for (const gpu::Image* g : {input.positionBuffer, input.normalBuffer, input.albedoBuffer, input.specularBuffer,
+                                input.openpbrBuffer, input.velocityBuffer, input.layersBuffer})
+        if (!g || !*g) return;
     const bool reference = input.quality == RenderQuality::Reference;
     if (reference && !ensureReferenceImages()) return;
     m_quality = input.quality;
     m_layers = input.layers;
     m_slot = input.frameSlot;
-    m_alphaTables = input.alphaTables;
+    m_input = input;
     m_textures = input.textures;
-    m_velocityView = input.velocityBuffer;
     if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
     if (!reference) m_refFrames = 0;              // a realtime frame breaks the reference run
     const uint32_t shift = !reference && input.halfResolution ? 1u : 0u;
@@ -304,25 +325,7 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
     m_traceWidth = (m_width + shift) >> shift;
     m_traceHeight = (m_height + shift) >> shift;
     m_cur ^= 1u;
-
-    // Earlier frames' readers of these images (the passes, lighting) finish first; new images
-    // start in GENERAL.
-    barrier(cmd, kCompute | kFragment);
-    if (!m_imagesReady) {
-        for (Image* img : {&m_midA, &m_midB, &m_noisyDiffuse, &m_noisySpecular, &m_tmpDiffuse, &m_tmpSpecular,
-                           &m_resA[0], &m_resA[1], &m_resB[0], &m_resB[1], &m_histDiffuse[0], &m_histDiffuse[1],
-                           &m_histSpecular[0], &m_histSpecular[1], &m_surfA[0], &m_surfA[1], &m_surfB[0],
-                           &m_surfB[1], &m_guide[0], &m_guide[1], &m_moments[0], &m_moments[1],
-                           &m_meanDummy})
-            rtc::transition(cmd, *img, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute, kReadWrite, true);
-        m_imagesReady = true;
-        m_historyValid = false;
-    }
-    if (reference) {
-        for (Image* img : {&m_meanDiffuse, &m_meanSpecular})
-            rtc::transition(cmd, *img, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, kReadWrite,
-                            img->layout == VK_IMAGE_LAYOUT_UNDEFINED);
-    }
+    const uint32_t prev = m_cur ^ 1u;
 
     m_push = {};
     m_push.extent = {m_width, m_height, input.frameIndex, input.renderSeed};
@@ -333,45 +336,55 @@ void RTDirectTechnique::sample(VkCommandBuffer cmd, const DirectInput& input) {
     m_push.trace = {m_traceWidth, m_traceHeight, m_shift, 0u};
     writeSampleSet(input);
 
-    dispatchSample(cmd, m_initial, m_traceWidth, m_traceHeight);
+    // Each trace pixel's surface and its reservoir after the temporal reuse of last frame's.
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    declareInputs(pass);
+    pass.storageRead(m_resA[prev]).storageRead(m_resB[prev]).storageRead(m_surfA[prev]).storageRead(m_surfB[prev]);
+    for (Image* img : {&m_surfA[m_cur], &m_surfB[m_cur], &m_midA, &m_midB}) pass.storageWrite(*img, render::Old::Keep);
+    pass.begin();
+    dispatchSample(frame.cmd, m_initial, m_traceWidth, m_traceHeight);
     m_rendered = true;
 }
 
 void RTDirectTechnique::dispatchSample(VkCommandBuffer cmd, VkPipeline pipeline, uint32_t width, uint32_t height) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    const VkDescriptorSet sets[] = {m_sampleSets[m_slot], m_alphaTables, m_textures};
+    const VkDescriptorSet sets[] = {m_sampleSets[m_slot], m_input.alphaTables->set(m_slot), m_textures};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sampleLayout, 0, 3, sets, 0, nullptr);
     vkCmdPushConstants(cmd, m_sampleLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(m_push), &m_push);
     vkCmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
-    barrier(cmd, kCompute);
 }
 
-void RTDirectTechnique::trace(VkCommandBuffer cmd) {
+void RTDirectTechnique::trace(const render::Frame& frame) {
     if (!m_rendered) return;
-    dispatchSample(cmd, m_spatial, m_traceWidth, m_traceHeight);
+    // The spatial reuse of the neighbours' reservoirs and the final ray.
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    declareInputs(pass);
+    pass.storageRead(m_midA).storageRead(m_midB).storageRead(m_surfA[m_cur]).storageRead(m_surfB[m_cur]);
+    pass.storageWrite(m_resA[m_cur], render::Old::Keep).storageWrite(m_resB[m_cur], render::Old::Keep);
+    pass.begin();
+    dispatchSample(frame.cmd, m_spatial, m_traceWidth, m_traceHeight);
 }
 
-void RTDirectTechnique::shade(VkCommandBuffer cmd) {
+void RTDirectTechnique::shade(const render::Frame& frame) {
     if (!m_rendered) return;
     const bool reference = m_quality == RenderQuality::Reference;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layers ? m_shadeLayered : m_shade);
-    const VkDescriptorSet sets[] = {m_sampleSets[m_slot], m_alphaTables, m_textures};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sampleLayout, 0, 3, sets, 0, nullptr);
-    vkCmdPushConstants(cmd, m_sampleLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(m_push), &m_push);
-    vkCmdDispatch(cmd, (m_width + 7) / 8, (m_height + 7) / 8, 1);
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    declareInputs(pass);
+    pass.storageRead(m_resA[m_cur]).storageRead(m_resB[m_cur]).storageRead(m_surfA[m_cur]).storageRead(m_surfB[m_cur]);
+    for (Image* img : {&m_guide[m_cur], &m_noisyDiffuse, &m_noisySpecular}) pass.storageWrite(*img, render::Old::Keep);
+    if (reference) pass.storageReadWrite(m_meanDiffuse).storageReadWrite(m_meanSpecular);   // the running means
+    else pass.storageRead(m_meanDummy);                                                     // bound, never accessed
+    pass.begin();
+    dispatchSample(frame.cmd, m_layers ? m_shadeLayered : m_shade, m_width, m_height);
     if (reference) {
         ++m_refFrames;
-        for (Image* img : {&m_meanDiffuse, &m_meanSpecular})
-            rtc::transition(cmd, *img, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment,
-                            VK_ACCESS_SHADER_READ_BIT, false);
         m_historyValid = false;
-    } else {
-        barrier(cmd, kCompute);   // the denoiser reads the light and the guide
     }
 }
 
-void RTDirectTechnique::denoise(VkCommandBuffer cmd) {
+void RTDirectTechnique::denoise(const render::Frame& frame) {
     if (!denoises()) return;
+    const VkCommandBuffer cmd = frame.cmd;
     const uint32_t prev = m_cur ^ 1u;
     namespace D = shader::rt_di_denoise;
     using Views = std::array<std::pair<shader::Binding, VkImageView>, D::kSet0.size()>;
@@ -396,46 +409,55 @@ void RTDirectTechnique::denoise(VkCommandBuffer cmd) {
     };
     const auto& sets = m_denoiseSets[m_slot];
     // The views every pass binds: the noisy light, the guides, the velocity, the accumulations.
-    const auto views = [&](VkImageView in0, VkImageView in1, VkImageView out0, VkImageView out1) {
+    const auto views = [&](Image& in0, Image& in1, Image& out0, Image& out1) {
         return Views{{{D::noisyDiffuse, m_noisyDiffuse.view},
                       {D::noisySpecular, m_noisySpecular.view},
                       {D::prevGuide, m_guide[prev].view},
                       {D::guide, m_guide[m_cur].view},
-                      {D::gVelocity, m_velocityView},
+                      {D::gVelocity, m_input.velocityBuffer->view},
                       {D::histPrevDiffuse, m_histDiffuse[prev].view},
                       {D::histPrevSpecular, m_histSpecular[prev].view},
-                      {D::inDiffuse, in0},
-                      {D::inSpecular, in1},
-                      {D::outDiffuse, out0},
-                      {D::outSpecular, out1},
+                      {D::inDiffuse, in0.view},
+                      {D::inSpecular, in1.view},
+                      {D::outDiffuse, out0.view},
+                      {D::outSpecular, out1.view},
                       {D::prevMoments, m_moments[prev].view},
                       {D::moments, m_moments[m_cur].view}}};
     };
-    // temporal: noisy + last frame's accumulation (guided by last frame's guides) -> this frame's.
-    run(m_temporal, sets[0],
-        views(m_histDiffuse[m_cur].view, m_histSpecular[m_cur].view, m_tmpDiffuse.view, m_tmpSpecular.view), 1u);
-    barrier(cmd, kCompute);
+    // temporal: noisy + last frame's accumulation (guided by last frame's guides) -> this frame's (bound as the
+    // a-trous input) and its moments.
+    {
+        render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.sampled(*m_input.velocityBuffer);
+        for (Image* img : {&m_noisyDiffuse, &m_noisySpecular, &m_guide[prev], &m_guide[m_cur], &m_histDiffuse[prev],
+                           &m_histSpecular[prev], &m_moments[prev]})
+            pass.storageRead(*img);
+        for (Image* img : {&m_histDiffuse[m_cur], &m_histSpecular[m_cur], &m_moments[m_cur]})
+            pass.storageWrite(*img, render::Old::Keep);
+        pass.begin();
+        run(m_temporal, sets[0], views(m_histDiffuse[m_cur], m_histSpecular[m_cur], m_tmpDiffuse, m_tmpSpecular), 1u);
+    }
     // a-trous, steps 1, 2 and 4: the accumulation -> out -> tmp -> out, the output lighting reads.
-    for (Image* img : {&m_outDiffuse, &m_outSpecular})
-        rtc::transition(cmd, *img, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT, true);
-    run(m_atrous, sets[1],
-        views(m_histDiffuse[m_cur].view, m_histSpecular[m_cur].view, m_outDiffuse.view, m_outSpecular.view), 1u);
-    barrier(cmd, kCompute);
-    run(m_atrous, sets[2], views(m_outDiffuse.view, m_outSpecular.view, m_tmpDiffuse.view, m_tmpSpecular.view), 2u);
-    barrier(cmd, kCompute);
-    run(m_atrous, sets[3], views(m_tmpDiffuse.view, m_tmpSpecular.view, m_outDiffuse.view, m_outSpecular.view), 4u);
-    for (Image* img : {&m_outDiffuse, &m_outSpecular})
-        rtc::transition(cmd, *img, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment, VK_ACCESS_SHADER_READ_BIT,
-                        false);
+    const auto atrous = [&](VkDescriptorSet set, Image& in0, Image& in1, Image& out0, Image& out1, render::Old old,
+                            uint32_t step) {
+        render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.storageRead(in0).storageRead(in1).storageRead(m_guide[m_cur]).storageRead(m_moments[m_cur]);
+        pass.storageWrite(out0, old).storageWrite(out1, old);
+        pass.begin();
+        run(m_atrous, set, views(in0, in1, out0, out1), step);
+    };
+    atrous(sets[1], m_histDiffuse[m_cur], m_histSpecular[m_cur], m_outDiffuse, m_outSpecular, render::Old::Discard, 1u);
+    atrous(sets[2], m_outDiffuse, m_outSpecular, m_tmpDiffuse, m_tmpSpecular, render::Old::Keep, 2u);
+    atrous(sets[3], m_tmpDiffuse, m_tmpSpecular, m_outDiffuse, m_outSpecular, render::Old::Keep, 4u);
     m_historyValid = true;
 }
 
-VkImageView RTDirectTechnique::diffuse() const noexcept {
-    return m_quality == RenderQuality::Reference ? m_meanDiffuse.view : m_outDiffuse.view;
+gpu::Image& RTDirectTechnique::diffuse() noexcept {
+    return m_quality == RenderQuality::Reference ? m_meanDiffuse : m_outDiffuse;
 }
 
-VkImageView RTDirectTechnique::specular() const noexcept {
-    return m_quality == RenderQuality::Reference ? m_meanSpecular.view : m_outSpecular.view;
+gpu::Image& RTDirectTechnique::specular() noexcept {
+    return m_quality == RenderQuality::Reference ? m_meanSpecular : m_outSpecular;
 }
 
 void RTDirectTechnique::resize(uint32_t width, uint32_t height) {
@@ -462,7 +484,7 @@ void RTDirectTechnique::destroy() {
     for (VkDescriptorSetLayout* l : {&m_sampleSetLayout, &m_denoiseSetLayout})
         if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     destroyScreenImages();
-    rtc::destroyImage(m_device, m_meanDummy);
+    m_allocator->retire(m_meanDummy);
     m_openpbrTables.destroy();
     m_sampleSets = {};
     m_denoiseSets = {};

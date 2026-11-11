@@ -86,8 +86,8 @@ void TAAPass::record(const render::Frame& frame) {
     writeDescriptorSet(frame.slot, 1 - outputIndex);
 
     render::Pass pass(frame, "post.taa", render::Pass::Raster);
-    // LEGACY(step 4a): the mask is VfxRenderer's, not tracked yet.
     pass.sampled(*m_currentFrame).sampled(history);
+    if (m_mask) pass.sampled(*m_mask);
     if (m_velocity) pass.sampled(*m_velocity);
     if (m_depth) pass.sampled(*m_depth);
     pass.color(m_history[outputIndex], render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}});
@@ -110,7 +110,7 @@ void TAAPass::record(const render::Frame& frame) {
     params.flags = 0;
     if (m_velocity && *m_velocity) params.flags |= 1;
     if (m_useVarianceClipping) params.flags |= 2;
-    if (m_maskView != VK_NULL_HANDLE) params.flags |= 4;   // the transparency mask is bound
+    if (m_mask) params.flags |= 4;   // the transparency mask is bound
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
 
@@ -147,8 +147,8 @@ glm::vec2 TAAPass::getJitterOffset(uint32_t frameIndex) const {
     return 2.0f * m_jitterSequence[frameIndex % (upscales() ? UPSCALE_JITTER_SAMPLES : JITTER_SAMPLES)] / input;
 }
 
-void TAAPass::setTransparencyMask(VkImageView mask) {
-    m_maskView = mask;
+void TAAPass::setTransparencyMask(gpu::Image* mask) {
+    m_mask = mask && *mask ? mask : nullptr;
 }
 
 void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
@@ -169,7 +169,7 @@ void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
         {T::historyFrame, {m_sampler, m_history[historyIdx].view, kRead}},      // the opposite buffer
         {T::velocityBuffer, {m_sampler, pick(velocityView), kRead}},            // the shader's flags skip a fallback
         {T::depthBuffer, {m_sampler, pick(depthView), depthLayout}},
-        {T::transparencyMask, {m_sampler, pick(m_maskView), kRead}},            // flag bit 2 says it is bound
+        {T::transparencyMask, {m_sampler, pick(m_mask ? m_mask->view : VkImageView{VK_NULL_HANDLE}), kRead}},            // flag bit 2 says it is bound
     }};
     std::array<VkWriteDescriptorSet, T::kSet0.size()> writes{};
     for (std::size_t i = 0; i < images.size(); ++i) {

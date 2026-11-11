@@ -232,7 +232,7 @@ void DecalPass::record(const render::Frame& frame, const View& view, VkDescripto
     const VkExtent2D extent = m_albedo->extent();
 
     {
-        // LEGACY(step 4a): the textures are the texture manager's, not tracked yet.
+        // The bindless textures are immutable once uploaded and always SHADER_READ_ONLY: nothing to declare.
         render::Pass pass(frame, nullptr, render::Pass::Raster);
         pass.read(s.decals, render::BufferUse::Storage)
             .sampled(*m_position)
@@ -252,11 +252,6 @@ void DecalPass::record(const render::Frame& frame, const View& view, VkDescripto
                            &pc);
         vkCmdDraw(cmd, kDecalVertices, s.count, 0, 0);
     }
-
-    // LEGACY(step 4a): RT direct light, RT GI and SSSPass sample the decaled targets undeclared.
-    render::Pass legacy(frame, nullptr, render::Pass::Compute);
-    legacy.sampled(*m_albedo).sampled(*m_normal);
-    legacy.begin();
 }
 
 } // namespace ohao

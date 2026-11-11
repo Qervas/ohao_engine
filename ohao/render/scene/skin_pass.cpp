@@ -2,6 +2,7 @@
 #include "render/shader_bindings/skin_skin.hpp"
 
 #include "core/log.hpp"
+#include "render/rt/rt_compute.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
@@ -14,9 +15,9 @@ constexpr uint32_t kBindings = shader::skin_skin::kSet0.size();   // vertices, p
 constexpr VkDeviceSize kMinPaletteBytes = 64u * 1024u;
 }
 
-bool SkinPass::initialize(VkDevice device, VkPhysicalDevice physical) {
+bool SkinPass::initialize(VkDevice device, GpuAllocator& allocator) {
     m_device = device;
-    m_physical = physical;
+    m_allocator = &allocator;
     std::array<VkDescriptorSetLayoutBinding, kBindings> bindings{};
     for (uint32_t i = 0; i < kBindings; ++i) bindings[i] = shader::layoutBinding(shader::skin_skin::kSet0[i]);
     VkDescriptorSetLayoutCreateInfo li{};
@@ -52,7 +53,7 @@ bool SkinPass::initialize(VkDevice device, VkPhysicalDevice physical) {
 void SkinPass::shutdown() {
     if (m_device == VK_NULL_HANDLE) return;
     for (Slot& s : m_slots) {
-        rtc::destroyHostBuffer(m_device, s.palettes);
+        m_allocator->destroyBuffer(s.palettes);
         s = Slot{};
     }
     for (VkPipeline* p : {&m_skin, &m_bounds})
@@ -64,24 +65,28 @@ void SkinPass::shutdown() {
     m_device = VK_NULL_HANDLE;
 }
 
-bool SkinPass::prepare(uint32_t slotIndex, std::span<const Job> jobs, VkBuffer vertexArena, VkBuffer meshletArena,
-                       VkBuffer meshletVertexArena) {
+bool SkinPass::prepare(uint32_t slotIndex, std::span<const Job> jobs, GpuBuffer& vertexArena, GpuBuffer& meshletArena,
+                       GpuBuffer& meshletVertexArena) {
     if (!ready() || slotIndex >= m_slots.size() || jobs.empty()) return false;
+    m_vertices = &vertexArena;
+    m_meshlets = &meshletArena;
+    m_meshletVertices = &meshletVertexArena;
     Slot& s = m_slots[slotIndex];
     VkDeviceSize matrices = 0;
     for (const Job& j : jobs) matrices += j.current.size() + j.previous.size();
     const VkDeviceSize bytes = std::max<VkDeviceSize>(matrices * sizeof(glm::mat4), sizeof(glm::mat4));
     if (bytes > s.capacity) {
-        rtc::destroyHostBuffer(m_device, s.palettes);   // the slot's fence was waited: unused
+        m_allocator->destroyBuffer(s.palettes);   // the slot's fence was waited: unused
         const VkDeviceSize cap = std::max({bytes, s.capacity * 2, kMinPaletteBytes});
-        if (!rtc::createHostBuffer(m_device, m_physical, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, s.palettes)) {
+        s.palettes = rtc::createHostBuffer(*m_allocator, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!s.palettes.isValid()) {
             s.capacity = 0;
             OHAO_LOG(Error, render, "skin: palette buffer allocation failed ({} bytes)", cap);
             return false;
         }
         s.capacity = cap;
     }
-    auto* out = static_cast<glm::mat4*>(s.palettes.mapped);
+    auto* out = static_cast<glm::mat4*>(s.palettes.getMappedData());
     s.offsets.clear();
     uint32_t at = 0;
     for (const Job& j : jobs) {
@@ -92,12 +97,13 @@ bool SkinPass::prepare(uint32_t slotIndex, std::span<const Job> jobs, VkBuffer v
         std::memcpy(out + at, j.previous.data(), j.previous.size_bytes());
         at += static_cast<uint32_t>(j.previous.size());
     }
+    m_allocator->flushBuffer(s.palettes, 0, VkDeviceSize{at} * sizeof(glm::mat4));
 
     const std::array<VkDescriptorBufferInfo, kBindings> infos{{
-        {vertexArena, 0, VK_WHOLE_SIZE},
+        {vertexArena.buffer, 0, VK_WHOLE_SIZE},
         {s.palettes.buffer, 0, VK_WHOLE_SIZE},
-        {meshletArena, 0, VK_WHOLE_SIZE},
-        {meshletVertexArena, 0, VK_WHOLE_SIZE},
+        {meshletArena.buffer, 0, VK_WHOLE_SIZE},
+        {meshletVertexArena.buffer, 0, VK_WHOLE_SIZE},
     }};
     std::array<VkWriteDescriptorSet, kBindings> writes{};
     for (uint32_t i = 0; i < kBindings; ++i) {
@@ -108,16 +114,12 @@ bool SkinPass::prepare(uint32_t slotIndex, std::span<const Job> jobs, VkBuffer v
     return true;
 }
 
-void SkinPass::recordSkin(VkCommandBuffer cmd, uint32_t slotIndex, std::span<const Job> jobs) {
-    const Slot& s = m_slots[slotIndex];
-    // Earlier frames read these ranges (draws, traces, BLAS builds) and wrote them: this frame's
-    // writes come after both. The palettes are host writes made before the submit.
-    VkMemoryBarrier before{};
-    before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    before.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    before.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &before, 0,
-                         nullptr, 0, nullptr);
+void SkinPass::recordSkin(const Frame& frame, std::span<const Job> jobs) {
+    Slot& s = m_slots[frame.slot];
+    const VkCommandBuffer cmd = frame.cmd;
+    Pass pass(frame, "skin", Pass::Compute);
+    pass.readWrite(*m_vertices, BufferUse::Storage).read(s.palettes, BufferUse::Storage);
+    pass.begin();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skin);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinLayout, 0, 1, &s.set, 0, nullptr);
     for (std::size_t i = 0; i < jobs.size(); ++i) {
@@ -129,18 +131,15 @@ void SkinPass::recordSkin(VkCommandBuffer cmd, uint32_t slotIndex, std::span<con
         vkCmdPushConstants(cmd, m_skinLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cmd, (j.vertexCount + gpu::shared::kSkinGroupSize - 1) / gpu::shared::kSkinGroupSize, 1, 1);
     }
-    // The deformed vertices to their readers: the bounds pass, the BLAS refit, the draws, the traces.
-    VkMemoryBarrier after{};
-    after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
-                          VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &after, 0,
-                         nullptr, 0, nullptr);
 }
 
-void SkinPass::recordBounds(VkCommandBuffer cmd, uint32_t slotIndex, std::span<const Job> jobs) {
-    const Slot& s = m_slots[slotIndex];
+void SkinPass::recordBounds(const Frame& frame, std::span<const Job> jobs) {
+    Slot& s = m_slots[frame.slot];
+    const VkCommandBuffer cmd = frame.cmd;
+    Pass pass(frame, "skin.bounds", Pass::Compute);
+    pass.read(*m_vertices, BufferUse::Storage).read(*m_meshletVertices, BufferUse::Storage);
+    pass.read(s.palettes, BufferUse::Storage).readWrite(*m_meshlets, BufferUse::Storage);
+    pass.begin();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_bounds);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boundsLayout, 0, 1, &s.set, 0, nullptr);
     for (std::size_t i = 0; i < jobs.size(); ++i) {
@@ -153,12 +152,6 @@ void SkinPass::recordBounds(VkCommandBuffer cmd, uint32_t slotIndex, std::span<c
         vkCmdPushConstants(cmd, m_boundsLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cmd, (j.meshletCount + gpu::shared::kSkinGroupSize - 1) / gpu::shared::kSkinGroupSize, 1, 1);
     }
-    VkMemoryBarrier after{};
-    after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &after, 0,
-                         nullptr, 0, nullptr);
 }
 
 } // namespace ohao::render

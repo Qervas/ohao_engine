@@ -16,13 +16,13 @@
 #include <array>
 #include <cstdint>
 
-namespace ohao::render { class RenderScene; }
+namespace ohao::render { class RenderScene; class Pass; }
 
 namespace ohao::rtc {
 
 class AlphaTables {
 public:
-    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice);
+    [[nodiscard]] bool init(VkDevice device, GpuAllocator& allocator);
     void destroy();
 
     [[nodiscard]] VkDescriptorSetLayout layout() const noexcept { return m_layout; }
@@ -34,6 +34,9 @@ public:
     [[nodiscard]] VkDescriptorSet set(uint32_t slot) const noexcept {
         return slot < m_sets.size() ? m_sets[slot] : VK_NULL_HANDLE;
     }
+    // What a pass that binds the slot's set reads: the scene's tables, the smoke proxies and, since every such
+    // pass traces, the scene's acceleration structures.
+    void declare(render::Pass& pass, uint32_t slot, const render::RenderScene& scene);
 
 private:
     void writeSmoke(uint32_t slot, const render::RenderScene& scene, bool smokeInGi);
@@ -41,11 +44,11 @@ private:
     static constexpr uint32_t kBindings = 8;         // 0-6 the scene's tables, 7 the smoke proxies (rt/alpha_test.slang)
     static constexpr uint32_t kSceneBindings = 7;
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physical{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
     VkDescriptorSetLayout m_layout{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sets{};
-    std::array<HostBuffer, MAX_FRAMES_IN_FLIGHT> m_smoke{};   // binding 7, per slot (host-visible)
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_smoke{};   // binding 7, per slot (host-visible)
 };
 
 } // namespace ohao::rtc
