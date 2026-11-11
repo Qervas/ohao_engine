@@ -50,6 +50,9 @@ static_assert(sizeof(Material) == 112 + 16 * kTextureSlots && alignof(Material) 
 // A mesh as the engine reads it: views of arrays something else keeps alive (a cooked file's mapping, or the
 // vectors of a mesh made in code). The engine holds one through a shared_ptr that owns that something.
 struct Mesh {
+    // What names this mesh among all cooked meshes: its file's content name and its place in it. Zero for a mesh
+    // made in code. What is derived from a mesh and cooked (its collision shape) is named from it.
+    ContentHash id{};
     std::string_view name;
     std::string_view error;   // not empty: the importer could not make this mesh, and the rest is empty
     std::span<const Vertex> vertices;
@@ -86,7 +89,9 @@ private:
 
 class ModelFile {
 public:
-    [[nodiscard]] static Result<std::shared_ptr<const ModelFile>> open(const std::filesystem::path& path);
+    // `key`: the file's content name (what the cooker named it by).
+    [[nodiscard]] static Result<std::shared_ptr<const ModelFile>> open(const std::filesystem::path& path,
+                                                                       const ContentHash& key);
     [[nodiscard]] std::size_t meshCount() const noexcept { return m_meshes.size(); }
     [[nodiscard]] const Mesh& mesh(std::size_t i) const { return m_meshes[i]; }
     // The index of the mesh named `mesh`, or "#<index>"; the error names `path`.
@@ -106,6 +111,8 @@ struct Texture {
 
 // Written to a temporary beside `path`, then renamed over it: a reader never sees half a file.
 [[nodiscard]] VoidResult<> writeModel(const std::filesystem::path& path, std::span<const MeshSource> meshes);
+// Any cooked file whose content is its reader's own (a collision shape, the physics backend's): the same way.
+[[nodiscard]] VoidResult<> writeFile(const std::filesystem::path& path, std::span<const uint8_t> bytes);
 [[nodiscard]] VoidResult<> writeTexture(const std::filesystem::path& path, uint32_t width, uint32_t height,
                                         std::span<const uint8_t> rgba8);
 

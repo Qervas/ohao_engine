@@ -31,6 +31,8 @@ public:
                                                                                          std::string_view mesh = {}) = 0;
     // A texture a cooked material names (cooked::Material::textures), mapped from the cache.
     [[nodiscard]] virtual Result<cooked::Texture> texture(const ContentHash& key) const = 0;
+    // Where a cooked collision shape of this name is kept (it may not exist yet); empty: nowhere, nothing is kept.
+    [[nodiscard]] virtual std::filesystem::path shapeFile(const ContentHash& key) const { (void)key; return {}; }
     [[nodiscard]] virtual bool exists(const AssetRef& ref) const = 0;   // no load
     // Empty for a path the resolver rejects (absolute, or outside the project).
     [[nodiscard]] virtual std::filesystem::path absolutePath(const AssetRef& ref) const = 0;
@@ -52,6 +54,7 @@ public:
     [[nodiscard]] Result<std::shared_ptr<const cooked::Mesh>, AssetError> loadMesh(const AssetRef& ref,
                                                                                  std::string_view mesh = {}) override;
     [[nodiscard]] Result<cooked::Texture> texture(const ContentHash& key) const override;
+    [[nodiscard]] std::filesystem::path shapeFile(const ContentHash& key) const override { return m_cache.shape(key); }
     [[nodiscard]] bool exists(const AssetRef& ref) const override;
     [[nodiscard]] std::filesystem::path absolutePath(const AssetRef& ref) const override;
     void forget(const AssetRef& ref) override;

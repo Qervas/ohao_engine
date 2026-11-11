@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <set>
 #include <utility>
 
@@ -117,6 +118,8 @@ struct PhysicsScene::Impl {
         Motion motion{Motion::Static};
         enum class Kind : uint8_t { Box, Sphere, Capsule, Convex, Mesh, Compound } kind{Kind::Box};
         glm::vec3 scale{1.0f};   // the world scale the shapes were baked with
+        // The shared shapes its colliders use (sharedShape): held here, so one lives while a body uses it.
+        std::vector<std::shared_ptr<const pb::SharedShape>> shared;
         bool hasParts{false};
         bool trigger{false};     // a sensor
         // Dynamic bodies: the world pose last written to the entity (or the body was placed at),
@@ -310,7 +313,14 @@ struct PhysicsScene::Impl {
 
     // One collider as a backend shape in the body's frame (scale baked), or nullopt.
     std::optional<pb::ShapeInfo> shapeOf(entt::entity e, const Collider& c, glm::vec3 scale, Motion motion,
-                                         std::vector<std::shared_ptr<FittedCollider>>& keep, BodyRecord::Kind& kind);
+                                         std::vector<std::shared_ptr<FittedCollider>>& keep, BodyRecord::Kind& kind,
+                                         std::vector<std::shared_ptr<const pb::SharedShape>>& held);
+    // A cooked mesh's collision mesh or convex hull at scale 1, made once for every body that uses it at any
+    // scale: from this scene's own table, else from the cooked cache, else built now and written there. Null: the
+    // mesh has no identity (made in code) or the backend cannot make it; the caller builds the body's own.
+    [[nodiscard]] std::shared_ptr<const pb::SharedShape> sharedShape(const cooked::Mesh& mesh, ColliderShape shape);
+    std::map<std::pair<ContentHash, ColliderShape>, std::weak_ptr<const pb::SharedShape>> sharedShapes;
+    uint32_t staticsBuilt{0};   // since the broad phase was last optimised
 
     // A removed body's pairs end now (Jolt's later OnContactRemoved for it no longer maps).
     void endPairsOf(pb::BodyHandle h);

@@ -27,6 +27,8 @@ struct Cache {
     std::filesystem::path dir;   // <project root>/.ohao/cooked
     [[nodiscard]] std::filesystem::path model(const ContentHash& key) const { return dir / (key.hex() + ".model"); }
     [[nodiscard]] std::filesystem::path texture(const ContentHash& key) const { return dir / (key.hex() + ".tex"); }
+    // A collision shape the physics backend made of a cooked mesh (ecs/physics_scene.cpp names and writes it).
+    [[nodiscard]] std::filesystem::path shape(const ContentHash& key) const { return dir / (key.hex() + ".shape"); }
 };
 
 // The name `source` cooks to; an error when it cannot be read.

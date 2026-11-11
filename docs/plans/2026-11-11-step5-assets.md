@@ -243,6 +243,32 @@ Each is one or a few commits with the hooks green.
   - One upload and one BLAS build submit per load, not two waits a mesh; BLAS compaction if it measures a gain.
   - kit2k's four budgets met (load 400 ms, collision build 150 ms, a ray 5 µs, an idle sync 10 µs), with collision
     shapes cached per (mesh, shape, scale), the gap recorded in the level pipeline.
+  - *As built, first piece (2026-11-11): collision shapes shared and cooked.*
+    - **Measured first:** `level_bench --only kit2k` (new: the four numbers of the level pipeline's spec). As it
+      stood: load 33.3 s, of it the collision build 33.2 s (2,000 mesh shapes of 25,000 triangles, 16.6 ms each);
+      a ray 18.4 us; an idle sync 0.07 us.
+    - **One shape per mesh.** A cooked mesh has an identity (`cooked::Mesh::id`: its file's content name and its
+      place in it). The physics scene makes a mesh's collision mesh or convex hull once, at scale 1
+      (`IPhysicsBackend::makeShared`), and each body uses it at its own scale (`ShapeInfo::Type::SHARED`; Jolt's
+      `ScaledShape`, and the shape itself at scale 1). Bodies hold it; it goes with the last.
+    - **Cooked.** The shape's bytes as the backend saves them are a file in the cooked cache, named by the mesh,
+      the kind and the backend's format (Jolt's version). The physics scene writes it the first time and restores
+      it after. kit2k's 40 shapes are 15 MB.
+    - **Not per (mesh, shape, scale) as planned:** kit2k has 400 such pairs, which would still be 6.6 s.
+    - **The ray** was slow because static bodies added one at a time leave the broad phase's tree as they came
+      until a step rebuilds it; the bench never steps. The physics sync now rebuilds it after adding static
+      bodies (`optimizeBroadPhase`): 18.4 us to 0.34 us.
+    - **Result, against the budgets (gated: `level_budgets.json` is at step 6):** load 87 to 89 ms (400),
+      collision build 12 ms (150), a ray 0.34 us (5), an idle sync 0.07 us (10). The first load after a mesh
+      changes builds its shapes: 728 ms, 646 of it the 40 shapes.
+    - **Through the renderer** (`asset_bench`): kit2k's first frame 35.3 s to 0.51 s, resident memory 1,022 MB to
+      317 MB.
+    - **Behaviour held:** the fight's five `world.hash` checkpoints are the same before and after; 3,696 of the
+      kit's 10,000 fixed rays hit, as with every collider built from its own scaled vertices (the bench now fails
+      on another count). Planted: the scale ignored gives 3,792 and fails. Gates 6 of 6; `physics_bench` within
+      budget.
+    - **Left in 5f:** the meshlets built at load, the split vertex streams, one upload and one BLAS submit per
+      load. kit2k's first frame is now 0.4 s of renderer work after a 0.1 s load.
 - **5g, streaming.**
   - Loads run off the main thread; a frame takes finished uploads under a byte budget; an asset not yet arrived
     draws its placeholder. A lockstep host and a capture wait for everything asked (deterministic frames).

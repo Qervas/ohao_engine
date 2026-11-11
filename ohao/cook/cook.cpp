@@ -204,14 +204,14 @@ Result<std::shared_ptr<const cooked::ModelFile>> cookedModel(const Cache& cache,
     const fs::path path = cache.model(key.value());
     std::error_code ec;
     if (fs::exists(path, ec)) {
-        if (auto file = cooked::ModelFile::open(path)) return file;   // an unreadable one is cooked again
+        if (auto file = cooked::ModelFile::open(path, key.value())) return file;   // an unreadable one is cooked again
     }
     const auto start = std::chrono::steady_clock::now();
     if (auto done = cook(cache, source, kind, path); !done) return R::err(done.error());
     if (cookedNow) *cookedNow = true;
     OHAO_LOG(Info, asset, "cooked '{}' ({}) in {:.0f} ms", source.generic_string(), kind == ModelKind::Whole ? "whole" : "meshes",
              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-    return cooked::ModelFile::open(path);
+    return cooked::ModelFile::open(path, key.value());
 }
 
 } // namespace ohao::cook

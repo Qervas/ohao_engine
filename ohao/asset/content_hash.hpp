@@ -13,6 +13,7 @@ namespace ohao {
 struct ContentHash {
     uint64_t hi{0}, lo{0};
     [[nodiscard]] friend bool operator==(const ContentHash&, const ContentHash&) = default;
+    [[nodiscard]] friend auto operator<=>(const ContentHash&, const ContentHash&) = default;
     [[nodiscard]] explicit operator bool() const noexcept { return (hi | lo) != 0; }
     [[nodiscard]] std::string hex() const {
         static constexpr char digits[] = "0123456789abcdef";

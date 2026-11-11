@@ -35,7 +35,11 @@ step 2h, 2026-11-09), unchanged.
     material names its textures by their pixels' hash, and a texture is uploaded once whoever uses it
     (`BindlessTextureManager::contentTexture`). What a mesh held is given back when its last entity goes: its
     textures (destroyed after the frames in flight), its materials' table rows and its arena ranges, each for the
-    next load to take (`tools/bench/asset_bench.py --loop N` holds it). Only glTF and GLB are read. A glTF's node tree,
+    next load to take (`tools/bench/asset_bench.py --loop N` holds it). Only glTF and GLB are read.
+    A mesh or convex collider of a cooked mesh is the mesh's one shape (built once at scale 1, kept in the cooked
+    cache as the backend's bytes, restored after), used by each body at its own scale; a primitive's is built per
+    body as before. After static bodies are added the physics sync rebuilds the broad phase's tree, so a ray
+    before the first step costs what one after it does (`level_bench --only kit2k`). A glTF's node tree,
     `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
   - A `Level` component is a level file in the world: the `level` sync system
     (`ohao_level_world`, `level/level_system.hpp`, before `instantiate`) makes one entity per

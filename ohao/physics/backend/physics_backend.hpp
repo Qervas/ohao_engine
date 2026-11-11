@@ -97,6 +97,13 @@ namespace CollisionLayer {
 
 struct CompoundChild;
 
+// A shape the backend made once, for many bodies to use (each at its own scale): a level's mesh used by a hundred
+// nodes is one collision mesh. Made, saved and restored by the backend (IPhysicsBackend::makeShared); whoever holds
+// the pointer keeps it, and a body made from it keeps what it needs itself.
+struct SharedShape {
+    virtual ~SharedShape() = default;
+};
+
 struct ShapeInfo {
     enum class Type {
         BOX,
@@ -107,7 +114,8 @@ struct ShapeInfo {
         MESH,
         HEIGHTFIELD,
         CONVEX_HULL,
-        COMPOUND
+        COMPOUND,
+        SHARED
     };
 
     Type type = Type::BOX;
@@ -143,6 +151,11 @@ struct ShapeInfo {
     // compound in Jolt). A child is any other type, a compound included. A single child with
     // an offset is how a shape away from the body's origin is made.
     std::vector<CompoundChild> children;
+
+    // SHARED: a shape made by makeShared, at this scale (a negative axis mirrors it; a mesh's or a hull's axes
+    // may differ).
+    std::shared_ptr<const SharedShape> shared;
+    glm::vec3 sharedScale{1.0f};
 
     // Span convenience (sets raw pointers; caller keeps storage alive)
     void setMesh(std::span<const glm::vec3> vertices, std::span<const uint32_t> indices) noexcept {
@@ -412,6 +425,16 @@ public:
     // === BODY MANAGEMENT ===
     [[nodiscard]] virtual BodyHandle createBody(const BodyCreationInfo& info) = 0;
     virtual void destroyBody(BodyHandle handle) = 0;
+
+    // A MESH or CONVEX_HULL shape made once for ShapeInfo::Type::SHARED; null when it cannot be made.
+    [[nodiscard]] virtual std::shared_ptr<const SharedShape> makeShared(const ShapeInfo& info) = 0;
+    // The shape as bytes this backend reads back (loadShared: null for bytes it does not know), so that a shape is
+    // built once per content and not once per run. sharedFormat changes when what it writes does.
+    [[nodiscard]] virtual std::vector<uint8_t> saveShared(const SharedShape& shape) const = 0;
+    [[nodiscard]] virtual std::shared_ptr<const SharedShape> loadShared(std::span<const uint8_t> bytes) = 0;
+    [[nodiscard]] virtual uint32_t sharedFormat() const = 0;
+    // After many static bodies were added: queries before the next step are as fast as after it.
+    virtual void optimizeBroadPhase() = 0;
     [[nodiscard]] virtual bool isValidBody(BodyHandle handle) const = 0;
 
     // === BODY TRANSFORM ===
@@ -554,6 +577,11 @@ public:
 
     [[nodiscard]] BodyHandle createBody(const BodyCreationInfo&) override { return m_nextHandle++; }
     void destroyBody(BodyHandle) override {}
+    [[nodiscard]] std::shared_ptr<const SharedShape> makeShared(const ShapeInfo&) override { return nullptr; }
+    [[nodiscard]] std::vector<uint8_t> saveShared(const SharedShape&) const override { return {}; }
+    [[nodiscard]] std::shared_ptr<const SharedShape> loadShared(std::span<const uint8_t>) override { return nullptr; }
+    [[nodiscard]] uint32_t sharedFormat() const override { return 0; }
+    void optimizeBroadPhase() override {}
     [[nodiscard]] bool isValidBody(BodyHandle h) const override { return h < m_nextHandle; }
 
     void setPosition(BodyHandle, const glm::vec3&) override {}

@@ -1,7 +1,7 @@
 // level_bench: the level pipeline's budgets (docs/specs/2026-10-26-level-pipeline-design.md,
 // "Performance budgets").
 //
-//   level_bench [--check budgets.json] [--out build/level_bench.json] [--only blockout]
+//   level_bench [--check budgets.json] [--out build/level_bench.json] [--only blockout|kit2k]
 //               [--rounds N] [--reference build/serve_bench_reference.json]
 //
 // Step 4 measures blockout_load_ms: a cold load of assets/levels/blockout_room.glb into a
@@ -9,8 +9,8 @@
 // resolver, expansion, colliders; no GPU upload), median and p95 of N rounds (30) after 5
 // warm-ups. The OS file cache is warm after the warm-ups; the engine's caches are not.
 // level_info_bytes (step 5): the size of level.info's result on the blockout, through a Session
-// as an agent calls it; a size, so a noisy machine cannot excuse a miss. The kit2k budgets
-// (step 6) are reported as not measured until that step adds them.
+// as an agent calls it; a size, so a noisy machine cannot excuse a miss. `--only kit2k` measures
+// the generated kit's four numbers instead (measureKit), one load after a warming one.
 //
 // The machine is recorded as scene_bench records it (bench_env.hpp): a calibration loop before
 // and after against the reference, and every other process's CPU. A run >25% slower than the
@@ -85,6 +85,109 @@ LoadResult loadBlockout() {
     return r;
 }
 
+// kit2k (tools/level/kit_level.py: 2,000 nodes over 40 meshes, 998,560 triangles, every node a static mesh
+// collider): one cold load with the level and physics systems, the part of it that built the colliders, 10,000
+// rays down into the kit, and the two systems' sync on the still world.
+struct KitResult {
+    double loadMs{0.0}, collisionMs{0.0}, rayUs{0.0}, idleUs{0.0};
+    std::size_t nodes{0}, hits{0};
+    uint32_t statics{0};
+};
+
+KitResult measureKit() {
+    KitResult r;
+    const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    const auto t0 = std::chrono::steady_clock::now();
+    ecs::World world;
+    ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+    level::installLevels(world, files, engineTypes());
+    ecs::PhysicsScene& physics = ecs::installPhysics(world, files);
+    const entt::entity lv = world.createWithId(0x1e7e1, "Level");
+    world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"build/kit2k/kit2k.glb", {}}});
+    world.sync();
+    r.loadMs = ms(t0, std::chrono::steady_clock::now());
+    r.collisionMs = physics.info().buildMs;
+    r.nodes = world.registry().view<ecs::LevelNode>().size();
+    r.statics = physics.info().bodies.statics;
+
+    // Rays straight down over the kit's 68 m square, from a fixed sequence.
+    std::vector<double> rays;
+    uint32_t seed = 0x9e3779b9u;
+    const auto next = [&] {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / 16777216.0f;
+    };
+    for (int i = 0; i < 10000; ++i) {
+        const glm::vec3 from{(next() - 0.5f) * 68.0f, 10.0f, (next() - 0.5f) * 68.0f};
+        const auto a = std::chrono::steady_clock::now();
+        const auto hit = physics.raycast(from, {0.0f, -1.0f, 0.0f}, 20.0f);
+        rays.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - a).count());
+        r.hits += hit ? 1 : 0;
+    }
+    r.rayUs = stats(rays).median;
+    std::vector<double> idle;
+    for (int i = 0; i < 500; ++i) {
+        const auto a = std::chrono::steady_clock::now();
+        world.sync();
+        idle.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - a).count());
+    }
+    r.idleUs = stats(idle).median;
+    return r;
+}
+
+// The kit's four numbers against their budgets; the process's exit code.
+int runKit(const nlohmann::json& budgets, int currentStep, const std::string& outPath) {
+    if (!std::filesystem::exists(std::filesystem::path(OHAO_SOURCE_DIR) / "build/kit2k/kit2k.glb")) {
+        std::fprintf(stderr, "level_bench: build/kit2k/kit2k.glb is not there; run tools/level/kit_level.py\n");
+        return 2;
+    }
+    log::setLevel(log::Level::Warn);
+    const KitResult first = measureKit();   // cooks what the cache lacks; the OS file cache warms
+    const KitResult r = measureKit();
+    log::setLevel(log::Level::Info);
+    std::vector<std::string> failures;
+    // A benchmark of broken code fails: the kit's nodes and bodies, and how many of the fixed rays hit (3,696 with
+    // every collider built from its own scaled vertices, before shapes were shared).
+    if (r.nodes != 2001 || r.statics != 2000 || r.hits != 3696)
+        failures.push_back("kit2k did not load as expected: " + std::to_string(r.nodes) + " nodes, " +
+                           std::to_string(r.statics) + " static bodies, " + std::to_string(r.hits) +
+                           " rays hit (want 2001, 2000, 3696)");
+    nlohmann::json out;
+    std::printf("level_bench kit2k (%zu nodes, %u static bodies, %zu of 10000 rays hit)\n", r.nodes, r.statics, r.hits);
+    const auto row = [&](const char* name, double value, const char* unit) {
+        std::string verdict = "reported";
+        if (budgets.contains(name)) {
+            const double max = budgets[name].value("max", 0.0);
+            verdict = currentStep < budgets[name].value("gatedFrom", 0) ? "pending" : value <= max ? "pass" : "fail";
+            if (verdict == "fail") {
+                char text[160];
+                std::snprintf(text, sizeof text, "%s: %.3f %s over its budget of %.3f", name, value, unit, max);
+                failures.push_back(text);
+            }
+            std::printf("  %-26s %10.3f %s   budget %.0f: %s\n", name, value, unit, max, verdict.c_str());
+        } else {
+            std::printf("  %-26s %10.3f %s\n", name, value, unit);
+        }
+        out[name] = {{"value", value}, {"verdict", verdict}};
+    };
+    std::printf("  the load before it          %10.3f ms   (collision %.3f ms; it cooked what the cache lacked)\n", first.loadMs,
+                first.collisionMs);
+    out["first_load_ms"] = first.loadMs;
+    row("kit2k_load_ms", r.loadMs, "ms");
+    row("kit2k_collision_build_ms", r.collisionMs, "ms");
+    row("kit2k_raycast_us", r.rayUs, "us");
+    row("idle_sync_us", r.idleUs, "us");
+    out["passed"] = failures.empty();
+    out["failures"] = failures;
+    std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
+    for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
+    std::string line = "{\"suite\":\"level_bench.kit2k\",\"passed\":" + std::to_string(failures.empty() ? 1 : 0) +
+                       ",\"failed\":" + std::to_string(failures.size()) + ",\"failures\":[";
+    for (std::size_t i = 0; i < failures.size(); ++i) line += (i ? "," : "") + test::jsonString(failures[i]);
+    std::printf("%s]}\n", line.c_str());
+    return failures.empty() ? 0 : 1;
+}
+
 // level.info's result on the blockout, in bytes (the token budget agents pay), and the result.
 std::size_t levelInfoBytes(std::string& result) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
@@ -123,8 +226,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (only != "blockout") {
-        std::fprintf(stderr, "level_bench: only 'blockout' is measured so far (kit2k comes with step 6)\n");
+    if (only != "blockout" && only != "kit2k") {
+        std::fprintf(stderr, "level_bench: --only is blockout or kit2k\n");
         return 2;
     }
 
@@ -149,6 +252,8 @@ int main(int argc, char** argv) {
             maxExternal = doc["noise"].value("maxExternalCorePct", maxExternal);
         }
     }
+
+    if (only == "kit2k") return runKit(budgets, currentStep, outPath == "build/level_bench.json" ? "build/level_bench_kit2k.json" : outPath);
 
     const double cal0 = bench::calibrationMs();
     bench::LoadMonitor monitor;
@@ -209,9 +314,7 @@ int main(int argc, char** argv) {
                                std::to_string(static_cast<int>(max)));
         std::printf("    budget %.0f bytes, gated from step %d: %s\n", max, from, infoVerdict.c_str());
     }
-    for (const auto& [name, b] : budgets.items())
-        if (name != "blockout_load_ms" && name != "level_info_bytes")
-            std::printf("  %-18s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
+    std::printf("  kit2k's four: level_bench --only kit2k\n");
 
     const double ref = bench::readReference(refPath);
     const double slow = ref > 0 ? std::max(cal0, cal1) / ref : 0.0;

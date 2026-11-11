@@ -151,7 +151,7 @@ VoidResult<> writeModel(const std::filesystem::path& path, std::span<const MeshS
     return w.write(path);
 }
 
-Result<std::shared_ptr<const ModelFile>> ModelFile::open(const std::filesystem::path& path) {
+Result<std::shared_ptr<const ModelFile>> ModelFile::open(const std::filesystem::path& path, const ContentHash& key) {
     using R = Result<std::shared_ptr<const ModelFile>>;
     auto map = Mapping::open(path);
     if (!map) return R::err(map.error());
@@ -169,6 +169,11 @@ Result<std::shared_ptr<const ModelFile>> ModelFile::open(const std::filesystem::
             !inside(bytes, r.bones, r.bonesSize, 1))
             return R::err(bad);
         Mesh m;
+        ContentHasher id;
+        id.value(key.hi);
+        id.value(key.lo);
+        id.value(static_cast<uint64_t>(file->m_meshes.size()));
+        m.id = id.finish();
         const char* text = reinterpret_cast<const char*>(bytes.data());
         m.name = {text + r.name, static_cast<std::size_t>(r.nameSize)};
         m.error = {text + r.error, static_cast<std::size_t>(r.errorSize)};
@@ -209,6 +214,12 @@ Result<std::size_t> ModelFile::find(std::string_view path, std::string_view mesh
     if (index < 0)
         return R::err(where + " has no mesh '" + std::string(mesh) + "' (" + std::to_string(count) + " meshes)");
     return R::ok(static_cast<std::size_t>(index));
+}
+
+VoidResult<> writeFile(const std::filesystem::path& path, std::span<const uint8_t> bytes) {
+    Writer w;
+    (void)w.add(bytes);
+    return w.write(path);
 }
 
 VoidResult<> writeTexture(const std::filesystem::path& path, uint32_t width, uint32_t height,
