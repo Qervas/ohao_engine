@@ -1,4 +1,4 @@
-#include "render/scene/meshlet_builder.hpp"
+#include "asset/meshlets.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
@@ -7,7 +7,7 @@
 #include <memory>
 #include <thread>
 
-namespace ohao::render {
+namespace ohao {
 
 namespace {
 
@@ -200,4 +200,4 @@ void buildMeshlets(std::span<const Vertex> vertices, std::span<const uint32_t> i
     }
 }
 
-} // namespace ohao::render
+} // namespace ohao

@@ -70,6 +70,13 @@ MeshHandle uploadMesh(RenderScene& scene, const cooked::Mesh& mesh, std::string_
         md.triangleMaterialSlot.assign(triangles, 0u);
         std::copy(slots.begin(), slots.end(), md.triangleMaterialSlot.begin());
     }
+    // A cooked mesh brings its submeshes' meshlets (the same runs, made by the cooker).
+    if (!mesh.submeshes.empty() && (md.submeshes.empty() ? mesh.submeshes.size() == 1 : mesh.submeshes.size() == md.submeshes.size())) {
+        for (const cooked::Submesh& s : mesh.submeshes) md.submeshMeshlets.push_back({s.firstMeshlet, s.meshletCount});
+        md.meshlets = mesh.meshlets;
+        md.meshletVertices = mesh.meshletVertices;
+        md.meshletTriangles = mesh.meshletTriangles;
+    }
     return scene.registerMesh(md);
 }
 

@@ -2,6 +2,7 @@
 #include "core/render_handles.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
+#include "asset/meshlets.hpp"
 #include "asset/vertex.hpp"   // Vertex
 #include "gpu/layout_meta.hpp"
 #include "gpu/shared_layout.hpp"
@@ -49,6 +50,11 @@ struct MeshData {
     std::vector<SubmeshDesc> submeshes;          // empty: one submesh, slot 0
     std::vector<uint32_t> triangleMaterialSlot;  // empty: all 0
     std::string debugName;
+    // The submeshes' meshlets already built (a cooked mesh's): per submesh its first meshlet and count in
+    // `meshlets`, whose offsets are into the two lists. submeshMeshlets empty: the registry builds them.
+    std::vector<std::array<uint32_t, 2>> submeshMeshlets;
+    std::span<const Meshlet> meshlets;
+    std::span<const uint32_t> meshletVertices, meshletTriangles;
 };
 
 // glTF's alphaMode (gpu::shared::kAlphaOpaque / kAlphaMask / kAlphaBlend). Mask: alpha-tested

@@ -307,6 +307,17 @@ Each is one or a few commits with the hooks green.
       budget.
     - **Left in 5f:** the meshlets built at load, the split vertex streams, one upload and one BLAS submit per
       load. kit2k's first frame is now 0.4 s of renderer work after a 0.1 s load.
+  - *As built, second piece (2026-11-11): cooked meshlets; what is not built.*
+    - **Measured first:** kit2k's 144 ms of mesh work at a first frame was meshlets 50 ms, upload 50 ms (40
+      submits), BLAS builds 44 ms; Sponza's 38 ms was meshlets 25, upload 8, BLAS 4.
+    - **Meshlets are cooked:** a cooked mesh holds its submeshes (the runs of one material slot) and their
+      meshlets, built by the cooker with the same builder (`asset/meshlets.hpp`, moved from the renderer); the
+      registry copies them and builds only those of meshes made in code. The five goldens are identical.
+      First frame, warm: kit2k 0.57 s to 0.47, Sponza 0.29 to 0.28, the helmet 0.28 to 0.25.
+    - **Not built, by the measurement:** one upload and one BLAS submit per load (at most 50 + 44 ms of kit2k's
+      0.47 s, and 5g moves loading off the frame's thread, where the count of submits stops mattering); BLAS
+      compaction; the split position stream, a renderer optimisation no measurement has asked for
+      (`render_bench` would be its judge). Row 15's requirement, kit2k's four budgets, is met.
 - **5g, streaming.**
   - Loads run off the main thread; a frame takes finished uploads under a byte budget; an asset not yet arrived
     draws its placeholder. A lockstep host and a capture wait for everything asked (deterministic frames).

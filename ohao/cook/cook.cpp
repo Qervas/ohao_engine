@@ -207,6 +207,25 @@ Result<cooked::MeshSource> meshSource(const Cache& cache, const Model& model, st
     s.materialOfTriangle = model.materialPerTriangle;
     s.bones = model.boneNames;
     s.materials.resize(model.materialColors.size());
+    // The submeshes (runs of one material slot; triangles past the per-triangle list's end use slot 0) and their
+    // meshlets, as the renderer registers them. A mesh without materials is one run, which the renderer makes.
+    if (!model.materialColors.empty() && !model.materialPerTriangle.empty()) {
+        const auto triangles = static_cast<uint32_t>(model.indices.size() / 3);
+        const auto listed = std::min<uint32_t>(triangles, static_cast<uint32_t>(model.materialPerTriangle.size()));
+        for (uint32_t start = 0, tri = 1; tri <= listed; ++tri) {
+            if (tri < listed && model.materialPerTriangle[tri] == model.materialPerTriangle[start]) continue;
+            s.submeshes.push_back({start * 3, (tri - start) * 3, model.materialPerTriangle[start], 0, 0});
+            start = tri;
+        }
+        if (listed < triangles) s.submeshes.push_back({listed * 3, (triangles - listed) * 3, 0u, 0, 0});
+    } else if (model.indices.size() >= 3) {
+        s.submeshes.push_back({0u, static_cast<uint32_t>(model.indices.size()), 0u, 0, 0});
+    }
+    for (cooked::Submesh& sub : s.submeshes) {
+        sub.firstMeshlet = static_cast<uint32_t>(s.meshlets.meshlets.size());
+        buildMeshlets(model.vertices, model.indices, sub.firstIndex, sub.indexCount, s.meshlets);
+        sub.meshletCount = static_cast<uint32_t>(s.meshlets.meshlets.size()) - sub.firstMeshlet;
+    }
     using Slot = cooked::TextureSlot;
     const auto texture = [&](cooked::Material& out, Slot slot, const std::vector<int>& index,
                              const std::vector<Model::TextureData>& list, std::size_t m) -> VoidResult<> {

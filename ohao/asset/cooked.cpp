@@ -30,7 +30,10 @@ struct MeshRecord {
     uint64_t name, nameSize, error, errorSize;
     uint64_t vertices, vertexCount, indices, indexCount, slots, slotCount, materials, materialCount;
     uint64_t bones, bonesSize, boneCount;   // names, each ended by a zero
+    uint64_t submeshes, submeshCount, meshlets, meshletCount, meshletVertices, meshletVertexCount, meshletTriangles,
+        meshletTriangleCount;
 };
+static_assert(std::is_trivially_copyable_v<Meshlet> && sizeof(Meshlet) == 48 && sizeof(Submesh) == 20);
 
 struct TextureRecord {
     uint32_t width, height, format, srgb;
@@ -145,6 +148,14 @@ VoidResult<> writeModel(const std::filesystem::path& path, std::span<const MeshS
         r.bones = w.add(names.data(), names.size());
         r.bonesSize = names.size();
         r.boneCount = m.bones.size();
+        r.submeshes = w.add(std::span<const Submesh>(m.submeshes));
+        r.submeshCount = m.submeshes.size();
+        r.meshlets = w.add(std::span<const Meshlet>(m.meshlets.meshlets));
+        r.meshletCount = m.meshlets.meshlets.size();
+        r.meshletVertices = w.add(std::span<const uint32_t>(m.meshlets.vertices));
+        r.meshletVertexCount = m.meshlets.vertices.size();
+        r.meshletTriangles = w.add(std::span<const uint32_t>(m.meshlets.triangles));
+        r.meshletTriangleCount = m.meshlets.triangles.size();
         w.put(records + sizeof(MeshRecord) * i, r);
     }
     Header h{};
@@ -171,7 +182,9 @@ Result<std::shared_ptr<const ModelFile>> ModelFile::open(const std::filesystem::
         if (!inside(bytes, r.name, r.nameSize, 1) || !inside(bytes, r.error, r.errorSize, 1) ||
             !inside(bytes, r.vertices, r.vertexCount, sizeof(Vertex)) || !inside(bytes, r.indices, r.indexCount, 4) ||
             !inside(bytes, r.slots, r.slotCount, 4) || !inside(bytes, r.materials, r.materialCount, sizeof(Material)) ||
-            !inside(bytes, r.bones, r.bonesSize, 1))
+            !inside(bytes, r.bones, r.bonesSize, 1) || !inside(bytes, r.submeshes, r.submeshCount, sizeof(Submesh)) ||
+            !inside(bytes, r.meshlets, r.meshletCount, sizeof(Meshlet)) || !inside(bytes, r.meshletVertices, r.meshletVertexCount, 4) ||
+            !inside(bytes, r.meshletTriangles, r.meshletTriangleCount, 4))
             return R::err(bad);
         Mesh m;
         ContentHasher id;
@@ -186,6 +199,10 @@ Result<std::shared_ptr<const ModelFile>> ModelFile::open(const std::filesystem::
         m.indices = arrayAt<uint32_t>(bytes, r.indices, r.indexCount);
         m.materialOfTriangle = arrayAt<uint32_t>(bytes, r.slots, r.slotCount);
         m.materials = arrayAt<Material>(bytes, r.materials, r.materialCount);
+        m.submeshes = arrayAt<Submesh>(bytes, r.submeshes, r.submeshCount);
+        m.meshlets = arrayAt<Meshlet>(bytes, r.meshlets, r.meshletCount);
+        m.meshletVertices = arrayAt<uint32_t>(bytes, r.meshletVertices, r.meshletVertexCount);
+        m.meshletTriangles = arrayAt<uint32_t>(bytes, r.meshletTriangles, r.meshletTriangleCount);
         std::string_view names{text + r.bones, static_cast<std::size_t>(r.bonesSize)};
         for (uint64_t b = 0; b < r.boneCount; ++b) {
             const std::size_t end = names.find('\0');

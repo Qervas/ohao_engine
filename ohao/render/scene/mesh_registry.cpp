@@ -1,6 +1,6 @@
 #include "render/scene/mesh_registry.hpp"
 #include "gpu/vulkan/gpu_fault.hpp"
-#include "render/scene/meshlet_builder.hpp"
+#include "asset/meshlets.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
@@ -333,16 +333,24 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     mesh.aabbMax = mx;
 
     // Meshlets, submesh by submesh (offsets local to this mesh until placed in the arenas).
-    MeshletSet meshlets;
-    std::vector<std::array<uint32_t, 2>> submeshMeshlets;
-    for (const SubmeshDesc& s : mesh.submeshes) {
-        const auto first = static_cast<uint32_t>(meshlets.meshlets.size());
-        buildMeshlets(data.vertices, data.indices, s.firstIndex, s.indexCount, meshlets);
-        submeshMeshlets.push_back({first, static_cast<uint32_t>(meshlets.meshlets.size()) - first});
+    MeshletSet built;
+    std::vector<std::array<uint32_t, 2>> submeshMeshlets = data.submeshMeshlets;
+    std::span<const Meshlet> meshlets = data.meshlets;
+    std::span<const uint32_t> meshletVertices = data.meshletVertices, meshletTriangles = data.meshletTriangles;
+    if (submeshMeshlets.size() != mesh.submeshes.size()) {   // not cooked (a mesh made in code): built here
+        submeshMeshlets.clear();
+        for (const SubmeshDesc& s : mesh.submeshes) {
+            const auto first = static_cast<uint32_t>(built.meshlets.size());
+            buildMeshlets(data.vertices, data.indices, s.firstIndex, s.indexCount, built);
+            submeshMeshlets.push_back({first, static_cast<uint32_t>(built.meshlets.size()) - first});
+        }
+        meshlets = built.meshlets;
+        meshletVertices = built.vertices;
+        meshletTriangles = built.triangles;
     }
-    const auto meshletCount = static_cast<uint32_t>(meshlets.meshlets.size());
-    const auto meshletVertexCount = static_cast<uint32_t>(meshlets.vertices.size());
-    const auto meshletTriangleCount = static_cast<uint32_t>(meshlets.triangles.size());
+    const auto meshletCount = static_cast<uint32_t>(meshlets.size());
+    const auto meshletVertexCount = static_cast<uint32_t>(meshletVertices.size());
+    const auto meshletTriangleCount = static_cast<uint32_t>(meshletTriangles.size());
 
     // One staging buffer for the whole registration:
     // vertices | indices | slots | entry | meshlets | meshlet vertices | meshlet triangles.
@@ -403,16 +411,16 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         // vertex offset, as for the index arena).
         auto* gpuMeshlets = reinterpret_cast<gpu::shared::MeshletGpu*>(dst + meshletAt);
         for (uint32_t i = 0; i < meshletCount; ++i) {
-            const Meshlet& s = meshlets.meshlets[i];
+            const Meshlet& s = meshlets[i];
             gpu::shared::MeshletGpu g{};
             g.range = {vertexBase + s.vertexOffset, triangleBase + s.triangleOffset, s.vertexCount, s.triangleCount};
             g.sphere = {s.center.x, s.center.y, s.center.z, s.radius};
             g.cone = {s.coneAxis.x, s.coneAxis.y, s.coneAxis.z, s.coneCutoff};
             std::memcpy(gpuMeshlets + i, &g, sizeof(g));
         }
-        if (mvBytes) std::memcpy(dst + meshletAt + mBytes, meshlets.vertices.data(), static_cast<std::size_t>(mvBytes));
+        if (mvBytes) std::memcpy(dst + meshletAt + mBytes, meshletVertices.data(), static_cast<std::size_t>(mvBytes));
         if (mtBytes)
-            std::memcpy(dst + meshletAt + mBytes + mvBytes, meshlets.triangles.data(), static_cast<std::size_t>(mtBytes));
+            std::memcpy(dst + meshletAt + mBytes + mvBytes, meshletTriangles.data(), static_cast<std::size_t>(mtBytes));
         m_ctx.allocator->flushBuffer(staging);
 
         // Growth copies (old -> new) and these writes touch disjoint ranges.

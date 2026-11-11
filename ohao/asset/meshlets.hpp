@@ -11,7 +11,7 @@
 // mean (so its normal cone can cull); with no neighbour left it takes the next unused
 // triangle in index order; it closes the meshlet when the next triangle no longer fits.
 // Every triangle lands in exactly one meshlet. One function, so a better clusterer can
-// replace it.
+// replace it. The cooker builds a cooked mesh's (ohao/cook); the renderer builds those of meshes made in code.
 #include "asset/vertex.hpp"   // Vertex
 
 #include <glm/glm.hpp>
@@ -20,7 +20,7 @@
 #include <span>
 #include <vector>
 
-namespace ohao::render {
+namespace ohao {
 
 struct Meshlet {
     uint32_t vertexOffset{0};     // into MeshletSet::vertices
@@ -44,4 +44,4 @@ struct MeshletSet {
 void buildMeshlets(std::span<const Vertex> vertices, std::span<const uint32_t> indices, uint32_t first,
                    uint32_t count, MeshletSet& out);
 
-} // namespace ohao::render
+} // namespace ohao

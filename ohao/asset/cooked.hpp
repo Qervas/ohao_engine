@@ -7,6 +7,7 @@
 // - A texture file holds one image as one use of it reads it (TextureKind), named by the hash of that use and its
 //   source pixels: every mip level, block-compressed, ready to copy to the GPU, and each channel's smallest value.
 #include "asset/content_hash.hpp"
+#include "asset/meshlets.hpp"
 #include "asset/vertex.hpp"
 #include "core/result.hpp"
 
@@ -20,7 +21,7 @@
 
 namespace ohao::cooked {
 
-inline constexpr uint32_t kFormatVersion = 2;
+inline constexpr uint32_t kFormatVersion = 3;
 
 enum class TextureSlot : uint32_t {
     Albedo, Normal, RoughMetal, Emissive, Occlusion, Coat, CoatRoughness, FuzzColor, FuzzRoughness, Count
@@ -47,6 +48,12 @@ struct Material {
 };
 static_assert(sizeof(Material) == 112 + 16 * kTextureSlots && alignof(Material) == 8);
 
+// A run of a mesh's triangles with one material slot, and its meshlets in the mesh's list.
+struct Submesh {
+    uint32_t firstIndex{0}, indexCount{0}, materialSlot{0};
+    uint32_t firstMeshlet{0}, meshletCount{0};
+};
+
 // A mesh as the engine reads it: views of arrays something else keeps alive (a cooked file's mapping, or the
 // vectors of a mesh made in code). The engine holds one through a shared_ptr that owns that something.
 struct Mesh {
@@ -60,6 +67,12 @@ struct Mesh {
     std::span<const uint32_t> materialOfTriangle;
     std::span<const Material> materials;
     std::vector<std::string_view> bones;
+    // The mesh's submeshes (a mesh without materials: none, it is one run) and their meshlets, as buildMeshlets
+    // makes them (offsets into meshletVertices and meshletTriangles). Empty for a mesh made in code: the renderer
+    // builds them when it registers the mesh.
+    std::span<const Submesh> submeshes;
+    std::span<const Meshlet> meshlets;
+    std::span<const uint32_t> meshletVertices, meshletTriangles;
 };
 
 // What a writer is given for one mesh.
@@ -70,6 +83,8 @@ struct MeshSource {
     std::span<const uint32_t> materialOfTriangle;
     std::vector<Material> materials;
     std::vector<std::string> bones;
+    std::vector<Submesh> submeshes;
+    MeshletSet meshlets;
 };
 
 // A read-only mapping of a file.

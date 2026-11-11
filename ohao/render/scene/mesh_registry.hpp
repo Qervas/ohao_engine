@@ -10,7 +10,7 @@ namespace ohao::render {
 
 // Mesh arenas: every registered mesh takes a range of one shared vertex arena, index
 // arena (mesh-local indices), triangle material-slot stream and mesh table, and its
-// submeshes' meshlets (render/scene/meshlet_builder) to the meshlet arenas: the meshlets
+// submeshes' meshlets (asset/meshlets.hpp) to the meshlet arenas: the meshlets
 // (gpu::shared::MeshletGpu), their vertices (mesh-local indices) and their packed local
 // triangles. Each mesh owns one BLAS built against the arenas, from its original
 // triangles. Registration is load-time work: it uploads and builds synchronously.

@@ -220,7 +220,7 @@ VulkanRenderer::render()
                                their meshlets (cone, frustum, Hi-Z) and mesh shaders draw
                                the rest (without VK_EXT_mesh_shader: a compute pass and
                                per-meshlet draws, the same image). The meshlets are built
-                               at registerMesh (render/scene/meshlet_builder)
+                               at registerMesh (asset/meshlets.hpp)
   LightClusters                the raster lights (uncapped) into the frame slot's light
                                buffer when they changed; lights.cluster lists, for each of
                                16x9x24 froxels out to the camera's far plane, up to 256
