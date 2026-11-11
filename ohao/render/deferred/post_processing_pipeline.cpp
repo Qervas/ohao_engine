@@ -18,6 +18,7 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
 
     // Initialize sub-passes
     m_bloomPass = std::make_unique<BloomPass>();
+    m_bloomPass->setAllocator(*m_allocator);
     if (!m_bloomPass->initialize(device, physicalDevice)) {
         return false;
     }

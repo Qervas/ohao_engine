@@ -144,6 +144,11 @@ bool VulkanRenderer::initialize() {
                                m_bufferMarkerEnabled);
         gpu::setFaultContext([this] { return m_passTimer.describe(); });
 
+        if (!m_allocator.initialize(m_instance, m_physicalDevice, m_device)) {
+            OHAO_LOG(Error, gpu, "the renderer's allocator did not start");
+            return false;
+        }
+
         // Set shader base path for all render passes
         RenderPassBase::setShaderBasePath(m_shaderBasePath);
 
@@ -242,6 +247,7 @@ void VulkanRenderer::shutdown() {
 
         // Presentation: semaphores and swapchain belong to the device.
         vkDeviceWaitIdle(m_device);
+        m_allocator.shutdown();   // what the passes retired goes now: the device is idle
         for (auto& sem : m_imageAcquired) {
             if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_device, sem, nullptr);
             sem = VK_NULL_HANDLE;
@@ -760,7 +766,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     m_deferredRenderer->setRayQuerySupported(m_rayQueryEnabled);   // RT shadows' inline ray queries
     m_deferredRenderer->setMeshShaderSupported(m_meshShaderEnabled);   // the G-buffer's meshlet path
     OHAO_LOG(Debug, gpu, "VulkanRenderer: Calling DeferredRenderer::initialize()...");
-    if (!m_deferredRenderer->initialize(m_device, m_physicalDevice)) {
+    if (!m_deferredRenderer->initialize(m_device, m_physicalDevice, m_allocator)) {
         OHAO_LOG(Error, gpu, "VulkanRenderer: DeferredRenderer::initialize() failed!");
         m_deferredRenderer.reset();
         return false;

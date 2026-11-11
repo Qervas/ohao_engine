@@ -1,6 +1,8 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "gpu/vulkan/gpu_image.hpp"
+#include "render/graph/pass.hpp"
 #include "render/shader_bindings/postprocess_bloom_downsample.hpp"
 #include "render/shader_bindings/postprocess_bloom_upsample.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -35,37 +37,27 @@ public:
     [[nodiscard]] float levelWeightSum() const;
 
     // Get output (for compositing)
-    [[nodiscard]] VkImageView getBloomOutput() const { return m_mipViews[0]; }
+    [[nodiscard]] VkImageView getBloomOutput() { return m_chain.subView(0, 0); }
     // False when execute() skipped (e.g. no input yet): the output holds nothing.
     [[nodiscard]] bool didExecute() const { return m_executed; }
 
 private:
     [[nodiscard]] bool createMipChain();
-    [[nodiscard]] bool createRenderPasses();
     [[nodiscard]] bool createPipelines();
     [[nodiscard]] bool createDescriptors();
     void destroyMipChain();
 
-    void executeInput(VkCommandBuffer cmd, VkDescriptorSet inputSet);
-    [[nodiscard]] bool createFramebuffers();   // one per mip; rebuilt with the mip chain
-    void executeDownsample(VkCommandBuffer cmd);
-    void executeUpsample(VkCommandBuffer cmd);
+    // One fullscreen draw into `mip` of the chain; `set` holds what it samples, `params` its SampleParams or null.
+    void draw(const render::Frame& frame, uint32_t mip, render::Load load, VkPipeline pipeline, VkPipelineLayout layout,
+              VkDescriptorSet set, const void* params);
 
     // Input
     VkImageView m_hdrInputView{VK_NULL_HANDLE};
 
-    // Bloom mip chain
-    VkImage m_bloomImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_bloomMemory{VK_NULL_HANDLE};
-    std::array<VkImageView, MAX_MIP_LEVELS> m_mipViews{};
-    std::array<VkFramebuffer, MAX_MIP_LEVELS> m_framebuffers{};
+    // The mip chain: level i is half level i - 1.
+    gpu::Image m_chain;
     uint32_t m_mipLevels{0};
     std::array<glm::uvec2, MAX_MIP_LEVELS> m_mipSizes{};
-
-    // Render passes
-    VkRenderPass m_inputRenderPass{VK_NULL_HANDLE};
-    VkRenderPass m_downsampleRenderPass{VK_NULL_HANDLE};
-    VkRenderPass m_upsampleRenderPass{VK_NULL_HANDLE};
 
     // Pipelines
     VkPipeline m_inputPipeline{VK_NULL_HANDLE};

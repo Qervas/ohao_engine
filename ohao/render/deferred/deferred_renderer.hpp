@@ -32,6 +32,7 @@
 namespace ohao::render { class RenderScene; class GpuPassTimer; }
 
 namespace ohao {
+class GpuAllocator;
 
 // Full deferred rendering pipeline that orchestrates all passes
 // This is the main entry point for AAA-quality rendering
@@ -40,7 +41,7 @@ public:
     DeferredRenderer() = default;
     ~DeferredRenderer();
 
-    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator);
     // VK_KHR_ray_query is enabled on the device (before initialize): RT direct light and RT GI
     // trace with inline ray queries; without them lighting loops over the lights, CSM for the sun.
     void setRayQuerySupported(bool on) noexcept { m_rayQuery = on; }

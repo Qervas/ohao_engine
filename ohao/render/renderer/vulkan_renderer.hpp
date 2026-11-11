@@ -29,6 +29,7 @@
 #include "render/frame/frame_resources.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
@@ -582,6 +583,8 @@ private:
 
     // Bindless texture manager
     std::unique_ptr<BindlessTextureManager> m_textureManager;
+    // Every pass's images and buffers (step 4a): named, and destroyed after the frames in flight.
+    GpuAllocator m_allocator;
 
     // Persistent GPU render world; recordUpdates runs at the start of every frame body.
     std::unique_ptr<render::RenderScene> m_renderScene;

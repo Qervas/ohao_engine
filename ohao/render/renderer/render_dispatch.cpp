@@ -128,6 +128,7 @@ void VulkanRenderer::renderDeferred() {
     const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();
     if (m_textureManager) m_textureManager->onFrameRetired();
+    m_allocator.collect();
     m_frameResources.resetFrame(m_currentFrame);
 
     // Update camera data
@@ -336,6 +337,7 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();   // retire-queue tick, after the slot's fence wait
     if (m_textureManager) m_textureManager->onFrameRetired();
+    m_allocator.collect();
     m_frameResources.resetFrame(m_currentFrame);
 
     glm::mat4 view = m_camera->getViewMatrix();

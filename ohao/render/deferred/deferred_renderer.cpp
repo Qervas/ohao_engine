@@ -17,7 +17,7 @@ DeferredRenderer::~DeferredRenderer() {
     cleanup();
 }
 
-bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator) {
     m_device = device;
     m_physicalDevice = physicalDevice;
 
@@ -91,6 +91,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
+    m_postProcessing->setAllocator(allocator);
     if (!m_postProcessing->initialize(device, physicalDevice)) {
         OHAO_LOG(Error, render, "DeferredRenderer: PostProcessing failed");
         return false;

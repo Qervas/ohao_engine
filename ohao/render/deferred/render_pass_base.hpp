@@ -11,6 +11,8 @@
 
 namespace ohao {
 
+class GpuAllocator;
+
 // Forward declarations
 class Scene;
 struct FrameResources;
@@ -55,6 +57,9 @@ public:
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_device != VK_NULL_HANDLE; }
 
+    // Before initialize(): where the pass's images and buffers come from (step 4a).
+    void setAllocator(GpuAllocator& allocator) noexcept { m_allocator = &allocator; }
+
     // Initialize pass resources (pipelines, descriptors, etc.)
     [[nodiscard]] virtual bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) = 0;
 
@@ -77,6 +82,7 @@ public:
 protected:
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
 
     // Shader base path (shared across all passes)
     static inline std::string s_shaderBasePath = "bin/shaders/";
