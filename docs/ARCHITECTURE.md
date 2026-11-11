@@ -242,8 +242,9 @@ VulkanRenderer::render()
   (vkWaitForPresentKHR, gpu/vulkan/present_waiter.hpp); a realtime window host stamps each
   frame (poll, view, submit, present) and the look movements it shows into its FrameLog
   (runtime/frame_log.hpp): render.stats' latency and pacing, ohao_game --latency, feel_bench;
-  before polling it waits until at most LiveConfig::framesAhead frames are unpresented
-  (presentToAwait, VulkanRenderer::waitForPresentOf; 1 with a look-led player), and before
+  a frame at the display's rate starts on the display's refreshes (LiveHost::onRefreshGrid);
+  with a look-led player it polls only once the GPU has finished the frame before
+  (VulkanRenderer::waitForSubmitted), and before
   sync it sets World::setPendingLook to the look no step has consumed yet
 ```
 

@@ -101,11 +101,6 @@ struct LiveConfig {
     bool autoExposure{true};
     // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
     std::size_t frameLogCapacity{FrameLog::kCapacity};
-    // Late input sampling: at most this many submitted frames not yet presented when a realtime
-    // frame polls its input (presentToAwait). -1: automatic, 1 while the world has a look-led
-    // player (a play window), unbounded otherwise; a larger number than MAX_FRAMES_IN_FLIGHT never
-    // waits.
-    int framesAhead{-1};
 };
 
 struct RunReport {
@@ -174,8 +169,10 @@ private:
     void renderFrame();   // world.sync, the world's view, render + present
     // The present stamps the renderer resolved, into the frame log.
     void collectPresents();
-    // LiveConfig::framesAhead resolved for this frame.
-    [[nodiscard]] int framesAhead() const;
+    // The world has a look-led player in control (a play window): a frame's input is polled late.
+    [[nodiscard]] bool pollsLate() const;
+    // `t` moved to the nearest frame start on the display's refreshes (unchanged until one is known).
+    [[nodiscard]] FrameTime onRefreshGrid(FrameTime t) const;
     // ohao_game --latency: the measured numbers as HUD text, top left.
     void drawLatencyReadout(render::HudList& hud) const;
     // Readback copies the renderer made beyond the host's own requests (a bug if not 0).
@@ -209,12 +206,19 @@ private:
         uint64_t shownFrame{0};       // the frame that first showed it in full (0: none yet)
     };
     static constexpr std::size_t kMaxLooksInFlight = 4096;
-    static constexpr std::chrono::microseconds kFramesAheadTimeout{20000};
     void trackLook(FrameTime poll, bool injected);
     void lookConsumed(LookInFlight& l, FrameTime at);
     FrameLog m_frameLog;
     std::vector<LookInFlight> m_looks;
     FrameTime m_lastFrameStart{};
+    // Frames at the display's rate start on its refreshes, not on a timer that drifts across them: the
+    // compositor takes a frame at one point of each refresh, so a start that drifts shows up to a refresh
+    // later (docs/notes/platform.md, "Latency on this laptop").
+    bool m_refreshLocked{false};   // the cap is the display's refresh rate, and presents are confirmed
+    FrameTime m_refreshAt{};       // a refresh, as the present stamps place it (each stamp moves it a tenth)
+    // A frame starts this long before a stamp's place in the refresh: measured under KWin, starts from
+    // 0.6 ms after it show a refresh later.
+    static constexpr std::chrono::microseconds kRefreshLead{450};
     std::chrono::nanoseconds m_framePeriod{0};   // the frame-rate cap's period (0: none)
     int m_maxFps{0};
     FrameTime m_frameView{};   // this frame's view resolve (renderFrame)

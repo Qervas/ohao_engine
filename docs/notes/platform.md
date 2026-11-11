@@ -82,15 +82,35 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
       player's movements, which nothing shows, were counted at about 55 ms until `PhysicsScene::ignoresLook`:
       the median read 23 to 24 ms and the p95 63 ms.)
     - From submit to present is 20 to 22 ms: the frame's 9 ms on the GPU, then 7 to 9 ms to the display through
-      the compositor. Polling only once the previous frame is presented (`--frames-ahead 0`) gives 15.7 ms from
-      submit to present and 20.8 ms latency, at 16.9 ms a frame; two frames ahead gives 29.4 ms.
+      the compositor.
     - With the render scale (`feel_bench --render-scale`, 20 s each): 16.7 ms at 0.667 (4.7 ms frames) and
       12.7 ms at 0.5 (4.2 ms frames), against 20.8 ms at 1. From submit to present stays 12 to 16 ms: with the GPU
       at 3 to 5 ms a frame, most of it is the compositor's.
     - `VK_KHR_present_wait`'s time agrees with the compositor's own (Wayland's presentation-time, read in the same
       run) to 0.3 ms.
-    - Polling when the GPU finishes the newest frame, instead of at a present, measured 18.9 ms against 20.1 ms
-      while alive, one run each: not kept, the difference is not shown to be above the spread.
+    - **Pacing** (2026-11-11). Until then a play window polled once the frame before the newest was presented.
+      A present comes about three refreshes (240 Hz) after its submit here, so at scale 0.5 that gave two frames
+      every three refreshes while the player lived (160 a second, 4.2 and 8.4 ms alternating) and 237 a second
+      while dead: `frame_p99_over_median` 2.1 to 2.8. Now a frame starts on the display's refreshes and polls
+      once the GPU has finished the frame before (`docs/changes/2026-11-11-frame-pacing.md`):
+
+      | Scale | Latency, median / p95 (ms) | Frame, median / p99 (ms) | p99 / median |
+      |---|---|---|---|
+      | 1, before | 20.82 / 25.1 to 25.3 (3 runs) | 9.1 / 17.2 to 17.5 | 1.87 to 1.92 |
+      | 1 | 19.6 to 20.3 / 22.1 to 23.1 (4 runs) | 9.1 / 11.5 to 12.4 | 1.27 to 1.36 |
+      | 0.667, before | 16.6 to 16.7 / 17.5 to 17.8 (2 runs) | 4.9 / 13.4 | 2.7 to 2.8 |
+      | 0.667 | 15.6 to 15.8 / 17.7 to 18.3 (3 runs) | 4.5 / 6.4 to 7.3 | 1.44 to 1.61 |
+      | 0.5, before | 12.5 / 13.5 | 4.2 / 9.0 | 2.12 |
+      | 0.5 | 13.0 / 13.6 to 14.1 (2 runs) | 4.17 / 4.3 | 1.02 to 1.04 |
+
+    - **The compositor takes a frame at one point of each refresh.** At scale 0.5, one frame a refresh, the
+      latency against the frame's start (after a present stamp, 10 s each): +1.0 ms 15.6, +2.0 ms 14.6, +3.0 ms
+      13.6, -0.45 ms 13.0, 0 12.5, +0.25 ms 12.2, +0.5 ms 12.2 (p95 16.3: some frames a refresh late), +0.75 ms
+      15.8. A timer at 240 a second (237 measured) drifts through all of these: 14.1 ms, p95 16.0. The start is
+      0.45 ms before the stamp (`LiveHost::kRefreshLead`), the latest with a steady p95.
+    - **Fifo** shows every frame for a refresh, so at one frame a refresh a frame waits for the one before: 17.1 ms
+      at scale 0.5 (16.5 to 19.2 at four other starts), at 240 even frames a second. The old wait read 12.5 ms
+      there, at 160 uneven frames a second (p99 / median 3.06). Mailbox, the default, reads as immediate (12.9 ms).
   - **A window measures nothing with the display asleep.** KWin discards every frame, and a frame's present is then
     confirmed only when the next frame replaces it, which reads as a present a frame late. `feel_bench` exits 2
     when no connected display is on (`/sys/class/drm/*/dpms`); `kscreen-doctor --dpms on` wakes it.

@@ -251,9 +251,12 @@ step 2h, 2026-11-09), unchanged.
     position is); anything else interpolates as before. Presentation only: `RenderPose`, never
     `Transform`, `world.hash`, a file or a snapshot; no lead in lockstep (alpha 1, nothing pending),
     for the dead, or for characters moved by their `MoveIntent`.
-  - **Late input sampling:** a realtime frame polls only once at most `LiveConfig::framesAhead`
-    submitted frames are unpresented (`presentToAwait`; it waits on present wait, else the frame's
-    fence, at most 20 ms). Automatic (-1): 1 while a player leads its look, unbounded otherwise.
+  - **Late input sampling:** while a player leads its look, a realtime frame polls only once the GPU has
+    finished the frame before (`LiveHost::pollsLate`, the frame's fence): its input goes into a frame the
+    GPU starts at once. No wait otherwise.
+  - **Frames start on the display's refreshes** (`LiveHost::onRefreshGrid`): at the display's rate (the
+    default cap, fifo included) a frame starts 0.45 ms before a refresh, placed by the present stamps, not
+    on a timer that drifts across them. The measurements: `docs/notes/platform.md`, "A window's latency".
   - **Stalls:** every window on this laptop gets a few frames a minute of 330–500 ms (5–16 a
     minute measured) in which the presentation engine holds the swapchain's images: the frame's
     GPU work is normal and starts late, nothing of the engine's is queued in the gap, and a
