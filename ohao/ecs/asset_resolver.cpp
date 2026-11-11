@@ -8,7 +8,7 @@ namespace ohao::ecs {
 namespace fs = std::filesystem;
 
 FileAssetResolver::FileAssetResolver(fs::path projectRoot)
-    : m_root(fs::absolute(std::move(projectRoot)).lexically_normal()) {}
+    : m_root(fs::absolute(std::move(projectRoot)).lexically_normal()), m_cache{m_root / ".ohao" / "cooked"} {}
 
 fs::path FileAssetResolver::absolutePath(const AssetRef& ref) const {
     if (ref.path.empty()) return {};
@@ -46,31 +46,30 @@ Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(co
     const auto invalid = [&](const std::string& why) {
         return R::err({"E_ASSET_INVALID", "'" + ref.path + "' could not be loaded: " + why});
     };
-    if (mesh.empty()) {
-        auto loaded = ModelLoader::loadResult(file);
-        if (!loaded || !loaded.value()) return invalid(loaded ? std::string("the loader returned nothing") : loaded.error());
-        std::shared_ptr<const Model> model = std::move(loaded.value());
-        std::lock_guard lock(m_mutex);
-        m_models.emplace(key, model);
-        return R::ok(std::move(model));
-    }
-    // One mesh of a file: the file is imported once, for all of its meshes.
-    std::shared_ptr<const ModelLoader::FileMeshes> meshes;
+    // The file's cooked model (cooked now when the cache has none): every mesh of it, or the whole file as one.
+    const cook::ModelKind kind = mesh.empty() ? cook::ModelKind::Whole : cook::ModelKind::Meshes;
+    const std::string fileKey = file + (mesh.empty() ? "\nwhole" : "\nmeshes");
+    std::shared_ptr<const cooked::ModelFile> cookedFile;
     {
         std::lock_guard lock(m_mutex);
-        if (const auto it = m_files.find(file); it != m_files.end()) meshes = it->second;
+        if (const auto it = m_files.find(fileKey); it != m_files.end()) cookedFile = it->second;
     }
-    if (!meshes) {
-        auto loaded = ModelLoader::loadMeshes(file);
+    if (!cookedFile) {
+        auto loaded = cook::cookedModel(m_cache, p, kind);
         if (!loaded) return invalid(loaded.error());
-        meshes = std::move(loaded.value());
+        cookedFile = std::move(loaded.value());
         std::lock_guard lock(m_mutex);
-        m_files.emplace(file, meshes);
+        m_files.emplace(fileKey, cookedFile);
     }
-    const auto index = ModelLoader::findMesh(*meshes, file, mesh);
-    if (!index) return invalid(index.error());
-    std::shared_ptr<const Model> model = meshes->meshes[index.value()];
-    if (!model) return invalid(meshes->errors[index.value()]);
+    std::size_t index = 0;
+    if (!mesh.empty()) {
+        const auto found = cookedFile->find(file, mesh);
+        if (!found) return invalid(found.error());
+        index = found.value();
+    }
+    auto made = cook::toModel(m_cache, cookedFile->mesh(index), p);
+    if (!made) return invalid(made.error());
+    std::shared_ptr<const Model> model = std::move(made.value());
     std::lock_guard lock(m_mutex);
     m_models.emplace(key, model);
     return R::ok(std::move(model));
@@ -87,7 +86,8 @@ void FileAssetResolver::forget(const AssetRef& ref) {
     if (p.empty()) return;
     const std::string file = p.generic_string();
     std::lock_guard lock(m_mutex);
-    m_files.erase(file);
+    m_files.erase(file + "\nwhole");
+    m_files.erase(file + "\nmeshes");
     std::erase_if(m_models, [&](const auto& entry) {   // the whole file and each mesh of it ("file\nmesh")
         return entry.first == file || (entry.first.size() > file.size() && entry.first.starts_with(file) &&
                                        entry.first[file.size()] == '\n');

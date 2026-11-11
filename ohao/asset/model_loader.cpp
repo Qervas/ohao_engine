@@ -247,29 +247,6 @@ Result<std::shared_ptr<const ModelLoader::FileMeshes>> ModelLoader::loadMeshes(s
     return R::ok(std::move(file));
 }
 
-Result<std::size_t> ModelLoader::findMesh(const FileMeshes& file, std::string_view path, std::string_view mesh) {
-    using R = Result<std::size_t>;
-    const std::string where = "'" + std::string(path) + "'";
-    const int count = static_cast<int>(file.names.size());
-    int index = -1;
-    if (!mesh.empty() && mesh.front() == '#') {
-        int value = 0;
-        const auto [end, ec] = std::from_chars(mesh.data() + 1, mesh.data() + mesh.size(), value);
-        if (ec == std::errc() && end == mesh.data() + mesh.size() && value >= 0 && value < count) index = value;
-    } else {
-        for (int i = 0; i < count; ++i) {
-            if (file.names[static_cast<std::size_t>(i)] != mesh) continue;
-            if (index >= 0)
-                return R::err(where + ": meshes " + std::to_string(index) + " and " + std::to_string(i) + " are both named '" +
-                              std::string(mesh) + "'; use '#" + std::to_string(index) + "'");
-            index = i;
-        }
-    }
-    if (index < 0)
-        return R::err(where + " has no mesh '" + std::string(mesh) + "' (" + std::to_string(count) + " meshes)");
-    return R::ok(static_cast<std::size_t>(index));
-}
-
 // === OBJ Loader (native) ===
 
 std::shared_ptr<Model> ModelLoader::loadOBJ(std::string_view path) {

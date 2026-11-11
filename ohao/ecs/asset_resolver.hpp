@@ -2,7 +2,8 @@
 // Turns AssetRefs (project-relative paths) into loaded assets. Instantiate loads models
 // through it; validation (checkAssets) asks it whether a file exists. Tests and tools
 // substitute their own implementation, so nothing below them touches the disk.
-#include "asset/model_loader.hpp"
+#include "asset/cooked.hpp"
+#include "cook/cook.hpp"
 #include "core/result.hpp"
 #include "ecs/components.hpp"
 
@@ -56,8 +57,9 @@ private:
     std::filesystem::path m_root;
     std::mutex m_mutex;
     std::unordered_map<std::string, std::shared_ptr<const Model>> m_models;
-    // A glTF file's meshes, imported together the first time one is asked for.
-    std::unordered_map<std::string, std::shared_ptr<const ModelLoader::FileMeshes>> m_files;
+    // A source file's cooked model, by its path and what was asked of it (its meshes, or the whole file).
+    std::unordered_map<std::string, std::shared_ptr<const cooked::ModelFile>> m_files;
+    cook::Cache m_cache;   // <root>/.ohao/cooked
 };
 
 } // namespace ohao::ecs

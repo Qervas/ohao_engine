@@ -126,7 +126,7 @@ Each is one or a few commits with the hooks green.
   - `ohao/cook`: a source file imported once, whole, into cooked assets: one per mesh (vertex and index data, the
     submeshes, the material slots), one per material, one per texture (RGBA8 with its mips, the format a field), a
     level's structure, a file's skins and clips as they are read today.
-  - The content hash, the cache directory, the `(path, size, mtime)` index, `ohao cook [paths]`.
+  - The content hash and the cache directory.
   - Proven by the bit-for-bit comparison against today's loader, and by a planted change to a source file cooking
     again while an untouched one does not.
   - *As built, first piece (2026-11-11): a file is imported once.* `ModelLoader::loadMeshes` imports a glTF file
@@ -138,6 +138,28 @@ Each is one or a few commits with the hooks green.
     - The 188 loads took 9.0 s + 29.3 s before and 6.4 s + 6.9 s after.
     - kit2k's load went from 45.6 s to 33.5 s only: the rest is its 2,000 mesh colliders, each built from its
       25,000 triangles (5f's shape cache). `blockout_load_ms` 1.24 ms (budget 20).
+  - *As built, the cache (2026-11-11).*
+    - `asset/content_hash.hpp`: a 128-bit hash written here (two lanes of a folded 64x64 multiply over 8-byte
+      words). `asset/cooked.{hpp,cpp}`: the model file (a source's meshes: vertices, indices, a material slot a
+      triangle, materials with their textures' names, joint names) and the texture file (RGBA8, level 0), read in
+      place from a mapping and written through a temporary and a rename.
+    - `ohao/cook` (`ohao_cook`, level 3): `cookedModel` names a source by its bytes, the bytes of every buffer and
+      image a glTF names, what was asked (its meshes, or the whole file) and the versions, and cooks it when the
+      cache has no such file. `FileAssetResolver` loads only through it, and makes a `Model` of the cooked mesh
+      (`cook::toModel`, the bridge 5c removes).
+    - **Mips stay the GPU's until 5e**, so 5b and 5c change no pixel: the texture file holds level 0.
+    - **No `(path, size, mtime)` index:** a source is hashed at each load (Sponza's 108 MB with its images among
+      the 0.64 s below). Built if a measurement asks.
+    - **No `ohao cook` yet:** every host cooks on demand, and nothing ships without the cooker. Built with the
+      first build that does.
+    - Identical: `model_hash`'s 188 lines through the cache, cold and warm; the five goldens. A copy of the
+      blockout cooks nothing (same content, another path); one byte of its buffer changed cooks once; the untouched
+      copy and a second load cook nothing.
+    - First frame, the cache warm (`asset_bench`; before in brackets): play 0.27 s (0.28 to 0.30), helmet 0.32 s
+      (0.41), Sponza 0.64 s (1.23), flat42 0.33 s (0.47), kit2k 35.5 s (47.9; its colliders). The first load of
+      each cooks: helmet 0.50 s, Sponza 1.51 s, flat42 0.54 s. `blockout_load_ms` 0.92 ms.
+    - The cache of every scene here is 511 MB (uncompressed pixels, a texture once). It only grows: unused files
+      stay until `.ohao/` is deleted, which is always safe.
 - **5c, the runtime reads cooked data only.**
   - The asset manager replaces `FileAssetResolver`'s model cache: handles to cooked assets, mapped from the cache,
     cooked on demand. A texture is one asset by content: decoded never, uploaded once whoever uses it.

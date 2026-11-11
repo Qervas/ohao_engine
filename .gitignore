@@ -97,3 +97,6 @@ smoke_test.png
 
 # Agent workflow scratch (progress logs, briefs, review diffs): never committed
 .superpowers/
+
+# The cooked asset cache (step 5): made from the sources, named by their content.
+.ohao/

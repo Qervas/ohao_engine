@@ -39,8 +39,6 @@ public:
         std::vector<std::string> errors;
     };
     [[nodiscard]] static Result<std::shared_ptr<const FileMeshes>> loadMeshes(std::string_view path);
-    /// The index in `file` of the mesh named `mesh`, or "#<index>".
-    [[nodiscard]] static Result<std::size_t> findMesh(const FileMeshes& file, std::string_view path, std::string_view mesh);
 
     /// Extension without leading dot, lowercased (e.g. "glb").
     [[nodiscard]] static std::string getExtension(std::string_view path);
