@@ -105,7 +105,8 @@ public:
     BlasHandle createBLAS(VkBuffer vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride,
                           VkBuffer indexBuffer, uint32_t indexCount,
                           VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                          VkCommandBuffer cmd, uint32_t firstVertex = 0, bool updatable = false);
+                          VkCommandBuffer cmd, uint32_t firstVertex = 0, bool updatable = false,
+                          RetiredTlas* ownScratch = nullptr);
 
     // Destroy a specific BLAS
     void destroyBLAS(BlasHandle handle);

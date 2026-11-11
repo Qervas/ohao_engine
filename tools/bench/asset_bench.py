@@ -80,14 +80,19 @@ def loop(rounds):
             return {**{k: memory[k] for k in HELD}, "residentBytes": resident(s.proc.pid)[0]}
         rows.append(rest())
         for _ in range(rounds):
+            arrive = {}
             for name in LOOP:
+                # A scene arriving in a running engine: its load and the first frame that shows it.
+                start = time.perf_counter()
                 s.load(SCENES[name])
                 s.call("render.capture", {"path": out + "/frame.png", "width": 640, "height": 360})
-            rows.append(rest())
+                arrive[name] = (time.perf_counter() - start) * 1e3
+            rows.append({**rest(), "arrive": arrive})
     for i, r in enumerate(rows):
         print("round %2d  textures %3d %7.1f MB  meshes %3d %6.1f MB  blas %3d %6.1f MB  materials %4d  resident %6.1f MB"
               % (i, r["textures"], r["textureBytes"] / 1048576.0, r["meshes"], r["meshBytes"] / 1048576.0, r["blas"],
-                 r["blasBytes"] / 1048576.0, r["materials"], r["residentBytes"] / 1048576.0))
+                 r["blasBytes"] / 1048576.0, r["materials"], r["residentBytes"] / 1048576.0)
+              + "".join("  %s %.0f ms" % (n, ms) for n, ms in r.get("arrive", {}).items()))
     failures = ["%s: %d at rest, %d after round %d" % (k, rows[0][k], r[k], i)
                 for i, r in enumerate(rows) for k in HELD if r[k] != rows[0][k]][:8]
     # Resident memory settles after the first round (caches fill once): it must not climb from there.

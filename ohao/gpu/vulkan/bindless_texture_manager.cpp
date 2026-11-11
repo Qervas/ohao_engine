@@ -71,6 +71,8 @@ bool BindlessTextureManager::initialize(VkInstance instance, VkDevice device, Vk
         vkGetDeviceQueue(m_device, graphicsQueueFamily, 0, &m_graphicsQueue);
     }
 
+    m_work.initialize(m_device, m_graphicsQueue, m_commandPool);
+
     if (!createDescriptorResources()) {
         return false;
     }
@@ -87,6 +89,7 @@ void BindlessTextureManager::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
 
     vkDeviceWaitIdle(m_device);
+    m_work.shutdown();
 
     // Destroy all loaded textures
     for (auto& tex : m_textures) {
@@ -367,6 +370,7 @@ void BindlessTextureManager::releaseContent(BindlessTextureHandle handle) {
 }
 
 void BindlessTextureManager::onFrameRetired() {
+    m_work.collect();
     ++m_frame;
     std::erase_if(m_retired, [&](const RetiredTexture& r) {
         if (r.at > m_frame) return false;
@@ -479,7 +483,7 @@ void BindlessTextureManager::flushUploads() {
 void BindlessTextureManager::uploadPending() {
     if (m_pending.empty()) return;
     // One staging buffer and one submit for as many textures as fit kStaging (a larger one goes alone): a load's
-    // textures are a few submits, each bounded.
+    // textures are a few submits, each bounded, none waited for (gpu::SubmittedWork).
     const auto bytesOf = [](const PendingUpload& u) { return static_cast<VkDeviceSize>((u.bytes + 15) & ~std::size_t(15)); };
     for (std::size_t first = 0; first < m_pending.size();) {
         VkDeviceSize size = bytesOf(m_pending[first]);
@@ -493,19 +497,11 @@ void BindlessTextureManager::uploadPending() {
             if (staging.isValid()) m_allocator.destroyBuffer(staging);
             break;
         }
-        const VkCommandBufferAllocateInfo cmdInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool = m_commandPool,
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-        VkCommandBuffer cmd;
-        vkAllocateCommandBuffers(m_device, &cmdInfo, &cmd);
-        const VkCommandBufferBeginInfo beginInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        };
-        vkBeginCommandBuffer(cmd, &beginInfo);
+        const VkCommandBuffer cmd = m_work.begin();
+        if (cmd == VK_NULL_HANDLE) {
+            m_allocator.destroyBuffer(staging);
+            break;
+        }
 
         auto* mapped = static_cast<uint8_t*>(staging.getMappedData());
         VkDeviceSize offset = 0;
@@ -524,15 +520,10 @@ void BindlessTextureManager::uploadPending() {
             offset += bytesOf(u);
         }
         m_allocator.flushBuffer(staging);
-        vkEndCommandBuffer(cmd);
-        const VkSubmitInfo submitInfo{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &cmd,
-        };
-        gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
-        m_allocator.destroyBuffer(staging);
+        // Not waited for: the queue runs it before any frame submitted afterwards, which is the first that can
+        // sample these textures. The staging buffer goes when it has run.
+        GpuAllocator* allocator = &m_allocator;
+        m_work.submit(cmd, "texture upload", size, [allocator, staging]() mutable { allocator->destroyBuffer(staging); });
         first = last;
     }
     m_pending.clear();

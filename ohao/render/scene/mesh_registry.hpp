@@ -1,6 +1,7 @@
 #pragma once
 #include "render/scene/render_scene_types.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
+#include "gpu/vulkan/submitted_work.hpp"
 
 #include <vulkan/vulkan.h>
 #include <map>
@@ -13,7 +14,9 @@ namespace ohao::render {
 // submeshes' meshlets (asset/meshlets.hpp) to the meshlet arenas: the meshlets
 // (gpu::shared::MeshletGpu), their vertices (mesh-local indices) and their packed local
 // triangles. Each mesh owns one BLAS built against the arenas, from its original
-// triangles. Registration is load-time work: it uploads and builds synchronously.
+// triangles. Registration records the uploads and the BLAS build in one command buffer and submits it without
+// waiting (gpu::SubmittedWork): the queue runs it before any frame submitted afterwards, so the handle is good at
+// once, and the caller never waits for the device.
 // A released mesh's ranges and its index are given back by reclaim(), which the owner calls once no frame in flight
 // can read them; the next mesh that fits takes them (first fit; free neighbours merge), so loading and unloading
 // does not grow the arenas.
@@ -41,6 +44,8 @@ public:
     // Marks the mesh released (info() returns null from now on) and hands back its BLAS for the
     // caller to destroy once no frame in flight uses it. INVALID_BLAS if none or unknown.
     [[nodiscard]] BlasHandle release(MeshHandle h);
+    // Frees the staging and scratch buffers of registrations the GPU has finished. Every frame; never waits.
+    void collect() { m_work.collect(); }
     // Gives a released mesh's arena ranges and its index to the next registration. The index's generation moves,
     // so a handle to the old mesh stays stale.
     void reclaim(uint32_t index);
@@ -100,11 +105,13 @@ private:
     // The mesh table's row for a new mesh: a reclaimed index, else the next. False: no room.
     [[nodiscard]] bool takeIndex(VkCommandBuffer cmd, std::vector<GpuBuffer>& retired, uint32_t& grown, uint32_t& index);
     MeshHandle place(uint32_t index, MeshInfo&& mesh);
-    void buildBlas(MeshInfo& mesh, bool updatable = false);
-    [[nodiscard]] VkCommandBuffer beginOneShot();
-    void endOneShot(VkCommandBuffer cmd);
+    // Records the mesh's BLAS build on `cmd` (after its vertices' and indices' copies); `scratch` is the build's.
+    void buildBlas(MeshInfo& mesh, VkCommandBuffer cmd, RetiredTlas& scratch, bool updatable = false);
+    // Submits a registration without waiting; its staging and scratch buffers go when it has run.
+    void submit(VkCommandBuffer cmd, GpuBuffer staging, RetiredTlas scratch);
 
     Context m_ctx{};
+    gpu::SubmittedWork m_work;
     Arena m_vertices, m_indices, m_triangleSlots, m_meshTable;
     Arena m_meshlets, m_meshletVertices, m_meshletTriangles;
     std::vector<MeshInfo> m_meshes;        // by index; a reclaimed one waits in m_freeIndices

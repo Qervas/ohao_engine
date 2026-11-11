@@ -2,6 +2,7 @@
 
 #include "core/concepts.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
+#include "gpu/vulkan/submitted_work.hpp"
 
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -127,8 +128,9 @@ public:
     void releaseContent(BindlessTextureHandle handle);
     static constexpr uint32_t kRetireFrames = 3;   // at least the renderer's frames in flight
     void onFrameRetired();                         // once per frame, after the frame slot's fence wait
-    // Uploads the textures still waiting (a load uploads as it goes, one staging buffer and one submit per 64 MB
-    // of pixels) and writes the table once.
+    // Submits the uploads of the textures still waiting (a load uploads as it goes, one staging buffer and one
+    // submit per 64 MB of pixels) and writes the table once. It does not wait for the GPU: a frame submitted
+    // afterwards samples them uploaded.
     void flushUploads();
 
     /// Overwrite an existing texture's texels in place (same WxH). No new slot / no unload.
@@ -228,6 +230,7 @@ private:
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
     GpuAllocator m_allocator;   // the textures' images and the staging buffers
+    gpu::SubmittedWork m_work;  // the uploads the GPU has not finished
 
     // Descriptor resources
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};

@@ -31,6 +31,7 @@ constexpr VkBufferUsageFlags kTableUsage =
 
 bool MeshRegistry::initialize(const Context& ctx) {
     m_ctx = ctx;
+    m_work.initialize(ctx.device, ctx.queue, ctx.commandPool);
     return createArena(m_vertices, kVertexStride, kInitialVertices,
                        kGeometryUsage | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) &&
            createArena(m_indices, sizeof(uint32_t), kInitialIndices,
@@ -43,6 +44,7 @@ bool MeshRegistry::initialize(const Context& ctx) {
 }
 
 void MeshRegistry::shutdown() {
+    m_work.shutdown();
     if (m_ctx.rt) {
         for (auto& mesh : m_meshes) {
             if (mesh.blas != INVALID_BLAS) m_ctx.rt->destroyBLAS(mesh.blas);
@@ -162,32 +164,23 @@ MeshHandle MeshRegistry::place(uint32_t index, MeshInfo&& mesh) {
     return MeshHandle{index, m_generations[index]};
 }
 
-VkCommandBuffer MeshRegistry::beginOneShot() {
-    VkCommandBufferAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    ai.commandPool = m_ctx.commandPool;
-    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = 1;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    if (vkAllocateCommandBuffers(m_ctx.device, &ai, &cmd) != VK_SUCCESS) return VK_NULL_HANDLE;
-    VkCommandBufferBeginInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bi);
-    return cmd;
+void MeshRegistry::submit(VkCommandBuffer cmd, GpuBuffer staging, RetiredTlas scratch) {
+    // What a frame submitted after this reads (the arenas, the BLAS) is written.
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    GpuAllocator* allocator = m_ctx.allocator;
+    RTAccelerationStructure* rt = m_ctx.rt;
+    m_work.submit(cmd, "mesh upload", staging.sizeBytes(), [allocator, rt, staging, scratch]() mutable {
+        allocator->destroyBuffer(staging);
+        if (rt) rt->destroyRetired(scratch);
+    });
 }
 
-void MeshRegistry::endOneShot(VkCommandBuffer cmd) {
-    vkEndCommandBuffer(cmd);
-    VkSubmitInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
-    gpu::submitAndWait(m_ctx.device, m_ctx.queue, si, "mesh upload");
-    vkFreeCommandBuffers(m_ctx.device, m_ctx.commandPool, 1, &cmd);
-}
-
-void MeshRegistry::buildBlas(MeshInfo& mesh, bool updatable) {
+void MeshRegistry::buildBlas(MeshInfo& mesh, VkCommandBuffer cmd, RetiredTlas& scratch, bool updatable) {
     mesh.blas = INVALID_BLAS;
     if (!m_ctx.rt || !m_ctx.rt->isSupported() || mesh.indexCount < 3) return;
     mesh.blas = m_ctx.rt->createBLAS(
@@ -195,9 +188,9 @@ void MeshRegistry::buildBlas(MeshInfo& mesh, bool updatable) {
         m_indices.buf.buffer, mesh.indexCount,
         static_cast<VkDeviceSize>(mesh.vertexOffset) * kVertexStride,
         static_cast<VkDeviceSize>(mesh.indexOffset) * sizeof(uint32_t),
-        VK_NULL_HANDLE,          // own one-shot command buffer (load time)
+        cmd,
         mesh.vertexOffset,       // arena indices are mesh-local
-        updatable);
+        updatable, &scratch);
 }
 
 MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<GpuBuffer>& retired, uint32_t& grown) {
@@ -217,7 +210,7 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
     }
     if (baseFirst == UINT32_MAX) baseFirst = 0;
 
-    VkCommandBuffer cmd = beginOneShot();
+    VkCommandBuffer cmd = m_work.begin();
     if (cmd == VK_NULL_HANDLE) return {};
     uint32_t index = 0, firstCopy = 0;
     const bool tookVertices = take(m_vertices, mesh.vertexCount, cmd, retired, grown, mesh.vertexOffset);
@@ -268,15 +261,15 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
     barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0,
                          nullptr, 0, nullptr);
-    endOneShot(cmd);
-    m_ctx.allocator->destroyBuffer(staging);
+    RetiredTlas scratch;
+    if (ok) buildBlas(mesh, cmd, scratch, true);
+    submit(cmd, staging, scratch);
     if (!ok) {
         if (tookVertices) give(m_vertices, mesh.vertexOffset, mesh.vertexCount);
         if (tookMeshlets) give(m_meshlets, firstCopy, meshletCount);
         if (tookIndex) m_freeIndices.push_back(index);
         return {};
     }
-    buildBlas(mesh, true);
     return place(index, std::move(mesh));
 }
 
@@ -371,7 +364,7 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         return {};
     }
 
-    VkCommandBuffer cmd = beginOneShot();
+    VkCommandBuffer cmd = m_work.begin();
     if (cmd == VK_NULL_HANDLE) {
         m_ctx.allocator->destroyBuffer(staging);
         return {};
@@ -455,8 +448,11 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
-    endOneShot(cmd);
-    m_ctx.allocator->destroyBuffer(staging);
+    // A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so
+    // existing BLASes survive arena growth untouched.
+    RetiredTlas scratch;
+    if (ok) buildBlas(mesh, cmd, scratch);
+    submit(cmd, staging, scratch);
     if (!ok) {
         if (took > 0) give(m_vertices, mesh.vertexOffset, vertexCount);
         if (took > 1) give(m_indices, mesh.indexOffset, indexCount);
@@ -468,9 +464,6 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         return {};
     }
 
-    // A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so
-    // existing BLASes survive arena growth untouched.
-    buildBlas(mesh);
     return place(index, std::move(mesh));
 }
 
@@ -516,7 +509,7 @@ std::vector<Vertex> MeshRegistry::readVertices(MeshHandle h) {
         m_ctx.allocator->destroyBuffer(staging);
         return {};
     }
-    VkCommandBuffer cmd = beginOneShot();
+    VkCommandBuffer cmd = m_work.begin();
     if (cmd == VK_NULL_HANDLE) {
         m_ctx.allocator->destroyBuffer(staging);
         return {};
@@ -535,7 +528,8 @@ std::vector<Vertex> MeshRegistry::readVertices(MeshHandle h) {
     after.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &after, 0, nullptr, 0,
                          nullptr);
-    endOneShot(cmd);
+    m_work.submit(cmd, "mesh read", 0, {});
+    m_work.waitAll();
     m_ctx.allocator->invalidateBuffer(staging);
     std::vector<Vertex> out(mesh->vertexCount);
     std::memcpy(out.data(), staging.getMappedData(), static_cast<std::size_t>(bytes));

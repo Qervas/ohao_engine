@@ -322,6 +322,26 @@ Each is one or a few commits with the hooks green.
   - Loads run off the main thread; a frame takes finished uploads under a byte budget; an asset not yet arrived
     draws its placeholder. A lockstep host and a capture wait for everything asked (deterministic frames).
   - Done when a scene loads with no device or queue wait on the main thread.
+  - *As built (2026-11-11): no wait for the device; the thread is 4b's.*
+    - **The three waits on the load path are gone:** a mesh's upload and its BLAS build (now one command buffer,
+      the build with scratch of its own) and the textures' uploads are submitted with a fence and not waited
+      for (`gpu::SubmittedWork`). A queue runs its work in the order submitted, so the frame submitted next
+      draws the mesh, samples the texture and traces the BLAS: nothing is marked ready and nothing draws a
+      placeholder; a capture and a lockstep host see what they saw. Staging and scratch buffers go when their
+      fence has signalled (checked every frame, never waited for), at most 256 MB of them at once.
+    - **Measured:** first frame, warm: play 0.27 s to 0.23, the helmet 0.25 to 0.22, Sponza 0.28 to 0.25, flat42
+      0.25 to 0.22, kit2k 0.47 to 0.42. Gates 6 of 6 (the validation layer silent), the goldens identical, the
+      release loop passes.
+    - **A scene arriving in a running engine** (`asset_bench.py --loop` now times it: the load and the first frame
+      that shows it): Sponza 60 ms, the helmet 28 ms; with the waits put back, 65 and 31. So the waits were a few
+      milliseconds, and what remains is the main thread's own work. Sponza's instantiate is 40 ms: 13 naming its
+      source by its bytes, 7 copying its mesh to staging, 15 opening and copying its 69 textures.
+    - **Not built: preparing a load on another thread** (naming, mapping, the staging copies), a frame's byte
+      budget and a placeholder until an asset arrives. Nothing loads during play today (a scene's assets arrive
+      with the scene), and step 4b builds the job system such a loader would run on; a private thread now would
+      be rewritten there. It is 4b's first customer, with the 40 ms above as its baseline.
+    - **Still waiting for the device:** the environment map's upload and its replacement (`env_upload.cpp`), once
+      a scene.
 - **5h, hot reload and the agent's API.**
   - A watcher (inotify) on the sources in use: a changed file is cooked and swapped where it is used.
   - `asset.info` (what is loaded, its bytes, who uses it), `asset.reload`; `ohao doctor`'s `assets.present` covers

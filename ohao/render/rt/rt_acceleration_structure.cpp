@@ -224,7 +224,8 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
                                                 VkDeviceSize vertexStride,
                                                 VkBuffer indexBuffer, uint32_t indexCount,
                                                 VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                                                VkCommandBuffer cmd, uint32_t firstVertex, bool updatable) {
+                                                VkCommandBuffer cmd, uint32_t firstVertex, bool updatable,
+                                                RetiredTlas* ownScratch) {
     if (!m_supported) return INVALID_BLAS;
 
     // Geometry: point to BASE of combined buffers (not sub-range).
@@ -302,13 +303,29 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     addressInfo.accelerationStructure = entry.handle;
     entry.deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(m_device, &addressInfo);
 
-    // Ensure scratch buffer
-    ensureScratchBuffer(sizeInfo.buildScratchSize);
+    // The build's scratch: the shared buffer when the caller waits for the build, else one of the build's own
+    // (`ownScratch`, the caller's to destroy with destroyRetired once the build has run): a build recorded for
+    // later must not share scratch with the next one.
+    VkBuffer scratch = VK_NULL_HANDLE;
+    if (ownScratch) {
+        const VkDeviceSize size = (sizeInfo.buildScratchSize + m_scratchAlignment - 1) & ~(m_scratchAlignment - 1);
+        if (!createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ownScratch->buffer, ownScratch->memory)) {
+            OHAO_LOG(Error, render, "RT: failed to create a BLAS build's scratch buffer");
+            vkDestroyAccelerationStructureKHR(m_device, entry.handle, nullptr);
+            destroyBuffer(entry.buffer, entry.memory);
+            return INVALID_BLAS;
+        }
+        scratch = ownScratch->buffer;
+    } else {
+        ensureScratchBuffer(sizeInfo.buildScratchSize);
+        scratch = m_scratchBuffer;
+    }
 
     // Build
     buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     buildInfo.dstAccelerationStructure = entry.handle;
-    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
+    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(scratch);
 
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
     rangeInfo.primitiveCount = primitiveCount;

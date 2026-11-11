@@ -223,7 +223,9 @@ What every change must respect. The build checks some of these; the rest are her
   acquire and present goes through it; a lost device, or a fence not signalled within 2 s (`kGpuTimeout`, Windows' TDR
   delay), logs one `GPU fault: {...}` line on the `gpu` channel (what each frame in flight ran, from breadcrumbs the
   pass timer writes with `VK_AMD_buffer_marker`; `VK_EXT_device_fault`'s report) and exits 5 with no Vulkan teardown.
-  A new submit uses `gpu::submit` or `gpu::submitAndWait`, never `vkQueueSubmit` + `vkQueueWaitIdle`; a new pass is
+  A new submit uses `gpu::submit` or `gpu::submitAndWait`, never `vkQueueSubmit` + `vkQueueWaitIdle`; a load's work
+  (an upload, a BLAS build) goes through `gpu::SubmittedWork`, which does not wait for it (the queue runs it before the
+  next frame); a new pass is
   timed (`GpuPassTimer::begin`/`end`), or a fault inside it is reported as its neighbour's. A single submit that
   legitimately needs over 2 s is an unbounded dispatch: split it. `OHAO_INJECT_GPU_FAULT=lost:N` or `hang:N` fakes one
   at frame N without touching the GPU. Windows are capped at the display's refresh rate (`--fps N`, 0 uncapped; fifo

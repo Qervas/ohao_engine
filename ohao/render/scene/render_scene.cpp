@@ -944,6 +944,7 @@ void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
 
 void RenderScene::onFrameRetired() {
     if (!m->initialized) return;
+    m->meshes.collect();
     ++m->frameCounter;
     auto& q = m->retireQueue;
     auto keep = q.begin();
