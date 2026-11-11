@@ -108,6 +108,8 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
       13.6, -0.45 ms 13.0, 0 12.5, +0.25 ms 12.2, +0.5 ms 12.2 (p95 16.3: some frames a refresh late), +0.75 ms
       15.8. A timer at 240 a second (237 measured) drifts through all of these: 14.1 ms, p95 16.0. The start is
       0.45 ms before the stamp (`LiveHost::kRefreshLead`), the latest with a steady p95.
+    - **Fullscreen is no faster** (2026-11-11, one run): at 2560x1600 and scale 0.5 a present comes 11.5 ms after
+      the frame's 5.8 ms, against 9.3 ms after for the 1920x1080 window.
     - **Fifo** shows every frame for a refresh, so at one frame a refresh a frame waits for the one before: 17.1 ms
       at scale 0.5 (16.5 to 19.2 at four other starts), at 240 even frames a second. The old wait read 12.5 ms
       there, at 160 uneven frames a second (p99 / median 3.06). Mailbox, the default, reads as immediate (12.9 ms).

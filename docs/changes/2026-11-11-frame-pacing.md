@@ -74,5 +74,8 @@ one build, a switch choosing the rule, in turn.
 - **Between the regimes** (scale 0.667, the GPU near one refresh a frame) frames are 4.2 to 7 ms: p99 over median
   1.44 to 1.61 against the budget's 1.5.
 - **The 15 ms budget** is met only at scale 0.5 on the 4060. About 9 ms from the GPU's end to the display is the
-  compositor's. A fullscreen window was not measured.
+  compositor's.
+- **Fullscreen does not shorten the compositor's part** (one 10 s run, a switch not kept): at 2560x1600, scale
+  0.5, frames are 5.8 ms and a present comes 17.3 ms after its submit, 11.5 ms past the frame; the 1920x1080
+  window's is 9.3 ms past it. The frames come from the NVIDIA GPU and the panel is on the Intel one.
 - **Without present wait** the refreshes are not known and the cap is a timer, as before.
