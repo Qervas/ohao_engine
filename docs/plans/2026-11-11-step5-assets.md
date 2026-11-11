@@ -22,8 +22,11 @@ From a survey of the tree at `c536dafd` and runs on this machine (4060, 2026-11-
   | Sponza | 1.38 s | 597 MB |
   | flat42 (wide), Frank's kit | 0.56 s | 343 MB |
 
-  Load time is not what hurts at this content's size. Memory and the missing release are; load time is measured
-  again on kit2k (5a), which is the size the budgets were written for.
+  Load time is not what hurts at this content's size; memory and the missing release are.
+- **At a kit's size load time is the problem.** kit2k (`tools/level/kit_level.py`: 2,000 nodes over 40 meshes,
+  998,560 triangles, a 28.6 MB GLB, every node a static mesh collider) loads headless in **43.6 s**
+  (`ohao level build/kit2k/kit2k.glb`, the whole process, no GPU), at 916 MB resident; the budget is 400 ms. The
+  file is imported whole by Assimp once for each of its 40 meshes.
 - **Three glTF readers, and one file read many times.**
   - Assimp 5.4.3 for geometry, materials and textures (`asset/model_loader.cpp`); a simdjson reader for a level's
     structure (`level/gltf_structure.cpp`); another for skins and clips (`anim/gltf_anim.cpp`).
@@ -47,8 +50,8 @@ From a survey of the tree at `c536dafd` and runs on this machine (4060, 2026-11-
 - **Dependencies present:** simdjson, stb, Assimp, ufbx, miniaudio, nlohmann. **Absent:** any block compressor, KTX,
   meshoptimizer, zstd, a hash library. An on-disk cache by hash exists for RT pipelines
   (`render/rt/pipeline_disk_cache.cpp`, FNV-1a).
-- **kit2k** (2,000 nodes over 40 meshes, about 1 M triangles) was never generated: `tools/level/kit_level.py` does
-  not exist, and `level_bench` prints its four budgets as not measured.
+- **kit2k** had never been generated (the level pipeline planned it in Blender, which this machine does not have).
+  It is now written by numpy alone; `level_bench` still prints its four budgets as not measured.
 
 ## Decisions
 
@@ -105,7 +108,7 @@ Each is one or a few commits with the hooks green.
   - `asset_bench`: for the play scene, the helmet, Sponza, flat42 and kit2k, the time from a scene file to its
     assets resolved (no GPU) and to a first frame, the GPU's texture, mesh and BLAS bytes, and resident memory.
   - The GPU's bytes by kind in `render.stats` (what the bench reads, and what an agent reads).
-  - `tools/level/kit_level.py`: kit2k, generated; `level_bench`'s four kit2k numbers measured as they stand.
+  - `tools/level/kit_level.py`: kit2k, generated (done); `level_bench`'s four kit2k numbers measured as they stand.
 - **5b, the cooker and the cache.**
   - `ohao/cook`: a source file imported once, whole, into cooked assets: one per mesh (vertex and index data, the
     submeshes, the material slots), one per material, one per texture (RGBA8 with its mips, the format a field), a
