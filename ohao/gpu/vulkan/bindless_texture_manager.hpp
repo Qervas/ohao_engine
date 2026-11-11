@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/concepts.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
 
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -18,9 +19,6 @@
 #include <glm/glm.hpp>
 
 namespace ohao {
-
-// Forward declarations
-class GpuAllocator;
 
 // Texture handle for bindless access
 struct BindlessTextureHandle {
@@ -55,7 +53,7 @@ enum class BindlessTextureType : uint32_t {
 struct BindlessTextureInfo {
     VkImage image{VK_NULL_HANDLE};
     VkImageView view{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
+    GpuAllocation allocation;   // empty: a view registered from outside
     uint32_t width{0};
     uint32_t height{0};
     uint32_t mipLevels{1};
@@ -98,9 +96,9 @@ public:
     ~BindlessTextureManager();
 
     // Initialization
-    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
-                    GpuAllocator* allocator, uint32_t maxTextures = 4096,
-                    uint32_t graphicsQueueFamily = 0, VkQueue graphicsQueue = VK_NULL_HANDLE);
+    [[nodiscard]] bool initialize(VkInstance instance, VkDevice device, VkPhysicalDevice physicalDevice,
+                    uint32_t maxTextures = 4096, uint32_t graphicsQueueFamily = 0,
+                    VkQueue graphicsQueue = VK_NULL_HANDLE);
     void cleanup();
 
     // Texture loading
@@ -114,10 +112,15 @@ public:
                                                   BindlessTextureType type = BindlessTextureType::Custom,
                                                   bool generateMips = true);
 
-    // The texture of this content, uploaded when nobody has asked for it before: `open` is called only then. A
-    // texture that cannot be opened or uploaded is the type's default (and is asked for again next time).
+    // The texture of this content, made when nobody has asked for it before: `open` is called only then. Its table
+    // index is good at once; its pixels reach the GPU at the next flushUploads(), which the caller owes before a
+    // frame samples it (instantiate flushes once per run). A texture that cannot be opened or made is the type's
+    // default (and is asked for again next time).
     [[nodiscard]] ContentTexture contentTexture(const TextureContentKey& key, const std::function<TexturePixels()>& open);
     [[nodiscard]] std::size_t contentTextureCount() const noexcept { return m_byContent.size(); }
+    // Uploads the textures still waiting (a load uploads as it goes, one staging buffer and one submit per 64 MB
+    // of pixels) and writes the table once.
+    void flushUploads();
 
     /// Overwrite an existing texture's texels in place (same WxH). No new slot / no unload.
     /// Used by Diff dense-map FD loop for fast beauty SoT updates.
@@ -203,17 +206,17 @@ private:
     [[nodiscard]] bool loadTextureData(std::string_view path, BindlessTextureType type, std::vector<uint8_t>& outData,
                           uint32_t& width, uint32_t& height, VkFormat& format);
 
-    [[nodiscard]] bool createTextureImage(std::span<const uint8_t> data, uint32_t width, uint32_t height,
-                             VkFormat format, bool generateMips,
-                             VkImage& outImage, VkDeviceMemory& outMemory,
-                             VkImageView& outView, uint32_t& outMipLevels);
+    // A texture's image, view and table slot, its pixels queued for flushUploads(). UINT32_MAX: not made.
+    [[nodiscard]] uint32_t addTexture(TexturePixels pixels, VkFormat format, BindlessTextureType type, bool mips,
+                                      bool opaque, std::string name);
+    void recordUpload(VkCommandBuffer cmd, VkBuffer staging, VkDeviceSize offset, const BindlessTextureInfo& tex);
 
     void generateMipmaps(VkCommandBuffer cmd, VkImage image,
                           uint32_t width, uint32_t height, uint32_t mipLevels);
 
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
-    GpuAllocator* m_allocator{nullptr};
+    GpuAllocator m_allocator;   // the textures' images and the staging buffers
 
     // Descriptor resources
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
@@ -227,6 +230,16 @@ private:
     std::unordered_map<std::string, BindlessTextureHandle> m_pathToHandle;
     std::unordered_map<std::string, BindlessTextureHandle> m_nameToHandle;
     std::map<TextureContentKey, ContentTexture> m_byContent;
+    struct PendingUpload {
+        uint32_t slot;
+        TexturePixels pixels;
+        bool opaque;
+    };
+    std::vector<PendingUpload> m_pending;
+    static constexpr VkDeviceSize kStaging = 64ull << 20;   // one staging buffer, one submit
+    VkDeviceSize m_pendingBytes{0};
+    bool m_tableStale{false};   // uploaded since the table was last written
+    void uploadPending();
 
     // Default textures
     BindlessTextureHandle m_defaultWhite;

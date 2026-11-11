@@ -7,21 +7,12 @@
 
 #include <chrono>
 #include <cstring>
-#include <fstream>
-#include <iterator>
 
 namespace ohao::cook {
 
 namespace {
 
 namespace fs = std::filesystem;
-
-bool readFile(const fs::path& path, std::vector<uint8_t>& out) {
-    std::ifstream in{path, std::ios::binary};
-    if (!in) return false;
-    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    return true;
-}
 
 // A glTF's JSON: the whole .gltf, or a .glb's first chunk. Empty: not one.
 std::string_view gltfJson(std::span<const uint8_t> bytes) {
@@ -179,8 +170,10 @@ VoidResult<> cook(const Cache& cache, const fs::path& source, ModelKind kind, co
 
 Result<ContentHash> modelKey(const fs::path& source, ModelKind kind) {
     using R = Result<ContentHash>;
-    std::vector<uint8_t> bytes;
-    if (!readFile(source, bytes)) return R::err("'" + source.generic_string() + "' cannot be read");
+    // Mapped, not read: the bytes are hashed where the file cache holds them.
+    const auto file = cooked::Mapping::open(source);
+    if (!file) return R::err("'" + source.generic_string() + "' cannot be read");
+    const std::span<const uint8_t> bytes = file.value()->bytes();
     ContentHasher h;
     h.value(kCookerVersion);
     h.value(cooked::kFormatVersion);
@@ -191,12 +184,11 @@ Result<ContentHash> modelKey(const fs::path& source, ModelKind kind) {
     for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     h.text(ext);
     if (ext == ".gltf" || ext == ".glb") {
-        std::vector<uint8_t> named;
         for (const std::string& uri : gltfUris(bytes)) {
             h.text(uri);
-            if (readFile(source.parent_path() / uri, named)) {   // a missing one is the importer's to report
-                h.value(static_cast<uint64_t>(named.size()));
-                h.bytes(named);
+            if (const auto named = cooked::Mapping::open(source.parent_path() / uri)) {   // a missing one is the importer's to report
+                h.value(static_cast<uint64_t>(named.value()->bytes().size()));
+                h.bytes(named.value()->bytes());
             }
         }
     }

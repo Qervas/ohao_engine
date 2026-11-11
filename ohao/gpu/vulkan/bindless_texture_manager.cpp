@@ -26,13 +26,15 @@ BindlessTextureManager::~BindlessTextureManager() {
     cleanup();
 }
 
-bool BindlessTextureManager::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
-                                          GpuAllocator* allocator, uint32_t maxTextures,
-                                          uint32_t graphicsQueueFamily, VkQueue graphicsQueue) {
+bool BindlessTextureManager::initialize(VkInstance instance, VkDevice device, VkPhysicalDevice physicalDevice,
+                                          uint32_t maxTextures, uint32_t graphicsQueueFamily, VkQueue graphicsQueue) {
     m_device = device;
     m_physicalDevice = physicalDevice;
-    m_allocator = allocator;
     m_maxTextures = maxTextures;
+    if (!m_allocator.initialize(instance, physicalDevice, device)) {
+        OHAO_LOG(Error, gpu, "BindlessTextureManager: the allocator could not be made");
+        return false;
+    }
 
     // Reserve texture slots
     m_textures.resize(maxTextures);
@@ -85,13 +87,13 @@ void BindlessTextureManager::cleanup() {
             vkDestroyImageView(m_device, tex.view, nullptr);
         }
         if (tex.image != VK_NULL_HANDLE) {
-            vkDestroyImage(m_device, tex.image, nullptr);
-        }
-        if (tex.memory != VK_NULL_HANDLE) {
-            vkFreeMemory(m_device, tex.memory, nullptr);
+            GpuImage image{tex.image, tex.allocation};
+            m_allocator.destroyImage(image);
         }
     }
     m_textures.clear();
+    m_pending.clear();
+    m_allocator.shutdown();
 
     if (m_defaultSampler != VK_NULL_HANDLE) {
         vkDestroySampler(m_device, m_defaultSampler, nullptr);
@@ -246,82 +248,27 @@ bool BindlessTextureManager::createDefaultTextures() {
 
 bool BindlessTextureManager::createSolidColorTexture(uint32_t color, BindlessTextureHandle& outHandle,
                                                        std::string_view name) {
-    VkImage image;
-    VkDeviceMemory memory;
-    VkImageView view;
-    uint32_t mipLevels;
-
     const auto pixels = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&color), sizeof(color));
-    if (!createTextureImage(pixels, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false,
-                             image, memory, view, mipLevels)) {
-        return false;
-    }
-
-    uint32_t slot = allocateSlot();
-    if (slot == UINT32_MAX) {
-        vkDestroyImageView(m_device, view, nullptr);
-        vkDestroyImage(m_device, image, nullptr);
-        vkFreeMemory(m_device, memory, nullptr);
-        return false;
-    }
-
-    auto& tex = m_textures[slot];
-    tex.image = image;
-    tex.view = view;
-    tex.memory = memory;
-    tex.width = 1;
-    tex.height = 1;
-    tex.mipLevels = 1;
-    tex.format = VK_FORMAT_R8G8B8A8_UNORM;
-    tex.name = std::string(name);
-
+    const uint32_t slot = addTexture({pixels, 1, 1, nullptr}, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Custom,
+                                     false, false, std::string(name));
+    if (slot == UINT32_MAX) return false;
+    flushUploads();
     outHandle.index = slot;
     m_nameToHandle[std::string(name)] = outHandle;
-    m_loadedCount++;
-
     return true;
 }
 
 bool BindlessTextureManager::createDefaultNormalTexture() {
     // Default flat normal (pointing up in tangent space): (0.5, 0.5, 1.0) = 0xFFFF8080
-    uint32_t normalColor = 0xFFFF8080;
-
-    VkImage image;
-    VkDeviceMemory memory;
-    VkImageView view;
-    uint32_t mipLevels;
-
-    const auto pixels = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&normalColor),
-                                                 sizeof(normalColor));
-    if (!createTextureImage(pixels, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false,
-                             image, memory, view, mipLevels)) {
-        return false;
-    }
-
-    uint32_t slot = allocateSlot();
-    if (slot == UINT32_MAX) {
-        vkDestroyImageView(m_device, view, nullptr);
-        vkDestroyImage(m_device, image, nullptr);
-        vkFreeMemory(m_device, memory, nullptr);
-        return false;
-    }
-
-    auto& tex = m_textures[slot];
-    tex.image = image;
-    tex.view = view;
-    tex.memory = memory;
-    tex.width = 1;
-    tex.height = 1;
-    tex.mipLevels = 1;
-    tex.format = VK_FORMAT_R8G8B8A8_UNORM;
-    tex.type = BindlessTextureType::Normal;
-    tex.name = "default_normal";
-    tex.persistent = true;
-
+    const uint32_t normalColor = 0xFFFF8080;
+    const auto pixels = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&normalColor), sizeof(normalColor));
+    const uint32_t slot = addTexture({pixels, 1, 1, nullptr}, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Normal,
+                                     false, false, "default_normal");
+    if (slot == UINT32_MAX) return false;
+    flushUploads();
+    m_textures[slot].persistent = true;
     m_defaultNormal.index = slot;
     m_nameToHandle["default_normal"] = m_defaultNormal;
-    m_loadedCount++;
-
     return true;
 }
 
@@ -351,55 +298,18 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(std::string_view path,
         return it->second;
     }
 
-    // Load texture data
     std::vector<uint8_t> data;
     uint32_t width, height;
     VkFormat format;
-
     if (!loadTextureData(path, type, data, width, height, format)) {
         OHAO_LOG(Error, gpu, "Failed to load texture: {}", path);
         return getDefaultTexture(type);
     }
-
-    // Create texture image
-    VkImage image;
-    VkDeviceMemory memory;
-    VkImageView view;
-    uint32_t mipLevels;
-
-    if (!createTextureImage(data, width, height, format, generateMips,
-                             image, memory, view, mipLevels)) {
-        return getDefaultTexture(type);
-    }
-
-    // Allocate slot
-    uint32_t slot = allocateSlot();
-    if (slot == UINT32_MAX) {
-        vkDestroyImageView(m_device, view, nullptr);
-        vkDestroyImage(m_device, image, nullptr);
-        vkFreeMemory(m_device, memory, nullptr);
-        return getDefaultTexture(type);
-    }
-
-    // Store texture info
-    auto& tex = m_textures[slot];
-    tex.image = image;
-    tex.view = view;
-    tex.memory = memory;
-    tex.width = width;
-    tex.height = height;
-    tex.mipLevels = mipLevels;
-    tex.format = format;
-    tex.type = type;
-    tex.name = std::string(path);
-
-    BindlessTextureHandle handle{slot};
+    const uint32_t slot = addTexture({data, width, height, nullptr}, format, type, generateMips, false, std::string(path));
+    if (slot == UINT32_MAX) return getDefaultTexture(type);
+    flushUploads();
+    const BindlessTextureHandle handle{slot};
     m_pathToHandle[std::string(path)] = handle;
-    m_loadedCount++;
-    m_totalMemoryUsage += pixelBytes(tex);
-
-    updateDescriptorSet();
-
     return handle;
 }
 
@@ -408,63 +318,147 @@ BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(std::span<co
                                                                       VkFormat format,
                                                                       BindlessTextureType type,
                                                                       bool generateMips) {
-    VkImage image;
-    VkDeviceMemory memory;
-    VkImageView view;
-    uint32_t mipLevels;
-
-    if (!createTextureImage(data, width, height, format, generateMips,
-                             image, memory, view, mipLevels)) {
-        return getDefaultTexture(type);
-    }
-
-    uint32_t slot = allocateSlot();
-    if (slot == UINT32_MAX) {
-        vkDestroyImageView(m_device, view, nullptr);
-        vkDestroyImage(m_device, image, nullptr);
-        vkFreeMemory(m_device, memory, nullptr);
-        return getDefaultTexture(type);
-    }
-
-    auto& tex = m_textures[slot];
-    tex.image = image;
-    tex.view = view;
-    tex.memory = memory;
-    tex.width = width;
-    tex.height = height;
-    tex.mipLevels = mipLevels;
-    tex.format = format;
-    tex.type = type;
-    tex.name = "memory_" + std::to_string(slot);
-
-    BindlessTextureHandle handle{slot};
-    m_loadedCount++;
-    m_totalMemoryUsage += pixelBytes(tex);
-
-    updateDescriptorSet();
-
-    return handle;
+    const uint32_t slot = addTexture({data, width, height, nullptr}, format, type, generateMips, false, {});
+    if (slot == UINT32_MAX) return getDefaultTexture(type);
+    flushUploads();
+    return BindlessTextureHandle{slot};
 }
 
 ContentTexture BindlessTextureManager::contentTexture(const TextureContentKey& key,
                                                       const std::function<TexturePixels()>& open) {
     if (const auto it = m_byContent.find(key); it != m_byContent.end()) return it->second;
-    const TexturePixels px = open();
+    TexturePixels px = open();
     const std::size_t n = static_cast<std::size_t>(px.width) * px.height;
     if (n == 0 || px.rgba8.size() < n * 4) return {getDefaultTexture(key.type), {}};
     ContentTexture made;
     for (std::size_t i = 0; i < n; ++i)
         for (std::size_t c = 0; c < 4; ++c) made.channelMin[c] = std::min(made.channelMin[c], px.rgba8[i * 4 + c]);
-    if (key.opaque) {
-        std::vector<uint8_t> opaque(px.rgba8.begin(), px.rgba8.begin() + static_cast<std::ptrdiff_t>(n * 4));
-        for (std::size_t i = 0; i < n; ++i) opaque[i * 4 + 3] = 255;
-        made.handle = loadTextureFromMemory(opaque, px.width, px.height, key.format, key.type);
-    } else {
-        made.handle = loadTextureFromMemory(px.rgba8, px.width, px.height, key.format, key.type);
-    }
-    if (made.handle == getDefaultTexture(key.type)) return made;   // not uploaded: not remembered
+    const uint32_t slot = addTexture(std::move(px), key.format, key.type, true, key.opaque, {});
+    if (slot == UINT32_MAX) return {getDefaultTexture(key.type), made.channelMin};   // not remembered: asked again
+    made.handle = BindlessTextureHandle{slot};
     m_byContent.emplace(key, made);
     return made;
+}
+
+uint32_t BindlessTextureManager::addTexture(TexturePixels px, VkFormat format, BindlessTextureType type, bool mips,
+                                            bool opaque, std::string name) {
+    const std::size_t bytes = static_cast<std::size_t>(px.width) * px.height * 4;
+    if (bytes == 0 || px.rgba8.size() < bytes) {
+        OHAO_LOG(Error, gpu, "a texture's pixels are fewer than width x height x 4");
+        return UINT32_MAX;
+    }
+    const uint32_t levels = mips ? static_cast<uint32_t>(std::floor(std::log2(std::max(px.width, px.height)))) + 1 : 1;
+    const VkImageCreateInfo imageInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {px.width, px.height, 1},
+        .mipLevels = levels,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    GpuImage image = m_allocator.createImage(imageInfo, AllocationUsage::GpuOnly);
+    if (!image.isValid()) return UINT32_MAX;
+    const VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = image.image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1},
+    };
+    VkImageView view = VK_NULL_HANDLE;
+    const uint32_t slot = vkCreateImageView(m_device, &viewInfo, nullptr, &view) == VK_SUCCESS ? allocateSlot() : UINT32_MAX;
+    if (slot == UINT32_MAX) {
+        if (view != VK_NULL_HANDLE) vkDestroyImageView(m_device, view, nullptr);
+        m_allocator.destroyImage(image);
+        return UINT32_MAX;
+    }
+    auto& tex = m_textures[slot];
+    tex.image = image.image;
+    tex.allocation = image.allocation;
+    tex.view = view;
+    tex.width = px.width;
+    tex.height = px.height;
+    tex.mipLevels = levels;
+    tex.format = format;
+    tex.type = type;
+    tex.name = name.empty() ? "memory_" + std::to_string(slot) : std::move(name);
+    m_loadedCount++;
+    m_totalMemoryUsage += pixelBytes(tex);
+    m_pending.push_back({slot, std::move(px), opaque});
+    // A long load uploads as it goes: what waits is at most one staging buffer of mapped pixels.
+    m_pendingBytes += bytes;
+    if (m_pendingBytes >= kStaging) uploadPending();
+    return slot;
+}
+
+void BindlessTextureManager::flushUploads() {
+    uploadPending();
+    if (m_tableStale) updateDescriptorSet();
+    m_tableStale = false;
+}
+
+void BindlessTextureManager::uploadPending() {
+    if (m_pending.empty()) return;
+    // One staging buffer and one submit for as many textures as fit kStaging (a larger one goes alone): a load's
+    // textures are a few submits, each bounded.
+    const auto bytesOf = [](const PendingUpload& u) { return static_cast<VkDeviceSize>(u.pixels.width) * u.pixels.height * 4; };
+    for (std::size_t first = 0; first < m_pending.size();) {
+        VkDeviceSize size = bytesOf(m_pending[first]);
+        std::size_t last = first + 1;
+        for (; last < m_pending.size() && size + bytesOf(m_pending[last]) <= kStaging; ++last) size += bytesOf(m_pending[last]);
+
+        GpuBuffer staging = m_allocator.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, AllocationUsage::CpuToGpu, true);
+        if (!staging.isValid() || !staging.getMappedData()) {
+            OHAO_LOG(Error, gpu, "texture upload: no staging buffer of {} bytes; {} textures are left without pixels", size,
+                     m_pending.size() - first);
+            if (staging.isValid()) m_allocator.destroyBuffer(staging);
+            break;
+        }
+        const VkCommandBufferAllocateInfo cmdInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = m_commandPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VkCommandBuffer cmd;
+        vkAllocateCommandBuffers(m_device, &cmdInfo, &cmd);
+        const VkCommandBufferBeginInfo beginInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        auto* mapped = static_cast<uint8_t*>(staging.getMappedData());
+        VkDeviceSize offset = 0;
+        for (std::size_t i = first; i < last; ++i) {
+            const PendingUpload& u = m_pending[i];
+            const VkDeviceSize bytes = bytesOf(u);
+            std::memcpy(mapped + offset, u.pixels.rgba8.data(), static_cast<std::size_t>(bytes));
+            if (u.opaque)
+                for (VkDeviceSize p = 3; p < bytes; p += 4) mapped[offset + p] = 255;
+            recordUpload(cmd, staging.buffer, offset, m_textures[u.slot]);
+            offset += bytes;
+        }
+        m_allocator.flushBuffer(staging);
+        vkEndCommandBuffer(cmd);
+        const VkSubmitInfo submitInfo{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd,
+        };
+        gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+        m_allocator.destroyBuffer(staging);
+        first = last;
+    }
+    m_pending.clear();
+    m_pendingBytes = 0;
+    m_tableStale = true;
 }
 
 bool BindlessTextureManager::updateTextureFromMemory(BindlessTextureHandle handle,
@@ -582,7 +576,6 @@ BindlessTextureHandle BindlessTextureManager::registerExternalTexture(VkImageVie
     auto& tex = m_textures[slot];
     tex.view = view;
     tex.image = VK_NULL_HANDLE;  // External, don't destroy
-    tex.memory = VK_NULL_HANDLE;
     tex.type = type;
     tex.name = std::string(name);
 
@@ -622,19 +615,18 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
     }
 
     std::erase_if(m_byContent, [&](const auto& entry) { return entry.second.handle == handle; });
+    std::erase_if(m_pending, [&](const PendingUpload& u) { return u.slot == handle.index; });
 
     // Destroy resources
     if (tex.view != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device, tex.view, nullptr);
     }
     if (tex.image != VK_NULL_HANDLE) {
-        vkDestroyImage(m_device, tex.image, nullptr);
-    }
-    if (tex.memory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, tex.memory, nullptr);
+        GpuImage image{tex.image, tex.allocation};
+        m_allocator.destroyImage(image);
+        m_totalMemoryUsage -= pixelBytes(tex);
     }
 
-    m_totalMemoryUsage -= pixelBytes(tex);
     tex = BindlessTextureInfo{};  // Reset
 
     freeSlot(handle.index);
@@ -750,135 +742,9 @@ bool BindlessTextureManager::loadTextureData(std::string_view path, BindlessText
     return true;
 }
 
-bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, uint32_t width, uint32_t height,
-                                                  VkFormat format, bool generateMips,
-                                                  VkImage& outImage, VkDeviceMemory& outMemory,
-                                                  VkImageView& outView, uint32_t& outMipLevels) {
-    outMipLevels = generateMips ?
-        static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1 : 1;
-
-    VkDeviceSize imageSize = width * height * 4;
-    if (data.size_bytes() < static_cast<size_t>(imageSize)) {
-        OHAO_LOG(Error, gpu, "createTextureImage: pixel span smaller than width*height*4");
-        return false;
-    }
-
-    // Create staging buffer
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingMemory;
-
-    VkBufferCreateInfo bufferInfo{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = imageSize,
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-    };
-
-    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &stagingBuffer) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, stagingBuffer, &memReqs);
-
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-
-    uint32_t memTypeIndex = UINT32_MAX;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((memReqs.memoryTypeBits & (1 << i)) &&
-            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
-            memTypeIndex = i;
-            break;
-        }
-    }
-
-    VkMemoryAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .allocationSize = memReqs.size,
-        .memoryTypeIndex = memTypeIndex,
-    };
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingMemory) != VK_SUCCESS) {
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        return false;
-    }
-
-    vkBindBufferMemory(m_device, stagingBuffer, stagingMemory, 0);
-
-    // Copy data to staging buffer
-    void* mapped;
-    vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &mapped);
-    memcpy(mapped, data.data(), static_cast<size_t>(imageSize));
-    vkUnmapMemory(m_device, stagingMemory);
-
-    // Create image
-    VkImageCreateInfo imageInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = format,
-        .extent = {width, height, 1},
-        .mipLevels = outMipLevels,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                 VK_IMAGE_USAGE_SAMPLED_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    };
-
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        vkFreeMemory(m_device, stagingMemory, nullptr);
-        return false;
-    }
-
-    // Allocate image memory
-    VkMemoryRequirements imgMemReqs;
-    vkGetImageMemoryRequirements(m_device, outImage, &imgMemReqs);
-
-    uint32_t imgMemTypeIndex = UINT32_MAX;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((imgMemReqs.memoryTypeBits & (1 << i)) &&
-            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-            imgMemTypeIndex = i;
-            break;
-        }
-    }
-
-    VkMemoryAllocateInfo imgAllocInfo{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .allocationSize = imgMemReqs.size,
-        .memoryTypeIndex = imgMemTypeIndex,
-    };
-
-    if (vkAllocateMemory(m_device, &imgAllocInfo, nullptr, &outMemory) != VK_SUCCESS) {
-        vkDestroyImage(m_device, outImage, nullptr);
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        vkFreeMemory(m_device, stagingMemory, nullptr);
-        return false;
-    }
-
-    vkBindImageMemory(m_device, outImage, outMemory, 0);
-
-    // Transition and copy
-    VkCommandBufferAllocateInfo cmdAllocInfo{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = m_commandPool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-
-    VkCommandBuffer cmd;
-    vkAllocateCommandBuffers(m_device, &cmdAllocInfo, &cmd);
-
-    VkCommandBufferBeginInfo beginInfo{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    };
-    vkBeginCommandBuffer(cmd, &beginInfo);
-
+// Level 0 from `staging` at `offset`, then the mips by blits, the image left to be sampled.
+void BindlessTextureManager::recordUpload(VkCommandBuffer cmd, VkBuffer staging, VkDeviceSize offset,
+                                          const BindlessTextureInfo& tex) {
     // Transition to transfer dst
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -886,10 +752,10 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = outImage;
+    barrier.image = tex.image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = outMipLevels;
+    barrier.subresourceRange.levelCount = tex.mipLevels;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
     barrier.srcAccessMask = 0;
@@ -900,7 +766,7 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
 
     // Copy buffer to image
     VkBufferImageCopy region{};
-    region.bufferOffset = 0;
+    region.bufferOffset = offset;
     region.bufferRowLength = 0;
     region.bufferImageHeight = 0;
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -908,13 +774,13 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
     region.imageSubresource.baseArrayLayer = 0;
     region.imageSubresource.layerCount = 1;
     region.imageOffset = {0, 0, 0};
-    region.imageExtent = {width, height, 1};
+    region.imageExtent = {tex.width, tex.height, 1};
 
-    vkCmdCopyBufferToImage(cmd, stagingBuffer, outImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     // Generate mipmaps or transition to shader read
-    if (generateMips && outMipLevels > 1) {
-        generateMipmaps(cmd, outImage, width, height, outMipLevels);
+    if (tex.mipLevels > 1) {
+        generateMipmaps(cmd, tex.image, tex.width, tex.height, tex.mipLevels);
     } else {
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -924,44 +790,6 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                               0, 0, nullptr, 0, nullptr, 1, &barrier);
     }
-
-    vkEndCommandBuffer(cmd);
-
-    // Submit
-    VkSubmitInfo submitInfo{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &cmd,
-    };
-
-    gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "texture upload");
-
-    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
-    vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-    vkFreeMemory(m_device, stagingMemory, nullptr);
-
-    // Create image view
-    VkImageViewCreateInfo viewInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = outImage,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = format,
-        .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = outMipLevels,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-
-    if (vkCreateImageView(m_device, &viewInfo, nullptr, &outView) != VK_SUCCESS) {
-        vkDestroyImage(m_device, outImage, nullptr);
-        vkFreeMemory(m_device, outMemory, nullptr);
-        return false;
-    }
-
-    return true;
 }
 
 void BindlessTextureManager::generateMipmaps(VkCommandBuffer cmd, VkImage image,

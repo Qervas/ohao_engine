@@ -188,6 +188,22 @@ Each is one or a few commits with the hooks green.
     - Resident memory after the first frame, the decoded copies gone: helmet 313.8 MB to 231.5, Sponza 566.8 to
       255.9, flat42 320.6 to 233.9 (the play scene, with no model textures, 233.1 to 232.1). First frame, warm: play 0.28 s, helmet 0.32 s, Sponza 0.59 s
       (0.64), flat42 0.33 s, kit2k 35.4 s.
+  - *As built, second piece (2026-11-11): a load's textures in one batch.*
+    - Every texture the manager makes goes one way: its image (VMA, an allocator of the manager's own), view and
+      table slot at once, its pixels queued; `flushUploads` copies what waits into one staging buffer and one
+      submit per 64 MB of pixels (level 0, then the mips by blits) and writes the table once. Instantiate
+      flushes at the end of a run; a long load uploads as it goes, so at most 64 MB of mapped pixels wait.
+      Before: a staging buffer, two `vkAllocateMemory`, a submit with its wait and a rewrite of the whole table
+      per texture.
+    - A source is mapped to be hashed, not read through a stream: Sponza's key (108 MB with its images) took
+      66 ms and takes 13.
+    - Where Sponza's load goes now (ms): its key 13, the mesh and its BLAS 36, each texture's smallest values 70
+      (a scan of 256 MB; cooked with 5e), the uploads 130.
+    - First frame, warm, before this piece and after: helmet 0.32 s to 0.29 to 0.30, Sponza 0.59 to 0.47, flat42
+      0.33 to 0.30, play 0.26 (no textures of its own). Sponza's peak resident memory 310 MB.
+    - Tried and dropped: the scan as a 32-lane minimum written by hand took 160 ms against the plain loop's 70.
+    - Planted: instantiate without its flush. The helmet's golden fails (the validation layer says nothing).
+    - Not done here: the upload still waits on the graphics queue (5g moves it off the frame's thread).
 - **5d, release.**
   - Textures, materials and meshes are counted and freed when unused, their GPU memory after the frames in flight
     (no device wait); the mesh arena reuses released ranges; the manager drops unmapped cooked data.

@@ -125,7 +125,7 @@ bool VulkanRenderer::initialize() {
 
 // Bindless texture manager: the deferred G-buffer pass binds its set
         m_textureManager = std::make_unique<BindlessTextureManager>();
-        if (!m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,
+        if (!m_textureManager->initialize(m_instance, m_device, m_physicalDevice, 4096,
                                            m_graphicsQueueFamily, m_graphicsQueue)) {
             OHAO_LOG(Warn, gpu, "Failed to initialize BindlessTextureManager (textures unavailable)");
             m_textureManager.reset();

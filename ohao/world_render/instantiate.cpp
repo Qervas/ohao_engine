@@ -4,6 +4,7 @@
 
 #include "core/log.hpp"
 
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/model_upload.hpp"
 #include "render/scene/render_scene.hpp"
 
@@ -150,6 +151,8 @@ public:
         for (const auto& [seq, e] : m_dirty)
             if (const auto* ms = m_reg.try_get<MeshSource>(e)) instantiate(e, *ms);
         m_reg.clear<InstantiateDirty>();
+        // The textures the new materials name, in one batch.
+        if (m_textures) m_textures->flushUploads();
     }
 
 private:
