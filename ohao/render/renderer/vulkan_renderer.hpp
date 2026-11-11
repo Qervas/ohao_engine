@@ -320,64 +320,6 @@ public:
     }
     [[nodiscard]] std::optional<bool> causticsOverride() const { return m_causticsOverride; }
 
-    // Returns the motion vector AOV image view from the active RT profile,
-    // or VK_NULL_HANDLE if no RT profile is active.
-    [[nodiscard]] VkImageView getMotionVectorAOV() const;
-
-    // Returns the motion vector AOV VkImage (needed for vkCmdCopyImageToBuffer).
-    [[nodiscard]] VkImage getMotionVectorImage() const;
-
-    // Returns the depth / roughness AOV image views and images from the active
-    // RT profile, or VK_NULL_HANDLE if no RT profile is active.
-    [[nodiscard]] VkImageView getDepthAOV()         const;
-    [[nodiscard]] VkImage     getDepthAOVImage()    const;
-    [[nodiscard]] VkImageView getRoughnessAOV()     const;
-    [[nodiscard]] VkImage     getRoughnessAOVImage() const;
-    [[nodiscard]] VkImageView getDiffuseRadianceAOV()      const;
-    [[nodiscard]] VkImage     getDiffuseRadianceAOVImage() const;
-    [[nodiscard]] VkImageView getSpecularRadianceAOV()      const;
-    [[nodiscard]] VkImage     getSpecularRadianceAOVImage() const;
-    [[nodiscard]] VkImageView getDiffAlbedoAOV()      const;
-    [[nodiscard]] VkImage     getDiffAlbedoAOVImage() const;
-    [[nodiscard]] VkImageView getSpecColorAOV()       const;
-    [[nodiscard]] VkImage     getSpecColorAOVImage()  const;
-    [[nodiscard]] VkImageView getNormalRoughnessAOV()      const;
-    [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const;
-    // Sub-plan 4.C: NRD denoised outputs (RGBA32F)
-    [[nodiscard]] VkImage     getOutDiffRadianceAOVImage() const;
-    [[nodiscard]] VkImage     getOutSpecRadianceAOVImage() const;
-    // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
-    [[nodiscard]] VkImage     getNrdComposedAOVImage() const;
-
-    // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
-    // One 2-half pair per pixel; total = 2 * width * height values.
-    // Returns false if no RT profile is active or readback fails.
-    [[nodiscard]] bool readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height);
-
-    // Debug: readback the depth AOV as raw float buffer (1 float per pixel).
-    [[nodiscard]] bool readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height);
-
-    // Debug: readback R16F roughness AOV as native float (decoded from half in-helper).
-    [[nodiscard]] bool readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA32F diffuse radiance AOV (4 floats per pixel, native).
-    [[nodiscard]] bool readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA32F specular radiance AOV (4 floats per pixel, native).
-    [[nodiscard]] bool readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
-
-    // Sub-plan 4.C: NRD denoised output readback (RGBA32F)
-    [[nodiscard]] bool readbackDenoisedDiffuse(std::vector<float>& data, uint32_t& width, uint32_t& height);
-    [[nodiscard]] bool readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height);
-    // Sub-plan 4.D: NRD composed HDR output readback (RGBA32F)
-    [[nodiscard]] bool readbackNrdComposed(std::vector<float>& data, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA8 diffuse albedo AOV (4 bytes per pixel).
-    [[nodiscard]] bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA8 specular color AOV (4 bytes per pixel).
-    [[nodiscard]] bool readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
-
     [[nodiscard]] uint32_t getWidth() const noexcept { return m_width; }
     [[nodiscard]] uint32_t getHeight() const noexcept { return m_height; }
     [[nodiscard]] VkExtent2D getExtent() const noexcept {
@@ -388,10 +330,11 @@ public:
     // Read GPU terrain heightmap back to CPU (blocking — one-time call at setup).
     // Returns false if no procedural terrain exists. outRes = square resolution.
     [[nodiscard]] bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
-    // Copies a whole RGBA32F (half: RGBA16F) image, left in `layout` by shaders of `stage`, to the
-    // CPU as RGBA32F, and puts it back in that layout. Submits and waits; for readbacks only.
-    [[nodiscard]] bool readImageRGBA(VkImage image, bool half, VkImageLayout layout, VkPipelineStageFlags stage,
-                                     std::vector<float>& out);
+    // Copies a whole image of the frame's size (`texelBytes` a texel) into `out`, on a command buffer of its
+    // own, and leaves it a transfer source. Submits and waits; for readbacks only.
+    [[nodiscard]] bool readImage(gpu::Image& image, uint32_t texelBytes, void* out);
+    // The same for an RGBA32F or RGBA16F image, as RGBA32F.
+    [[nodiscard]] bool readImageRGBA(gpu::Image& image, std::vector<float>& out);
 
 private:
     // Vulkan setup (no window required)
@@ -499,13 +442,10 @@ private:
     // Presentation (windowed mode only).
     [[nodiscard]] bool createPresentation();
     [[nodiscard]] bool recreatePresentation();
-    // The deferred frame's final image into the swapchain image, left ready to present, and into
-    // `staging` too when one is given (a requested readback); returns whether it was.
-    bool blitDeferredOutputToSwapchain(const render::Frame& frame, uint32_t imageIndex, GpuBuffer* staging);
-    // The path tracer's RGBA8 output (in TRANSFER_SRC_OPTIMAL) into the swapchain image, and
-    // into `staging` too when one is given; returns whether it was. A headless frame's copy.
-    bool blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging);
-    void copyRTOutputToStaging(VkCommandBuffer cmd, VkImage src, VkBuffer staging);
+    // A frame's final image (the deferred frame's, the path tracer's output; null: black) into the swapchain
+    // image, left ready to present, and into `staging` too when one is given (a requested readback); returns
+    // whether it was.
+    bool blitOutputToSwapchain(const render::Frame& frame, uint32_t imageIndex, gpu::Image* src, GpuBuffer* staging);
     std::optional<PresentTarget> m_presentTarget;
     VkSurfaceKHR m_surface{VK_NULL_HANDLE};
     std::unique_ptr<Swapchain> m_swapchain;
@@ -606,9 +546,12 @@ private:
     [[nodiscard]] bool initializeDeferredRenderer();
     void applyRTRenderSettings();
     void renderDeferred();
-    // A requested headless frame: its final RGBA8 image into the slot's staging buffer.
-    // Returns whether the staging buffer received it.
-    bool copyDeferredOutputToStaging(const render::Frame& frame);
+    // A requested headless frame: its final RGBA8 image (the deferred frame's, the path tracer's output) into
+    // the slot's staging buffer. Returns whether the staging buffer received it.
+    bool copyOutputToStaging(const render::Frame& frame, gpu::Image* src);
+    // The active path tracer's image `target`, or null (no path tracer is active, or it has none).
+    [[nodiscard]] gpu::Image* tracerImage(PathTracer::Target target);
+    // That image's texels as stored, for the readbacks of its RGBA32F and RGBA8 guides.
 
     RTRenderSettings m_rtSettings{kOfflineRTSettings};
 };

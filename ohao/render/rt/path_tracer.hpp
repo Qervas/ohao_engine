@@ -11,16 +11,20 @@
 // Accumulates samples across frames for progressive refinement (reset on camera move).
 //
 // Two output images:
-//   m_accumBuffer  — RGBA32F HDR accumulation across frames (the latest of a ping-pong pair)
-//   m_outputImage  — RGBA8 tonemapped final output (ready for display)
+//   accum()                — RGBA32F HDR accumulation across frames (the latest of a ping-pong pair)
+//   image(Target::Output)  — RGBA8 tonemapped final output (ready for display)
+//
+// A frame is a sequence of render::Pass scopes (render/graph/pass.hpp), each declaring what it touches: the
+// emissive lights, the manifold gather, the radiance cache's update and resolve, caustics' light pass, the trace,
+// the manifold pass, path guiding's update, the denoiser. Every image is a gpu::Image named "pt.<what>".
 //
 // Usage:
 //   PathTracer pt;
-//   pt.init(device, physicalDevice, 1920, 1080);
+//   pt.init(device, physicalDevice, allocator, 1920, 1080);
 //   // per frame, after RenderScene::recordUpdates:
 //   pt.setSceneBuffers(renderScene);
 //   pt.setBindlessTextures(views, samplers);
-//   pt.render(cmd, frameSlot, view, proj);   // lights: the RenderScene light table (binding 11)
+//   pt.render(frame, view, proj);   // lights: the RenderScene light table (binding 11)
 //   // on camera move:
 //   pt.resetAccumulation();
 //   // on window resize:
@@ -37,7 +41,9 @@
 #include "render/rt/denoise/denoise_types.hpp"
 #include "core/concepts.hpp"
 #include "gpu/layout_meta.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "render/graph/pass.hpp"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <algorithm>
@@ -55,7 +61,7 @@
 namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }      // NEW 4.D
 namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5)
-namespace ohao::render { class RenderScene; class GpuPassTimer; }
+namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
@@ -103,7 +109,7 @@ public:
     // family index + the exact instance/device-extension lists used at
     // vkCreateDevice / vkCreateInstance time. Defaults keep backward
     // compatibility for callers that don't use NRD.
-    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator,
                             uint32_t width, uint32_t height,
                             VkInstance instance = VK_NULL_HANDLE,
                             uint32_t graphicsQueueFamilyIndex = 0,
@@ -112,13 +118,11 @@ public:
     void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
     // Traces the scene last given to setSceneBuffers, lit by its light table; does
-    // nothing without a TLAS. `frameSlot` is the frame-in-flight slot whose fence was
+    // nothing without a TLAS. `frame.slot` is the frame-in-flight slot whose fence was
     // just waited: its own descriptor set is rewritten and bound (earlier frames may
-    // still read theirs).
-    void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj);
-    // Times render()'s stages (pt.cache.update, pt.cache.resolve, pt.trace, pt.denoise); the
-    // caller ends the last one. Null: untimed.
-    void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
+    // still read theirs). Its stages are timed on `frame.timer` (emissive.lights, pt.manifold.gather,
+    // pt.cache.update, pt.cache.resolve, pt.caustics, pt.trace, pt.manifold, pt.guide.update, pt.denoise).
+    void render(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj);
     // The display transform (shaders/display/display.slang) of the output, NRD's and DLSS's frames:
     // a linear exposure (render::displayExposure) and the curve.
     void setDisplay(float exposure, render::DisplayCurve curve) noexcept {
@@ -128,37 +132,30 @@ public:
 
     void resize(uint32_t width, uint32_t height);
 
-    [[nodiscard]] VkImage getOutputImage() const { return m_outputImage; }
-    [[nodiscard]] VkImage getAccumImage() const { return m_accumBuffer; }
-    [[nodiscard]] VkImage getAlbedoAOV() const { return m_albedoAOV; }
-    [[nodiscard]] VkImage getNormalAOV() const { return m_normalAOV; }
-    [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
-    [[nodiscard]] VkImageView getMotionVectorAOV() const { return m_motionVectorView; }
-    [[nodiscard]] VkImage getMotionVectorImage() const { return m_motionVectorImage; }
-    [[nodiscard]] VkImageView getDepthAOV()         const { return m_depthAOVView; }
-    [[nodiscard]] VkImage     getDepthAOVImage()    const { return m_depthAOVImage; }
-    [[nodiscard]] VkImageView getRoughnessAOV()     const { return m_roughnessAOVView; }
-    [[nodiscard]] VkImage     getRoughnessAOVImage() const { return m_roughnessAOVImage; }
-    [[nodiscard]] VkImageView getDiffuseRadianceAOV()      const { return m_diffuseRadianceView; }
-    [[nodiscard]] VkImage     getDiffuseRadianceAOVImage() const { return m_diffuseRadianceImage; }
-    [[nodiscard]] VkImageView getSpecularRadianceAOV()      const { return m_specularRadianceView; }
-    [[nodiscard]] VkImage     getSpecularRadianceAOVImage() const { return m_specularRadianceImage; }
-    [[nodiscard]] VkImageView getDiffAlbedoAOV()      const { return m_diffAlbedoView; }
-    [[nodiscard]] VkImage     getDiffAlbedoAOVImage() const { return m_diffAlbedoImage; }
-    [[nodiscard]] VkImageView getSpecColorAOV()       const { return m_specColorView; }
-    [[nodiscard]] VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
-    [[nodiscard]] VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
-    [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
-    // DLSS-RR specular hit-distance guide (R32F; written by the tracer from frontier F1 T4).
-    [[nodiscard]] VkImageView getSpecHitDistAOV()      const { return m_specHitDistView; }
-    [[nodiscard]] VkImage     getSpecHitDistAOVImage() const { return m_specHitDistImage; }
-    [[nodiscard]] VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
-    [[nodiscard]] VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
-    [[nodiscard]] VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
-    [[nodiscard]] VkImage     getOutSpecRadianceAOVImage() const { return m_outSpecRadianceImage; }
-    [[nodiscard]] VkImageView getNrdComposedAOV()      const { return m_nrdComposedView; }
-    [[nodiscard]] VkImage     getNrdComposedAOVImage() const { return m_nrdComposedImage; }
-    // Sub-plan 4.E T1: tonemapped NRD output (RGBA8 UNORM, binding 30).
+    // The frame's images but the accumulation pair. All are the render resolution's but Output and DlssOutput (the
+    // output's: a DLSS upscaling preset renders smaller).
+    enum class Target : uint8_t {
+        Output,            // RGBA8: the frame, through the display transform (a window presents it, a capture reads it)
+        Albedo,            // RGBA32F: the denoisers' albedo guide
+        Normal,            // RGBA32F: their normal guide (under DLSS RR the world normal and roughness, packed)
+        Motion,            // RG16F: the camera's motion vectors
+        Depth,             // R32F: view-space depth
+        Roughness,         // R16F: perceptual roughness
+        DiffuseRadiance,   // RGBA32F: NRD's diffuse input (radiance, hit distance)
+        SpecularRadiance,  // RGBA32F: NRD's specular input
+        DiffuseAlbedo,     // RGBA8: the diffuse albedo NRD's output is remodulated by
+        SpecularColor,     // RGBA8: the specular colour (F0)
+        NormalRoughness,   // R10G10B10A2: NRD REBLUR's IN_NORMAL_ROUGHNESS (oct-encoded normal, roughness)
+        DenoisedDiffuse,   // RGBA32F: NRD's denoised diffuse
+        DenoisedSpecular,  // RGBA32F: NRD's denoised specular
+        NrdComposed,       // RGBA32F: nrd_compose's HDR frame
+        Emission,          // RGBA16F, binding 13: the camera ray's emission; NRD's channels leave it out, nrd_compose adds it
+        DlssOutput,        // RGBA16F: DLSS RR's denoised HDR frame (made only in a build with DLSS)
+        Count
+    };
+    [[nodiscard]] gpu::Image& image(Target target) noexcept { return m_targets[static_cast<std::size_t>(target)]; }
+    // The accumulation image the latest render() wrote: the frame's linear radiance.
+    [[nodiscard]] gpu::Image& accum() noexcept { return m_accum[m_accumLatest]; }
 
     // Scene inputs from the RenderScene: bindings 4 (vertex arena), 5 (index arena),
     // 8 (mesh table), 9 (triangle material slots), 10 (material table), 11 (RT
@@ -241,7 +238,7 @@ private:
     // A program: raygen, the miss, the hit group and a second raygen (none when extraSpv is null), on the shared layout.
     [[nodiscard]] VkPipeline buildRtPipeline(const char* rgenSpv, const char* rgenEntry, const char* extraSpv,
                                              const char* extraEntry, const char* cacheName);
-    [[nodiscard]] bool buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffer, VkDeviceMemory& sbtMemory,
+    [[nodiscard]] bool buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
                                                VkStridedDeviceAddressRegionKHR& rgenRegion,
                                                VkStridedDeviceAddressRegionKHR& missRegion,
                                                VkStridedDeviceAddressRegionKHR& hitRegion,
@@ -270,6 +267,7 @@ private:
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+    GpuAllocator* m_allocator = nullptr;
     // m_width/m_height = internal RENDER resolution (raygen + AOVs).
     // m_outW/m_outH = OUTPUT/display resolution (beauty + DLSS COLOR_OUT).
     uint32_t m_width = 0;
@@ -298,12 +296,6 @@ private:
     std::unique_ptr<DlssRR> m_dlssRR;
     VkInstance m_dlssInstance     = VK_NULL_HANDLE;  // stashed at init() for lazy NGX init
     bool       m_dlssInitAttempted = false;          // one-shot latch (success or failure)
-    // DLSS-RR COLOR_OUT — denoised HDR-linear result DLSS writes (RGBA16F). Then
-    // tonemapped into m_outputImage (RGBA8) for the standard beauty readback.
-    VkImage        m_dlssColorOutImage  = VK_NULL_HANDLE;
-    VkDeviceMemory m_dlssColorOutMemory = VK_NULL_HANDLE;
-    VkImageView    m_dlssColorOutView   = VK_NULL_HANDLE;
-    bool           m_dlssColorOutFirstFrame = true;  // gates UNDEFINED→GENERAL transition
 #endif
 
     // Config
@@ -347,7 +339,6 @@ private:
     uint64_t m_emissiveVersion = 0;
     uint32_t m_instanceSlotEnd = 0;
     float m_analyticLightPower = 0.0f;
-    render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's
     float m_displayExposure{render::displayExposure(render::kDefaultEv100)};
     render::DisplayCurve m_displayCurve{render::DisplayCurve::AgX};
     uint32_t m_radianceCacheCapacity = 1;
@@ -373,96 +364,11 @@ private:
     // Accumulation — RGBA32F HDR, two images ping-ponged per frame: the trace writes
     // this frame's (binding 1) and reads the previous frame's (binding 3, read-only), so
     // no invocation reads a pixel another one is writing (temporal reprojection reads a
-    // neighbour). m_accumBuffer / m_accumView name the image the latest render() wrote.
-    VkImage m_accumImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkDeviceMemory m_accumMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkImageView m_accumViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    bool m_accumInitialized[2] = {false, false};
-    uint32_t m_accumWriteIndex = 0;
-    VkImage m_accumBuffer = VK_NULL_HANDLE;
-    VkImageView m_accumView = VK_NULL_HANDLE;
-
-    // Output image — RGBA8 tonemapped
-    VkImage m_outputImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_outputMemory = VK_NULL_HANDLE;
-    VkImageView m_outputView = VK_NULL_HANDLE;
-
-    // AOV buffers for denoiser guide (RGBA32F)
-    VkImage m_albedoAOV = VK_NULL_HANDLE;
-    VkDeviceMemory m_albedoAOVMemory = VK_NULL_HANDLE;
-    VkImageView m_albedoAOVView = VK_NULL_HANDLE;
-    VkImage m_normalAOV = VK_NULL_HANDLE;
-    VkDeviceMemory m_normalAOVMemory = VK_NULL_HANDLE;
-    VkImageView m_normalAOVView = VK_NULL_HANDLE;
-
-    // Feature 3.A: camera motion vector AOV (RG16F)
-    VkImage        m_motionVectorImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_motionVectorMemory = VK_NULL_HANDLE;
-    VkImageView    m_motionVectorView = VK_NULL_HANDLE;
-
-    // Feature 3.B: view-space depth AOV (R32F)
-    VkImage        m_depthAOVImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_depthAOVMemory = VK_NULL_HANDLE;
-    VkImageView    m_depthAOVView = VK_NULL_HANDLE;
-
-    // Feature 3.B: perceptual roughness AOV (R8 UNORM)
-    VkImage        m_roughnessAOVImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_roughnessAOVMemory = VK_NULL_HANDLE;
-    VkImageView    m_roughnessAOVView = VK_NULL_HANDLE;
-
-    // Feature 3.C (raw since 3.C.6): diffuse radiance (RGBA32F since 3.C.5)
-    VkImage        m_diffuseRadianceImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_diffuseRadianceMemory = VK_NULL_HANDLE;
-    VkImageView    m_diffuseRadianceView = VK_NULL_HANDLE;
-
-    // Feature 3.C (raw since 3.C.6): specular radiance (RGBA32F since 3.C.5)
-    VkImage        m_specularRadianceImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_specularRadianceMemory = VK_NULL_HANDLE;
-    VkImageView    m_specularRadianceView = VK_NULL_HANDLE;
-
-    // Feature 3.C.6: diffuse albedo AOV for NRD remodulate (RGBA8 UNORM)
-    VkImage        m_diffAlbedoImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_diffAlbedoMemory = VK_NULL_HANDLE;
-    VkImageView    m_diffAlbedoView = VK_NULL_HANDLE;
-
-    // Feature 3.C.6: specular color / F0 AOV for NRD remodulate (RGBA8 UNORM)
-    VkImage        m_specColorImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_specColorMemory = VK_NULL_HANDLE;
-    VkImageView    m_specColorView = VK_NULL_HANDLE;
-
-    // Feature 4.B: NRD REBLUR IN_NORMAL_ROUGHNESS — oct-encoded normal (RG) + roughness (B)
-    VkImage        m_normalRoughnessImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
-    VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
-
-    // DLSS-RR: specular hit-distance guide (R32F, world-space ray length; frontier F1 T4).
-    VkImage        m_specHitDistImage  = VK_NULL_HANDLE;
-    VkDeviceMemory m_specHitDistMemory = VK_NULL_HANDLE;
-    VkImageView    m_specHitDistView   = VK_NULL_HANDLE;
-
-    // Feature 4.C: NRD denoised diffuse output (RGBA32F)
-    VkImage        m_outDiffRadianceImage  = VK_NULL_HANDLE;
-    VkDeviceMemory m_outDiffRadianceMemory = VK_NULL_HANDLE;
-    VkImageView    m_outDiffRadianceView   = VK_NULL_HANDLE;
-
-    // Feature 4.C: NRD denoised specular output (RGBA32F)
-    VkImage        m_outSpecRadianceImage  = VK_NULL_HANDLE;
-    VkDeviceMemory m_outSpecRadianceMemory = VK_NULL_HANDLE;
-    VkImageView    m_outSpecRadianceView   = VK_NULL_HANDLE;
-
-    // Feature 4.D: NRD composed HDR output (RGBA32F) at binding 29.
-    // NOT in PathTracer's RT descriptor layout — only in NrdCompositor's
-    // compute descriptor set.
-    VkImage        m_nrdComposedImage     = VK_NULL_HANDLE;
-    VkDeviceMemory m_nrdComposedMemory    = VK_NULL_HANDLE;
-    VkImageView    m_nrdComposedView      = VK_NULL_HANDLE;
-    bool           m_nrdComposeFirstFrame = true;  // gates UNDEFINED→GENERAL transition on binding 29
-
-    // The camera ray's emission (RGBA16F, binding 13): NRD's channels leave it out; nrd_compose adds it.
-    VkImage        m_emissionAOVImage  = VK_NULL_HANDLE;
-    VkDeviceMemory m_emissionAOVMemory = VK_NULL_HANDLE;
-    VkImageView    m_emissionAOVView   = VK_NULL_HANDLE;
-    bool           m_emissionInitialized = false;
+    // neighbour).
+    gpu::Image m_accum[2];
+    uint32_t m_accumWriteIndex = 0;   // the image the next render() writes
+    uint32_t m_accumLatest = 0;       // the image the latest render() wrote
+    std::array<gpu::Image, static_cast<std::size_t>(Target::Count)> m_targets;
 
     // RT Pipeline
     VkPipeline m_rtPipeline = VK_NULL_HANDLE;
@@ -473,8 +379,7 @@ private:
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};
 
     // Shader Binding Table
-    VkBuffer m_sbtBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_sbtMemory = VK_NULL_HANDLE;
+    GpuBuffer m_sbt;
     VkStridedDeviceAddressRegionKHR m_rgenRegion{};
     VkStridedDeviceAddressRegionKHR m_missRegion{};
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
@@ -484,8 +389,7 @@ private:
     // Caustics' program (ensureCausticsPipeline): raygenCaustics and the light pass, causticTrace.
     VkPipeline m_causticsPipeline = VK_NULL_HANDLE;
     bool m_causticsPipelineFailed = false;
-    VkBuffer m_causticsSbtBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_causticsSbtMemory = VK_NULL_HANDLE;
+    GpuBuffer m_causticsSbt;
     VkStridedDeviceAddressRegionKHR m_causticsRgenRegion{};
     VkStridedDeviceAddressRegionKHR m_causticsMissRegion{};
     VkStridedDeviceAddressRegionKHR m_causticsHitRegion{};
@@ -495,16 +399,14 @@ private:
     struct GuidedProgram {
         VkPipeline pipeline = VK_NULL_HANDLE;
         bool failed = false;
-        VkBuffer sbtBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory sbtMemory = VK_NULL_HANDLE;
+        GpuBuffer sbt;
         VkStridedDeviceAddressRegionKHR rgen{}, miss{}, hit{}, extra{};
     };
     GuidedProgram m_guided[2];
     // Caustics step 2's program (ensureManifoldPipeline): manifoldConnect.
     VkPipeline m_manifoldPipeline = VK_NULL_HANDLE;
     bool m_manifoldPipelineFailed = false;
-    VkBuffer m_manifoldSbtBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_manifoldSbtMemory = VK_NULL_HANDLE;
+    GpuBuffer m_manifoldSbt;
     VkStridedDeviceAddressRegionKHR m_manifoldRgenRegion{};
     VkStridedDeviceAddressRegionKHR m_manifoldMissRegion{};
     VkStridedDeviceAddressRegionKHR m_manifoldHitRegion{};
@@ -551,7 +453,6 @@ private:
     PFN_vkGetBufferDeviceAddress vkGetBufferDeviceAddressFn = nullptr;
 
     // Helpers
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer);
 };
 

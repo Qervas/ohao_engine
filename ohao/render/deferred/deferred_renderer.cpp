@@ -598,8 +598,8 @@ gpu::Image* DeferredRenderer::finalOutput() {
     return m_postProcessing && m_postProcessing->didExecute() ? &m_postProcessing->output() : nullptr;
 }
 
-VkImage DeferredRenderer::getLitImage() const {
-    return m_lightingPass ? m_lightingPass->lit().image : VK_NULL_HANDLE;
+gpu::Image* DeferredRenderer::litImage() {
+    return m_lightingPass ? &m_lightingPass->lit() : nullptr;
 }
 
 glm::vec2 DeferredRenderer::getJitterOffset(uint32_t frameIndex) const {

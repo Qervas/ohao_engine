@@ -167,6 +167,13 @@ Pass& Pass::storageReadWrite(gpu::Image& img, Sub sub) {
     return *this;
 }
 
+Pass& Pass::external(gpu::Image& img, Sub sub) {
+    image(img, sub, VK_IMAGE_LAYOUT_GENERAL, shaderStages(),
+          VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+          true, false);
+    return *this;
+}
+
 Pass& Pass::copySrc(gpu::Image& img, Sub sub) {
     image(img, sub, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT, false, false);
     return *this;

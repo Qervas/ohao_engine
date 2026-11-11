@@ -157,35 +157,4 @@ GpuBuffer createHostBuffer(GpuAllocator& allocator, VkDeviceSize size, VkBufferU
     return buffer;
 }
 
-bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,
-                      HostBuffer& out) {
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = size;
-    bi.usage = usage;
-    if (vkCreateBuffer(device, &bi, nullptr, &out.buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(device, out.buffer, &req);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = req.size;
-    // Device-local memory the host can write (resizable BAR) when there is some, else
-    // system memory, which every read crosses the bus for.
-    constexpr VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    ai.memoryTypeIndex = findMemoryType(physicalDevice, req.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (ai.memoryTypeIndex == UINT32_MAX) ai.memoryTypeIndex = findMemoryType(physicalDevice, req.memoryTypeBits, host);
-    if (ai.memoryTypeIndex == UINT32_MAX) return false;
-    if (vkAllocateMemory(device, &ai, nullptr, &out.memory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(device, out.buffer, out.memory, 0);
-    if (vkMapMemory(device, out.memory, 0, VK_WHOLE_SIZE, 0, &out.mapped) != VK_SUCCESS) return false;
-    std::memset(out.mapped, 0, static_cast<std::size_t>(size));
-    return true;
-}
-
-void destroyHostBuffer(VkDevice device, HostBuffer& buf) {
-    if (buf.buffer) vkDestroyBuffer(device, buf.buffer, nullptr);
-    if (buf.memory) vkFreeMemory(device, buf.memory, nullptr);   // unmaps
-    buf = HostBuffer{};
-}
-
 } // namespace ohao::rtc

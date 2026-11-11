@@ -145,7 +145,7 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAl
         OHAO_LOG(Error, render, "RTGI: failed to upload OpenPBR's energy tables");
         return false;
     }
-    if (!m_cache.create(device, physicalDevice, kCacheCapacity, kCacheMaxSamples)) {
+    if (!m_cache.create(device, *m_allocator, kCacheCapacity, kCacheMaxSamples)) {
         OHAO_LOG(Error, render, "RTGI: failed to create its radiance cache");
         return false;
     }
@@ -351,7 +351,7 @@ void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
     input.alphaTables->declare(pass, m_slot, *input.scene);
     pass.read(m_lights[m_slot], render::BufferUse::Storage);
     // LEGACY(step 4a): the environment map is EnvUpload's and OpenPBR's tables an OpenPBRTablesBuffer, not tracked
-    // yet; the radiance cache records its own barriers (RadianceCache, the path tracer's).
+    // yet.
     if (!input.envMap) pass.sampled(m_envDummy);
     if (reference) {
         m_historyValid = false;
@@ -431,8 +431,9 @@ void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
     writes[17].pImageInfo = &layersInfo;
     vkUpdateDescriptorSets(m_device, 18, writes, 0, nullptr);
 
-    // The cache: last frame's work ordered before this frame's, emptied if a reset asked.
-    m_cache.recordBeginFrame(cmd);
+    // The cache: emptied if a reset asked, then read and fed by the trace.
+    m_cache.recordBeginFrame(frame);
+    m_cache.fedBy(pass);
 
     pass.begin();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
@@ -447,7 +448,7 @@ void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
     vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);
     pass.end();
-    m_cache.recordResolve(cmd);   // this frame's samples blended in for the next frame's rays
+    m_cache.recordResolve(frame);   // this frame's samples blended in for the next frame's rays
     m_rendered = true;
     if (reference) ++m_refFrames;
 }

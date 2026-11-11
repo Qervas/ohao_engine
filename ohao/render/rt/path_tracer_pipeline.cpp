@@ -272,7 +272,7 @@ bool PathTracer::ensureCausticsPipeline() {
     m_causticsPipeline = buildRtPipeline(m_shaderSet.raygenCausticsSpv, m_shaderSet.raygenCausticsEntry,
                                          m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry, "path_tracer_caustics");
     if (!m_causticsPipeline ||
-        !buildShaderBindingTable(m_causticsPipeline, m_causticsSbtBuffer, m_causticsSbtMemory, m_causticsRgenRegion,
+        !buildShaderBindingTable(m_causticsPipeline, m_causticsSbt, m_causticsRgenRegion,
                                  m_causticsMissRegion, m_causticsHitRegion, &m_causticTraceRegion)) {
         OHAO_LOG(Error, render, "PathTracer: caustics' pipeline unavailable: caustics stay off");
         m_causticsPipelineFailed = true;
@@ -289,7 +289,7 @@ bool PathTracer::ensureManifoldPipeline() {
     m_manifoldPipeline = buildRtPipeline(m_shaderSet.manifoldSpv, m_shaderSet.manifoldEntry, nullptr, nullptr,
                                          "path_tracer_manifold");
     if (!m_manifoldPipeline ||
-        !buildShaderBindingTable(m_manifoldPipeline, m_manifoldSbtBuffer, m_manifoldSbtMemory, m_manifoldRgenRegion,
+        !buildShaderBindingTable(m_manifoldPipeline, m_manifoldSbt, m_manifoldRgenRegion,
                                  m_manifoldMissRegion, m_manifoldHitRegion, nullptr)) {
         OHAO_LOG(Error, render, "PathTracer: the manifold pass's pipeline unavailable: caustics' step 2 stays off");
         m_manifoldPipelineFailed = true;
@@ -311,7 +311,7 @@ bool PathTracer::ensureGuidedProgram(bool caustics) {
                           : buildRtPipeline(m_shaderSet.raygenGuidedSpv, m_shaderSet.raygenGuidedEntry, nullptr, nullptr,
                                             "path_tracer_guided");
     if (!g.pipeline ||
-        !buildShaderBindingTable(g.pipeline, g.sbtBuffer, g.sbtMemory, g.rgen, g.miss, g.hit, caustics ? &g.extra : nullptr)) {
+        !buildShaderBindingTable(g.pipeline, g.sbt, g.rgen, g.miss, g.hit, caustics ? &g.extra : nullptr)) {
         OHAO_LOG(Error, render, "PathTracer: path guiding's {} pipeline unavailable: guiding stays off",
                  caustics ? "caustics" : "default");
         g.failed = true;
@@ -323,11 +323,11 @@ bool PathTracer::ensureGuidedProgram(bool caustics) {
 // ─── Shader Binding Table ────────────────────────────────────────────
 
 bool PathTracer::createShaderBindingTable() {
-    return buildShaderBindingTable(m_rtPipeline, m_sbtBuffer, m_sbtMemory, m_rgenRegion, m_missRegion, m_hitRegion,
+    return buildShaderBindingTable(m_rtPipeline, m_sbt, m_rgenRegion, m_missRegion, m_hitRegion,
                                    &m_cacheRgenRegion);
 }
 
-bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffer, VkDeviceMemory& sbtMemory,
+bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
                                          VkStridedDeviceAddressRegionKHR& rgenRegion,
                                          VkStridedDeviceAddressRegionKHR& missRegion,
                                          VkStridedDeviceAddressRegionKHR& hitRegion,
@@ -364,39 +364,15 @@ bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffe
     uint32_t hitSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t totalSize = rgenSize + missSize + hitSize + (extraRegion ? rgenSize : 0);   // the second rgen last
 
-    // Create SBT buffer
-    VkBufferCreateInfo bufInfo{};
-    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = totalSize;
-    bufInfo.usage = VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    // The table: host-written once, read by every trace through its device address.
+    sbt = m_allocator->createBuffer(totalSize,
+                                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    AllocationUsage::CpuToGpu, true);
+    if (!sbt.isValid() || !sbt.getMappedData()) return false;
 
-    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &sbtBuffer) != VK_SUCCESS) return false;
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, sbtBuffer, &memReqs);
-
-    VkMemoryAllocateFlagsInfo allocFlags{};
-    allocFlags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    allocFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.pNext = &allocFlags;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &sbtMemory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(m_device, sbtBuffer, sbtMemory, 0);
-
-    // Write handles into SBT buffer
-    void* mapped;
-    vkMapMemory(m_device, sbtMemory, 0, totalSize, 0, &mapped);
-    memset(mapped, 0, totalSize);
-
-    uint8_t* dst = static_cast<uint8_t*>(mapped);
+    uint8_t* dst = static_cast<uint8_t*>(sbt.getMappedData());
+    memset(dst, 0, totalSize);
     // Rgen at offset 0
     memcpy(dst, handles.data() + 0 * handleSize, handleSize);
     // Miss at offset rgenSize
@@ -405,11 +381,10 @@ bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, VkBuffer& sbtBuffe
     memcpy(dst + rgenSize + missSize, handles.data() + 2 * handleSize, handleSize);
     // The second raygen after the hit group
     if (extraRegion) memcpy(dst + rgenSize + missSize + hitSize, handles.data() + 3 * handleSize, handleSize);
-
-    vkUnmapMemory(m_device, sbtMemory);
+    m_allocator->flushBuffer(sbt);
 
     // Set up strided device address regions
-    VkDeviceAddress sbtAddr = getBufferDeviceAddress(sbtBuffer);
+    VkDeviceAddress sbtAddr = getBufferDeviceAddress(sbt.buffer);
 
     rgenRegion.deviceAddress = sbtAddr;
     // A raygen region holds exactly one record, and the spec requires its size

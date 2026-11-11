@@ -18,7 +18,7 @@ public:
     // Sub-plan 4.C T3b: NRD integration needs the full Vulkan context (instance,
     // queue family, enabled extensions). Default args keep this invocation
     // backwards-compatible with non-NRD callers.
-    virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice,
+    virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator,
                       uint32_t width, uint32_t height,
                       VkInstance instance = VK_NULL_HANDLE,
                       uint32_t graphicsQueueFamilyIndex = 0,
@@ -28,34 +28,11 @@ public:
     virtual void resize(uint32_t width, uint32_t height) = 0;
 
     // Lit by the scene's light table (setSceneBuffers), never by a light passed in.
-    virtual void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) = 0;
+    virtual void render(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj) = 0;
 
-    virtual VkImage getOutputImage() const = 0;
-    virtual VkImage getAccumImage() const = 0;
-    virtual VkImage getAlbedoAOV() const = 0;
-    virtual VkImage getNormalAOV() const = 0;
-    virtual VkImageView getMotionVectorAOV() const = 0;
-    virtual VkImage getMotionVectorImage() const = 0;
-    virtual VkImageView getDepthAOV()         const = 0;
-    virtual VkImage     getDepthAOVImage()    const = 0;
-    virtual VkImageView getRoughnessAOV()     const = 0;
-    virtual VkImage     getRoughnessAOVImage() const = 0;
-    virtual VkImageView getDiffuseRadianceAOV()      const = 0;
-    virtual VkImage     getDiffuseRadianceAOVImage() const = 0;
-    virtual VkImageView getSpecularRadianceAOV()      const = 0;
-    virtual VkImage     getSpecularRadianceAOVImage() const = 0;
-    virtual VkImageView getDiffAlbedoAOV()      const = 0;
-    virtual VkImage     getDiffAlbedoAOVImage() const = 0;
-    virtual VkImageView getSpecColorAOV()       const = 0;
-    virtual VkImage     getSpecColorAOVImage()  const = 0;
-    virtual VkImageView getNormalRoughnessAOV()      const = 0;
-    virtual VkImage     getNormalRoughnessAOVImage() const = 0;
-    // Sub-plan 4.C: NRD denoised outputs (RGBA32F)
-    virtual VkImage     getOutDiffRadianceAOVImage() const = 0;
-    virtual VkImage     getOutSpecRadianceAOVImage() const = 0;
-    // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
-    virtual VkImage     getNrdComposedAOVImage() const = 0;
-    virtual VkImageView getNrdComposedAOV()      const = 0;
+    // The tracer's images, for the way out and the readbacks: PathTracer::image and PathTracer::accum.
+    [[nodiscard]] virtual gpu::Image& image(PathTracer::Target target) = 0;
+    [[nodiscard]] virtual gpu::Image& accum() = 0;
 
     // See PathTracer::setSceneBuffers / setBindlessTextures.
     virtual void setSceneBuffers(const render::RenderScene& scene) = 0;
@@ -73,7 +50,6 @@ public:
     virtual void setEnvMapResource(VkImageView view, VkSampler sampler) = 0;
 
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
-    virtual void setPassTimer(render::GpuPassTimer* timer) = 0;
     // The display transform its output and denoisers' frames use (the post stack's).
     virtual void setDisplay(float exposure, render::DisplayCurve curve) = 0;
     virtual void notifyViewChanged() = 0;
@@ -88,7 +64,7 @@ public:
     RTProfileRendererBase(RTRenderSettings settings, PathTracerShaderSet shaderSet)
         : m_settings(settings), m_shaderSet(shaderSet) {}
 
-    bool init(VkDevice device, VkPhysicalDevice physicalDevice,
+    bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator,
               uint32_t width, uint32_t height,
               VkInstance instance = VK_NULL_HANDLE,
               uint32_t graphicsQueueFamilyIndex = 0,
@@ -96,7 +72,7 @@ public:
               const std::vector<const char*>& deviceExtensions = {}) override {
         m_pathTracer.setShaderSet(m_shaderSet);
         m_pathTracer.setRadianceCacheCapacity(m_settings.radianceCache ? render::RadianceCache::kDefaultCapacity : 1u);
-        if (!m_pathTracer.init(device, physicalDevice, width, height,
+        if (!m_pathTracer.init(device, physicalDevice, allocator, width, height,
                                 instance, graphicsQueueFamilyIndex,
                                 instanceExtensions, deviceExtensions)) {
             return false;
@@ -109,36 +85,13 @@ public:
     void destroy() override { m_pathTracer.destroy(); }
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
 
-    void setPassTimer(render::GpuPassTimer* timer) override { m_pathTracer.setPassTimer(timer); }
     void setDisplay(float exposure, render::DisplayCurve curve) override { m_pathTracer.setDisplay(exposure, curve); }
-    void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) override {
-        m_pathTracer.render(cmd, frameSlot, view, proj);
+    void render(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj) override {
+        m_pathTracer.render(frame, view, proj);
     }
 
-    VkImage getOutputImage() const override { return m_pathTracer.getOutputImage(); }
-    VkImage getAccumImage() const override { return m_pathTracer.getAccumImage(); }
-    VkImage getAlbedoAOV() const override { return m_pathTracer.getAlbedoAOV(); }
-    VkImage getNormalAOV() const override { return m_pathTracer.getNormalAOV(); }
-    VkImageView getMotionVectorAOV() const override { return m_pathTracer.getMotionVectorAOV(); }
-    VkImage getMotionVectorImage() const override { return m_pathTracer.getMotionVectorImage(); }
-    VkImageView getDepthAOV()         const override { return m_pathTracer.getDepthAOV(); }
-    VkImage     getDepthAOVImage()    const override { return m_pathTracer.getDepthAOVImage(); }
-    VkImageView getRoughnessAOV()     const override { return m_pathTracer.getRoughnessAOV(); }
-    VkImage     getRoughnessAOVImage() const override { return m_pathTracer.getRoughnessAOVImage(); }
-    VkImageView getDiffuseRadianceAOV()      const override { return m_pathTracer.getDiffuseRadianceAOV(); }
-    VkImage     getDiffuseRadianceAOVImage() const override { return m_pathTracer.getDiffuseRadianceAOVImage(); }
-    VkImageView getSpecularRadianceAOV()      const override { return m_pathTracer.getSpecularRadianceAOV(); }
-    VkImage     getSpecularRadianceAOVImage() const override { return m_pathTracer.getSpecularRadianceAOVImage(); }
-    VkImageView getDiffAlbedoAOV()      const override { return m_pathTracer.getDiffAlbedoAOV(); }
-    VkImage     getDiffAlbedoAOVImage() const override { return m_pathTracer.getDiffAlbedoAOVImage(); }
-    VkImageView getSpecColorAOV()       const override { return m_pathTracer.getSpecColorAOV(); }
-    VkImage     getSpecColorAOVImage()  const override { return m_pathTracer.getSpecColorAOVImage(); }
-    VkImageView getNormalRoughnessAOV()      const override { return m_pathTracer.getNormalRoughnessAOV(); }
-    VkImage     getNormalRoughnessAOVImage() const override { return m_pathTracer.getNormalRoughnessAOVImage(); }
-    VkImage     getOutDiffRadianceAOVImage() const override { return m_pathTracer.getOutDiffRadianceAOVImage(); }
-    VkImage     getOutSpecRadianceAOVImage() const override { return m_pathTracer.getOutSpecRadianceAOVImage(); }
-    VkImage     getNrdComposedAOVImage() const override { return m_pathTracer.getNrdComposedAOVImage(); }
-    VkImageView getNrdComposedAOV()      const override { return m_pathTracer.getNrdComposedAOV(); }
+    gpu::Image& image(PathTracer::Target target) override { return m_pathTracer.image(target); }
+    gpu::Image& accum() override { return m_pathTracer.accum(); }
 
     void setSceneBuffers(const render::RenderScene& scene) override { m_pathTracer.setSceneBuffers(scene); }
     void setBindlessCapacity(uint32_t capacity) override { m_pathTracer.setBindlessCapacity(capacity); }

@@ -11,14 +11,6 @@
 
 namespace ohao::rtc {
 
-// LEGACY(step 4a): ManifoldCasters' host-written buffers (the path tracer's frame, not moved yet); everything
-// else makes its own with createHostBuffer(GpuAllocator&, ...).
-struct HostBuffer {
-    VkBuffer buffer{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    void* mapped{nullptr};
-};
-
 uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
 // Pipeline statistics (OHAO_PIPELINE_STATS=1 on a device with VK_KHR_pipeline_executable_properties,
@@ -46,11 +38,5 @@ VkShaderModule loadShaderModule(VkDevice device, const char* spirv);
 // A buffer the host writes every frame and every pixel reads: device-local memory the host can map (resizable
 // BAR) when there is some, else host memory; mapped for its lifetime and zeroed. Invalid when it fails.
 [[nodiscard]] GpuBuffer createHostBuffer(GpuAllocator& allocator, VkDeviceSize size, VkBufferUsageFlags usage);
-
-// LEGACY(step 4a): ManifoldCasters' (see HostBuffer).
-bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,
-                      HostBuffer& out);
-void destroyHostBuffer(VkDevice device, HostBuffer& buf);
-
 
 } // namespace ohao::rtc

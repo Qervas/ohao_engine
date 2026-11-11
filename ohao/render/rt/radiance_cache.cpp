@@ -8,21 +8,6 @@ namespace ohao::render {
 
 namespace {
 
-bool createDeviceBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBuffer& buffer,
-                        VkDeviceMemory& memory) {
-    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    info.size = size;
-    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateBuffer(device, &info, nullptr, &buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(device, buffer, &req);
-    VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    alloc.allocationSize = req.size;
-    alloc.memoryTypeIndex = rtc::findMemoryType(physicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (alloc.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(device, &alloc, nullptr, &memory) != VK_SUCCESS) return false;
-    return vkBindBufferMemory(device, buffer, memory, 0) == VK_SUCCESS;
-}
-
 struct ResolveConstants {
     uint32_t capacity;
     uint32_t maxSamples;
@@ -33,13 +18,16 @@ OHAO_CHECK_PUSH(ResolveConstants, rt_radiance_cache_resolve)   // rt/radiance_ca
 
 } // namespace
 
-bool RadianceCache::create(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t capacity, uint32_t maxSamples) {
+bool RadianceCache::create(VkDevice device, GpuAllocator& allocator, uint32_t capacity, uint32_t maxSamples) {
     m_device = device;
+    m_allocator = &allocator;
     m_capacity = capacity;
     m_maxSamples = maxSamples;
-    if (!createDeviceBuffer(device, physicalDevice, VkDeviceSize(capacity) * 4u, m_keys, m_keysMemory) ||
-        !createDeviceBuffer(device, physicalDevice, VkDeviceSize(capacity) * 16u, m_accum, m_accumMemory) ||
-        !createDeviceBuffer(device, physicalDevice, VkDeviceSize(capacity) * 16u, m_resolved, m_resolvedMemory)) {
+    constexpr VkBufferUsageFlags kUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    m_keys = allocator.createBuffer(VkDeviceSize(capacity) * 4u, kUsage, AllocationUsage::GpuOnly);
+    m_accum = allocator.createBuffer(VkDeviceSize(capacity) * 16u, kUsage, AllocationUsage::GpuOnly);
+    m_resolved = allocator.createBuffer(VkDeviceSize(capacity) * 16u, kUsage, AllocationUsage::GpuOnly);
+    if (!m_keys.isValid() || !m_accum.isValid() || !m_resolved.isValid()) {
         OHAO_LOG(Error, render, "RadianceCache: buffers of {} entries could not be created", capacity);
         destroy();
         return false;
@@ -72,8 +60,8 @@ bool RadianceCache::create(VkDevice device, VkPhysicalDevice physicalDevice, uin
         return false;
     }
     // The buffers never change: the set is written once.
-    const VkDescriptorBufferInfo infos[] = {{m_keys, 0, VK_WHOLE_SIZE}, {m_accum, 0, VK_WHOLE_SIZE},
-                                            {m_resolved, 0, VK_WHOLE_SIZE}};
+    const VkDescriptorBufferInfo infos[] = {{m_keys.buffer, 0, VK_WHOLE_SIZE}, {m_accum.buffer, 0, VK_WHOLE_SIZE},
+                                            {m_resolved.buffer, 0, VK_WHOLE_SIZE}};
     VkWriteDescriptorSet writes[3];
     for (uint32_t i = 0; i < 3; ++i) {
         writes[i] = shader::write(shader::rt_radiance_cache_resolve::kSet0[i], m_set);
@@ -96,58 +84,38 @@ void RadianceCache::destroy() {
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(m_device, m_setLayout, nullptr);
-    for (VkBuffer* b : {&m_keys, &m_accum, &m_resolved})
-        if (*b) vkDestroyBuffer(m_device, *b, nullptr);
-    for (VkDeviceMemory* m : {&m_keysMemory, &m_accumMemory, &m_resolvedMemory})
-        if (*m) vkFreeMemory(m_device, *m, nullptr);
+    for (GpuBuffer* b : {&m_keys, &m_accum, &m_resolved}) m_allocator->retire(*b);
     *this = RadianceCache{};
 }
 
-namespace {
-// The stages a cache's readers and writers run in: the path tracer's raygen, RT GI's compute.
-constexpr VkPipelineStageFlags kShaders = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-} // namespace
-
-void RadianceCache::recordBeginFrame(VkCommandBuffer cmd) {
-    if (!valid()) return;
-    constexpr VkPipelineStageFlags kPrevious = kShaders;
-    if (!m_clearPending) {
-        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, kPrevious, kShaders, 0, 1, &b, 0, nullptr, 0, nullptr);
-        return;
-    }
-    m_clearPending = false;
-    VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    before.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    before.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, kPrevious, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
-    for (VkBuffer b : {m_keys, m_accum, m_resolved}) vkCmdFillBuffer(cmd, b, 0, VK_WHOLE_SIZE, 0u);
-    VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, kShaders, 0, 1, &after, 0,
-                         nullptr, 0, nullptr);
+void RadianceCache::fedBy(Pass& pass) {
+    pass.write(m_keys, BufferUse::Storage).write(m_accum, BufferUse::Storage).read(m_resolved, BufferUse::Storage);
 }
 
-void RadianceCache::recordResolve(VkCommandBuffer cmd) {
+void RadianceCache::lookedUpBy(Pass& pass) {
+    pass.read(m_keys, BufferUse::Storage).read(m_resolved, BufferUse::Storage);
+}
+
+void RadianceCache::recordBeginFrame(const Frame& frame) {
+    if (!valid() || !m_clearPending) return;
+    m_clearPending = false;
+    Pass pass(frame, nullptr, Pass::Transfer);
+    for (GpuBuffer* b : {&m_keys, &m_accum, &m_resolved}) pass.write(*b, BufferUse::CopyDst);
+    pass.begin();
+    for (const GpuBuffer* b : {&m_keys, &m_accum, &m_resolved}) vkCmdFillBuffer(frame.cmd, b->buffer, 0, VK_WHOLE_SIZE, 0u);
+}
+
+void RadianceCache::recordResolve(const Frame& frame) {
     if (!valid()) return;
-    VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    toCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, kShaders, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
-                         &toCompute, 0, nullptr, 0, nullptr);
+    const VkCommandBuffer cmd = frame.cmd;
+    Pass pass(frame, nullptr, Pass::Compute);
+    for (GpuBuffer* b : {&m_keys, &m_accum, &m_resolved}) pass.write(*b, BufferUse::Storage);
+    pass.begin();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
     const ResolveConstants rc{m_capacity, m_maxSamples, kStaleFrames, 0};
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rc), &rc);
     vkCmdDispatch(cmd, (m_capacity + 255u) / 256u, 1, 1);
-    VkMemoryBarrier toTrace{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    toTrace.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toTrace.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, kShaders, 0, 1,
-                         &toTrace, 0, nullptr, 0, nullptr);
 }
 
 } // namespace ohao::render

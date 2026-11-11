@@ -54,11 +54,6 @@ public:
     [[nodiscard]] gpu::Image& power() noexcept { return m_power; }
     [[nodiscard]] GpuBuffer& ranges(uint32_t frameSlot) noexcept { return m_ranges[frameSlot]; }
     [[nodiscard]] GpuBuffer& first(uint32_t frameSlot) noexcept { return m_first[frameSlot]; }
-    // LEGACY(step 4a): the path tracer binds these handles (PathTracer's frame, not moved yet).
-    [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lights.buffer; }
-    [[nodiscard]] VkImageView powerView() const noexcept { return m_power.view; }
-    [[nodiscard]] VkBuffer rangeBuffer(uint32_t frameSlot) const noexcept { return m_ranges[frameSlot].buffer; }
-    [[nodiscard]] VkBuffer firstBuffer(uint32_t frameSlot) const noexcept { return m_first[frameSlot].buffer; }
 
 private:
     bool createLights(uint32_t capacity);

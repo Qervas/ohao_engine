@@ -191,10 +191,9 @@ public:
     // The frame's final image for display and readback (the post stack's RGBA8 output); null when
     // the last render() made none.
     [[nodiscard]] gpu::Image* finalOutput();
-    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post.
-    // LEGACY(step 4a): the one-shot readback (render_dispatch.cpp) copies it by barriers of its own, from
-    // SHADER_READ_ONLY and back.
-    [[nodiscard]] VkImage getLitImage() const;
+    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post. Null
+    // without a lighting pass.
+    [[nodiscard]] gpu::Image* litImage();
 
     // Get jitter offset for TAA
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;

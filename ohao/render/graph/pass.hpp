@@ -101,7 +101,10 @@ public:
     // ranges of the one buffer.
     Pass& readWrite(GpuBuffer& buffer, BufferUse use);
 
-    // --- what code with barriers of its own (NRD, DLSS) leaves behind: after end(), `image` is in `layout`.
+    // --- code with barriers of its own (NRD, DLSS)
+    // An image handed to it in GENERAL: its shaders (the pass's kind) may sample it, read it and write it.
+    Pass& external(gpu::Image& image, Sub sub = {});
+    // What it leaves behind: after end(), `image` is in `layout`.
     Pass& leaves(gpu::Image& image, VkImageLayout layout);
 
     void begin();

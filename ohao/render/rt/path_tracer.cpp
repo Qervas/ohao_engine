@@ -47,16 +47,6 @@ bool PathTracer::loadFunctionPointers() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-uint32_t PathTracer::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties)
-            return i;
-    }
-    return UINT32_MAX;
-}
-
 VkDeviceAddress PathTracer::getBufferDeviceAddress(VkBuffer buffer) {
     VkBufferDeviceAddressInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
@@ -67,7 +57,7 @@ VkDeviceAddress PathTracer::getBufferDeviceAddress(VkBuffer buffer) {
 
 // ─── Initialization ──────────────────────────────────────────────────
 
-bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
+bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator,
                        uint32_t width, uint32_t height,
                        VkInstance instance,
                        uint32_t graphicsQueueFamilyIndex,
@@ -75,6 +65,7 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                        const std::vector<const char*>& deviceExtensions) {
     m_device = device;
     m_physicalDevice = physicalDevice;
+    m_allocator = &allocator;
     // `width`/`height` from the caller are the OUTPUT/display resolution. The
     // internal render resolution is derived from it (== output unless a DLSS
     // upscaling preset is active — which it is NOT at init(), since the denoise
@@ -101,20 +92,20 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
-    if (!m_radianceCache.create(m_device, m_physicalDevice, m_radianceCacheCapacity)) {
+    if (!m_radianceCache.create(m_device, allocator, m_radianceCacheCapacity)) {
         OHAO_LOG(Error, render, "PathTracer: failed to create the radiance cache");
         return false;
     }
 
-    if (!m_guiding.create(m_device, m_physicalDevice)) {
+    if (!m_guiding.create(m_device, allocator)) {
         OHAO_LOG(Error, render, "PathTracer: failed to create path guiding's buffers");
         return false;
     }
-    if (!m_caustics.create(m_device, m_physicalDevice)) {
+    if (!m_caustics.create(m_device, allocator)) {
         OHAO_LOG(Error, render, "PathTracer: failed to create caustics' buffers");
         return false;
     }
-    if (!m_manifold.create(m_device, m_physicalDevice)) {
+    if (!m_manifold.create(m_device, allocator)) {
         OHAO_LOG(Error, render, "PathTracer: failed to create the manifold pass's buffers");
         return false;
     }
@@ -237,7 +228,7 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     m_outH = height;
     computeRenderResolution();
 
-    // Recreate both images at new resolution
+    // The images at the new resolution; the old ones are retired.
     destroyImages();
     createImages();
 
@@ -248,7 +239,6 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
         m_dlssRR->releaseFeature();
     }
     m_dlssInitAttempted = false;
-    m_dlssColorOutFirstFrame = true;
 #endif
 
     // Reset accumulation since the buffer dimensions changed
@@ -302,9 +292,9 @@ void PathTracer::computeRenderResolution() {
 // Switching to/from DLSSRR (or a different OHAO_DLSS_QUALITY) changes the
 // internal render resolution, which requires reallocating every render-target
 // image. This happens between frames (setRenderSettings is called from the
-// renderer's per-frame prep, outside the command buffer), so a device-idle +
-// destroy/create is safe here. The per-frame descriptor rewrite in render()
-// rebinds all image views, so no stale descriptors survive.
+// renderer's per-frame prep, outside the command buffer): the old images are
+// retired, and the per-frame descriptor rewrite in render() rebinds all image
+// views, so no stale descriptors survive.
 void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
     m_renderSettings = applyDenoisePolicy(settings);
     m_maxBounces = m_renderSettings.maxBounces;
@@ -318,18 +308,18 @@ void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
 
     // Render resolution changed (e.g. first switch into a DLSS upscaling preset).
     // Reallocate the render-target images at the new render res.
-    vkDeviceWaitIdle(m_device);
     destroyImages();
     createImages();
 
 #ifdef OHAO_DLSS_ENABLED
     // The DLSS feature (if any) was created for the old dims — force a fresh
     // lazy re-init at the new render/output dims on the next DLSSRR frame.
+    // Frames in flight may still run the feature NGX releases here: the device idles first.
     if (m_dlssRR) {
+        vkDeviceWaitIdle(m_device);
         m_dlssRR->releaseFeature();
     }
-    m_dlssInitAttempted      = false;
-    m_dlssColorOutFirstFrame = true;
+    m_dlssInitAttempted = false;
 #endif
 
     // Buffer dimensions changed → restart accumulation + temporal history.
@@ -377,15 +367,9 @@ void PathTracer::destroy() {
     m_manifold.destroy();
 
     // SBT
-    if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
-    if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }
-    if (m_causticsSbtBuffer) { vkDestroyBuffer(m_device, m_causticsSbtBuffer, nullptr); m_causticsSbtBuffer = VK_NULL_HANDLE; }
-    if (m_causticsSbtMemory) { vkFreeMemory(m_device, m_causticsSbtMemory, nullptr); m_causticsSbtMemory = VK_NULL_HANDLE; }
-    if (m_manifoldSbtBuffer) { vkDestroyBuffer(m_device, m_manifoldSbtBuffer, nullptr); m_manifoldSbtBuffer = VK_NULL_HANDLE; }
-    if (m_manifoldSbtMemory) { vkFreeMemory(m_device, m_manifoldSbtMemory, nullptr); m_manifoldSbtMemory = VK_NULL_HANDLE; }
+    for (GpuBuffer* sbt : {&m_sbt, &m_causticsSbt, &m_manifoldSbt}) m_allocator->retire(*sbt);
     for (GuidedProgram& g : m_guided) {
-        if (g.sbtBuffer) vkDestroyBuffer(m_device, g.sbtBuffer, nullptr);
-        if (g.sbtMemory) vkFreeMemory(m_device, g.sbtMemory, nullptr);
+        m_allocator->retire(g.sbt);
         if (g.pipeline) vkDestroyPipeline(m_device, g.pipeline, nullptr);
         g = GuidedProgram{};
     }
@@ -405,6 +389,7 @@ void PathTracer::destroy() {
 
     // Images
     destroyImages();
+    m_device = VK_NULL_HANDLE;
 }
 
 } // namespace ohao
