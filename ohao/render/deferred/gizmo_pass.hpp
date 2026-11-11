@@ -1,6 +1,8 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/shader_bindings/overlay_gizmo.hpp"
 #include "../gizmo/gizmo_meshes.hpp"
 
@@ -16,8 +18,9 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
-    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
-    void onResize(uint32_t width, uint32_t height) override;
+    void execute(VkCommandBuffer, uint32_t) override {}   // record() draws: the pass needs its target
+    // The handles composited over `target` (the final RGBA8 image) in place, timed as gizmo.
+    void record(const render::Frame& frame, gpu::Image& target);
     [[nodiscard]] const char* getName() const override { return "GizmoPass"; }
 
     // Configure what to render
@@ -29,16 +32,11 @@ public:
     void setHighlightedAxis(GizmoAxis axis) { m_highlightedAxis = axis; }
     [[nodiscard]] GizmoMode getGizmoMode() const { return m_currentMode; }
 
-    // Set the target image to composite gizmos onto.
-    // The gizmo pass will create its own framebuffer from this image view.
-    void setTargetImage(VkImage image, VkImageView imageView);
-
 private:
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createVertexBuffers();
     void destroyVertexBuffers();
     void updateGizmoBuffers();
-    void destroyFramebuffer();
 
     bool m_enabled{false};
     GizmoMode m_currentMode{GizmoMode::TRANSLATE};
@@ -51,29 +49,15 @@ private:
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
 
-    // Own render pass (LOAD_OP_LOAD for compositing on top)
-    VkRenderPass m_renderPass{VK_NULL_HANDLE};
-
-    // Target image (from overlay or post-processing pass)
-    VkImage m_targetImage{VK_NULL_HANDLE};
-    VkImageView m_targetImageView{VK_NULL_HANDLE};
-    VkFramebuffer m_framebuffer{VK_NULL_HANDLE};
-
     // Vertex/index buffers for gizmo geometry
-    VkBuffer m_vertexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_vertexMemory{VK_NULL_HANDLE};
-    VkBuffer m_indexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_indexMemory{VK_NULL_HANDLE};
+    GpuBuffer m_vertexBuffer;
+    GpuBuffer m_indexBuffer;
     uint32_t m_indexCount{0};
 
     // Cached geometry
     std::vector<GizmoVertex> m_vertices;
     std::vector<uint32_t> m_indices;
     bool m_geometryDirty{true};
-
-    // Dimensions
-    uint32_t m_width{0};
-    uint32_t m_height{0};
 
     // Push constants (must match overlay/gizmo.slang)
     struct GizmoPushConstants {

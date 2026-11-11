@@ -148,6 +148,10 @@ bool VulkanRenderer::initialize() {
             OHAO_LOG(Error, gpu, "the renderer's allocator did not start");
             return false;
         }
+        if (!createStagingBuffers()) {
+            OHAO_LOG(Error, gpu, "the readback staging buffers could not be created");
+            return false;
+        }
 
         // Set shader base path for all render passes
         RenderPassBase::setShaderBasePath(m_shaderBasePath);
@@ -247,12 +251,14 @@ void VulkanRenderer::shutdown() {
 
         // Presentation: semaphores and swapchain belong to the device.
         vkDeviceWaitIdle(m_device);
+        destroyStagingBuffers();
         m_allocator.shutdown();   // what the passes retired goes now: the device is idle
         for (auto& sem : m_imageAcquired) {
             if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_device, sem, nullptr);
             sem = VK_NULL_HANDLE;
         }
         m_presentWaiter.stop();   // its thread reads the swapchain
+        m_swapchainImages.clear();
         m_swapchain.reset();
 
         // Cleanup multi-frame resources
@@ -662,14 +668,12 @@ VkImageView VulkanRenderer::getNormalRoughnessAOV() const {
 }
 
 bool VulkanRenderer::createPresentation() {
-    // The deferred final image must be a valid blit source: R8G8B8A8_UNORM from
-    // post-processing, or R16G16B16A16_SFLOAT from lighting when post is skipped.
-    for (VkFormat f : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT}) {
+    // The deferred final image (post-processing's R8G8B8A8_UNORM) must be a valid blit source.
+    {
         VkFormatProperties fp{};
-        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, f, &fp);
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, VK_FORMAT_R8G8B8A8_UNORM, &fp);
         if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT)) {
-            OHAO_LOG(Error, gpu, "present: deferred output format {} cannot be a blit source",
-                     static_cast<int>(f));
+            OHAO_LOG(Error, gpu, "present: the deferred output format cannot be a blit source");
             return false;
         }
     }
@@ -678,6 +682,7 @@ bool VulkanRenderer::createPresentation() {
                              m_presentTarget->mode)) {
         return false;
     }
+    wrapSwapchainImages();
     m_presentWaiter.start(m_device, *m_swapchain, m_presentWaitEnabled ? m_waitForPresent : nullptr);
     VkSemaphoreCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -686,6 +691,15 @@ bool VulkanRenderer::createPresentation() {
     OHAO_LOG(Info, gpu, "present: swapchain {}x{}, {} images", m_swapchain->extent().width,
              m_swapchain->extent().height, m_swapchain->imageCount());
     return true;
+}
+
+void VulkanRenderer::wrapSwapchainImages() {
+    // New images, in no layout yet: the tracked state starts over.
+    m_swapchainImages.clear();
+    const VkExtent2D extent = m_swapchain->extent();
+    for (uint32_t i = 0; i < m_swapchain->imageCount(); ++i)
+        m_swapchainImages.push_back(gpu::Image::wrap(m_swapchain->image(i), VK_NULL_HANDLE, m_swapchain->format(),
+                                                     extent.width, extent.height, "swapchain." + std::to_string(i)));
 }
 
 VkResult VulkanRenderer::presentFrame(uint32_t imageIndex) {
@@ -700,6 +714,7 @@ bool VulkanRenderer::recreatePresentation() {
     const VkExtent2D want = m_presentTarget->extent;
     if (want.width == 0 || want.height == 0) return false;   // minimized
     if (!m_swapchain->recreate(want)) return false;
+    wrapSwapchainImages();
     m_swapchainDirty = false;
     resize(m_swapchain->extent().width, m_swapchain->extent().height);
     return true;

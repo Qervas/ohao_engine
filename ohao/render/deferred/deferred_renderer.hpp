@@ -189,12 +189,9 @@ public:
     [[nodiscard]] bool smokeInGi() const noexcept { return m_smokeInGi; }
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
-    // Get final output for display/readback
-    [[nodiscard]] VkImageView getFinalOutput() const;
-    [[nodiscard]] VkImage getFinalOutputImage() const;
-    // True when the final image is the post stack's RGBA8 output; false when it is the
-    // lighting pass's RGBA16F HDR image (tonemapping off), which a byte copy cannot read back.
-    [[nodiscard]] bool finalOutputIsRGBA8() const;
+    // The frame's final image for display and readback (the post stack's RGBA8 output); null when
+    // the last render() made none.
+    [[nodiscard]] gpu::Image* finalOutput();
     // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post.
     [[nodiscard]] VkImage getLitImage() const;
 

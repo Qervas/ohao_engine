@@ -25,20 +25,23 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
-    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
+    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override { record(render::Frame{cmd, nullptr, frameIndex}); }
+    // The whole chain; the caller times it as post.bloom.
+    void record(const render::Frame& frame);
     void onResize(uint32_t width, uint32_t height) override;
     [[nodiscard]] const char* getName() const override { return "BloomPass"; }
 
     // Configuration
+    // LEGACY(step 4a): the input is DeferredLightingPass's lit image, a view until that image is tracked.
     void setInputImage(VkImageView hdrInput);
     void setFilterRadius(float radius) { m_filterRadius = radius; }
     // The weights the upsample chain gives the levels sum to this (1 + 1/2 + 1/4 + ...): level 0's
     // output divided by it is a normalised convolution of the frame.
     [[nodiscard]] float levelWeightSum() const;
 
-    // Get output (for compositing)
-    [[nodiscard]] VkImageView getBloomOutput() { return m_chain.subView(0, 0); }
-    // False when execute() skipped (e.g. no input yet): the output holds nothing.
+    // The chain; level 0 of it is the output (for compositing).
+    [[nodiscard]] gpu::Image& chain() { return m_chain; }
+    // False when record() skipped (e.g. no input yet): the output holds nothing.
     [[nodiscard]] bool didExecute() const { return m_executed; }
 
 private:
@@ -75,7 +78,7 @@ private:
     std::vector<VkDescriptorSet> m_descriptorSets;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_inputSets{};
 
-    bool m_executed{false};   // execute() rendered the bloom chain this frame
+    bool m_executed{false};   // record() rendered the bloom chain this frame
 
     // Sampler
     VkSampler m_sampler{VK_NULL_HANDLE};

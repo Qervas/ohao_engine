@@ -100,6 +100,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize gizmo pass (transform handles)
     m_gizmoPass = std::make_unique<GizmoPass>();
+    m_gizmoPass->setAllocator(allocator);
     if (!m_gizmoPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Warn, render, "DeferredRenderer: GizmoPass failed (non-fatal)");
         m_gizmoPass.reset();
@@ -109,6 +110,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // The HUD over the final image (sub-project 7): drawn only on frames with a list.
     m_hudPass = std::make_unique<HudPass>();
+    m_hudPass->setAllocator(allocator);
     if (!m_hudPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Warn, render, "DeferredRenderer: HudPass failed (non-fatal: no HUD)");
         m_hudPass.reset();
@@ -579,45 +581,25 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
     if (m_postProcessing) m_postProcessing->setTransparencyMask(vfxOn ? m_vfx->transparencyMask() : VK_NULL_HANDLE);
 
+    const render::Frame frame{cmd, m_passTimer, frameIndex};
+
     // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
     if (m_postProcessing && m_lightingPass) {
         // The lit image, SSS applied in place
-        m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());
+        m_postProcessing->setHDRInput(m_lightingPass->getOutputView());
         m_postProcessing->setDeltaTime(m_deltaTime);
-        m_postProcessing->setPassTimer(m_passTimer);
-        m_postProcessing->execute(cmd, frameIndex);
+        m_postProcessing->record(frame);
     }
+    gpu::Image* const finalImage = finalOutput();
 
     // 6. Gizmo pass (transform handles for selected objects)
-    if (m_gizmoPass && m_gizmoEnabled) {
-        timerBegin("gizmo");
-        // Determine the final output image — must be from a pass that actually ran
-        VkImage finalImage = VK_NULL_HANDLE;
-        VkImageView finalView = VK_NULL_HANDLE;
-
-        if (m_postProcessing && m_postProcessing->didExecute()) {
-            finalImage = m_postProcessing->getOutputImage();
-            finalView = m_postProcessing->getOutputView();
-        } else if (m_lightingPass) {
-            finalImage = m_lightingPass->getOutputImage();
-            finalView = m_lightingPass->getOutputView();
-        }
-
-        if (finalImage != VK_NULL_HANDLE && finalView != VK_NULL_HANDLE) {
-            m_gizmoPass->setTargetImage(finalImage, finalView);
-            m_gizmoPass->setViewProjection(m_proj * m_view);
-            m_gizmoPass->execute(cmd, frameIndex);
-        }
-        timerEnd();  // gizmo
+    if (m_gizmoPass && m_gizmoEnabled && finalImage) {
+        m_gizmoPass->setViewProjection(m_proj * m_view);
+        m_gizmoPass->record(frame, *finalImage);
     }
 
     // 7. The HUD, over the final RGBA8 image (a frame without a list records nothing).
-    if (m_hudPass && m_hudPass->hasItems() && m_postProcessing && m_postProcessing->didExecute()) {
-        timerBegin("hud");
-        m_hudPass->setTarget(m_postProcessing->getOutputImage(), m_postProcessing->getOutputView(), m_outWidth, m_outHeight);
-        m_hudPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
+    if (m_hudPass && m_hudPass->hasItems() && finalImage) m_hudPass->record(frame, *finalImage);
 
     // Store current view-proj for next frame's motion vectors
     m_prevViewProj = m_proj * m_view;   // unjittered: next frame's velocity carries its own jitter
@@ -666,8 +648,6 @@ void DeferredRenderer::onResize(uint32_t outWidth, uint32_t outHeight) {
         m_postProcessing->setRenderSize(width, height);
         m_postProcessing->onResize(outWidth, outHeight);
     }
-    if (m_gizmoPass) m_gizmoPass->onResize(outWidth, outHeight);
-    if (m_hudPass) m_hudPass->onResize(outWidth, outHeight);
 
     // The transparent pass draws into the new lit image against the new depth.
     if (m_vfx && m_lightingPass && m_gbufferPass &&
@@ -742,32 +722,12 @@ void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t ver
     }
 }
 
-VkImageView DeferredRenderer::getFinalOutput() const {
-    if (m_postProcessing && m_postProcessing->didExecute()) {
-        return m_postProcessing->getOutputView();
-    }
-    if (m_lightingPass) {
-        return m_lightingPass->getOutputView();
-    }
-    return VK_NULL_HANDLE;
-}
-
-bool DeferredRenderer::finalOutputIsRGBA8() const {
-    return m_postProcessing && m_postProcessing->didExecute();
+gpu::Image* DeferredRenderer::finalOutput() {
+    return m_postProcessing && m_postProcessing->didExecute() ? &m_postProcessing->output() : nullptr;
 }
 
 VkImage DeferredRenderer::getLitImage() const {
     return m_lightingPass ? m_lightingPass->getOutputImage() : VK_NULL_HANDLE;
-}
-
-VkImage DeferredRenderer::getFinalOutputImage() const {
-    if (m_postProcessing && m_postProcessing->didExecute()) {
-        return m_postProcessing->getOutputImage();
-    }
-    if (m_lightingPass) {
-        return m_lightingPass->getOutputImage();
-    }
-    return VK_NULL_HANDLE;
 }
 
 glm::vec2 DeferredRenderer::getJitterOffset(uint32_t frameIndex) const {

@@ -63,8 +63,9 @@ void BloomPass::cleanup() {
     m_sampler = VK_NULL_HANDLE;
 }
 
-void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+void BloomPass::record(const render::Frame& frame) {
     m_executed = false;
+    const uint32_t frameIndex = frame.slot;
 
     if (m_hdrInputView == VK_NULL_HANDLE) return;
     if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_inputSets[frameIndex] == VK_NULL_HANDLE) return;
@@ -73,6 +74,7 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_mipLevels == 0 || !m_chain) return;
 
     // This frame slot's input set; its last use was retired by the slot's fence.
+    // LEGACY(step 4a): the lit image is DeferredLightingPass's, not tracked yet.
     VkDescriptorImageInfo imageInfo{};
     imageInfo.sampler = m_sampler;
     imageInfo.imageView = m_hdrInputView;
@@ -85,9 +87,6 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     write.descriptorCount = 1;
     write.pImageInfo = &imageInfo;
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-
-    // The whole chain is timed as post.bloom by the post-processing pipeline.
-    const render::Frame frame{cmd, nullptr, frameIndex};
 
     // The frame into level 0 as it is.
     draw(frame, 0, render::Load::Clear, m_inputPipeline, m_inputPipelineLayout, m_inputSets[frameIndex], nullptr);
@@ -104,11 +103,6 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         draw(frame, static_cast<uint32_t>(i), render::Load::Keep, m_upsamplePipeline, m_upsampleLayout,
              m_descriptorSets[i + 2], &params);
     }
-
-    // LEGACY(step 4a): the tonemap samples level 0 without declaring it; gone when post.tonemap is a render::Pass.
-    render::Pass legacy(frame, nullptr, render::Pass::Raster);
-    legacy.sampled(m_chain, {0, 0});
-    legacy.begin();
 
     m_executed = true;
 }
@@ -128,7 +122,7 @@ void BloomPass::draw(const render::Frame& frame, uint32_t mip, render::Load load
 }
 
 float BloomPass::levelWeightSum() const {
-    // execute() adds each level to the one above at 0.5.
+    // record() adds each level to the one above at 0.5.
     float sum = 0.0f, w = 1.0f;
     for (uint32_t i = 0; i < m_mipLevels; ++i, w *= 0.5f) sum += w;
     return sum > 0.0f ? sum : 1.0f;
@@ -148,7 +142,7 @@ void BloomPass::onResize(uint32_t width, uint32_t height) {
 }
 
 void BloomPass::setInputImage(VkImageView hdrInput) {
-    m_hdrInputView = hdrInput;   // written into this frame's input set by execute()
+    m_hdrInputView = hdrInput;   // written into this frame's input set by record()
 }
 
 bool BloomPass::createMipChain() {

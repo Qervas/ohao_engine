@@ -49,6 +49,14 @@ Need advance(gpu::State& s, VkImageLayout layout, VkPipelineStageFlags2 stage, V
 
 } // namespace
 
+Timed::Timed(const Frame& frame, const char* name) : m_frame(frame) {
+    if (m_frame.timer) m_frame.timer->begin(m_frame.cmd, name);
+}
+
+Timed::~Timed() {
+    if (m_frame.timer) m_frame.timer->end(m_frame.cmd);
+}
+
 Pass::Pass(const Frame& frame, const char* name, Kind kind) : m_frame(frame), m_name(name), m_kind(kind) {}
 
 VkPipelineStageFlags2 Pass::shaderStages() const noexcept {
@@ -242,6 +250,7 @@ Pass& Pass::read(GpuBuffer& buf, BufferUse use) {
         buffer(buf, m_kind == Transfer ? VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR : shader,
                VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, false);
         break;
+    case BufferUse::HostRead: buffer(buf, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT, false); break;
     }
     return *this;
 }

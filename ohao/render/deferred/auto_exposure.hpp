@@ -6,8 +6,9 @@
 // less the compensation, and eases the camera's EV100 toward it. The EV100 stays on the GPU (the
 // display pass reads it); a copy per frame slot is what render.stats reports. Captures never meter.
 
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
-#include "render/rt/rt_compute.hpp"
+#include "render/graph/pass.hpp"
 
 #include <array>
 #include <cstdint>
@@ -28,17 +29,18 @@ public:
         float rangeLog2{30.0f};
     };
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    bool initialize(VkDevice device, GpuAllocator& allocator);
     void cleanup();
 
-    // Meters `hdr` (SHADER_READ_ONLY, w x h, last written as a colour attachment) into the EV100
-    // the display pass reads, `dt` seconds after the last frame; frame slot `slot`'s copy follows.
-    void record(VkCommandBuffer cmd, uint32_t slot, VkImageView hdr, VkSampler sampler, uint32_t width,
+    // Meters `hdr` (w x h; `tracked` is its image, or null for one no pass tracks, which is then
+    // SHADER_READ_ONLY) into the EV100 the display pass reads, `dt` seconds after the last frame; the
+    // frame slot's copy follows.
+    void record(const render::Frame& frame, gpu::Image* tracked, VkImageView hdr, VkSampler sampler, uint32_t width,
                 uint32_t height, float dt, const Settings& settings);
     // The next metered frame takes its target at once.
     void reset() noexcept { m_reset = true; }
 
-    [[nodiscard]] VkBuffer stateBuffer() const noexcept { return m_state; }
+    [[nodiscard]] GpuBuffer& stateBuffer() noexcept { return m_state; }
 
     // The EV100 of the newest metered frame whose fence has signalled (`fenceSignalled(slot)`).
     template <class FenceSignalled>
@@ -47,7 +49,7 @@ public:
         uint64_t newest = 0;
         for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
             if (m_slotFrame[s] == 0 || m_slotFrame[s] <= newest || !fenceSignalled(s)) continue;
-            const float* v = static_cast<const float*>(m_readback[s].mapped);
+            const float* v = static_cast<const float*>(m_readback[s].getMappedData());
             if (!v || v[1] == 0.0f) continue;
             newest = m_slotFrame[s];
             out = v[0];
@@ -57,11 +59,10 @@ public:
 
 private:
     VkDevice m_device{VK_NULL_HANDLE};
-    VkBuffer m_bins{VK_NULL_HANDLE};
-    VkDeviceMemory m_binsMemory{VK_NULL_HANDLE};
-    VkBuffer m_state{VK_NULL_HANDLE};
-    VkDeviceMemory m_stateMemory{VK_NULL_HANDLE};
-    std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_readback{};
+    GpuAllocator* m_allocator{nullptr};
+    GpuBuffer m_bins;
+    GpuBuffer m_state;
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_readback{};
     std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_slotFrame{};   // which metered frame each copy holds
     uint64_t m_frames{0};
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};

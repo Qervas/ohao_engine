@@ -573,10 +573,8 @@ bool VulkanRenderer::createCommandPool() {
 }
 
 bool VulkanRenderer::initializeFrameResources() {
-    // Per-frame command buffer, fence and readback staging buffer.
-    const size_t stagingBufferSize = static_cast<size_t>(m_width) * m_height * 4;   // RGBA8
-    bool success = m_frameResources.initialize(m_device, m_physicalDevice, m_commandPool,
-                                               stagingBufferSize);
+    // Per-frame command buffer and fence.
+    bool success = m_frameResources.initialize(m_device, m_physicalDevice, m_commandPool);
 
     if (success) {
         OHAO_LOG(Debug, gpu, "multi-frame rendering enabled with {} frames in flight",
@@ -584,6 +582,24 @@ bool VulkanRenderer::initializeFrameResources() {
     }
 
     return success;
+}
+
+bool VulkanRenderer::createStagingBuffers() {
+    // Readback buffers: the CPU reads them, so host-cached memory where the device offers it.
+    // Uncached host-visible memory read 3.7 MB (one 1280x720 frame) in ~20 ms; cached reads at
+    // memory speed. Storage too: capture.preview writes a preview straight into one.
+    const VkDeviceSize size = static_cast<VkDeviceSize>(m_width) * m_height * 4;   // RGBA8
+    for (GpuBuffer& staging : m_staging) {
+        staging = m_allocator.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                           AllocationUsage::GpuToCpu, true);
+        if (!staging.isValid() || !staging.getMappedData()) return false;
+        std::memset(staging.getMappedData(), 0, size);   // black, not garbage, until a frame is copied
+    }
+    return true;
+}
+
+void VulkanRenderer::destroyStagingBuffers() {
+    for (GpuBuffer& staging : m_staging) m_allocator.retire(staging);
 }
 
 } // namespace ohao

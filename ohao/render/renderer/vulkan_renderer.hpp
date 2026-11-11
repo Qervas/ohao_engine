@@ -30,6 +30,7 @@
 #include "render/frame/gpu_pass_timer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
@@ -401,6 +402,9 @@ private:
 
     // Phase 1: Rendering pipeline setup
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
+    // The readback staging buffers, one a frame slot, at the frame's size (width x height x 4 bytes).
+    [[nodiscard]] bool createStagingBuffers();
+    void destroyStagingBuffers();
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
     // This frame's raster lights for the deferred renderer: the scene's light table (none
     // without lights, as in the path tracer).
@@ -435,6 +439,8 @@ private:
 
     // Multi-frame rendering (ring buffer)
     FrameResourceManager m_frameResources;
+    // What a requested frame is copied into (or capture.preview writes), host-cached and mapped; one a slot.
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_staging{};
     // Per-pass GPU timestamps, one query pool per frame slot (render/frame/gpu_pass_timer.hpp).
     render::GpuPassTimer m_passTimer;
     uint32_t m_currentFrame{0};
@@ -493,8 +499,9 @@ private:
     // Presentation (windowed mode only).
     [[nodiscard]] bool createPresentation();
     [[nodiscard]] bool recreatePresentation();
-    // Returns whether `staging` received the frame (a requested readback).
-    bool blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkBuffer staging);
+    // The deferred frame's final image into the swapchain image, left ready to present, and into
+    // `staging` too when one is given (a requested readback); returns whether it was.
+    bool blitDeferredOutputToSwapchain(const render::Frame& frame, uint32_t imageIndex, GpuBuffer* staging);
     // The path tracer's RGBA8 output (in TRANSFER_SRC_OPTIMAL) into the swapchain image, and
     // into `staging` too when one is given; returns whether it was. A headless frame's copy.
     bool blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging);
@@ -502,6 +509,9 @@ private:
     std::optional<PresentTarget> m_presentTarget;
     VkSurfaceKHR m_surface{VK_NULL_HANDLE};
     std::unique_ptr<Swapchain> m_swapchain;
+    // The swapchain's images, tracked like any other; wrapped again whenever the swapchain is (re)built.
+    std::vector<gpu::Image> m_swapchainImages;
+    void wrapSwapchainImages();
     // VK_KHR_present_id + VK_KHR_present_wait were enabled (a window on a device with both).
     bool m_presentWaitEnabled{false};
     bool m_bufferMarkerEnabled{false};   // pass breadcrumbs (VK_AMD_buffer_marker)
@@ -526,7 +536,7 @@ private:
     uint32_t m_previewHeight{0};
     std::unique_ptr<CapturePreviewPass> m_previewPass;   // null when its pipeline failed: previews on the CPU
     // Records capture.preview for the frame on m_currentFrame; false when the frame has no RGBA8 image.
-    bool recordPreview(VkCommandBuffer cmd, const PreviewRequest& request);
+    bool recordPreview(const render::Frame& frame, const PreviewRequest& request);
     // Marks the frame being recorded on m_currentFrame as the requested one when it wrote
     // its staging buffer (`copied`), and clears the request.
     void finishReadbackRequest(bool copied) noexcept;
@@ -598,7 +608,7 @@ private:
     void renderDeferred();
     // A requested headless frame: its final RGBA8 image into the slot's staging buffer.
     // Returns whether the staging buffer received it.
-    bool copyDeferredOutputToStaging(VkCommandBuffer cmd);
+    bool copyDeferredOutputToStaging(const render::Frame& frame);
 
     RTRenderSettings m_rtSettings{kOfflineRTSettings};
 };

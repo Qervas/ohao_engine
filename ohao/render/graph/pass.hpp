@@ -37,6 +37,19 @@ enum class BufferUse : uint8_t {
     Uniform, Storage, Indirect, Vertex, Index, CopySrc, CopyDst,
     AccelInput,   // geometry or instances an acceleration-structure build reads
     Accel,        // an acceleration structure's storage: written by a build, read by a trace or a ray query
+    HostRead,     // mapped memory the host reads once the frame's fence has signalled
+};
+
+// One timer over several passes (bloom's fifteen are post.bloom): the passes inside take a null name.
+class Timed {
+public:
+    Timed(const Frame& frame, const char* name);
+    ~Timed();
+    Timed(const Timed&) = delete;
+    Timed& operator=(const Timed&) = delete;
+
+private:
+    Frame m_frame;
 };
 
 // A range of an image's subresources; the default is all of it.
