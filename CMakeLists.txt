@@ -99,6 +99,13 @@ FetchContent_MakeAvailable(stb)
 add_library(ohao_stb_image STATIC ${CMAKE_SOURCE_DIR}/external/stb_image.cpp)
 target_include_directories(ohao_stb_image PUBLIC ${stb_SOURCE_DIR})
 
+# The block compressor (external/bc7enc: BC7 and BC5), for the cooker alone.
+add_library(ohao_bc7enc STATIC ${CMAKE_SOURCE_DIR}/external/bc7enc/bc7enc.cpp ${CMAKE_SOURCE_DIR}/external/bc7enc/rgbcx.cpp)
+target_include_directories(ohao_bc7enc PUBLIC ${CMAKE_SOURCE_DIR}/external/bc7enc)
+target_compile_definitions(ohao_bc7enc PRIVATE RGBCX_USE_SMALLER_TABLES=1)
+target_compile_options(ohao_bc7enc PRIVATE -w -fno-strict-aliasing)
+set_target_properties(ohao_bc7enc PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(ohao)

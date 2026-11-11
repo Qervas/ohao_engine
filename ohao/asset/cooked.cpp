@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 
@@ -32,8 +33,12 @@ struct MeshRecord {
 };
 
 struct TextureRecord {
-    uint32_t width, height;
-    uint64_t pixels, pixelsSize;
+    uint32_t width, height, format, srgb;
+    uint8_t channelMin[4];
+    uint32_t pad;
+};
+struct LevelRecord {
+    uint64_t bytes, size;
 };
 
 class Writer {
@@ -222,22 +227,29 @@ VoidResult<> writeFile(const std::filesystem::path& path, std::span<const uint8_
     return w.write(path);
 }
 
-VoidResult<> writeTexture(const std::filesystem::path& path, uint32_t width, uint32_t height,
-                          std::span<const uint8_t> rgba8) {
-    if (rgba8.size() != std::size_t(width) * height * 4) return err_void("a texture's pixels are not width x height x 4");
+VoidResult<> writeTexture(const std::filesystem::path& path, const Texture& t) {
+    if (t.levels.empty()) return err_void("a texture without levels");
     Writer w;
     w.reserve(sizeof(Header));
     const uint64_t record = w.reserve(sizeof(TextureRecord));
+    const uint64_t levels = w.reserve(sizeof(LevelRecord) * t.levels.size());
     TextureRecord r{};
-    r.width = width;
-    r.height = height;
-    r.pixels = w.add(rgba8);
-    r.pixelsSize = rgba8.size();
+    r.width = t.width;
+    r.height = t.height;
+    r.format = static_cast<uint32_t>(t.format);
+    r.srgb = t.srgb ? 1u : 0u;
+    std::memcpy(r.channelMin, t.channelMin.data(), 4);
     w.put(record, r);
+    for (std::size_t i = 0; i < t.levels.size(); ++i) {
+        LevelRecord l{};
+        l.bytes = w.add(t.levels[i]);
+        l.size = t.levels[i].size();
+        w.put(levels + i * sizeof(LevelRecord), l);
+    }
     Header h{};
     std::memcpy(h.magic, kTextureMagic, 8);
     h.version = kFormatVersion;
-    h.count = 1;
+    h.count = static_cast<uint32_t>(t.levels.size());
     h.size = w.size();
     w.put(0, h);
     return w.write(path);
@@ -250,14 +262,25 @@ Result<Texture> openTexture(const std::filesystem::path& path) {
     const std::span<const uint8_t> bytes = map.value()->bytes();
     const std::string bad = "'" + path.string() + "' is not a cooked texture of this version";
     const Header* h = headerOf(bytes, kTextureMagic);
-    if (!h || h->count != 1 || !inside(bytes, sizeof(Header), 1, sizeof(TextureRecord))) return R::err(bad);
+    const uint64_t levelsAt = sizeof(Header) + sizeof(TextureRecord);
+    if (!h || h->count == 0 || h->count > 32 || !inside(bytes, sizeof(Header), 1, sizeof(TextureRecord)) ||
+        !inside(bytes, levelsAt, h->count, sizeof(LevelRecord)))
+        return R::err(bad);
     const TextureRecord& r = arrayAt<TextureRecord>(bytes, sizeof(Header), 1)[0];
-    if (!inside(bytes, r.pixels, r.pixelsSize, 1) || r.pixelsSize != uint64_t(r.width) * r.height * 4) return R::err(bad);
+    if (r.format > static_cast<uint32_t>(TextureFormat::Bc5) || r.width == 0 || r.height == 0) return R::err(bad);
     Texture t;
     t.map = map.value();
     t.width = r.width;
     t.height = r.height;
-    t.pixels = arrayAt<uint8_t>(bytes, r.pixels, r.pixelsSize);
+    t.format = static_cast<TextureFormat>(r.format);
+    t.srgb = r.srgb != 0;
+    std::memcpy(t.channelMin.data(), r.channelMin, 4);
+    for (const LevelRecord& l : arrayAt<LevelRecord>(bytes, levelsAt, h->count)) {
+        if (!inside(bytes, l.bytes, l.size, 1) || l.size != levelBytes(t.format, std::max(1u, t.width >> t.levels.size()),
+                                                                      std::max(1u, t.height >> t.levels.size())))
+            return R::err(bad);
+        t.levels.push_back(arrayAt<uint8_t>(bytes, l.bytes, l.size));
+    }
     return R::ok(std::move(t));
 }
 

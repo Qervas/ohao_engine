@@ -5,5 +5,5 @@ target_include_directories(ohao_cook PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_cook PUBLIC cxx_std_20)
 target_link_libraries(ohao_cook
     PUBLIC ohao_core ohao_asset glm
-    PRIVATE ohao_level ohao_stb_image ohao_simdjson assimp)   # ohao_level: a glTF file's structure (its primitive counts)
+    PRIVATE ohao_level ohao_stb_image ohao_simdjson ohao_bc7enc assimp)   # ohao_level: a glTF file's structure (its primitive counts)
 target_include_directories(ohao_cook PRIVATE ${assimp_SOURCE_DIR}/include ${assimp_BINARY_DIR}/include)

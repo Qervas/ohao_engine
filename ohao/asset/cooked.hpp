@@ -4,8 +4,8 @@
 //
 // - A model file holds the meshes of one source file: each mesh's vertices, indices, the material slot of each
 //   triangle, its materials, and the names of the joints its vertices index.
-// - A texture file holds one image, named by the hash of its pixels: 8-bit RGBA, level 0 (the mips are made at
-//   upload until 5e cooks them compressed). Whether it is colour or data is its user's to say, not the file's.
+// - A texture file holds one image as one use of it reads it (TextureKind), named by the hash of that use and its
+//   source pixels: every mip level, block-compressed, ready to copy to the GPU, and each channel's smallest value.
 #include "asset/content_hash.hpp"
 #include "asset/vertex.hpp"
 #include "core/result.hpp"
@@ -20,7 +20,7 @@
 
 namespace ohao::cooked {
 
-inline constexpr uint32_t kFormatVersion = 1;
+inline constexpr uint32_t kFormatVersion = 2;
 
 enum class TextureSlot : uint32_t {
     Albedo, Normal, RoughMetal, Emissive, Occlusion, Coat, CoatRoughness, FuzzColor, FuzzRoughness, Count
@@ -102,10 +102,36 @@ private:
     std::vector<Mesh> m_meshes;
 };
 
+// How a material's slot reads an image, which decides how the image is cooked.
+enum class TextureKind : uint32_t {
+    Color,        // sRGB colour with alpha: BC7, mips averaged in linear light
+    Data,         // linear values in four channels: BC7
+    DataOpaque,   // linear values in R, G and B, alpha written 255 (a roughness/metal map): BC7
+    Normal,       // a tangent-space normal's x and y in R and G: BC5; the shader rebuilds z
+};
+[[nodiscard]] constexpr TextureKind kindOf(TextureSlot slot) noexcept {
+    switch (slot) {
+        case TextureSlot::Albedo: case TextureSlot::Emissive: case TextureSlot::FuzzColor: return TextureKind::Color;
+        case TextureSlot::Normal: return TextureKind::Normal;
+        case TextureSlot::RoughMetal: return TextureKind::DataOpaque;
+        default: return TextureKind::Data;
+    }
+}
+
+enum class TextureFormat : uint32_t { Rgba8, Bc7, Bc5 };
+// The bytes of one level: 4 a pixel, or 16 a block of 4x4 pixels (the last blocks padded).
+[[nodiscard]] constexpr uint64_t levelBytes(TextureFormat format, uint32_t width, uint32_t height) noexcept {
+    return format == TextureFormat::Rgba8 ? uint64_t{width} * height * 4
+                                          : uint64_t{(width + 3) / 4} * ((height + 3) / 4) * 16;
+}
+
 struct Texture {
     std::shared_ptr<const Mapping> map;
     uint32_t width{0}, height{0};
-    std::span<const uint8_t> pixels;   // RGBA8, level 0
+    TextureFormat format{TextureFormat::Rgba8};
+    bool srgb{false};
+    std::array<uint8_t, 4> channelMin{255, 255, 255, 255};   // of the source's level 0
+    std::vector<std::span<const uint8_t>> levels;            // level 0 first, down to 1x1
 };
 [[nodiscard]] Result<Texture> openTexture(const std::filesystem::path& path);
 
@@ -113,7 +139,6 @@ struct Texture {
 [[nodiscard]] VoidResult<> writeModel(const std::filesystem::path& path, std::span<const MeshSource> meshes);
 // Any cooked file whose content is its reader's own (a collision shape, the physics backend's): the same way.
 [[nodiscard]] VoidResult<> writeFile(const std::filesystem::path& path, std::span<const uint8_t> bytes);
-[[nodiscard]] VoidResult<> writeTexture(const std::filesystem::path& path, uint32_t width, uint32_t height,
-                                        std::span<const uint8_t> rgba8);
+[[nodiscard]] VoidResult<> writeTexture(const std::filesystem::path& path, const Texture& texture);
 
 } // namespace ohao::cooked

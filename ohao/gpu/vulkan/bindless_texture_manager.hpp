@@ -69,20 +69,22 @@ struct TextureContentKey {
     uint64_t hi{0}, lo{0};                         // the pixels' content hash (asset/content_hash.hpp)
     VkFormat format{VK_FORMAT_R8G8B8A8_SRGB};
     BindlessTextureType type{BindlessTextureType::Custom};
-    bool opaque{false};                            // alpha written as 255 whatever the pixels hold
     [[nodiscard]] constexpr auto operator<=>(const TextureContentKey&) const noexcept = default;
 };
 
-// RGBA8 pixels, level 0, and whatever keeps them alive (a cooked file's mapping).
+// A texture's pixels and whatever keeps them alive (a cooked file's mapping): level 0 as RGBA8 (the other levels
+// are then made by blits), or every level in the texture's format (a cooked texture's: BC7, BC5), level 0 first.
 struct TexturePixels {
     std::span<const uint8_t> rgba8;
     uint32_t width{0}, height{0};
     std::shared_ptr<const void> keep;
+    std::vector<std::span<const uint8_t>> levels;
+    std::array<uint8_t, 4> channelMin{255, 255, 255, 255};   // each channel's smallest value, where the source knows it
 };
 
 struct ContentTexture {
     BindlessTextureHandle handle;
-    std::array<uint8_t, 4> channelMin{255, 255, 255, 255};   // each channel's smallest value in the pixels given
+    std::array<uint8_t, 4> channelMin{255, 255, 255, 255};   // TexturePixels::channelMin
 };
 
 // Manages bindless texture array with dynamic updates
@@ -192,7 +194,8 @@ public:
             if (m_textures[i - 1].view != VK_NULL_HANDLE) return i;
         return 0;
     }
-    // The bytes of the loaded textures' pixels, mips included (not the views registered from outside).
+    // The bytes of the loaded textures' pixels as the GPU holds them (compressed where they are), mips included
+    // (not the views registered from outside).
     [[nodiscard]] size_t getTotalMemoryUsage() const noexcept { return m_totalMemoryUsage; }
     [[nodiscard]] float fillRatio() const noexcept {
         return m_maxTextures == 0 ? 0.f
@@ -215,8 +218,9 @@ private:
 
     // A texture's image, view and table slot, its pixels queued for flushUploads(). UINT32_MAX: not made.
     [[nodiscard]] uint32_t addTexture(TexturePixels pixels, VkFormat format, BindlessTextureType type, bool mips,
-                                      bool opaque, std::string name);
-    void recordUpload(VkCommandBuffer cmd, VkBuffer staging, VkDeviceSize offset, const BindlessTextureInfo& tex);
+                                      std::string name);
+    void recordUpload(VkCommandBuffer cmd, VkBuffer staging, VkDeviceSize offset, const BindlessTextureInfo& tex,
+                      bool everyLevel);
 
     void generateMipmaps(VkCommandBuffer cmd, VkImage image,
                           uint32_t width, uint32_t height, uint32_t mipLevels);
@@ -252,7 +256,7 @@ private:
     struct PendingUpload {
         uint32_t slot;
         TexturePixels pixels;
-        bool opaque;
+        std::size_t bytes;   // of every level it holds
     };
     std::vector<PendingUpload> m_pending;
     static constexpr VkDeviceSize kStaging = 64ull << 20;   // one staging buffer, one submit

@@ -514,6 +514,7 @@ bool VulkanRenderer::createLogicalDevice() {
     // Enable required device features (were previously in pEnabledFeatures)
     // Enable all features the renderer uses
     deviceFeatures2.features.samplerAnisotropy = VK_TRUE;
+    deviceFeatures2.features.textureCompressionBC = VK_TRUE;   // cooked textures are BC7 and BC5
     deviceFeatures2.features.fillModeNonSolid = VK_TRUE;
     deviceFeatures2.features.geometryShader = VK_TRUE;
     deviceFeatures2.features.tessellationShader = VK_TRUE;

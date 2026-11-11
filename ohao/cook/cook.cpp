@@ -5,7 +5,16 @@
 
 #include <simdjson.h>
 
+#include <bc7enc.h>
+#include <rgbcx.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <cmath>
+#include <mutex>
+#include <thread>
 #include <cstring>
 
 namespace ohao::cook {
@@ -60,23 +69,131 @@ std::vector<std::string> gltfUris(std::span<const uint8_t> bytes) {
     return uris;
 }
 
-ContentHash textureKey(uint32_t width, uint32_t height, std::span<const uint8_t> rgba8) {
+ContentHash textureKey(cooked::TextureKind kind, uint32_t width, uint32_t height, std::span<const uint8_t> rgba8) {
     ContentHasher h;
+    h.value(kCookerVersion);
     h.value(cooked::kFormatVersion);
+    h.value(static_cast<uint32_t>(kind));
     h.value(width);
     h.value(height);
     h.bytes(rgba8);
     return h.finish();
 }
 
-// The texture of `tex`'s pixels in the cache (written when it is not there): its name.
-Result<ContentHash> cookTexture(const Cache& cache, const Model::TextureData& tex) {
+// fn(i) for i in [0, count), on every core.
+template <class F> void parallelFor(uint32_t count, F&& fn) {
+    const uint32_t workers = std::min(count, std::max(1u, std::thread::hardware_concurrency()));
+    if (workers <= 1) {
+        for (uint32_t i = 0; i < count; ++i) fn(i);
+        return;
+    }
+    std::atomic<uint32_t> next{0};
+    std::vector<std::thread> threads;
+    for (uint32_t t = 0; t < workers; ++t)
+        threads.emplace_back([&] {
+            for (uint32_t i = next.fetch_add(1); i < count; i = next.fetch_add(1)) fn(i);
+        });
+    for (std::thread& t : threads) t.join();
+}
+
+struct Level {
+    uint32_t width{0}, height{0};
+    std::vector<uint8_t> rgba;
+};
+
+// The next mip: each pixel the mean of the 2x2 above it (an odd edge repeats its last pixel). Colour is averaged
+// in linear light, as a blit between sRGB images does.
+Level halved(const Level& in, bool srgb) {
+    static const std::array<float, 256> toLinear = [] {
+        std::array<float, 256> t{};
+        for (int i = 0; i < 256; ++i) {
+            const float c = static_cast<float>(i) / 255.0f;
+            t[static_cast<std::size_t>(i)] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+        }
+        return t;
+    }();
+    Level out;
+    out.width = std::max(1u, in.width / 2);
+    out.height = std::max(1u, in.height / 2);
+    out.rgba.resize(std::size_t(out.width) * out.height * 4);
+    parallelFor(out.height, [&](uint32_t y) {
+        const uint32_t y0 = std::min(y * 2, in.height - 1), y1 = std::min(y * 2 + 1, in.height - 1);
+        for (uint32_t x = 0; x < out.width; ++x) {
+            const uint32_t x0 = std::min(x * 2, in.width - 1), x1 = std::min(x * 2 + 1, in.width - 1);
+            const uint8_t* p[4] = {&in.rgba[(std::size_t(y0) * in.width + x0) * 4], &in.rgba[(std::size_t(y0) * in.width + x1) * 4],
+                                   &in.rgba[(std::size_t(y1) * in.width + x0) * 4], &in.rgba[(std::size_t(y1) * in.width + x1) * 4]};
+            uint8_t* o = &out.rgba[(std::size_t(y) * out.width + x) * 4];
+            for (int c = 0; c < 4; ++c) {
+                if (srgb && c < 3) {
+                    const float mean = (toLinear[p[0][c]] + toLinear[p[1][c]] + toLinear[p[2][c]] + toLinear[p[3][c]]) * 0.25f;
+                    const float enc = mean <= 0.0031308f ? mean * 12.92f : 1.055f * std::pow(mean, 1.0f / 2.4f) - 0.055f;
+                    o[c] = static_cast<uint8_t>(std::clamp(enc * 255.0f + 0.5f, 0.0f, 255.0f));
+                } else {
+                    o[c] = static_cast<uint8_t>((p[0][c] + p[1][c] + p[2][c] + p[3][c] + 2) / 4);
+                }
+            }
+        }
+    });
+    return out;
+}
+
+// A level as 4x4 blocks of 16 bytes (the last blocks repeat the edge's pixels): BC5 of R and G, or BC7.
+std::vector<uint8_t> encoded(const Level& in, cooked::TextureFormat format) {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        bc7enc_compress_block_init();
+        rgbcx::init();
+    });
+    // The deepest search: 48.7 dB on our colour textures at 41 megapixels a second (the plan's 5e).
+    bc7enc_compress_block_params params;
+    bc7enc_compress_block_params_init(&params);
+    bc7enc_compress_block_params_init_linear_weights(&params);
+    params.m_uber_level = BC7ENC_MAX_UBER_LEVEL;
+    params.m_max_partitions = BC7ENC_MAX_PARTITIONS;
+    const uint32_t bw = (in.width + 3) / 4, bh = (in.height + 3) / 4;
+    std::vector<uint8_t> out(std::size_t(bw) * bh * 16);
+    parallelFor(bh, [&](uint32_t by) {
+        for (uint32_t bx = 0; bx < bw; ++bx) {
+            uint8_t block[64];
+            for (uint32_t y = 0; y < 4; ++y)
+                for (uint32_t x = 0; x < 4; ++x)
+                    std::memcpy(block + (y * 4 + x) * 4,
+                                &in.rgba[(std::size_t(std::min(by * 4 + y, in.height - 1)) * in.width + std::min(bx * 4 + x, in.width - 1)) * 4], 4);
+            uint8_t* dst = &out[(std::size_t(by) * bw + bx) * 16];
+            if (format == cooked::TextureFormat::Bc5) rgbcx::encode_bc5_hq(dst, block, 0, 1, 4);
+            else bc7enc_compress_block(dst, block, &params);
+        }
+    });
+    return out;
+}
+
+// The texture of `tex`'s pixels as `kind` reads them, in the cache (cooked when it is not there): its name.
+Result<ContentHash> cookTexture(const Cache& cache, const Model::TextureData& tex, cooked::TextureKind kind) {
     using R = Result<ContentHash>;
     const auto width = static_cast<uint32_t>(tex.width), height = static_cast<uint32_t>(tex.height);
-    const ContentHash key = textureKey(width, height, tex.pixels);
+    if (width == 0 || height == 0 || tex.pixels.size() < std::size_t(width) * height * 4) return R::err("an image without pixels");
+    const ContentHash key = textureKey(kind, width, height, tex.pixels);
     std::error_code ec;
     if (fs::exists(cache.texture(key), ec)) return R::ok(key);
-    if (auto w = cooked::writeTexture(cache.texture(key), width, height, tex.pixels); !w) return R::err(w.error());
+
+    cooked::Texture out;
+    out.width = width;
+    out.height = height;
+    out.format = kind == cooked::TextureKind::Normal ? cooked::TextureFormat::Bc5 : cooked::TextureFormat::Bc7;
+    out.srgb = kind == cooked::TextureKind::Color;
+    Level level{width, height, std::vector<uint8_t>(tex.pixels.begin(), tex.pixels.begin() + std::ptrdiff_t(width) * height * 4)};
+    for (std::size_t i = 0; i < level.rgba.size(); i += 4) {
+        if (kind == cooked::TextureKind::DataOpaque) level.rgba[i + 3] = 255;
+        for (std::size_t c = 0; c < 4; ++c) out.channelMin[c] = std::min(out.channelMin[c], level.rgba[i + c]);
+    }
+    std::vector<std::vector<uint8_t>> levels;
+    for (;;) {
+        levels.push_back(encoded(level, out.format));
+        if (level.width == 1 && level.height == 1) break;
+        level = halved(level, out.srgb);
+    }
+    for (const auto& l : levels) out.levels.emplace_back(l);
+    if (auto w = cooked::writeTexture(cache.texture(key), out); !w) return R::err(w.error());
     return R::ok(key);
 }
 
@@ -94,7 +211,7 @@ Result<cooked::MeshSource> meshSource(const Cache& cache, const Model& model, st
     const auto texture = [&](cooked::Material& out, Slot slot, const std::vector<int>& index,
                              const std::vector<Model::TextureData>& list, std::size_t m) -> VoidResult<> {
         if (m >= index.size() || index[m] < 0 || static_cast<std::size_t>(index[m]) >= list.size()) return VoidResult<>::ok();
-        auto key = cookTexture(cache, list[static_cast<std::size_t>(index[m])]);
+        auto key = cookTexture(cache, list[static_cast<std::size_t>(index[m])], cooked::kindOf(slot));
         if (!key) return err_void(key.error());
         out.textures[static_cast<std::size_t>(slot)] = key.value();
         return VoidResult<>::ok();

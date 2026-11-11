@@ -193,7 +193,7 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const uint normalTex = asuint(row1.z);
     if (normalTex != 0xFFFFFFFFu)
     {
-        float3 tn = textures[NonUniformResourceIndex(normalTex)].Sample(i.uv).rgb * 2.0 - 1.0;
+        float3 tn = normalFromMap(textures[NonUniformResourceIndex(normalTex)].Sample(i.uv).rg);
         float3 T, B;
         if (dot(i.tangent.xyz, i.tangent.xyz) > 1e-6)
         {

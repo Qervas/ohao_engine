@@ -24,28 +24,34 @@ std::vector<SubmeshDesc> materialRuns(std::span<const uint32_t> slotOfTriangle) 
     return runs;
 }
 
-// How a material's texture slot is uploaded and which field of the desc takes its table index.
+// The field of the desc that takes a slot's table index, and what the table calls its kind.
 struct SlotUse {
     cooked::TextureSlot slot;
-    VkFormat format;
     BindlessTextureType type;
-    bool opaque;
     uint32_t MaterialDesc::*field;
 };
-// Colour is sRGB, data linear. A roughness/metal map keeps R (unused, or occlusion in a packed ORM image),
-// G roughness, B metallic; its alpha is written 255.
 constexpr SlotUse kSlots[] = {
-    {cooked::TextureSlot::Albedo, VK_FORMAT_R8G8B8A8_SRGB, BindlessTextureType::Albedo, false, &MaterialDesc::albedoTex},
-    {cooked::TextureSlot::Normal, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Normal, false, &MaterialDesc::normalTex},
-    {cooked::TextureSlot::RoughMetal, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Roughness, true, &MaterialDesc::roughMetalTex},
-    {cooked::TextureSlot::Emissive, VK_FORMAT_R8G8B8A8_SRGB, BindlessTextureType::Emissive, false, &MaterialDesc::emissiveTex},
-    {cooked::TextureSlot::Occlusion, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Roughness, false, &MaterialDesc::occlusionTex},
+    {cooked::TextureSlot::Albedo, BindlessTextureType::Albedo, &MaterialDesc::albedoTex},
+    {cooked::TextureSlot::Normal, BindlessTextureType::Normal, &MaterialDesc::normalTex},
+    {cooked::TextureSlot::RoughMetal, BindlessTextureType::Roughness, &MaterialDesc::roughMetalTex},
+    {cooked::TextureSlot::Emissive, BindlessTextureType::Emissive, &MaterialDesc::emissiveTex},
+    {cooked::TextureSlot::Occlusion, BindlessTextureType::Roughness, &MaterialDesc::occlusionTex},
     // KHR_materials_clearcoat's and _sheen's (material/material_layers.slang, row 11).
-    {cooked::TextureSlot::Coat, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Roughness, false, &MaterialDesc::coatTex},
-    {cooked::TextureSlot::CoatRoughness, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Roughness, false, &MaterialDesc::coatRoughnessTex},
-    {cooked::TextureSlot::FuzzColor, VK_FORMAT_R8G8B8A8_SRGB, BindlessTextureType::Albedo, false, &MaterialDesc::fuzzColorTex},
-    {cooked::TextureSlot::FuzzRoughness, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Roughness, false, &MaterialDesc::fuzzRoughnessTex},
+    {cooked::TextureSlot::Coat, BindlessTextureType::Roughness, &MaterialDesc::coatTex},
+    {cooked::TextureSlot::CoatRoughness, BindlessTextureType::Roughness, &MaterialDesc::coatRoughnessTex},
+    {cooked::TextureSlot::FuzzColor, BindlessTextureType::Albedo, &MaterialDesc::fuzzColorTex},
+    {cooked::TextureSlot::FuzzRoughness, BindlessTextureType::Roughness, &MaterialDesc::fuzzRoughnessTex},
 };
+
+// The GPU's format of a cooked texture (cooked::TextureKind decided it at cook time).
+VkFormat formatOf(const cooked::Texture& t) {
+    switch (t.format) {
+        case cooked::TextureFormat::Bc7: return t.srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+        case cooked::TextureFormat::Bc5: return VK_FORMAT_BC5_UNORM_BLOCK;
+        case cooked::TextureFormat::Rgba8: break;
+    }
+    return t.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+}
 
 } // namespace
 
@@ -105,16 +111,30 @@ MeshMaterials meshMaterials(BindlessTextureManager* textures, const cooked::Mesh
         for (const SlotUse& use : kSlots) {
             const ContentHash name = in.textures[static_cast<std::size_t>(use.slot)];
             if (!name) continue;
-            const ContentTexture tex = textures->contentTexture(
-                {name.hi, name.lo, use.format, use.type, use.opaque}, [&]() -> TexturePixels {
-                    auto opened = open(name);
-                    if (!opened) {
-                        OHAO_LOG(Error, asset, "{}", opened.error());
-                        return {};
-                    }
-                    const cooked::Texture& t = opened.value();
-                    return {t.pixels, t.width, t.height, t.map};
-                });
+            // The texture's name is its content and its kind, so the format is the kind's.
+            const cooked::TextureKind kind = cooked::kindOf(use.slot);
+            const VkFormat format = kind == cooked::TextureKind::Normal  ? VK_FORMAT_BC5_UNORM_BLOCK
+                                    : kind == cooked::TextureKind::Color ? VK_FORMAT_BC7_SRGB_BLOCK
+                                                                         : VK_FORMAT_BC7_UNORM_BLOCK;
+            const ContentTexture tex = textures->contentTexture({name.hi, name.lo, format, use.type}, [&]() -> TexturePixels {
+                auto opened = open(name);
+                if (!opened) {
+                    OHAO_LOG(Error, asset, "{}", opened.error());
+                    return {};
+                }
+                const cooked::Texture& t = opened.value();
+                if (formatOf(t) != format) {
+                    OHAO_LOG(Error, asset, "a cooked texture is not in its kind's format");
+                    return {};
+                }
+                TexturePixels px;
+                px.width = t.width;
+                px.height = t.height;
+                px.keep = t.map;
+                px.levels = t.levels;
+                px.channelMin = t.channelMin;
+                return px;
+            });
             if (!tex.handle.valid()) continue;
             d.*use.field = tex.handle.index;
             out.held.push_back(tex.handle.index);

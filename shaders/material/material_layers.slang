@@ -18,6 +18,14 @@
 //   row 16  subsurface_radius_scale.rgb, subsurface_scatter_anisotropy (the walk's: the path tracer reads them)
 import material.openpbr;
 
+// A tangent-space normal from a normal map's sample: x and y from R and G, z rebuilt. A cooked normal map is BC5,
+// which holds two channels (asset/cooked.hpp, TextureKind::Normal).
+public float3 normalFromMap(float2 rg)
+{
+    const float2 xy = rg * 2.0 - 1.0;
+    return float3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
+}
+
 public static const uint kLayerRowFirst = 7u;
 
 // A reader's bindless textures: each shader samples its own way (the G-buffer with derivatives, a

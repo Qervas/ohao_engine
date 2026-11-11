@@ -32,7 +32,8 @@ step 2h, 2026-11-09), unchanged.
     loaded through the cooked cache (`cook::cookedModel`, `<root>/.ohao/cooked/`: the file is imported once, for
     all its meshes, and again only when its bytes change). Every consumer (instantiate, physics, animation, audio)
     reads the cooked mesh in place from the file's mapping (`AssetResolver::loadMesh`, a `cooked::Mesh`); a
-    material names its textures by their pixels' hash, and a texture is uploaded once whoever uses it
+    material names its textures by their content and use (colour and data BC7, normals BC5 with z rebuilt in the
+    shader; every mip cooked), and a texture is uploaded once whoever uses it
     (`BindlessTextureManager::contentTexture`). What a mesh held is given back when its last entity goes: its
     textures (destroyed after the frames in flight), its materials' table rows and its arena ranges, each for the
     next load to take (`tools/bench/asset_bench.py --loop N` holds it). Only glTF and GLB are read.

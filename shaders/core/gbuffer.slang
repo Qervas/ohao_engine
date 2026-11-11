@@ -221,8 +221,7 @@ GBufferOut shade(GVertex v, bool frontFacing, float4 fragCoord, bool masked)
     if (normalTexIdx != 0xFFFFFFFFu)
     {
         const float2 normalUV = v.texCoord;
-        float3 tangentNormal = sampleTexture(normalTexIdx, normalUV).rgb;
-        tangentNormal = tangentNormal * 2.0 - 1.0;
+        const float3 tangentNormal = normalFromMap(sampleTexture(normalTexIdx, normalUV).rg);
         float3 T;
         float3 B;
         if (dot(v.tangent.xyz, v.tangent.xyz) > 1e-6)

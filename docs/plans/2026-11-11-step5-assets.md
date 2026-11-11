@@ -238,6 +238,44 @@ Each is one or a few commits with the hooks green.
 - **5e, compressed textures** (after Frank's approval of the compressor).
   - BC7 for colour, BC5 for normals (the shader rebuilds z), BC6H for the environment, mips from the cooker.
   - Done when texture memory drops by the compression ratio (4x for BC7) and the renders pass the referee.
+  - *As built (2026-11-11).*
+    - **The compressor, measured on our cooked textures** (32 threads; 12 colour textures, 31 megapixels; 8 normal
+      maps; 6 textures with alpha), all five candidates, the two ISPC ones with `ispc` 1.32:
+
+      | BC7 encoder | RGB | megapixels/s | with alpha: RGB, alpha |
+      |---|---|---|---|
+      | bc7enc, uber 0, 16 partitions | 48.30 dB | 107 | 47.22, 46.04 |
+      | bc7enc, uber 4, 64 partitions | 48.72 dB | 41 | 47.60, 46.43 |
+      | Compressonator core, quality 0.05 | 48.27 dB | 11 | 47.70, 48.02 |
+      | Compressonator core, quality 0.6 | 49.72 dB | 3.6 | 48.31, 47.96 |
+      | bc7e (bc7enc_rdo's ISPC), veryfast | 49.10 dB | 67 | 48.09, 47.44 |
+      | bc7e, basic | 49.85 dB | 23 | 48.55, 47.87 |
+      | bc7e, veryslow | 50.28 dB | 7.6 | 48.81, 48.04 |
+      | Intel ISPC texcomp, alpha_fast | 49.24 dB | 21 | 47.97, 47.53 |
+      | Intel ISPC texcomp, alpha_slow | 50.15 dB | 3.1 | 48.36, 47.80 |
+
+      BC5 on the normal maps (R and G): rgbcx fast 44.07 dB, rgbcx hq 45.15 dB at 30 megapixels/s, Compressonator
+      core 45.44 dB at 91, Intel ISPC 43.85 dB.
+    - **Chosen (Frank, 2026-11-11): bc7enc and rgbcx**, vendored in `external/bc7enc` (five files, MIT or public
+      domain, no build tool), at uber 4 and 64 partitions, BC5 by `encode_bc5_hq`. bc7e is about 1 dB better at the
+      same speed and needs the `ispc` compiler at build time; it is the change to make if a texture shows the
+      difference (the cooker's version moves, everything recooks).
+    - **A cooked texture is one use of an image** (`cooked::TextureKind`, from the material's slot): colour (BC7,
+      sRGB, mips averaged in linear light), data (BC7), a roughness/metal map (BC7, alpha written 255) or a normal
+      map (BC5: x and y; `normalFromMap` in the shaders rebuilds z, in the G-buffer, the path tracer's hit and
+      the transparent pass). The file holds every mip level, ready to copy, and each channel's smallest value (the
+      70 ms scan at load is gone). The runtime copies the levels; nothing is decoded, blitted or scanned.
+    - **Texture memory, a quarter exactly:** the helmet 106.7 MB to 26.7, Sponza 341.3 to 85.3, flat42 112.0 to
+      28.0. The cache of every scene here: 511 MB to 245 MB.
+    - **First frame, warm:** Sponza 0.47 s to 0.29, the helmet 0.30 to 0.28, flat42 0.30 to 0.24. The first load
+      of each cooks: Sponza 5.6 s (1.5 before), the helmet 1.0 s, flat42 1.1 s.
+    - **The referee:** the helmet's golden moved and was looked at: 22.5% of the pixels, RMSE 1.19 of 255
+      (46.6 dB), the largest difference (74) on one specular highlight; the crop shows the same image. Updated.
+      The other four goldens are identical (none has a cooked texture). Gates 6 of 6; the release loop and
+      kit2k's budgets hold.
+    - **Not done:** BC6H for the environment map (one image a scene, read from its source as before; neither
+      vendored encoder writes it), and Sponza rendered both ways as a picture for Frank.
+    - **`textureCompressionBC`** is now a device feature the renderer requires.
 - **5f, cooked geometry.**
   - Meshlets built by the cooker. Vertex data split into the position stream (depth, RT) and the rest.
   - One upload and one BLAS build submit per load, not two waits a mesh; BLAS compaction if it measures a gain.
