@@ -3,11 +3,12 @@
 #include "render_pass_base.hpp"
 #include "render/shader_bindings/core_gbuffer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
-#include "render/rt/rt_compute.hpp"
+#include "render/graph/pass.hpp"
 #include <array>
 
-namespace ohao::render { class RenderScene; class GpuPassTimer; }
+namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
@@ -34,7 +35,9 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
-    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
+    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override { record(render::Frame{cmd, nullptr, frameIndex}); }
+    // The five timed parts. The frame's culling has begun (GpuCulling::beginFrame).
+    void record(const render::Frame& frame);
     void onResize(uint32_t width, uint32_t height) override;
     [[nodiscard]] const char* getName() const override { return "GBufferPass"; }
 
@@ -43,40 +46,29 @@ public:
     void setCulling(GpuCulling* culling) { m_culling = culling; }
     // VK_EXT_mesh_shader is enabled (before initialize): the mesh-shader pipelines are built.
     void setMeshShaderSupported(bool on) { m_meshShaderSupported = on; }
-    // Times the five parts (the render graph does not time this pass).
-    void setPassTimer(render::GpuPassTimer* timer) { m_passTimer = timer; }
     void setViewProjection(const glm::mat4& view, const glm::mat4& proj,
                           const glm::mat4& prevViewProj);
 
-    // Get G-Buffer attachments for use by other passes
-    [[nodiscard]] VkImageView getPositionView() const { return m_gbuffer[0].view; }
-    [[nodiscard]] VkImageView getNormalView() const { return m_gbuffer[1].view; }
-    [[nodiscard]] VkImageView getAlbedoView() const { return m_gbuffer[2].view; }
-    [[nodiscard]] VkImageView getVelocityView() const { return m_gbuffer[3].view; }
-    [[nodiscard]] VkImageView getDepthView() const { return m_gbuffer[4].view; }
+    // The targets, for the passes that read them.
+    [[nodiscard]] gpu::Image& position() { return m_gbuffer[0]; }
+    [[nodiscard]] gpu::Image& normal() { return m_gbuffer[1]; }
+    [[nodiscard]] gpu::Image& albedo() { return m_gbuffer[2]; }
+    [[nodiscard]] gpu::Image& velocity() { return m_gbuffer[3]; }
+    [[nodiscard]] gpu::Image& depth() { return m_gbuffer[kDepth]; }
     // Emitted radiance (rgb: the emissive texture times the material's emissive strength,
     // linear, RGBA16F; 0 where nothing emits): lighting adds it to the lit image.
-    [[nodiscard]] VkImageView getEmissiveView() const { return m_gbuffer[kEmissive].view; }
+    [[nodiscard]] gpu::Image& emissive() { return m_gbuffer[kEmissive]; }
     // OpenPBR's per-pixel inputs beyond albedo, roughness and metalness (core/deferred_lighting.slang).
-    [[nodiscard]] VkImageView getSpecularView() const { return m_gbuffer[kSpecular].view; }
-    [[nodiscard]] VkImageView getOpenPBRView() const { return m_gbuffer[kOpenPBR].view; }
+    [[nodiscard]] gpu::Image& specular() { return m_gbuffer[kSpecular]; }
+    [[nodiscard]] gpu::Image& openpbr() { return m_gbuffer[kOpenPBR]; }
+    [[nodiscard]] gpu::Image& layers() { return m_gbuffer[kLayers]; }
+    // LEGACY(step 4a): SSSPass samples these and dispatches over the tiles undeclared.
+    [[nodiscard]] VkImageView getPositionView() const { return m_gbuffer[0].view; }
+    [[nodiscard]] VkImageView getNormalView() const { return m_gbuffer[1].view; }
     [[nodiscard]] VkImageView getLayersView() const { return m_gbuffer[kLayers].view; }
+    [[nodiscard]] VkBuffer sssTileBuffer() const { return m_sssTiles.buffer; }
     [[nodiscard]] const glm::mat4& projection() const { return m_projection; }
     [[nodiscard]] VkBuffer materialBuffer() const;   // RenderScene's material table (null without a scene)
-
-    // VkImage handles for render graph import
-    [[nodiscard]] VkImage getPositionImage() const { return m_gbuffer[0].image; }
-    [[nodiscard]] VkImage getNormalImage() const { return m_gbuffer[1].image; }
-    [[nodiscard]] VkImage getAlbedoImage() const { return m_gbuffer[2].image; }
-    [[nodiscard]] VkImage getVelocityImage() const { return m_gbuffer[3].image; }
-    [[nodiscard]] VkImage getDepthImage() const { return m_gbuffer[4].image; }
-
-    // Format accessors for render graph import
-    [[nodiscard]] VkFormat getPositionFormat() const { return m_gbuffer[0].format; }
-    [[nodiscard]] VkFormat getNormalFormat() const { return m_gbuffer[1].format; }
-    [[nodiscard]] VkFormat getAlbedoFormat() const { return m_gbuffer[2].format; }
-    [[nodiscard]] VkFormat getVelocityFormat() const { return m_gbuffer[3].format; }
-    [[nodiscard]] VkFormat getDepthFormat() const { return m_gbuffer[4].format; }
 
     // Texture manager for bindless textures
     void setTextureManager(BindlessTextureManager* texManager) { m_textureManager = texManager; }
@@ -93,19 +85,16 @@ public:
     // has been waited on.
     // The scene set (set 1 of core/gbuffer.slang: instances, materials, refs, camera UBO, ..., draw
     // table) and its layout, for the transparent pass's blended meshes, which reuse gbuffer.slang. A
-    // slot's set is written by this frame's execute().
+    // slot's set is written by this frame's record().
     [[nodiscard]] VkDescriptorSetLayout sceneSetLayout() const { return m_sceneLayout; }
     [[nodiscard]] VkDescriptorSet sceneSet(uint32_t slot) const {
         return slot < m_sceneSets.size() ? m_sceneSets[slot] : VK_NULL_HANDLE;
     }
 
-    [[nodiscard]] VkBuffer sssTileBuffer() const { return m_sssTiles.buffer; }
     [[nodiscard]] VkExtent2D sssTiles() const;
     [[nodiscard]] uint32_t sssTilesFlagged() const;
 
 private:
-    [[nodiscard]] bool createRenderPass();
-    [[nodiscard]] bool createFramebuffer();
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createGBuffer();
     [[nodiscard]] bool createSceneDescriptors();
@@ -115,12 +104,9 @@ private:
     // Rewrites the frame slot's scene set and camera UBO. False when the scene has
     // no buffers to bind.
     [[nodiscard]] bool updateSceneSet(uint32_t frameIndex);
-    [[nodiscard]] bool createMeshletPipelines(VkGraphicsPipelineCreateInfo base, VkPipelineRasterizationStateCreateInfo raster);
-    // One of the two render passes (`late`: loads what the early one drew), drawing its phase's
+    // One of the two raster phases (`late`: loads what the early one drew), drawing its phase's
     // lists when `draw`.
-    void drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, bool draw);
-    void timerBegin(VkCommandBuffer cmd, const char* name);
-    void timerEnd(VkCommandBuffer cmd);
+    void drawPass(const render::Frame& frame, bool late, bool draw);
 
     // G-Buffer render targets: position, normal, albedo, velocity, depth (4, the depth
     // attachment), emissive (5, the fragment shader's output 4), OpenPBR's specular (6, output 5:
@@ -132,14 +118,7 @@ private:
     static constexpr uint32_t kSpecular = 6;
     static constexpr uint32_t kOpenPBR = 7;
     static constexpr uint32_t kLayers = 8;   // OpenPBR's layers (material/material_layers.slang packLayers), RG32_UINT
-    std::array<RenderTarget, GBUFFER_COUNT> m_gbuffer;
-
-    // The early render pass clears and leaves the targets for the late one (depth readable by
-    // the Hi-Z build); the late one loads them and leaves them for the lighting. They are
-    // compatible: one framebuffer, one set of pipelines.
-    VkRenderPass m_renderPass{VK_NULL_HANDLE};
-    VkRenderPass m_lateRenderPass{VK_NULL_HANDLE};
-    VkFramebuffer m_framebuffer{VK_NULL_HANDLE};
+    std::array<gpu::Image, GBUFFER_COUNT> m_gbuffer;
 
     // Pipelines: double-sided (no face culling), one-sided (back faces culled), wireframe
     VkPipeline m_pipeline{VK_NULL_HANDLE};
@@ -159,7 +138,6 @@ private:
     [[nodiscard]] VkShaderStageFlags geometryStages() const noexcept;
 
     GpuCulling* m_culling{nullptr};
-    render::GpuPassTimer* m_passTimer{nullptr};
 
     // Descriptors for G-Buffer access
 
@@ -170,7 +148,7 @@ private:
 
     // Set 1 "scene": layout, pool, one set + camera UBO per frame slot. The UBOs are
     // host-visible and persistently mapped; a slot's UBO and set are rewritten only in
-    // execute(cmd, slot), after that slot's fence wait.
+    // record(), after that slot's fence wait.
     struct CameraUBO {
         glm::mat4 viewProj;
         glm::mat4 prevViewProj;
@@ -180,11 +158,9 @@ private:
     VkDescriptorSetLayout m_emptyLayout{VK_NULL_HANDLE};   // set 0 stand-in without bindless textures
     VkDescriptorPool m_scenePool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sceneSets{};
-    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_cameraBuffers{};
-    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> m_cameraMemory{};
-    std::array<void*, MAX_FRAMES_IN_FLIGHT> m_cameraMapped{};
-    rtc::HostBuffer m_sssTiles{};   // set 1, binding 4
-    void resetSSSTiles(VkCommandBuffer cmd);
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_cameraBuffers{};
+    GpuBuffer m_sssTiles{};   // set 1, binding 4
+    void resetSSSTiles(const render::Frame& frame);
 
     // Dimensions
     uint32_t m_width{0};

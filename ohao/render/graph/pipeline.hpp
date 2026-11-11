@@ -31,6 +31,11 @@ struct GraphicsPipelineDesc {
     const char* fragment{nullptr};         // null: depth only
     const char* vertexEntry{"main"};
     const char* fragmentEntry{"main"};
+    // A mesh pipeline (VK_EXT_mesh_shader) instead of a vertex one: `mesh`, with `task` or without; no vertex input.
+    const char* task{nullptr};
+    const char* mesh{nullptr};
+    const char* taskEntry{"main"};
+    const char* meshEntry{"main"};
     VkPipelineLayout layout{VK_NULL_HANDLE};
 
     // Attachments, as the pass that draws with it declares them. `blends` has one entry per colour format, or is

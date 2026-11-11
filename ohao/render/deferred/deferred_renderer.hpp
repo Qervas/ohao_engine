@@ -15,7 +15,6 @@
 #include "render/rt/rt_direct_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
 #include "render/rt/rt_alpha_tables.hpp"
-#include "render/graph/render_graph.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "core/common_types.hpp"
 #include <nlohmann/json.hpp>
@@ -193,6 +192,8 @@ public:
     // the last render() made none.
     [[nodiscard]] gpu::Image* finalOutput();
     // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post.
+    // LEGACY(step 4a): the one-shot readback (render_dispatch.cpp) copies it by barriers of its own, from
+    // SHADER_READ_ONLY and back.
     [[nodiscard]] VkImage getLitImage() const;
 
     // Get jitter offset for TAA
@@ -286,20 +287,6 @@ private:
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
     uint64_t m_frameNumber{0};
     RenderQuality m_quality{RenderQuality::Realtime};
-
-    // Render graph for centralized barrier tracking
-    RenderGraph m_renderGraph;
-
-    // Imported texture handles (valid after importGraphTextures())
-    TextureHandle m_graphDepthHandle;
-    TextureHandle m_graphNormalHandle;
-    TextureHandle m_graphAlbedoHandle;
-    TextureHandle m_graphShadowHandle;
-    TextureHandle m_graphLightingHandle;
-
-    // (Re-)import all per-pass render targets into the graph.
-    // Called once after initialize() and again after each onResize().
-    void importGraphTextures();
 
     render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's, per frame slot
 };

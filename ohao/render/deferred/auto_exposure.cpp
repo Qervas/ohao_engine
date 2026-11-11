@@ -81,13 +81,13 @@ void AutoExposure::cleanup() {
     m_device = VK_NULL_HANDLE;
 }
 
-void AutoExposure::record(const render::Frame& frame, gpu::Image* tracked, VkImageView hdr, VkSampler sampler,
-                          uint32_t width, uint32_t height, float dt, const Settings& settings) {
+void AutoExposure::record(const render::Frame& frame, gpu::Image& hdr, VkSampler sampler, uint32_t width,
+                          uint32_t height, float dt, const Settings& settings) {
     const uint32_t slot = frame.slot;
-    if (!m_histogram || !m_adapt || slot >= MAX_FRAMES_IN_FLIGHT || hdr == VK_NULL_HANDLE) return;
+    if (!m_histogram || !m_adapt || slot >= MAX_FRAMES_IN_FLIGHT || !hdr) return;
     const VkCommandBuffer cmd = frame.cmd;
     const VkDescriptorSet set = m_sets[slot];
-    const VkDescriptorImageInfo image{sampler, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo image{sampler, hdr.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const VkDescriptorBufferInfo bins{m_bins.buffer, 0, VK_WHOLE_SIZE}, state{m_state.buffer, 0, VK_WHOLE_SIZE};
     VkWriteDescriptorSet w[3] = {shader::write(shader::postprocess_exposure::hdr, set),
                                  shader::write(shader::postprocess_exposure::bins, set),
@@ -120,8 +120,7 @@ void AutoExposure::record(const render::Frame& frame, gpu::Image* tracked, VkIma
     m_reset = false;
     {
         render::Pass histogram(frame, nullptr, render::Pass::Compute);
-        // LEGACY(step 4a): without TAA `hdr` is DeferredLightingPass's lit image, not tracked yet.
-        if (tracked) histogram.sampled(*tracked);
+        histogram.sampled(hdr);
         histogram.readWrite(m_bins, render::BufferUse::Storage);
         histogram.begin();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_histogram);

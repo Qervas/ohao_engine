@@ -6,32 +6,37 @@
 namespace ohao::render {
 
 VkPipeline createGraphicsPipeline(VkDevice device, const GraphicsPipelineDesc& d) {
-    VkShaderModule vert = d.vertex ? rtc::loadShaderModule(device, d.vertex) : VK_NULL_HANDLE;
-    VkShaderModule frag = d.fragment ? rtc::loadShaderModule(device, d.fragment) : VK_NULL_HANDLE;
-    const auto destroyModules = [&] {
-        if (vert != VK_NULL_HANDLE) vkDestroyShaderModule(device, vert, nullptr);
-        if (frag != VK_NULL_HANDLE) vkDestroyShaderModule(device, frag, nullptr);
+    // The geometry stages (a vertex shader, or a mesh shader with or without its task shader), then the fragment's.
+    struct Stage { VkShaderStageFlagBits stage; const char* file; const char* entry; const VkSpecializationInfo* spec; };
+    const Stage wanted[] = {
+        {VK_SHADER_STAGE_VERTEX_BIT, d.mesh ? nullptr : d.vertex, d.vertexEntry, d.vertexSpecialization},
+        {VK_SHADER_STAGE_TASK_BIT_EXT, d.mesh ? d.task : nullptr, d.taskEntry, nullptr},
+        {VK_SHADER_STAGE_MESH_BIT_EXT, d.mesh, d.meshEntry, nullptr},
+        {VK_SHADER_STAGE_FRAGMENT_BIT, d.fragment, d.fragmentEntry, d.fragmentSpecialization},
     };
-    if (vert == VK_NULL_HANDLE || (d.fragment && frag == VK_NULL_HANDLE)) {
+    VkPipelineShaderStageCreateInfo stages[4]{};
+    uint32_t stageCount = 0;
+    bool loaded = d.vertex || d.mesh;
+    for (const Stage& w : wanted) {
+        if (!w.file) continue;
+        const VkShaderModule module = rtc::loadShaderModule(device, w.file);
+        if (module == VK_NULL_HANDLE) {
+            loaded = false;
+            break;
+        }
+        stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stageCount].stage = w.stage;
+        stages[stageCount].module = module;
+        stages[stageCount].pName = w.entry;
+        stages[stageCount].pSpecializationInfo = w.spec;
+        ++stageCount;
+    }
+    const auto destroyModules = [&] {
+        for (uint32_t i = 0; i < stageCount; ++i) vkDestroyShaderModule(device, stages[i].module, nullptr);
+    };
+    if (!loaded) {
         destroyModules();
         return VK_NULL_HANDLE;
-    }
-
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    uint32_t stageCount = 0;
-    stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[stageCount].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[stageCount].module = vert;
-    stages[stageCount].pName = d.vertexEntry;
-    stages[stageCount].pSpecializationInfo = d.vertexSpecialization;
-    ++stageCount;
-    if (frag != VK_NULL_HANDLE) {
-        stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[stageCount].module = frag;
-        stages[stageCount].pName = d.fragmentEntry;
-        stages[stageCount].pSpecializationInfo = d.fragmentSpecialization;
-        ++stageCount;
     }
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
@@ -106,8 +111,8 @@ VkPipeline createGraphicsPipeline(VkDevice device, const GraphicsPipelineDesc& d
     info.pNext = &rendering;
     info.stageCount = stageCount;
     info.pStages = stages;
-    info.pVertexInputState = &vertexInput;
-    info.pInputAssemblyState = &assembly;
+    info.pVertexInputState = d.mesh ? nullptr : &vertexInput;
+    info.pInputAssemblyState = d.mesh ? nullptr : &assembly;
     info.pViewportState = &viewport;
     info.pRasterizationState = &raster;
     info.pMultisampleState = &multisample;

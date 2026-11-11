@@ -32,11 +32,10 @@ public:
     bool initialize(VkDevice device, GpuAllocator& allocator);
     void cleanup();
 
-    // Meters `hdr` (w x h; `tracked` is its image, or null for one no pass tracks, which is then
-    // SHADER_READ_ONLY) into the EV100 the display pass reads, `dt` seconds after the last frame; the
+    // Meters `hdr` (w x h) into the EV100 the display pass reads, `dt` seconds after the last frame; the
     // frame slot's copy follows.
-    void record(const render::Frame& frame, gpu::Image* tracked, VkImageView hdr, VkSampler sampler, uint32_t width,
-                uint32_t height, float dt, const Settings& settings);
+    void record(const render::Frame& frame, gpu::Image& hdr, VkSampler sampler, uint32_t width, uint32_t height, float dt,
+                const Settings& settings);
     // The next metered frame takes its target at once.
     void reset() noexcept { m_reset = true; }
 

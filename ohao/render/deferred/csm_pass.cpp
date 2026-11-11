@@ -2,6 +2,7 @@
 #include "render/scene/vertex_input.hpp"
 #include "render/shader_bindings/shadow_shadow_csm.hpp"
 #include "gpu_culling.hpp"
+#include "render/graph/pipeline.hpp"
 #include "gpu/shared_layout.hpp"
 #include "core/log.hpp"
 #include <cstring>
@@ -16,6 +17,12 @@
 
 namespace ohao {
 
+namespace {
+constexpr VkFormat kShadowFormat = VK_FORMAT_D32_SFLOAT;
+constexpr float kDepthBiasConstant = 1.25f;
+constexpr float kDepthBiasSlope = 1.75f;
+} // namespace
+
 CSMPass::~CSMPass() {
     cleanup();
 }
@@ -24,9 +31,9 @@ bool CSMPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physicalDevice = physicalDevice;
 
+    if (!m_allocator) return false;
     if (!createShadowMap()) return false;
-    if (!createRenderPass()) return false;
-    if (!createFramebuffers()) return false;
+    if (!createShadowSampler()) return false;
     if (!createCascadeBuffer()) return false;
     if (!createSceneDescriptors()) return false;
     if (!createPipeline()) return false;
@@ -53,56 +60,25 @@ void CSMPass::cleanup() {
     safeDestroy(m_scenePool);   // frees the sets
     m_sceneSets.fill(VK_NULL_HANDLE);
     safeDestroy(m_sceneLayout);
-    if (m_cascadeBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(m_device, m_cascadeBuffer, nullptr);
-        m_cascadeBuffer = VK_NULL_HANDLE;
-    }
-    if (m_cascadeBufferMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_cascadeBufferMemory, nullptr);
-        m_cascadeBufferMemory = VK_NULL_HANDLE;
-    }
-    if (m_shadowSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(m_device, m_shadowSampler, nullptr);
-        m_shadowSampler = VK_NULL_HANDLE;
-    }
-    for (auto& fb : m_framebuffers) {
-        if (fb != VK_NULL_HANDLE) {
-            vkDestroyFramebuffer(m_device, fb, nullptr);
-            fb = VK_NULL_HANDLE;
-        }
-    }
-    if (m_renderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(m_device, m_renderPass, nullptr);
-        m_renderPass = VK_NULL_HANDLE;
-    }
-    for (auto& view : m_cascadeViews) {
-        if (view != VK_NULL_HANDLE) {
-            vkDestroyImageView(m_device, view, nullptr);
-            view = VK_NULL_HANDLE;
-        }
-    }
-    if (m_shadowMapArrayView != VK_NULL_HANDLE) {
-        vkDestroyImageView(m_device, m_shadowMapArrayView, nullptr);
-        m_shadowMapArrayView = VK_NULL_HANDLE;
-    }
-    if (m_shadowMap != VK_NULL_HANDLE) {
-        vkDestroyImage(m_device, m_shadowMap, nullptr);
-        m_shadowMap = VK_NULL_HANDLE;
-    }
-    if (m_shadowMapMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_shadowMapMemory, nullptr);
-        m_shadowMapMemory = VK_NULL_HANDLE;
+    safeDestroy(m_shadowSampler);
+    if (m_allocator) {
+        m_allocator->retire(m_cascadeBuffer);
+        m_allocator->retire(m_shadowMap);
     }
 }
 
-void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
-    if (!m_renderScene || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
+void CSMPass::record(const render::Frame& frame) {
+    render::Timed timed(frame, "csm");
+    const uint32_t frameIndex = frame.slot;
+    if (!m_renderScene || frameIndex >= MAX_FRAMES_IN_FLIGHT || !m_shadowMap || m_pipeline == VK_NULL_HANDLE) return;
+    const VkCommandBuffer cmd = frame.cmd;
 
     // Update cascade matrices based on current camera
     updateCascadeMatrices();
 
     // Update cascade buffer
-    memcpy(m_cascadeBufferMapped, &m_cascadeData, sizeof(CascadeData));
+    memcpy(m_cascadeBuffer.getMappedData(), &m_cascadeData, sizeof(CascadeData));
+    m_allocator->flushBuffer(m_cascadeBuffer);
 
     // The slot's set (instance table, draw table), rewritten every frame: the buffers can be
     // replaced by growth; the slot's previous use finished at its fence wait.
@@ -118,46 +94,25 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         writes[0].pBufferInfo = &infos[0];
         writes[1].pBufferInfo = &infos[1];
         vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
-        // Every cascade's list, before the render passes (compute outside them).
+        // Every cascade's list, before its draws.
         for (uint32_t cascade = 0; cascade < m_cascades; ++cascade)
-            m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, gpu::shared::kCullListCascade0 + cascade, 1,
+            m_culling->cull(frame, gpu::shared::kCullPhaseShadow, gpu::shared::kCullListCascade0 + cascade, 1,
                             m_cascadeData.viewProj[cascade], glm::vec3(0.0f));
     }
 
-    // Render each cascade
+    // Render each cascade into its layer
     for (uint32_t cascade = 0; cascade < m_cascades; ++cascade) {
-        VkClearValue clearValue{};
-        clearValue.depthStencil = {1.0f, 0};
-
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = m_renderPass;
-        renderPassInfo.framebuffer = m_framebuffers[cascade];
-        renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = {m_size, m_size};
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearValue;
-
-        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        // Set viewport and scissor
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = static_cast<float>(m_size);
-        viewport.height = static_cast<float>(m_size);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = {m_size, m_size};
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        render::Pass pass(frame, nullptr, render::Pass::Raster);
+        // LEGACY(step 4a): the instance and draw tables and the vertex and index arenas are RenderScene's, not
+        // tracked yet.
+        if (haveDraws) m_culling->declareDraws(pass, false);
+        pass.depth(m_shadowMap, render::Load::Clear, 1.0f, cascade);
+        pass.begin();
 
         // The cascade's culled list (every draw on the instance path; shadows draw both faces)
         if (haveDraws) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+            vkCmdSetDepthBias(cmd, kDepthBiasConstant, 0.0f, kDepthBiasSlope);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                                     0, 1, &m_sceneSets[frameIndex], 0, nullptr);
             const VkBuffer vertexBuffer = m_renderScene->vertexArena();
@@ -171,10 +126,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
             // firstInstance = the draw record: the shader reads its instance through it.
             m_culling->drawList(cmd, gpu::shared::kCullListCascade0 + cascade);
         }
-
-        vkCmdEndRenderPass(cmd);
     }
-    // The shadow map's layout transition is the render graph's (its barriers between passes).
 }
 
 bool CSMPass::configure(uint32_t cascades, uint32_t size) {
@@ -185,23 +137,10 @@ bool CSMPass::configure(uint32_t cascades, uint32_t size) {
         m_size = size;
         return false;
     }
-    vkDeviceWaitIdle(m_device);   // frames in flight sample and render the old map
-    destroyShadowMap();
+    m_allocator->retire(m_shadowMap);   // frames in flight sample and render the old map
     m_size = size;
-    if (!createShadowMap() || !createFramebuffers())
-        OHAO_LOG(Error, render, "CSM: the {}x{} shadow map could not be created", m_size, m_size);
+    if (!createShadowMap()) OHAO_LOG(Error, render, "CSM: the {}x{} shadow map could not be created", m_size, m_size);
     return true;
-}
-
-void CSMPass::destroyShadowMap() {
-    for (auto& fb : m_framebuffers) safeDestroy(fb);
-    for (auto& view : m_cascadeViews) safeDestroy(view);
-    safeDestroy(m_shadowMapArrayView);
-    if (m_shadowMap != VK_NULL_HANDLE) vkDestroyImage(m_device, m_shadowMap, nullptr);
-    if (m_shadowMapMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_shadowMapMemory, nullptr);
-    m_shadowMap = VK_NULL_HANDLE;
-    m_shadowMapMemory = VK_NULL_HANDLE;
-    safeDestroy(m_shadowSampler);
 }
 
 void CSMPass::setCameraData(const glm::mat4& view, const glm::mat4& proj,
@@ -214,66 +153,13 @@ void CSMPass::setCameraData(const glm::mat4& view, const glm::mat4& proj,
 }
 
 bool CSMPass::createShadowMap() {
-    // Create shadow map array (one layer per cascade)
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_D32_SFLOAT;
-    imageInfo.extent = {m_size, m_size, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = CASCADE_COUNT;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    m_shadowMap = m_allocator->createImage({"csm.shadow", kShadowFormat, m_size, m_size,
+                                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1,
+                                            CASCADE_COUNT});
+    return static_cast<bool>(m_shadowMap);
+}
 
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_shadowMap) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(m_device, m_shadowMap, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_shadowMapMemory) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkBindImageMemory(m_device, m_shadowMap, m_shadowMapMemory, 0);
-
-    // Create array view (for shader sampling all cascades)
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_shadowMap;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    viewInfo.format = VK_FORMAT_D32_SFLOAT;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = CASCADE_COUNT;
-
-    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_shadowMapArrayView) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Create per-cascade views (for rendering)
-    for (uint32_t i = 0; i < CASCADE_COUNT; ++i) {
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.subresourceRange.baseArrayLayer = i;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_cascadeViews[i]) != VK_SUCCESS) {
-            return false;
-        }
-    }
-
+bool CSMPass::createShadowSampler() {
     // Create shadow sampler with comparison
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -291,82 +177,10 @@ bool CSMPass::createShadowMap() {
     return vkCreateSampler(m_device, &samplerInfo, nullptr, &m_shadowSampler) == VK_SUCCESS;
 }
 
-bool CSMPass::createRenderPass() {
-    VkAttachmentDescription depthAttachment{};
-    depthAttachment.format = VK_FORMAT_D32_SFLOAT;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference depthRef{};
-    depthRef.attachment = 0;
-    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 0;
-    subpass.pDepthStencilAttachment = &depthRef;
-
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &depthAttachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-
-    return vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass) == VK_SUCCESS;
-}
-
-bool CSMPass::createFramebuffers() {
-    for (uint32_t i = 0; i < CASCADE_COUNT; ++i) {
-        VkFramebufferCreateInfo framebufferInfo{};
-        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = m_renderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = &m_cascadeViews[i];
-        framebufferInfo.width = m_size;
-        framebufferInfo.height = m_size;
-        framebufferInfo.layers = 1;
-
-        if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffers[i]) != VK_SUCCESS) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool CSMPass::createCascadeBuffer() {
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = sizeof(CascadeData);
-    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_cascadeBuffer) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(m_device, m_cascadeBuffer, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_cascadeBufferMemory) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkBindBufferMemory(m_device, m_cascadeBuffer, m_cascadeBufferMemory, 0);
-    vkMapMemory(m_device, m_cascadeBufferMemory, 0, sizeof(CascadeData), 0, &m_cascadeBufferMapped);
-
-    return true;
+    m_cascadeBuffer =
+        m_allocator->createBuffer(sizeof(CascadeData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, AllocationUsage::CpuToGpu, true);
+    return m_cascadeBuffer.isValid() && m_cascadeBuffer.getMappedData() != nullptr;
 }
 
 bool CSMPass::createSceneDescriptors() {
@@ -397,72 +211,6 @@ bool CSMPass::createSceneDescriptors() {
 }
 
 bool CSMPass::createPipeline() {
-    // Load shaders
-    // Depth-only, vertex stage only: each cascade is its own render pass into its
-    // own layer view, so the vertex shader projects straight into that cascade.
-    VkShaderModule vertShader = loadShaderModule("shadow_shadow_csm.slang.spv");
-
-    std::array<VkPipelineShaderStageCreateInfo, 1> shaderStages{};
-    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    shaderStages[0].module = vertShader;
-    shaderStages[0].pName = "main";
-
-    // Vertex input - full vertex stride: the scene's vertex arena is shared
-    auto csmBindingDescs = render::vertexBindings();
-    auto csmAttributeDescs = render::vertexAttributes();
-
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(csmBindingDescs.size());
-    vertexInputInfo.pVertexBindingDescriptions = csmBindingDescs.data();
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(csmAttributeDescs.size());
-    vertexInputInfo.pVertexAttributeDescriptions = csmAttributeDescs.data();
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_TRUE; // Clamp depth to [0, 1]
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT; // Front-face culling for shadow
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_TRUE;
-    rasterizer.depthBiasConstantFactor = 1.25f;
-    rasterizer.depthBiasSlopeFactor = 1.75f;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 0; // No color attachments
-
-    std::array<VkDynamicState, 2> dynamicStates = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
-    };
-
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-    dynamicState.pDynamicStates = dynamicStates.data();
-
     // Push constant: the cascade's view-projection
     VkPushConstantRange pushConstant{};
     pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -477,33 +225,27 @@ bool CSMPass::createPipeline() {
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(m_device, vertShader, nullptr);
-        return false;
-    }
+    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) return false;
 
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
-    pipelineInfo.pStages = shaderStages.data();
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = m_pipelineLayout;
-    pipelineInfo.renderPass = m_renderPass;
-    pipelineInfo.subpass = 0;
-
-    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                                nullptr, &m_pipeline);
-
-    vkDestroyShaderModule(m_device, vertShader, nullptr);
-
-    return result == VK_SUCCESS;
+    // Depth-only, vertex stage only: each cascade is its own pass into its own layer, so the vertex shader
+    // projects straight into that cascade. Full vertex stride: the scene's vertex arena is shared.
+    const auto bindings = render::vertexBindings();
+    const auto attributes = render::vertexAttributes();
+    render::GraphicsPipelineDesc desc{};
+    desc.name = "csm";
+    desc.vertex = "shadow_shadow_csm.slang.spv";
+    desc.layout = m_pipelineLayout;
+    desc.depthFormat = kShadowFormat;
+    desc.vertexBindings = bindings;
+    desc.vertexAttributes = attributes;
+    desc.cull = VK_CULL_MODE_FRONT_BIT;   // front-face culling for shadow
+    desc.depthTest = true;
+    desc.depthWrite = true;
+    desc.depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL;
+    desc.depthClamp = true;               // clamp depth to [0, 1]
+    desc.depthBias = true;                // kDepthBiasConstant, kDepthBiasSlope
+    m_pipeline = render::createGraphicsPipeline(m_device, desc);
+    return m_pipeline != VK_NULL_HANDLE;
 }
 
 void CSMPass::calculateCascadeSplits() {

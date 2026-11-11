@@ -32,8 +32,8 @@ public:
     [[nodiscard]] const char* getName() const override { return "BloomPass"; }
 
     // Configuration
-    // LEGACY(step 4a): the input is DeferredLightingPass's lit image, a view until that image is tracked.
-    void setInputImage(VkImageView hdrInput);
+    // The frame the chain convolves (the lit image).
+    void setInputImage(gpu::Image* hdrInput) { m_hdrInput = hdrInput; }
     void setFilterRadius(float radius) { m_filterRadius = radius; }
     // The weights the upsample chain gives the levels sum to this (1 + 1/2 + 1/4 + ...): level 0's
     // output divided by it is a normalised convolution of the frame.
@@ -55,7 +55,7 @@ private:
               VkDescriptorSet set, const void* params);
 
     // Input
-    VkImageView m_hdrInputView{VK_NULL_HANDLE};
+    gpu::Image* m_hdrInput{nullptr};
 
     // The mip chain: level i is half level i - 1.
     gpu::Image m_chain;

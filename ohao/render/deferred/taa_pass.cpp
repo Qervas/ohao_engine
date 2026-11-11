@@ -72,7 +72,7 @@ void TAAPass::cleanup() {
 }
 
 void TAAPass::record(const render::Frame& frame) {
-    if (m_currentFrameView == VK_NULL_HANDLE || m_pipeline == VK_NULL_HANDLE) return;
+    if (!m_currentFrame || !*m_currentFrame || m_pipeline == VK_NULL_HANDLE) return;
     if (frame.slot >= MAX_FRAMES_IN_FLIGHT || m_descriptorSets[frame.slot] == VK_NULL_HANDLE) return;
 
     // Ping-pong: write one history image while sampling the other, which holds
@@ -86,9 +86,11 @@ void TAAPass::record(const render::Frame& frame) {
     writeDescriptorSet(frame.slot, 1 - outputIndex);
 
     render::Pass pass(frame, "post.taa", render::Pass::Raster);
-    // LEGACY(step 4a): the current frame is DeferredLightingPass's lit image, depth and velocity are GBufferPass's,
-    // the mask is VfxRenderer's: not tracked yet.
-    pass.sampled(history).color(m_history[outputIndex], render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}});
+    // LEGACY(step 4a): the mask is VfxRenderer's, not tracked yet.
+    pass.sampled(*m_currentFrame).sampled(history);
+    if (m_velocity) pass.sampled(*m_velocity);
+    if (m_depth) pass.sampled(*m_depth);
+    pass.color(m_history[outputIndex], render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}});
     pass.begin();
     const VkCommandBuffer cmd = frame.cmd;
 
@@ -106,7 +108,7 @@ void TAAPass::record(const render::Frame& frame) {
     params.blendFactor = m_historyValid ? m_blendFactor : 0.0f;  // no history yet: current frame only
     params.motionScale = m_motionScale;
     params.flags = 0;
-    if (m_velocityView != VK_NULL_HANDLE) params.flags |= 1;
+    if (m_velocity && *m_velocity) params.flags |= 1;
     if (m_useVarianceClipping) params.flags |= 2;
     if (m_maskView != VK_NULL_HANDLE) params.flags |= 4;   // the transparency mask is bound
 
@@ -145,43 +147,28 @@ glm::vec2 TAAPass::getJitterOffset(uint32_t frameIndex) const {
     return 2.0f * m_jitterSequence[frameIndex % (upscales() ? UPSCALE_JITTER_SAMPLES : JITTER_SAMPLES)] / input;
 }
 
-void TAAPass::setCurrentFrame(VkImageView currentFrame) {
-    m_currentFrameView = currentFrame;
-}
-
-void TAAPass::setVelocityBuffer(VkImageView velocity) {
-    m_velocityView = velocity;
-}
-
-void TAAPass::setDepthBuffer(VkImageView depth) {
-    m_depthView = depth;
-}
-
 void TAAPass::setTransparencyMask(VkImageView mask) {
     m_maskView = mask;
-}
-
-void TAAPass::setGBufferInputs(VkImageView depth, VkImageView velocity) {
-    m_depthView = depth;
-    m_velocityView = velocity;
 }
 
 void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
     if (m_sampler == VK_NULL_HANDLE) return;
 
     // Every binding is written, the current frame where a view is missing: an unwritten descriptor crashed NVIDIA's driver.
-    const VkImageView fallbackView = m_currentFrameView;
+    const VkImageView fallbackView = m_currentFrame->view;
+    const VkImageView velocityView = m_velocity ? m_velocity->view : VK_NULL_HANDLE;
+    const VkImageView depthView = m_depth ? m_depth->view : VK_NULL_HANDLE;
     namespace T = shader::postprocess_taa_resolve;
     constexpr VkImageLayout kRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     const auto pick = [&](VkImageView v) { return v != VK_NULL_HANDLE ? v : fallbackView; };
-    // G-buffer depth stays DEPTH_STENCIL_READ_ONLY from the G-buffer pass to frame end.
+    // A depth image is sampled in the layout it is tested in.
     const VkImageLayout depthLayout =
-        m_depthView != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : kRead;
+        depthView != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : kRead;
     const std::array<std::pair<shader::Binding, VkDescriptorImageInfo>, T::kSet0.size()> images{{
-        {T::currentFrame, {m_sampler, m_currentFrameView, kRead}},
+        {T::currentFrame, {m_sampler, m_currentFrame->view, kRead}},
         {T::historyFrame, {m_sampler, m_history[historyIdx].view, kRead}},      // the opposite buffer
-        {T::velocityBuffer, {m_sampler, pick(m_velocityView), kRead}},          // the shader's flags skip a fallback
-        {T::depthBuffer, {m_sampler, pick(m_depthView), depthLayout}},
+        {T::velocityBuffer, {m_sampler, pick(velocityView), kRead}},            // the shader's flags skip a fallback
+        {T::depthBuffer, {m_sampler, pick(depthView), depthLayout}},
         {T::transparencyMask, {m_sampler, pick(m_maskView), kRead}},            // flag bit 2 says it is bound
     }};
     std::array<VkWriteDescriptorSet, T::kSet0.size()> writes{};

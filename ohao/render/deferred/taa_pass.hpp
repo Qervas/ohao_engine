@@ -24,16 +24,16 @@ public:
     [[nodiscard]] const char* getName() const override { return "TAAPass"; }
 
     // Configuration
-    void setCurrentFrame(VkImageView currentFrame);
-    void setVelocityBuffer(VkImageView velocity);
-    void setDepthBuffer(VkImageView depth);
-    // Both G-buffer inputs at once, one descriptor rewrite.
-    void setGBufferInputs(VkImageView depth, VkImageView velocity);
+    void setCurrentFrame(gpu::Image* currentFrame) { m_currentFrame = currentFrame; }
+    // The G-buffer's depth and velocity (null: none).
+    void setGBufferInputs(gpu::Image* depth, gpu::Image* velocity) {
+        m_depth = depth;
+        m_velocity = velocity;
+    }
     // The transparent pass's coverage (R8, SHADER_READ_ONLY when TAA runs): history weighs less
     // where it is set (sub-project 12, OPEN ruling 15). Null: none bound.
+    // LEGACY(step 4a): the mask is VfxRenderer's, a view until that image is tracked.
     void setTransparencyMask(VkImageView mask);
-    [[nodiscard]] VkImageView depthInput() const noexcept { return m_depthView; }
-    [[nodiscard]] VkImageView velocityInput() const noexcept { return m_velocityView; }
 
     // The current frame's size when it is smaller than the output (onResize's): the resolve upscales.
     void setInputSize(uint32_t width, uint32_t height) noexcept {
@@ -74,9 +74,9 @@ private:
     void writeDescriptorSet(uint32_t slot, uint32_t historyIdx);
 
     // Current frame input
-    VkImageView m_currentFrameView{VK_NULL_HANDLE};
-    VkImageView m_velocityView{VK_NULL_HANDLE};
-    VkImageView m_depthView{VK_NULL_HANDLE};
+    gpu::Image* m_currentFrame{nullptr};
+    gpu::Image* m_velocity{nullptr};
+    gpu::Image* m_depth{nullptr};
     VkImageView m_maskView{VK_NULL_HANDLE};
 
     // Double-buffered history

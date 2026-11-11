@@ -1,5 +1,6 @@
 #include "light_clusters.hpp"
 #include "render/shader_bindings/compute_light_cluster.hpp"
+#include "render/rt/rt_compute.hpp"
 #include "core/log.hpp"
 
 #include <algorithm>
@@ -20,15 +21,6 @@ constexpr VkDeviceSize kClusterBytes =
     VkDeviceSize{shared::kClusterCount} * (1 + shared::kClusterMaxLights) * sizeof(uint32_t);
 constexpr VkDeviceSize kStatsBytes = 4 * sizeof(uint32_t);
 
-void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags src, VkAccessFlags srcAccess, VkPipelineStageFlags dst,
-                   VkAccessFlags dstAccess) {
-    VkMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    b.srcAccessMask = srcAccess;
-    b.dstAccessMask = dstAccess;
-    vkCmdPipelineBarrier(cmd, src, dst, 0, 1, &b, 0, nullptr, 0, nullptr);
-}
-
 shared::LightGpu toGpu(const LightData& l) {
     shared::LightGpu g{};
     std::memcpy(g.position.data(), &l.position, sizeof(g.position));
@@ -44,9 +36,9 @@ LightClusters::~LightClusters() {
     cleanup();
 }
 
-bool LightClusters::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool LightClusters::initialize(VkDevice device, GpuAllocator& allocator) {
     m_device = device;
-    m_physicalDevice = physicalDevice;
+    m_allocator = &allocator;
     const VkDescriptorSetLayoutBinding bindings[] = {shader::layoutBinding(shader::compute_light_cluster::lights),
                                                      shader::layoutBinding(shader::compute_light_cluster::clusters),
                                                      shader::layoutBinding(shader::compute_light_cluster::stats)};
@@ -76,25 +68,19 @@ bool LightClusters::initialize(VkDevice device, VkPhysicalDevice physicalDevice)
         return false;
     }
 
-    // The froxel lists, device-local; counts start at zero so a frame that never builds reads
-    // empty lists.
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = kClusterBytes;
-    bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateBuffer(m_device, &bi, nullptr, &m_clusters.buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(m_device, m_clusters.buffer, &req);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = req.size;
-    ai.memoryTypeIndex = rtc::findMemoryType(m_physicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (vkAllocateMemory(m_device, &ai, nullptr, &m_clusters.memory) != VK_SUCCESS) return false;
-    if (vkBindBufferMemory(m_device, m_clusters.buffer, m_clusters.memory, 0) != VK_SUCCESS) return false;
+    // The froxel lists, device-local.
+    m_clusters = allocator.createBuffer(
+        kClusterBytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        AllocationUsage::GpuOnly);
+    if (!m_clusters.isValid()) return false;
 
-    for (Slot& s : m_slots)
-        if (!rtc::createHostBuffer(m_device, m_physicalDevice, kStatsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, s.stats))
-            return false;
+    for (Slot& s : m_slots) {
+        // Host-coherent memory without a preference, as the shader writes it: in host-cached memory
+        // (AllocationUsage::GpuToCpu) the build measured 0.3 ms, here 0.02.
+        s.stats = allocator.createBuffer(kStatsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::CpuOnly, true);
+        if (!s.stats.isValid() || !s.stats.getMappedData()) return false;
+    }
     return true;
 }
 
@@ -102,14 +88,12 @@ void LightClusters::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
     vkDeviceWaitIdle(m_device);
     for (Slot& s : m_slots) {
-        rtc::destroyHostBuffer(m_device, s.lights);
-        rtc::destroyHostBuffer(m_device, s.stats);
+        m_allocator->retire(s.lights);
+        m_allocator->retire(s.stats);
         s = Slot{};
     }
-    rtc::destroyHostBuffer(m_device, m_captureBuffer);
-    if (m_clusters.buffer) vkDestroyBuffer(m_device, m_clusters.buffer, nullptr);
-    if (m_clusters.memory) vkFreeMemory(m_device, m_clusters.memory, nullptr);
-    m_clusters = {};
+    m_allocator->retire(m_captureBuffer);
+    m_allocator->retire(m_clusters);
     if (m_pipeline) vkDestroyPipeline(m_device, m_pipeline, nullptr);
     if (m_layout) vkDestroyPipelineLayout(m_device, m_layout, nullptr);
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
@@ -137,32 +121,38 @@ void LightClusters::setLights(uint32_t slot, std::span<const LightData> lights, 
     }
     const auto count = static_cast<uint32_t>(n);
     if (version != 0 && s.version == version && s.count == count && s.lights.buffer) return;
-    // The slot's fence was waited on: its frame no longer reads the old buffer.
     if (count > s.capacity || !s.lights.buffer) {
         uint32_t cap = std::max(s.capacity, 64u);
         while (cap < count) cap *= 2;
-        rtc::destroyHostBuffer(m_device, s.lights);
+        m_allocator->retire(s.lights);
         s.capacity = 0;
-        if (!rtc::createHostBuffer(m_device, m_physicalDevice, VkDeviceSize{cap} * sizeof(shared::LightGpu),
-                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, s.lights)) {
+        s.lights = m_allocator->createBuffer(VkDeviceSize{cap} * sizeof(shared::LightGpu),
+                                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::CpuToGpu, true);
+        if (!s.lights.isValid() || !s.lights.getMappedData()) {
             OHAO_LOG(Error, render, "LightClusters: a light buffer of {} lights failed", cap);
+            m_allocator->retire(s.lights);
             s.count = 0;
             return;
         }
         s.capacity = cap;
     }
-    auto* dst = static_cast<shared::LightGpu*>(s.lights.mapped);
+    // The slot's fence was waited on: its frame no longer reads the buffer.
+    auto* dst = static_cast<shared::LightGpu*>(s.lights.getMappedData());
     for (uint32_t i = 0; i < count; ++i) dst[i] = toGpu(lights[i]);
+    m_allocator->flushBuffer(s.lights, 0, VkDeviceSize{count} * sizeof(shared::LightGpu));
     s.count = count;
     s.version = version;
 }
 
-void LightClusters::build(VkCommandBuffer cmd, uint32_t slot, const glm::mat4& view, const glm::mat4& proj,
-                          uint32_t width, uint32_t height, float farPlane, uint64_t frameNumber) {
+void LightClusters::build(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj, uint32_t width,
+                          uint32_t height, float farPlane, uint64_t frameNumber) {
+    render::Timed timed(frame, "lights.cluster");
+    const uint32_t slot = frame.slot;
     if (m_pipeline == VK_NULL_HANDLE || slot >= MAX_FRAMES_IN_FLIGHT) return;
     Slot& s = m_slots[slot];
     if (!s.lights.buffer) return;
     collectSlot(slot);   // the slot's last frame finished at its fence
+    const VkCommandBuffer cmd = frame.cmd;
 
     const float farD = std::max(farPlane, shared::kClusterNear * 2.0f);
     m_sliceScale = static_cast<float>(shared::kClusterSlices) / std::log(farD / shared::kClusterNear);
@@ -177,7 +167,8 @@ void LightClusters::build(VkCommandBuffer cmd, uint32_t slot, const glm::mat4& v
         writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
-    std::memset(s.stats.mapped, 0, kStatsBytes);   // host-coherent; read back after the fence
+    std::memset(s.stats.getMappedData(), 0, kStatsBytes);   // read back after the fence
+    m_allocator->flushBuffer(s.stats);
     s.pending = true;
     s.frame = frameNumber;
 
@@ -187,46 +178,60 @@ void LightClusters::build(VkCommandBuffer cmd, uint32_t slot, const glm::mat4& v
     pc.screen = {static_cast<float>(width), static_cast<float>(height), m_sliceScale, m_sliceBias};
     pc.config = {s.count, 0u, 0u, 0u};
 
-    // The last frame's lighting read the lists before this rewrite (queue order).
-    memoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_SHADER_WRITE_BIT);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &m_sets[slot], 0, nullptr);
-    vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, shared::kClusterCount, 1, 1);
-    memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT);
+    {
+        render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.read(s.lights, render::BufferUse::Storage)
+            .write(m_clusters, render::BufferUse::Storage)
+            .readWrite(s.stats, render::BufferUse::Storage);
+        pass.begin();
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &m_sets[slot], 0, nullptr);
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, shared::kClusterCount, 1, 1);
+    }
+    {
+        render::Pass toHost(frame, nullptr, render::Pass::Transfer);
+        toHost.read(s.stats, render::BufferUse::HostRead);
+        toHost.begin();
+    }
 
     if (m_captureRequested) {
         m_captured = false;
-        if (!m_captureBuffer.buffer &&
-            !rtc::createHostBuffer(m_device, m_physicalDevice, kClusterBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   m_captureBuffer))
-            return;
-        memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-        const VkBufferCopy region{0, 0, kClusterBytes};
-        vkCmdCopyBuffer(cmd, m_clusters.buffer, m_captureBuffer.buffer, 1, &region);
-        memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                      VK_ACCESS_HOST_READ_BIT);
+        if (!m_captureBuffer.buffer) {
+            m_captureBuffer =
+                m_allocator->createBuffer(kClusterBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, AllocationUsage::GpuToCpu, true);
+            if (!m_captureBuffer.isValid() || !m_captureBuffer.getMappedData()) {
+                m_allocator->retire(m_captureBuffer);
+                return;
+            }
+        }
+        {
+            render::Pass copy(frame, nullptr, render::Pass::Transfer);
+            copy.read(m_clusters, render::BufferUse::CopySrc).write(m_captureBuffer, render::BufferUse::CopyDst);
+            copy.begin();
+            const VkBufferCopy region{0, 0, kClusterBytes};
+            vkCmdCopyBuffer(cmd, m_clusters.buffer, m_captureBuffer.buffer, 1, &region);
+        }
+        render::Pass toHost(frame, nullptr, render::Pass::Transfer);
+        toHost.read(m_captureBuffer, render::BufferUse::HostRead);
+        toHost.begin();
         m_captured = true;
     }
 }
 
 void LightClusters::collectSlot(uint32_t slot) {
     Slot& s = m_slots[slot];
-    if (!s.pending || !s.stats.mapped) return;
+    if (!s.pending || !s.stats.getMappedData()) return;
+    m_allocator->invalidateBuffer(s.stats);
     uint32_t words[3];
-    std::memcpy(words, s.stats.mapped, sizeof(words));
+    std::memcpy(words, s.stats.getMappedData(), sizeof(words));
     if (!m_latest || s.frame >= m_latest->frame) m_latest = Overflow{s.frame, words[0], words[1], words[2]};
     s.pending = false;
 }
 
 std::vector<uint32_t> LightClusters::capture() const {
-    if (!m_captured || !m_captureBuffer.mapped) return {};
-    const auto* words = static_cast<const uint32_t*>(m_captureBuffer.mapped);
+    if (!m_captured || !m_captureBuffer.getMappedData()) return {};
+    const auto* words = static_cast<const uint32_t*>(m_captureBuffer.getMappedData());
     return std::vector<uint32_t>(words, words + kClusterBytes / sizeof(uint32_t));
 }
 

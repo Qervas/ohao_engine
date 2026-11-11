@@ -62,7 +62,10 @@ Pass::Pass(const Frame& frame, const char* name, Kind kind) : m_frame(frame), m_
 VkPipelineStageFlags2 Pass::shaderStages() const noexcept {
     switch (m_kind) {
     case Compute: return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    case Raster: return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    case Raster:
+        return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+               (m_meshShaders ? VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT
+                              : VkPipelineStageFlags2{0});
     case RayTracing: return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
     case Transfer: return kTransfer;
     }
@@ -136,8 +139,9 @@ void Pass::buffer(GpuBuffer& buf, VkPipelineStageFlags2 stage, VkAccessFlags2 ac
 }
 
 Pass& Pass::sampled(gpu::Image& img, Sub sub) {
-    image(img, sub, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, shaderStages(), VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false,
-          false);
+    const VkImageLayout layout = gpu::isDepthFormat(img.desc.format) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                                                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image(img, sub, layout, shaderStages(), VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false, false);
     return *this;
 }
 
@@ -233,9 +237,8 @@ Pass& Pass::read(GpuBuffer& buf, BufferUse use) {
     switch (use) {
     case BufferUse::Uniform: buffer(buf, shader, VK_ACCESS_2_UNIFORM_READ_BIT, false); break;
     case BufferUse::Storage: buffer(buf, shader, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, false); break;
-    case BufferUse::Indirect:
-        buffer(buf, m_kind == Compute ? shader : VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, false);
+    case BufferUse::Indirect:   // a draw's or a dispatch's arguments: both are read at DRAW_INDIRECT
+        buffer(buf, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, false);
         break;
     case BufferUse::Vertex:
         buffer(buf, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, false);

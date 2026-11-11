@@ -1,6 +1,8 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/shader_bindings/shadow_shadow_csm.hpp"
 #include "render/frame/frame_resources.hpp"
 #include <array>
@@ -25,7 +27,9 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
-    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
+    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override { record(render::Frame{cmd, nullptr, frameIndex}); }
+    // Every cascade's cull and draw, timed as csm.
+    void record(const render::Frame& frame);
     [[nodiscard]] const char* getName() const override { return "CSMPass"; }
 
     // Configuration
@@ -39,27 +43,22 @@ public:
     void setSplitLambda(float lambda) { m_splitLambda = lambda; }
 
     // render.settings csm: the cascades drawn (1-CASCADE_COUNT) and each one's size (512-4096).
-    // A new size idles the device and rebuilds the shadow map: its views change, so the caller
-    // rebinds them (returns true then). Between frames.
+    // A new size makes a new shadow map (returns true then). Between frames.
     bool configure(uint32_t cascades, uint32_t size);
     [[nodiscard]] uint32_t cascades() const noexcept { return m_cascades; }
     [[nodiscard]] uint32_t size() const noexcept { return m_size; }
 
-    // Get shadow map for sampling
-    [[nodiscard]] VkImageView getShadowMapArrayView() const { return m_shadowMapArrayView; }
+    // The shadow map (a D32 array, one layer per cascade) and the sampler that compares against it.
+    [[nodiscard]] gpu::Image& shadowMap() { return m_shadowMap; }
     [[nodiscard]] VkSampler getShadowSampler() const { return m_shadowSampler; }
-
-    // VkImage handle for render graph import
-    [[nodiscard]] VkImage getShadowMapImage() const { return m_shadowMap; }
 
     // Get cascade data for shader
     [[nodiscard]] const CascadeData& getCascadeData() const { return m_cascadeData; }
-    [[nodiscard]] VkBuffer getCascadeBuffer() const { return m_cascadeBuffer; }
+    [[nodiscard]] GpuBuffer& cascadeBuffer() { return m_cascadeBuffer; }
 
 private:
     [[nodiscard]] bool createShadowMap();
-    [[nodiscard]] bool createRenderPass();
-    [[nodiscard]] bool createFramebuffers();
+    [[nodiscard]] bool createShadowSampler();
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createCascadeBuffer();
     [[nodiscard]] bool createSceneDescriptors();
@@ -69,14 +68,8 @@ private:
     glm::mat4 calculateLightViewProj(uint32_t cascade);
 
     // Shadow map array (one layer per cascade)
-    VkImage m_shadowMap{VK_NULL_HANDLE};
-    VkDeviceMemory m_shadowMapMemory{VK_NULL_HANDLE};
-    VkImageView m_shadowMapArrayView{VK_NULL_HANDLE};
-    std::array<VkImageView, CASCADE_COUNT> m_cascadeViews{};
-    std::array<VkFramebuffer, CASCADE_COUNT> m_framebuffers{};
+    gpu::Image m_shadowMap;
 
-    // Render pass and pipeline
-    VkRenderPass m_renderPass{VK_NULL_HANDLE};
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
 
@@ -84,16 +77,14 @@ private:
     VkSampler m_shadowSampler{VK_NULL_HANDLE};
 
     // Cascade data buffer
-    VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_cascadeBufferMemory{VK_NULL_HANDLE};
-    void* m_cascadeBufferMapped{nullptr};
+    GpuBuffer m_cascadeBuffer;
 
     // Scene the pass draws (owned by VulkanRenderer)
     const render::RenderScene* m_renderScene{nullptr};
     GpuCulling* m_culling{nullptr};
 
     // Set 0: the instance table and the draw table, one set per frame slot, rewritten in
-    // execute(cmd, slot)
+    // record()
     VkDescriptorSetLayout m_sceneLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_scenePool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sceneSets{};
@@ -109,7 +100,6 @@ private:
     float m_splitLambda{0.95f}; // 0.95 = mostly logarithmic
     uint32_t m_cascades{CASCADE_COUNT};
     uint32_t m_size{SHADOW_MAP_SIZE};
-    void destroyShadowMap();   // the image, its views, the framebuffers and the sampler
     std::array<float, CASCADE_COUNT + 1> m_cascadeSplits{};
 
     // Cascade data for shader

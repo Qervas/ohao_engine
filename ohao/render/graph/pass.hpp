@@ -68,8 +68,17 @@ public:
     Pass(const Pass&) = delete;
     Pass& operator=(const Pass&) = delete;
 
+    // A raster pass that also draws with task and mesh shaders (VK_EXT_mesh_shader enabled): they read what its
+    // other shaders read. Before the declarations.
+    Pass& meshShaders(bool on = true) {
+        m_meshShaders = on;
+        return *this;
+    }
+
     // --- images
-    Pass& sampled(gpu::Image& image, Sub sub = {});            // a texture a shader samples
+    // A texture a shader samples. A depth image is sampled in DEPTH_STENCIL_READ_ONLY_OPTIMAL, the layout
+    // depthRead() tests it in; any other in SHADER_READ_ONLY_OPTIMAL.
+    Pass& sampled(gpu::Image& image, Sub sub = {});
     Pass& storageRead(gpu::Image& image, Sub sub = {});
     Pass& storageWrite(gpu::Image& image, Old old = Old::Discard, Sub sub = {});
     Pass& storageReadWrite(gpu::Image& image, Sub sub = {});
@@ -107,6 +116,7 @@ private:
     Frame m_frame;
     const char* m_name;
     Kind m_kind;
+    bool m_meshShaders{false};
     bool m_begun{false};
     bool m_ended{false};
     bool m_rendering{false};

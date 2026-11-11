@@ -20,8 +20,9 @@
 // Lists are compacted by prefix sum (cull/instances.slang): draw (and meshlet) order every
 // run, no atomics. The visibility history is cleared by resetHistory() (a temporal reset) and
 // whenever the draw table changes, so a capture depends only on the frames since its reset.
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
-#include "render/rt/rt_compute.hpp"
+#include "render/graph/pass.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <vulkan/vulkan.h>
@@ -70,11 +71,11 @@ public:
     GpuCulling& operator=(const GpuCulling&) = delete;
 
     // `meshShaders`: VK_EXT_mesh_shader is enabled on the device.
-    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, bool meshShaders);
+    [[nodiscard]] bool initialize(VkDevice device, GpuAllocator& allocator, bool meshShaders);
     void cleanup();
-    // The pyramid follows the frame's size; `depth` is the G-buffer depth view it is built
-    // from (read in DEPTH_STENCIL_READ_ONLY_OPTIMAL). The device must be idle.
-    bool resize(uint32_t width, uint32_t height, VkImageView depth);
+    // The pyramid follows the frame's size; `depth` is the G-buffer depth it is built from. The device
+    // must be idle.
+    bool resize(uint32_t width, uint32_t height, gpu::Image& depth);
 
     void setSettings(const Settings& s) noexcept { m_settings = s; }
     [[nodiscard]] const Settings& settings() const noexcept { return m_settings; }
@@ -83,17 +84,21 @@ public:
     // Forget which draws were visible (the next early pass draws nothing).
     void resetHistory() noexcept { m_historyReset = true; }
 
-    // Start of a frame's culling, outside any render pass: binds the scene's tables to the
-    // slot's set and clears the history when it is stale. False when there is nothing to
-    // draw (no draw table yet): the passes then draw nothing.
-    bool beginFrame(VkCommandBuffer cmd, uint32_t slot, const render::RenderScene& scene);
+    // Start of a frame's culling: binds the scene's tables to the slot's set and clears the
+    // history when it is stale. False when there is nothing to draw (no draw table yet): the
+    // passes then draw nothing.
+    bool beginFrame(const render::Frame& frame, const render::RenderScene& scene);
     // One phase over the draw table into lists firstList.. (listCount: 4 for a G-buffer phase,
     // 1 for a cascade), with the view-projection the draws are rasterized with and the
     // camera's position (the cone test).
-    void cull(VkCommandBuffer cmd, uint32_t phase, uint32_t firstList, uint32_t listCount, const glm::mat4& viewProj,
-              const glm::vec3& camera);
-    // The pyramid of the depth the early pass left (DEPTH_STENCIL_READ_ONLY_OPTIMAL).
-    void buildHiZ(VkCommandBuffer cmd);
+    void cull(const render::Frame& frame, uint32_t phase, uint32_t firstList, uint32_t listCount,
+              const glm::mat4& viewProj, const glm::vec3& camera);
+    // The pyramid of the depth the early pass left.
+    void buildHiZ(const render::Frame& frame);
+    // What a raster pass that draws the lists reads, declared before its begin(): the commands and
+    // their counts; with `meshlets` (the pass draws the meshlet lists too) what the task shader
+    // reads or the fallback's commands.
+    void declareDraws(render::Pass& pass, bool meshlets);
     // vkCmdDrawIndexedIndirectCount over instance list `list` (the caller binds the pipeline,
     // the vertex and index arenas and its sets). Nothing when the frame has no draws.
     void drawList(VkCommandBuffer cmd, uint32_t list) const;
@@ -108,8 +113,8 @@ public:
     // What the G-buffer's meshlet shaders bind: the commands (the task shader reads its draw
     // from them), the pyramid and its shape. A list's first command is at uint
     // list * drawCount() * 5.
-    [[nodiscard]] VkBuffer commandBuffer() const noexcept { return m_commands.buffer; }
-    [[nodiscard]] VkImageView hizView() const noexcept { return m_hiz.view; }
+    [[nodiscard]] GpuBuffer& commands() noexcept { return m_commands; }
+    [[nodiscard]] gpu::Image& hiz() noexcept { return m_hiz; }
     [[nodiscard]] uint32_t hizLevels() const noexcept { return m_hizLevels; }
     // The flags a meshlet test gets in `phase` (kCullFrustum, kCullCone, kCullOcclusion).
     [[nodiscard]] uint32_t meshletFlags(uint32_t phase) const noexcept;
@@ -120,27 +125,21 @@ public:
     [[nodiscard]] Capture capture() const;
 
 private:
-    struct Buffer {
-        VkBuffer buffer{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-    };
     bool ensureCapacity(uint32_t draws, uint32_t entries);
     void destroyBuffers();
     void destroyHiZ();
-    bool createBuffer(VkDeviceSize bytes, VkBufferUsageFlags usage, Buffer& out);
-    void recordCapture(VkCommandBuffer cmd);
+    void recordCapture(const render::Frame& frame);
     // The fallback's meshlet passes for a G-buffer phase: after its draw scatter.
-    void cullMeshlets(VkCommandBuffer cmd, uint32_t phase, const gpu::shared::CullPush& drawPush);
+    void cullMeshlets(const render::Frame& frame, uint32_t phase, const gpu::shared::CullPush& drawPush);
     [[nodiscard]] bool fallbackRuns() const noexcept {
         return !meshShadersActive() && m_settings.geometry != Geometry::Instances && m_entryCount > 0;
     }
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
     Settings m_settings;
     bool m_meshShaderSupported{false};
     PFN_vkCmdDrawMeshTasksIndirectCountEXT m_drawMeshTasksIndirectCount{nullptr};
-    VkPipelineStageFlags m_taskMeshStages{0};   // TASK | MESH when supported, else none
 
     // cull/instances.slang: one set layout for every entry, one set a frame slot
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};
@@ -153,16 +152,15 @@ private:
     // Per draw (m_capacity draws) and per meshlet entry (m_entryCapacity), device-local
     uint32_t m_capacity{0};
     uint32_t m_entryCapacity{0};
-    Buffer m_visibility, m_local, m_blockSums, m_blockOffsets, m_counts, m_commands;
-    Buffer m_meshletLocal, m_meshletCommands;
+    GpuBuffer m_visibility, m_local, m_blockSums, m_blockOffsets, m_counts, m_commands;
+    GpuBuffer m_meshletLocal, m_meshletCommands;
 
-    // The pyramid: R32F, every level, GENERAL; one set a level
-    rtc::Image m_hiz{};
+    // The pyramid: R32F, one set a level
+    gpu::Image m_hiz;
     uint32_t m_hizLevels{0};
-    std::vector<VkImageView> m_hizLevelViews;
     std::vector<std::array<uint32_t, 2>> m_hizSizes;
     uint32_t m_width{0}, m_height{0};
-    VkImageView m_depth{VK_NULL_HANDLE};
+    gpu::Image* m_depth{nullptr};
     VkDescriptorSetLayout m_hizSetLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_hizPool{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> m_hizSets;
@@ -180,7 +178,7 @@ private:
     bool m_captureRequested{false};
 
     // Capture (tests): host-visible copies
-    rtc::HostBuffer m_captureBuffer{};
+    GpuBuffer m_captureBuffer{};
     VkDeviceSize m_captureBytes{0};
     uint32_t m_capturedDraws{0}, m_capturedEntries{0};
     bool m_captured{false};

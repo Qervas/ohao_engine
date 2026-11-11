@@ -67,17 +67,16 @@ void BloomPass::record(const render::Frame& frame) {
     m_executed = false;
     const uint32_t frameIndex = frame.slot;
 
-    if (m_hdrInputView == VK_NULL_HANDLE) return;
+    if (!m_hdrInput || !*m_hdrInput) return;
     if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_inputSets[frameIndex] == VK_NULL_HANDLE) return;
     if (m_inputPipeline == VK_NULL_HANDLE || m_downsamplePipeline == VK_NULL_HANDLE ||
         m_upsamplePipeline == VK_NULL_HANDLE) return;
     if (m_mipLevels == 0 || !m_chain) return;
 
     // This frame slot's input set; its last use was retired by the slot's fence.
-    // LEGACY(step 4a): the lit image is DeferredLightingPass's, not tracked yet.
     VkDescriptorImageInfo imageInfo{};
     imageInfo.sampler = m_sampler;
-    imageInfo.imageView = m_hdrInputView;
+    imageInfo.imageView = m_hdrInput->view;
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -111,6 +110,7 @@ void BloomPass::draw(const render::Frame& frame, uint32_t mip, render::Load load
                      VkPipelineLayout layout, VkDescriptorSet set, const void* params) {
     render::Pass pass(frame, nullptr, render::Pass::Raster);
     // A level samples its neighbour: the one above going down, the one below coming up. Level 0's input is the frame.
+    if (pipeline == m_inputPipeline) pass.sampled(*m_hdrInput);
     if (pipeline == m_downsamplePipeline) pass.sampled(m_chain, {mip - 1, 0});
     if (pipeline == m_upsamplePipeline) pass.sampled(m_chain, {mip + 1, 0});
     pass.color(m_chain, load, {}, mip);
@@ -139,10 +139,6 @@ void BloomPass::onResize(uint32_t width, uint32_t height) {
     if (!createMipChain() || !createDescriptors()) {
         OHAO_LOG(Error, render, "BloomPass: resize to {}x{} failed; bloom disabled", width, height);
     }
-}
-
-void BloomPass::setInputImage(VkImageView hdrInput) {
-    m_hdrInputView = hdrInput;   // written into this frame's input set by record()
 }
 
 bool BloomPass::createMipChain() {

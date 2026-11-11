@@ -72,38 +72,31 @@ void PostProcessingPipeline::cleanup() {
 void PostProcessingPipeline::record(const render::Frame& frame) {
     m_didExecute = false;
 
-    if (m_hdrInputView == VK_NULL_HANDLE) return;
+    if (!m_hdrInput || !*m_hdrInput) return;
 
-    // LEGACY(step 4a): the lit image is DeferredLightingPass's, not tracked yet: sampled undeclared, as its owner
-    // leaves it (SHADER_READ_ONLY).
-    VkImageView currentInput = m_hdrInputView;
-    gpu::Image* tracked = nullptr;   // currentInput's image, once a pass here wrote it
+    gpu::Image* current = m_hdrInput;   // the frame so far: the lit image, then TAA's resolve
 
     // ── 1. Bloom ──────────────────────────────────────────────────────
     float bloomStrength = 0.0f;   // bloom's share of the frame (kBloomStrength when it ran)
     if (m_bloomEnabled && m_bloomPass) {
         render::Timed timed(frame, "post.bloom");
-        m_bloomPass->setInputImage(currentInput);
+        m_bloomPass->setInputImage(current);
         m_bloomPass->record(frame);
         if (m_bloomPass->didExecute()) bloomStrength = kBloomStrength;
     }
 
     // ── 2. TAA (temporal anti-aliasing) ───────────────────────────────
     if (m_taaEnabled && m_taaPass) {
-        m_taaPass->setCurrentFrame(currentInput);
+        m_taaPass->setCurrentFrame(current);
         m_taaPass->record(frame);
-        if (gpu::Image& resolved = m_taaPass->output(); resolved) {
-            tracked = &resolved;
-            currentInput = resolved.view;
-        }
+        if (gpu::Image& resolved = m_taaPass->output(); resolved) current = &resolved;
     }
 
     // ── 3. Auto exposure (a window's): the frame it shows, metered ─────
     const bool metered = m_autoExposureEnabled && m_autoExposure && frame.slot < MAX_FRAMES_IN_FLIGHT;
     if (metered) {
         render::Timed timed(frame, "exposure");
-        m_autoExposure->record(frame, tracked, currentInput, m_sampler, m_width, m_height, m_frameDt,
-                               m_autoExposureSettings);
+        m_autoExposure->record(frame, *current, m_sampler, m_width, m_height, m_frameDt, m_autoExposureSettings);
     }
 
     // ── 4. Tonemapping: HDR → LDR ─────────────────────────────────────
@@ -112,11 +105,12 @@ void PostProcessingPipeline::record(const render::Frame& frame) {
         // Bloom output only when bloom ran this frame; otherwise the image was never
         // written. Strength is 0 then, so any read-only image fills the binding.
         const bool bloomed = bloomStrength > 0.0f;
-        writeTonemapSet(frame.slot, currentInput, bloomed ? m_bloomPass->chain().subView(0, 0) : m_hdrInputView);
+        writeTonemapSet(frame.slot, current->view, bloomed ? m_bloomPass->chain().subView(0, 0) : m_hdrInput->view);
 
         render::Pass pass(frame, "post.tonemap", render::Pass::Raster);
-        if (tracked) pass.sampled(*tracked);
+        pass.sampled(*current);
         if (bloomed) pass.sampled(m_bloomPass->chain(), {0, 0});
+        else pass.sampled(*m_hdrInput);
         pass.read(m_autoExposure->stateBuffer(), render::BufferUse::Storage);
         pass.color(m_output, render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}});
         pass.begin();
@@ -172,28 +166,12 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
         OHAO_LOG(Error, render, "PostProcessingPipeline: the final image failed at {}x{}", width, height);
 }
 
-void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
-    if (m_taaPass) m_taaPass->setDepthBuffer(depth);
-}
-
-void PostProcessingPipeline::setNormalBuffer(VkImageView) {}
-
-void PostProcessingPipeline::setGBufferInputs(VkImageView depth, VkImageView, VkImageView velocity) {
+void PostProcessingPipeline::setGBufferInputs(gpu::Image* depth, gpu::Image* velocity) {
     if (m_taaPass) m_taaPass->setGBufferInputs(depth, velocity);
 }
 
 void PostProcessingPipeline::setTransparencyMask(VkImageView mask) {
     if (m_taaPass) m_taaPass->setTransparencyMask(mask);
-}
-
-PostProcessingPipeline::BoundGBufferInputs PostProcessingPipeline::boundGBufferInputs() const {
-    BoundGBufferInputs b;
-    if (m_taaPass)  { b.taaDepth  = m_taaPass->depthInput();  b.taaVelocity = m_taaPass->velocityInput(); }
-    return b;
-}
-
-void PostProcessingPipeline::setVelocityBuffer(VkImageView velocity) {
-    if (m_taaPass) m_taaPass->setVelocityBuffer(velocity);
 }
 
 void PostProcessingPipeline::setTAABlendFactor(float factor) {
@@ -210,10 +188,6 @@ glm::vec2 PostProcessingPipeline::getJitterOffset(uint32_t frameIndex) const {
         return m_taaPass->getJitterOffset(frameIndex);
     }
     return glm::vec2(0.0f);
-}
-
-void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {
-    m_hdrInputView = hdrInput;
 }
 
 void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, VkImageView bloom) {

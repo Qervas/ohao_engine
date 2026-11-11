@@ -34,23 +34,13 @@ public:
     [[nodiscard]] const char* getName() const override { return "PostProcessingPipeline"; }
 
     // Input configuration
-    // LEGACY(step 4a): the input is DeferredLightingPass's lit image, a view until that image is tracked.
-    void setHDRInput(VkImageView hdrInput);
-    void setDepthBuffer(VkImageView depth);
-    void setNormalBuffer(VkImageView normal);
-    void setVelocityBuffer(VkImageView velocity);
-    // All G-buffer-derived inputs in one step. Call it as soon as the G-buffer is
-    // recreated and before onResize(): every pass that rewrites a descriptor set
-    // must already hold the new views when it does.
-    void setGBufferInputs(VkImageView depth, VkImageView normal, VkImageView velocity);
+    // The lit image the stack starts from.
+    void setHDRInput(gpu::Image* hdrInput) { m_hdrInput = hdrInput; }
+    // The G-buffer's depth and velocity, which TAA reprojects with. Call it as soon as the G-buffer is recreated.
+    void setGBufferInputs(gpu::Image* depth, gpu::Image* velocity);
     // The transparent pass's coverage mask, which TAA's history weighs less under (null: none).
+    // LEGACY(step 4a): the mask is VfxRenderer's, a view until that image is tracked.
     void setTransparencyMask(VkImageView mask);
-
-    // The G-buffer views TAA currently references (null where the pass is absent).
-    struct BoundGBufferInputs {
-        VkImageView taaDepth{VK_NULL_HANDLE}, taaVelocity{VK_NULL_HANDLE};
-    };
-    [[nodiscard]] BoundGBufferInputs boundGBufferInputs() const;
     // Bloom's share of the frame's energy (frontier F2 T4): the display shows (1 - s) frame + s bloom.
     static constexpr float kBloomStrength = 0.04f;
 
@@ -121,7 +111,7 @@ private:
     gpu::Image m_output;   // post.output
 
     // Input views
-    VkImageView m_hdrInputView{VK_NULL_HANDLE};
+    gpu::Image* m_hdrInput{nullptr};
 
     // Dimensions
     uint32_t m_renderWidth{0};   // setRenderSize; 0: the output's
