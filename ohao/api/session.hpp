@@ -197,6 +197,13 @@ struct RenderStats {
         uint64_t late{0};
     };
     std::optional<Audio> audio;
+    // Step 5: what the scene's assets hold on the GPU. Textures: the loaded ones and their pixels' bytes, mips
+    // included. Meshes: the arenas' bytes in use and allocated. BLAS: the live ones and their storage.
+    struct Memory {
+        uint32_t textures{0}, blas{0};
+        uint64_t textureBytes{0}, meshBytes{0}, meshCapacityBytes{0}, blasBytes{0};
+    };
+    Memory memory;
 };
 
 // audio.mix's session overrides (sub-project 11): per bus a level replacing the game's, mute, solo; a

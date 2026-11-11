@@ -41,6 +41,7 @@ struct BlasEntry {
     VkDeviceSize vertexStride = 0;
     uint32_t maxVertex = 0;
     uint32_t primitiveOffset = 0;   // index byte offset
+    VkDeviceSize bytes = 0;         // the structure's storage
     uint32_t firstVertex = 0;
     VkDeviceSize scratchSize = 0;   // max(build, update) scratch
 };
@@ -164,6 +165,17 @@ public:
 
     VkAccelerationStructureKHR getTLAS() const { return m_tlas; }
     uint32_t getBlasCount() const { return static_cast<uint32_t>(m_blasEntries.size()); }
+    // The live BLASes and their storage.
+    struct BlasMemory {
+        uint32_t count{0};
+        VkDeviceSize bytes{0};
+    };
+    BlasMemory blasMemory() const {
+        BlasMemory m;
+        for (const BlasEntry& e : m_blasEntries)
+            if (e.handle != VK_NULL_HANDLE) { ++m.count; m.bytes += e.bytes; }
+        return m;
+    }
     // Device address of a live BLAS; 0 when the handle is unknown or destroyed.
     VkDeviceAddress getBlasAddress(BlasHandle handle) const {
         return handle < m_blasEntries.size() ? m_blasEntries[handle].deviceAddress : 0;

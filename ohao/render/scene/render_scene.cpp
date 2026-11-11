@@ -958,6 +958,19 @@ MaterialSmoothness RenderScene::materialSmoothness(uint32_t materialIndex) const
 bool RenderScene::rtSupported() const noexcept { return m->rt(); }
 RTAccelerationStructure* RenderScene::rtAccel() const noexcept { return m->rt() ? m->rtAccel.get() : nullptr; }
 
+RenderScene::GeometryMemory RenderScene::geometryMemory() const {
+    GeometryMemory g;
+    const MeshRegistry::Memory mm = m->meshes.memory();
+    g.meshBytes = mm.used;
+    g.meshCapacityBytes = mm.capacity;
+    if (const RTAccelerationStructure* rt = rtAccel()) {
+        const auto b = rt->blasMemory();
+        g.blas = b.count;
+        g.blasBytes = b.bytes;
+    }
+    return g;
+}
+
 VkBuffer RenderScene::vertexArena() const { return m->meshes.vertexArena(); }
 VkBuffer RenderScene::indexArena() const { return m->meshes.indexArena(); }
 VkBuffer RenderScene::triangleSlotBuffer() const { return m->meshes.triangleSlotBuffer(); }

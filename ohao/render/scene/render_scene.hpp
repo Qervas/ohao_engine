@@ -182,6 +182,12 @@ public:
     [[nodiscard]] const VfxFrame& vfx() const noexcept;
 
     [[nodiscard]] const RenderSceneStats& stats() const noexcept;
+    // GPU memory the scene's geometry holds: the mesh arenas (in use, allocated) and the live BLASes.
+    struct GeometryMemory {
+        uint64_t meshBytes{0}, meshCapacityBytes{0}, blasBytes{0};
+        uint32_t blas{0};
+    };
+    [[nodiscard]] GeometryMemory geometryMemory() const;
     // TLAS over every slot below the instance high-water mark (custom index = slot;
     // released and invisible slots have mask 0). Built or refit by recordUpdates;
     // VK_NULL_HANDLE before the first build or without RT. The handle changes when

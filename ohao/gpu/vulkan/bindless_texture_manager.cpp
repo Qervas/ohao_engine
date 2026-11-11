@@ -12,6 +12,16 @@
 
 namespace ohao {
 
+namespace {
+// The bytes of a texture's pixels over its mips (every texture is 4 bytes a pixel).
+size_t pixelBytes(const BindlessTextureInfo& t) {
+    size_t bytes = 0;
+    for (uint32_t m = 0; m < t.mipLevels; ++m)
+        bytes += size_t(std::max(1u, t.width >> m)) * std::max(1u, t.height >> m) * 4;
+    return bytes;
+}
+} // namespace
+
 BindlessTextureManager::~BindlessTextureManager() {
     cleanup();
 }
@@ -385,7 +395,7 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(std::string_view path,
     BindlessTextureHandle handle{slot};
     m_pathToHandle[std::string(path)] = handle;
     m_loadedCount++;
-    m_totalMemoryUsage += width * height * 4;  // Approximate
+    m_totalMemoryUsage += pixelBytes(tex);
 
     updateDescriptorSet();
 
@@ -428,7 +438,7 @@ BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(std::span<co
 
     BindlessTextureHandle handle{slot};
     m_loadedCount++;
-    m_totalMemoryUsage += width * height * 4;
+    m_totalMemoryUsage += pixelBytes(tex);
 
     updateDescriptorSet();
 
@@ -600,7 +610,7 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
         vkFreeMemory(m_device, tex.memory, nullptr);
     }
 
-    m_totalMemoryUsage -= tex.width * tex.height * 4;
+    m_totalMemoryUsage -= pixelBytes(tex);
     tex = BindlessTextureInfo{};  // Reset
 
     freeSlot(handle.index);

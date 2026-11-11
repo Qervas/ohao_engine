@@ -45,6 +45,19 @@ public:
     // A skinned mesh's local box (its pose); true when it changed.
     bool setBounds(MeshHandle h, const glm::vec3& mn, const glm::vec3& mx);
     [[nodiscard]] uint32_t count() const noexcept { return static_cast<uint32_t>(m_meshes.size()); }
+    // The arenas' bytes in use (vertices, indices, material slots, meshlets) and allocated.
+    struct Memory {
+        VkDeviceSize used{0}, capacity{0};
+    };
+    [[nodiscard]] Memory memory() const noexcept {
+        Memory m;
+        for (const Arena* a : {&m_vertices, &m_indices, &m_triangleSlots, &m_meshTable, &m_meshlets, &m_meshletVertices,
+                               &m_meshletTriangles}) {
+            m.used += a->used * a->elemSize;
+            m.capacity += a->capacity * a->elemSize;
+        }
+        return m;
+    }
 
     [[nodiscard]] VkBuffer vertexArena() const noexcept { return m_vertices.buf.buffer; }
     [[nodiscard]] VkBuffer indexArena() const noexcept { return m_indices.buf.buffer; }

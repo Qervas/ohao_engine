@@ -176,7 +176,7 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
   few pixels). `--update` only after looking at what drifted (`build/golden_diff/<name>.heat.png` and
   `.crop.png`); never widen a tolerance to make one pass.
 - **Benchmarks** (`tools/bench/`: `render_bench`, `scene_bench`, `serve_bench`, `physics_bench`, `level_bench`,
-  `audio_bench`, `feel_bench`) are tools run by hand, not gates: `<bench> --check tests/bench/<name>_budgets.json`,
+  `audio_bench`, `feel_bench`, `asset_bench.py`) are tools run by hand, not gates: `<bench> --check tests/bench/<name>_budgets.json`,
   results in `build/<bench>.json`. `render_bench --only SCENE` times one scene's passes from GPU timestamps; it is
   the baseline a renderer change is judged by. A budget changes only by Frank's ruling.
 

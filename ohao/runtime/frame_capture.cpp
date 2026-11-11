@@ -363,6 +363,15 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
     if (const auto& k = renderer.renderScene().stats().skinning; k.instances > 0)
         st->skinning = api::RenderStats::Skinning{k.instances, k.skinned, k.vertices, k.blasRefits, k.blasRebuilds};
     if (st) {
+        const render::RenderScene::GeometryMemory g = renderer.renderScene().geometryMemory();
+        st->memory.meshBytes = g.meshBytes;
+        st->memory.meshCapacityBytes = g.meshCapacityBytes;
+        st->memory.blas = g.blas;
+        st->memory.blasBytes = g.blasBytes;
+        if (const BindlessTextureManager* t = renderer.getTextureManager()) {
+            st->memory.textures = t->getLoadedTextureCount();
+            st->memory.textureBytes = t->getTotalMemoryUsage();
+        }
         if (DeferredRenderer* d = renderer.getDeferredRenderer()) {
             // The newest frame's effects: what the last prepare built, and the records the frame drew from.
             const render::VfxFrame& frame = renderer.renderScene().vfx();

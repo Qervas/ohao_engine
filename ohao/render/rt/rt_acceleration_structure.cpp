@@ -272,6 +272,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     entry.primitiveOffset = static_cast<uint32_t>(indexByteOffset);
     entry.firstVertex = firstVertex;
     entry.scratchSize = std::max(sizeInfo.buildScratchSize, sizeInfo.updateScratchSize);
+    entry.bytes = sizeInfo.accelerationStructureSize;
 
     if (!createBuffer(sizeInfo.accelerationStructureSize,
                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |

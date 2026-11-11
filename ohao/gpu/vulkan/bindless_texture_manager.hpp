@@ -152,6 +152,7 @@ public:
             if (m_textures[i - 1].view != VK_NULL_HANDLE) return i;
         return 0;
     }
+    // The bytes of the loaded textures' pixels, mips included (not the views registered from outside).
     [[nodiscard]] size_t getTotalMemoryUsage() const noexcept { return m_totalMemoryUsage; }
     [[nodiscard]] float fillRatio() const noexcept {
         return m_maxTextures == 0 ? 0.f

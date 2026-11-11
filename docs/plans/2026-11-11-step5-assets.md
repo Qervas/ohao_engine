@@ -23,6 +23,19 @@ From a survey of the tree at `c536dafd` and runs on this machine (4060, 2026-11-
   | flat42 (wide), Frank's kit | 0.56 s | 343 MB |
 
   Load time is not what hurts at this content's size; memory and the missing release are.
+- **The baseline** (`tools/bench/asset_bench.py`, 5a: a new `ohao serve` a scene, the second run; GPU bytes from
+  `render.stats`' `memory`):
+
+  | Scene | Loaded | First frame | Textures | Meshes | BLAS | Resident |
+  |---|---|---|---|---|---|---|
+  | play | 16 ms | 0.28 to 0.30 s | 4, 0.0 MB | 1.4 MB | 22, 1.0 MB | 235 MB |
+  | helmet | 7 ms | 0.41 s | 9, 106.7 MB | 1.8 MB | 13, 0.9 MB | 330 MB |
+  | Sponza | 8 ms | 1.23 s | 77, 384.0 MB | 24.9 MB | 3, 14.0 MB | 576 MB |
+  | flat42 | 8 ms | 0.47 s | 16, 112.0 MB | 1.5 MB | 7, 0.7 MB | 329 MB |
+  | kit2k | 45.6 s | 47.9 s | 4, 0.0 MB | 70.8 MB | 40, 53.4 MB | 1,085 MB |
+
+  Texture bytes are the pixels with their mips at 4 bytes each; each count includes the renderer's 4 built-in
+  textures. A scene's first run after a build takes about 2 s longer (the driver's caches).
 - **At a kit's size load time is the problem.** kit2k (`tools/level/kit_level.py`: 2,000 nodes over 40 meshes,
   998,560 triangles, a 28.6 MB GLB, every node a static mesh collider) loads headless in **43.6 s**
   (`ohao level build/kit2k/kit2k.glb`, the whole process, no GPU), at 916 MB resident; the budget is 400 ms. The
@@ -105,9 +118,9 @@ Each by AGENTS.md's "Deciding"; the ones that leave the spec are also under "Spe
 Each is one or a few commits with the hooks green.
 
 - **5a, the baseline.**
-  - `asset_bench`: for the play scene, the helmet, Sponza, flat42 and kit2k, the time from a scene file to its
-    assets resolved (no GPU) and to a first frame, the GPU's texture, mesh and BLAS bytes, and resident memory.
-  - The GPU's bytes by kind in `render.stats` (what the bench reads, and what an agent reads).
+  - `tools/bench/asset_bench.py` (done): for the play scene, the helmet, Sponza, flat42 and kit2k, the time to the
+    scene loaded and to a first frame, the GPU's texture, mesh and BLAS bytes, and resident memory.
+  - The GPU's bytes by kind in `render.stats`' `memory` (done): what the bench reads, and what an agent reads.
   - `tools/level/kit_level.py`: kit2k, generated (done); `level_bench`'s four kit2k numbers measured as they stand.
 - **5b, the cooker and the cache.**
   - `ohao/cook`: a source file imported once, whole, into cooked assets: one per mesh (vertex and index data, the

@@ -5,7 +5,8 @@ triangles (docs/specs/2026-10-26-level-pipeline-design.md, "Performance budgets"
 
 A kit as a level designer places one: each mesh used many times, on a grid, turned and scaled, with no level hint
 (so every node gets the default, a static mesh collider). The meshes are spheres pushed in and out by a few waves,
-each with normals, UVs and a material of its own. Generated, never checked in, never a golden; the same arguments
+each with normals, UVs and a material of its own. A scene file that holds the level, a camera and a sun is written
+beside it (`kit2k.scene.json`; the path must be relative to the project root). Generated, never checked in, never a golden; the same arguments
 give the same bytes.
 """
 import json
@@ -103,6 +104,18 @@ def main(argv):
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     with open(out, 'wb') as f:
         f.write(data)
+    scene = {'format': 'ohao.scene', 'version': 1,
+             'components': {'Camera': 1, 'Level': 1, 'Light': 1, 'Name': 1, 'Transform': 1},
+             'entities': [
+                 {'id': '6b69743200000001', 'Name': {'value': 'MainCamera'},
+                  'Transform': {'position': [0, 6, 14], 'rotation': [-0.2, 0, 0, 0.98]}, 'Camera': {'fovDeg': 70}},
+                 {'id': '6b69743200000002', 'Name': {'value': 'Sun'},
+                  'Transform': {'position': [0, 20, 0], 'rotation': [-0.440377, -0.266729, -0.13885, 0.845957]},
+                  'Light': {'type': 'Directional', 'color': [1, 0.95, 0.85], 'intensity': 3}},
+                 {'id': '6b69743200000003', 'Name': {'value': 'Level'},
+                  'Level': {'asset': {'path': out.replace(os.sep, '/')}}}]}
+    with open(os.path.splitext(out)[0] + '.scene.json', 'w') as f:
+        json.dump(scene, f, indent=2)
     print(json.dumps({'path': out, 'bytes': len(data), 'nodes': opts['--nodes'] + 1, 'meshes': opts['--meshes']}))
 
 
