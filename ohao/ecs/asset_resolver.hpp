@@ -37,11 +37,14 @@ public:
     // Drops whatever is cached of this file (every mesh of it): the next load reads the disk
     // (level.reload). A resolver without a cache has nothing to drop.
     virtual void forget(const AssetRef& ref) { (void)ref; }
+    // Drops everything cached: mapped cooked files go when the last mesh of them does, and the next load of a
+    // source names it by its bytes again (so an edited file cooks). A session does this when its world is replaced.
+    virtual void forgetAll() {}
 };
 
 // Files under a project root. Paths are '/'-separated and relative; absolute paths and
 // paths that leave the root ("../") are rejected. A source file's cooked model stays mapped
-// until forget() or clearCache(), and for as long as a mesh of it is held.
+// until forget() or forgetAll(), and for as long as a mesh of it is held.
 class FileAssetResolver final : public AssetResolver {
 public:
     explicit FileAssetResolver(std::filesystem::path projectRoot);
@@ -54,7 +57,7 @@ public:
     void forget(const AssetRef& ref) override;
 
     [[nodiscard]] const std::filesystem::path& root() const noexcept { return m_root; }
-    void clearCache();
+    void forgetAll() override;
 
 private:
     std::filesystem::path m_root;

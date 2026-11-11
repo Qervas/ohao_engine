@@ -112,12 +112,19 @@ public:
                                                   BindlessTextureType type = BindlessTextureType::Custom,
                                                   bool generateMips = true);
 
-    // The texture of this content, made when nobody has asked for it before: `open` is called only then. Its table
+    // The texture of this content, made when nobody holds it: `open` is called only then. Each call is one hold,
+    // given back with releaseContent. Its table
     // index is good at once; its pixels reach the GPU at the next flushUploads(), which the caller owes before a
     // frame samples it (instantiate flushes once per run). A texture that cannot be opened or made is the type's
     // default (and is asked for again next time).
     [[nodiscard]] ContentTexture contentTexture(const TextureContentKey& key, const std::function<TexturePixels()>& open);
     [[nodiscard]] std::size_t contentTextureCount() const noexcept { return m_byContent.size(); }
+    // Gives back one hold of a contentTexture (a handle that is not one, a default, is ignored). With the last hold
+    // gone the texture leaves the table; its image is destroyed kRetireFrames frames later (onFrameRetired), when
+    // no frame in flight can still sample it. No device wait.
+    void releaseContent(BindlessTextureHandle handle);
+    static constexpr uint32_t kRetireFrames = 3;   // at least the renderer's frames in flight
+    void onFrameRetired();                         // once per frame, after the frame slot's fence wait
     // Uploads the textures still waiting (a load uploads as it goes, one staging buffer and one submit per 64 MB
     // of pixels) and writes the table once.
     void flushUploads();
@@ -229,7 +236,19 @@ private:
     std::vector<uint32_t> m_freeSlots;
     std::unordered_map<std::string, BindlessTextureHandle> m_pathToHandle;
     std::unordered_map<std::string, BindlessTextureHandle> m_nameToHandle;
-    std::map<TextureContentKey, ContentTexture> m_byContent;
+    struct ContentEntry {
+        ContentTexture texture;
+        uint32_t holds{0};
+    };
+    std::map<TextureContentKey, ContentEntry> m_byContent;
+    std::unordered_map<uint32_t, TextureContentKey> m_contentOfSlot;
+    struct RetiredTexture {
+        uint64_t at;     // the frame it may be destroyed in
+        uint32_t slot;
+    };
+    std::vector<RetiredTexture> m_retired;
+    uint64_t m_frame{0};
+    void destroyTexture(uint32_t slot);   // its view and image now, its slot free, the table entry the default's
     struct PendingUpload {
         uint32_t slot;
         TexturePixels pixels;

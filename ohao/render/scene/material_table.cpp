@@ -33,6 +33,9 @@ void MaterialTable::shutdown() {
     m_alphaMode.clear();
     m_emissive.clear();
     m_smoothness.clear();
+    m_isLayered.clear();
+    m_live.clear();
+    m_free.clear();
     m_layered = 0;
     m_dirty.clear();
     m_allocator = nullptr;
@@ -62,7 +65,7 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
 }
 
 MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
-    if (m_packs.size() >= kCapacity) {
+    if (m_free.empty() && m_packs.size() >= kCapacity) {
         static bool logged = false;
         if (!logged) {
             OHAO_LOG(Warn, render, "RenderScene: material table full ({}): further materials use the default material",
@@ -71,22 +74,44 @@ MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
         }
         return MaterialHandle{0, 0};
     }
-    const auto index = static_cast<uint32_t>(m_packs.size());
-    m_packs.push_back(pack(desc));
-    m_doubleSided.push_back(desc.doubleSided ? 1u : 0u);
+    uint32_t index;
+    if (!m_free.empty()) {
+        index = m_free.back();
+        m_free.pop_back();
+    } else {
+        index = static_cast<uint32_t>(m_packs.size());
+        m_packs.emplace_back();
+        m_doubleSided.emplace_back();
+        m_alphaMode.emplace_back();
+        m_smoothness.emplace_back();
+        m_emissive.emplace_back();
+        m_isLayered.emplace_back();
+        m_live.emplace_back();
+    }
+    m_packs[index] = pack(desc);
+    m_doubleSided[index] = desc.doubleSided ? 1u : 0u;
     // A transmissive material (OpenPBR step 3) is drawn by the transparent pass, which refracts the
     // lit frame behind it, and its TLAS instance is non-opaque (rt/alpha_test.slang passes rays by
     // its transmittance): as a blended one on the host. Its table row keeps its own mode.
     const bool transmissive = desc.transmissionWeight > 0.0f && desc.metallic < 1.0f;
-    m_alphaMode.push_back(static_cast<uint8_t>(transmissive && desc.alphaMode == AlphaMode::Opaque ? AlphaMode::Blend
-                                                                                                 : desc.alphaMode));
-    m_smoothness.push_back({desc.roughness, desc.roughTexMin, desc.coatWeight, desc.coatRoughness, desc.coatRoughTexMin,
-                            desc.normalTex != kNoTexture});
-    m_emissive.push_back(desc.emissiveStrength > 0.0f && glm::any(glm::greaterThan(desc.emissionColor, glm::vec3(0.0f))) ? 1u
-                                                                                                                       : 0u);
-    if (layered(desc)) ++m_layered;
+    m_alphaMode[index] = static_cast<uint8_t>(transmissive && desc.alphaMode == AlphaMode::Opaque ? AlphaMode::Blend : desc.alphaMode);
+    m_smoothness[index] = {desc.roughness, desc.roughTexMin, desc.coatWeight, desc.coatRoughness, desc.coatRoughTexMin,
+                           desc.normalTex != kNoTexture};
+    m_emissive[index] = desc.emissiveStrength > 0.0f && glm::any(glm::greaterThan(desc.emissionColor, glm::vec3(0.0f))) ? 1u : 0u;
+    m_isLayered[index] = layered(desc) ? 1u : 0u;
+    m_layered += m_isLayered[index];
+    m_live[index] = 1;
     m_dirty.insert(index);
     return MaterialHandle{index, 0};
+}
+
+void MaterialTable::release(MaterialHandle h) {
+    if (h.index == 0 || h.index >= m_packs.size() || !m_live[h.index]) return;
+    m_live[h.index] = 0;
+    m_layered -= m_isLayered[h.index];
+    m_isLayered[h.index] = 0;
+    m_emissive[h.index] = 0;
+    m_free.push_back(h.index);
 }
 
 void MaterialTable::recordUploads(detail::StagingBatch& batch) {

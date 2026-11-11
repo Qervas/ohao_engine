@@ -67,8 +67,10 @@ MeshHandle uploadMesh(RenderScene& scene, const cooked::Mesh& mesh, std::string_
     return scene.registerMesh(md);
 }
 
-std::vector<MaterialDesc> meshMaterials(BindlessTextureManager* textures, const cooked::Mesh& mesh, const TextureSource& open) {
-    std::vector<MaterialDesc> mats(mesh.materials.size());
+MeshMaterials meshMaterials(BindlessTextureManager* textures, const cooked::Mesh& mesh, const TextureSource& open) {
+    MeshMaterials out;
+    std::vector<MaterialDesc>& mats = out.descs;
+    mats.resize(mesh.materials.size());
     for (std::size_t i = 0; i < mats.size(); ++i) {
         const cooked::Material& in = mesh.materials[i];
         MaterialDesc& d = mats[i];
@@ -115,6 +117,7 @@ std::vector<MaterialDesc> meshMaterials(BindlessTextureManager* textures, const 
                 });
             if (!tex.handle.valid()) continue;
             d.*use.field = tex.handle.index;
+            out.held.push_back(tex.handle.index);
             // Roughness in G: its smallest texel, for caustics' casters.
             if (use.slot == cooked::TextureSlot::RoughMetal) d.roughTexMin = static_cast<float>(tex.channelMin[1]) / 255.0f;
             else if (use.slot == cooked::TextureSlot::CoatRoughness) d.coatRoughTexMin = static_cast<float>(tex.channelMin[1]) / 255.0f;
@@ -124,7 +127,7 @@ std::vector<MaterialDesc> meshMaterials(BindlessTextureManager* textures, const 
         // An emissive texture emits at KHR_materials_emissive_strength (1 without it).
         if (d.emissiveTex != kNoTexture) d.emissiveStrength = in.emissionStrength;
     }
-    return mats;
+    return out;
 }
 
 } // namespace ohao::render

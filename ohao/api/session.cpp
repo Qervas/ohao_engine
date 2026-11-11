@@ -171,6 +171,7 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
         for (auto [e, id] : reg.view<const ecs::EntityId>().each())
             if (!reg.all_of<ecs::Parent>(e)) roots.push_back(e);
         for (const entt::entity e : roots) s.world.destroy(e);   // each subtree
+        if (s.assets) s.assets->forgetAll();   // the old scene's cooked files unmap; the new one reads its sources
         s.time->setFrame(0);
         dropInjected(s);
     }
@@ -740,6 +741,8 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
     out.key("textureBytes"); out.uint64(st->memory.textureBytes);
     out.key("meshBytes"); out.uint64(st->memory.meshBytes);
     out.key("meshCapacityBytes"); out.uint64(st->memory.meshCapacityBytes);
+    out.key("meshes"); out.uint64(st->memory.meshes);
+    out.key("materials"); out.uint64(st->memory.materials);
     out.key("blas"); out.uint64(st->memory.blas);
     out.key("blasBytes"); out.uint64(st->memory.blasBytes);
     out.endObject();
@@ -899,7 +902,7 @@ const std::vector<Method>& methodTable() {
         {{"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
            "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
            "saved; captures default to them. E_STATE on a host that renders nothing."}, renderSettings},
-        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, memory: {textures, textureBytes, meshBytes, meshCapacityBytes, blas, blasBytes}, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
+        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, memory: {textures, textureBytes, meshes, meshBytes, meshCapacityBytes, blas, blasBytes, materials}, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
            "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
            "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."}, renderStats},
         {{"events.read", p.find<EventsReadParams>(), "{events: [{seq, step, event, ...fields}], next, dropped?}",

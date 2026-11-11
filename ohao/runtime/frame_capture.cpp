@@ -367,6 +367,8 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
         st->memory.meshBytes = g.meshBytes;
         st->memory.meshCapacityBytes = g.meshCapacityBytes;
         st->memory.blas = g.blas;
+        st->memory.meshes = g.meshes;
+        st->memory.materials = g.materials;
         st->memory.blasBytes = g.blasBytes;
         if (const BindlessTextureManager* t = renderer.getTextureManager()) {
             st->memory.textures = t->getLoadedTextureCount();

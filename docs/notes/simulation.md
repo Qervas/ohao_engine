@@ -33,7 +33,9 @@ step 2h, 2026-11-09), unchanged.
     all its meshes, and again only when its bytes change). Every consumer (instantiate, physics, animation, audio)
     reads the cooked mesh in place from the file's mapping (`AssetResolver::loadMesh`, a `cooked::Mesh`); a
     material names its textures by their pixels' hash, and a texture is uploaded once whoever uses it
-    (`BindlessTextureManager::contentTexture`). Only glTF and GLB are read. A glTF's node tree,
+    (`BindlessTextureManager::contentTexture`). What a mesh held is given back when its last entity goes: its
+    textures (destroyed after the frames in flight), its materials' table rows and its arena ranges, each for the
+    next load to take (`tools/bench/asset_bench.py --loop N` holds it). Only glTF and GLB are read. A glTF's node tree,
     `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
   - A `Level` component is a level file in the world: the `level` sync system
     (`ohao_level_world`, `level/level_system.hpp`, before `instantiate`) makes one entity per

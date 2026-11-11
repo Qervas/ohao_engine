@@ -209,6 +209,32 @@ Each is one or a few commits with the hooks green.
     (no device wait); the mesh arena reuses released ranges; the manager drops unmapped cooked data.
   - Proven by a load and unload loop that returns GPU and resident memory to its baseline, and a planted leak
     (a texture never released) that the loop catches.
+  - *As built (2026-11-11).*
+    - **Measured first:** `asset_bench.py --loop N` loads Sponza, the helmet and the Cornell box in turn in one
+      engine and compares what the GPU holds at rest with the first rest (`render.stats`' `memory`, which gained
+      `meshes` and `materials`). Before: the textures stayed (448 MB, 70 entries), the mesh arenas grew 26.8 MB a
+      round and the material table 28 rows a round.
+    - **Textures** are held by count (`contentTexture` is one hold, `releaseContent` gives it back). With the
+      last hold gone the entry leaves the table and its image is destroyed three frames later
+      (`BindlessTextureManager::onFrameRetired`, the renderer's tick): no device wait. The freed table entry
+      shows the default until its slot is used again.
+    - **Materials:** a released row is the next `registerMaterial`'s. Instantiate holds a mesh's own materials
+      with the mesh, and counts the entities on each shared material value (an agent that edits a material a
+      thousand times no longer fills the 4,096 rows).
+    - **Meshes:** a released mesh's ranges in the seven arenas and its table index go back three frames after
+      the release (`MeshRegistry::reclaim`, from the scene's retire queue): first fit, free neighbours merged, the
+      arena's end moved back. An index's generation moves when it is reused; what names a mesh by its GPU row
+      asks by index (`infoAt`).
+    - **Cooked files:** a session that replaces its world calls `AssetResolver::forgetAll`: the mappings go with
+      their last mesh, and the next load names each source by its bytes again, so an edited file cooks.
+    - **Result:** after every round, textures 3, meshes 8, BLASes 8, materials 7 and their bytes are the first
+      rest's exactly, over 6 rounds. Resident memory: 222.9 MB at the first rest, 235.5 after round 1, 237.4 to
+      237.9 from round 2 on (261 before the cooked files were dropped). Load times unchanged.
+    - **Planted:** one texture in seven never released: the loop fails (13 textures, 69.3 MB, at every rest).
+    - **A bug the gates caught:** three places looked a mesh up as `MeshHandle{index, 0}`; once an index was
+      reused its generation was 1 and the mesh was not found (`check_analytic`, `check_material` and two goldens
+      failed in the one-process harness; an A/B with reclaim off passed). Fixed with `infoAt`.
+    - **Left:** `unloadTexture` (the environment map's) still waits for the device; 5g's.
 - **5e, compressed textures** (after Frank's approval of the compressor).
   - BC7 for colour, BC5 for normals (the shader rebuilds z), BC6H for the environment, mips from the cooker.
   - Done when texture memory drops by the compression ratio (4x for BC7) and the renders pass the referee.

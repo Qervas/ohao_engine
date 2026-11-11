@@ -41,9 +41,9 @@ public:
     void shutdown();
 
     MeshHandle registerMesh(const MeshData& data);            // uploads + BLAS now (blocking, load time)
-    // The handle becomes stale (meshInfo returns null) and its BLAS is destroyed after
-    // the frames in flight retire. Instances must stop using it first (the ECS extract
-    // releases them when MeshRenderer changes). Arena space is not reused yet.
+    // The handle becomes stale (meshInfo returns null); its BLAS is destroyed and its arena ranges
+    // given to later meshes after the frames in flight retire. Instances must stop using it first
+    // (the ECS extract releases them when MeshRenderer changes).
     void releaseMesh(MeshHandle h);
     // A skinned instance's own mesh (sub-project 10): `base`'s vertices copied into a new range
     // of the arena (its bind pose until a palette is set), its indices and triangle slots
@@ -62,6 +62,8 @@ public:
     // A mesh's vertices as the arena holds them now (blocking: the queue idles). Tests and tools.
     [[nodiscard]] std::vector<Vertex> readMeshVertices(MeshHandle h);
     MaterialHandle registerMaterial(const MaterialDesc& desc);
+    // Gives the material's table row back for the next registerMaterial. No instance may still use it.
+    void releaseMaterial(MaterialHandle h);
     uint32_t createInstance(const InstanceDesc& desc);        // returns slot
     void updateInstance(uint32_t slot, const InstanceDesc& desc);
     void destroyInstance(uint32_t slot);
@@ -182,10 +184,11 @@ public:
     [[nodiscard]] const VfxFrame& vfx() const noexcept;
 
     [[nodiscard]] const RenderSceneStats& stats() const noexcept;
-    // GPU memory the scene's geometry holds: the mesh arenas (in use, allocated) and the live BLASes.
+    // GPU memory the scene's geometry holds: the mesh arenas (in use, allocated), the live meshes and BLASes, and
+    // the materials in the table.
     struct GeometryMemory {
         uint64_t meshBytes{0}, meshCapacityBytes{0}, blasBytes{0};
-        uint32_t blas{0};
+        uint32_t meshes{0}, blas{0}, materials{0};
     };
     [[nodiscard]] GeometryMemory geometryMemory() const;
     // TLAS over every slot below the instance high-water mark (custom index = slot;

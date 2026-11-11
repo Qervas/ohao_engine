@@ -9,6 +9,13 @@ yet) and to its first frame (640x360, deferred: every drawn asset imported, uplo
 at a time; a tool run by hand. The first run after a build is about 2 s slower on every scene (the driver's
 caches): read the second.
 kit2k is generated first when it is missing (tools/level/kit_level.py); flat42 is skipped when it is not staged.
+
+    python tools/bench/asset_bench.py --loop N
+
+One engine loads Sponza, the helmet and the Cornell box in turn, N times, a frame each; after each round, with the
+Cornell box loaded, what the GPU holds (textures, meshes, BLASes, materials, their bytes) must be what it was after
+the first Cornell box, and resident memory must not climb: exit 1 otherwise (docs/plans/2026-11-11-step5-assets.md,
+5d).
 """
 import json
 import os
@@ -55,9 +62,48 @@ def measure(name, scene):
             **memory, "residentBytes": now, "residentPeakBytes": peak}
 
 
+LOOP = ["sponza", "helmet"]
+REST = "assets/scenes/cornell_box.scene.json"
+HELD = ["textures", "textureBytes", "meshes", "meshBytes", "blas", "blasBytes", "materials"]
+RESIDENT_SLACK = 16 << 20   # the allocator's and the driver's own; a leaked Sponza is 250 MB a round
+
+
+def loop(rounds):
+    out = "build/asset_bench/loop"
+    rows = []
+    with Serve(out, ["--log-level", "warn"]) as s:
+        def rest():
+            s.load(REST)
+            for _ in range(4):   # the frames in flight retire what the last scene held
+                s.call("render.capture", {"path": out + "/frame.png", "width": 640, "height": 360})
+            memory = s.call("render.stats", {"passes": False})["memory"]
+            return {**{k: memory[k] for k in HELD}, "residentBytes": resident(s.proc.pid)[0]}
+        rows.append(rest())
+        for _ in range(rounds):
+            for name in LOOP:
+                s.load(SCENES[name])
+                s.call("render.capture", {"path": out + "/frame.png", "width": 640, "height": 360})
+            rows.append(rest())
+    for i, r in enumerate(rows):
+        print("round %2d  textures %3d %7.1f MB  meshes %3d %6.1f MB  blas %3d %6.1f MB  materials %4d  resident %6.1f MB"
+              % (i, r["textures"], r["textureBytes"] / 1048576.0, r["meshes"], r["meshBytes"] / 1048576.0, r["blas"],
+                 r["blasBytes"] / 1048576.0, r["materials"], r["residentBytes"] / 1048576.0))
+    failures = ["%s: %d at rest, %d after round %d" % (k, rows[0][k], r[k], i)
+                for i, r in enumerate(rows) for k in HELD if r[k] != rows[0][k]][:8]
+    # Resident memory settles after the first round (caches fill once): it must not climb from there.
+    if len(rows) > 2 and rows[-1]["residentBytes"] > rows[1]["residentBytes"] + RESIDENT_SLACK:
+        failures.append("resident memory: %.1f MB after round 1, %.1f MB after round %d"
+                        % (rows[1]["residentBytes"] / 1048576.0, rows[-1]["residentBytes"] / 1048576.0, len(rows) - 1))
+    print(json.dumps({"suite": "asset_bench.loop", "passed": 0 if failures else 1, "failed": len(failures),
+                      "failures": failures}))
+    return 1 if failures else 0
+
+
 def main(argv):
     only, out = None, "build/asset_bench.json"
     for i, a in enumerate(argv):
+        if a == "--loop":
+            sys.exit(loop(int(argv[i + 1])))
         if a == "--only":
             only = argv[i + 1].split(",")
         elif a == "--out":

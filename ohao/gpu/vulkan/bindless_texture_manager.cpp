@@ -118,6 +118,8 @@ void BindlessTextureManager::cleanup() {
     m_pathToHandle.clear();
     m_nameToHandle.clear();
     m_byContent.clear();
+    m_contentOfSlot.clear();
+    m_retired.clear();
     m_freeSlots.clear();
     m_loadedCount = 0;
     m_totalMemoryUsage = 0;
@@ -326,7 +328,10 @@ BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(std::span<co
 
 ContentTexture BindlessTextureManager::contentTexture(const TextureContentKey& key,
                                                       const std::function<TexturePixels()>& open) {
-    if (const auto it = m_byContent.find(key); it != m_byContent.end()) return it->second;
+    if (const auto it = m_byContent.find(key); it != m_byContent.end()) {
+        ++it->second.holds;
+        return it->second.texture;
+    }
     TexturePixels px = open();
     const std::size_t n = static_cast<std::size_t>(px.width) * px.height;
     if (n == 0 || px.rgba8.size() < n * 4) return {getDefaultTexture(key.type), {}};
@@ -336,8 +341,58 @@ ContentTexture BindlessTextureManager::contentTexture(const TextureContentKey& k
     const uint32_t slot = addTexture(std::move(px), key.format, key.type, true, key.opaque, {});
     if (slot == UINT32_MAX) return {getDefaultTexture(key.type), made.channelMin};   // not remembered: asked again
     made.handle = BindlessTextureHandle{slot};
-    m_byContent.emplace(key, made);
+    m_byContent.emplace(key, ContentEntry{made, 1});
+    m_contentOfSlot.emplace(slot, key);
     return made;
+}
+
+void BindlessTextureManager::releaseContent(BindlessTextureHandle handle) {
+    const auto slot = m_contentOfSlot.find(handle.index);
+    if (slot == m_contentOfSlot.end()) return;
+    const auto it = m_byContent.find(slot->second);
+    if (it == m_byContent.end() || --it->second.holds > 0) return;
+    m_byContent.erase(it);
+    m_contentOfSlot.erase(slot);
+    std::erase_if(m_pending, [&](const PendingUpload& u) {
+        if (u.slot != handle.index) return false;
+        m_pendingBytes -= static_cast<VkDeviceSize>(u.pixels.width) * u.pixels.height * 4;
+        return true;
+    });
+    m_retired.push_back({m_frame + kRetireFrames, handle.index});
+}
+
+void BindlessTextureManager::onFrameRetired() {
+    ++m_frame;
+    std::erase_if(m_retired, [&](const RetiredTexture& r) {
+        if (r.at > m_frame) return false;
+        destroyTexture(r.slot);
+        return true;
+    });
+}
+
+void BindlessTextureManager::destroyTexture(uint32_t slot) {
+    auto& tex = m_textures[slot];
+    if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(m_device, tex.view, nullptr);
+    if (tex.image != VK_NULL_HANDLE) {
+        GpuImage image{tex.image, tex.allocation};
+        m_allocator.destroyImage(image);
+        m_totalMemoryUsage -= pixelBytes(tex);
+    }
+    tex = BindlessTextureInfo{};
+    freeSlot(slot);
+    m_loadedCount--;
+    // The table's entry must not name a destroyed view: it shows the default until the slot is used again.
+    const VkDescriptorImageInfo white{m_defaultSampler, m_textures[m_defaultWhite.index].view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_descriptorSet;
+    write.dstBinding = kBinding;
+    write.dstArrayElement = slot;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &white;
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
 uint32_t BindlessTextureManager::addTexture(TexturePixels px, VkFormat format, BindlessTextureType type, bool mips,
@@ -614,7 +669,9 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
         else ++it;
     }
 
-    std::erase_if(m_byContent, [&](const auto& entry) { return entry.second.handle == handle; });
+    std::erase_if(m_byContent, [&](const auto& entry) { return entry.second.texture.handle == handle; });
+    m_contentOfSlot.erase(handle.index);
+    std::erase_if(m_retired, [&](const RetiredTexture& r) { return r.slot == handle.index; });
     std::erase_if(m_pending, [&](const PendingUpload& u) { return u.slot == handle.index; });
 
     // Destroy resources

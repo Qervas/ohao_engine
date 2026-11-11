@@ -50,6 +50,9 @@ void MeshRegistry::shutdown() {
         }
     }
     m_meshes.clear();
+    m_generations.clear();
+    m_freeIndices.clear();
+    m_live = 0;
     if (m_ctx.allocator) {
         for (Arena* a : {&m_vertices, &m_indices, &m_triangleSlots, &m_meshTable, &m_meshlets, &m_meshletVertices,
                          &m_meshletTriangles}) {
@@ -95,6 +98,68 @@ bool MeshRegistry::reserve(Arena& a, VkDeviceSize count, VkCommandBuffer cmd,
     a.capacity = newCapacity;
     ++grown;
     return true;
+}
+
+bool MeshRegistry::take(Arena& a, VkDeviceSize count, VkCommandBuffer cmd, std::vector<GpuBuffer>& retired,
+                        uint32_t& grown, uint32_t& first) {
+    first = 0;
+    if (count == 0) return true;
+    for (auto it = a.free.begin(); it != a.free.end(); ++it) {
+        if (it->second < count) continue;
+        first = static_cast<uint32_t>(it->first);
+        const VkDeviceSize rest = it->second - count;
+        a.free.erase(it);
+        if (rest > 0) a.free.emplace(first + count, rest);
+        a.live += count;
+        return true;
+    }
+    if (!reserve(a, count, cmd, retired, grown)) return false;
+    first = static_cast<uint32_t>(a.used);
+    a.used += count;
+    a.live += count;
+    return true;
+}
+
+void MeshRegistry::give(Arena& a, VkDeviceSize first, VkDeviceSize count) {
+    if (count == 0) return;
+    a.live -= count;
+    auto next = a.free.lower_bound(first);
+    if (next != a.free.begin()) {
+        const auto before = std::prev(next);
+        if (before->first + before->second == first) {   // merges with the range before it
+            first = before->first;
+            count += before->second;
+            a.free.erase(before);
+        }
+    }
+    if (next != a.free.end() && first + count == next->first) {   // and with the one after
+        count += next->second;
+        a.free.erase(next);
+    }
+    if (first + count == a.used) a.used = first;   // the arena's end moves back
+    else a.free.emplace(first, count);
+}
+
+bool MeshRegistry::takeIndex(VkCommandBuffer cmd, std::vector<GpuBuffer>& retired, uint32_t& grown, uint32_t& index) {
+    if (!m_freeIndices.empty()) {
+        index = m_freeIndices.back();
+        m_freeIndices.pop_back();
+        return true;
+    }
+    if (!reserve(m_meshTable, 1, cmd, retired, grown)) return false;
+    index = static_cast<uint32_t>(m_meshTable.used++);
+    return true;
+}
+
+MeshHandle MeshRegistry::place(uint32_t index, MeshInfo&& mesh) {
+    if (index >= m_meshes.size()) {
+        m_meshes.resize(index + 1);
+        m_generations.resize(index + 1, 0);
+    }
+    m_meshes[index] = std::move(mesh);
+    ++m_meshTable.live;
+    ++m_live;
+    return MeshHandle{index, m_generations[index]};
 }
 
 VkCommandBuffer MeshRegistry::beginOneShot() {
@@ -154,9 +219,11 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
 
     VkCommandBuffer cmd = beginOneShot();
     if (cmd == VK_NULL_HANDLE) return {};
-    bool ok = reserve(m_vertices, mesh.vertexCount, cmd, retired, grown);
-    ok = ok && reserve(m_meshTable, 1, cmd, retired, grown);
-    ok = ok && reserve(m_meshlets, meshletCount, cmd, retired, grown);
+    uint32_t index = 0, firstCopy = 0;
+    const bool tookVertices = take(m_vertices, mesh.vertexCount, cmd, retired, grown, mesh.vertexOffset);
+    const bool tookMeshlets = tookVertices && take(m_meshlets, meshletCount, cmd, retired, grown, firstCopy);
+    bool ok = tookMeshlets && takeIndex(cmd, retired, grown, index);
+    const bool tookIndex = ok;
     GpuBuffer staging{};
     if (ok) {
         // Growth copies (old -> new) land before these reads of the grown buffers.
@@ -166,15 +233,14 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
         grownBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &grownBarrier,
                              0, nullptr, 0, nullptr);
-        mesh.vertexOffset = static_cast<uint32_t>(m_vertices.used);
-        const VkBufferCopy vCopy{VkDeviceSize{base->vertexOffset} * kVertexStride, m_vertices.used * kVertexStride,
+        const VkBufferCopy vCopy{VkDeviceSize{base->vertexOffset} * kVertexStride,
+                                 VkDeviceSize{mesh.vertexOffset} * kVertexStride,
                                  VkDeviceSize{mesh.vertexCount} * kVertexStride};
         vkCmdCopyBuffer(cmd, m_vertices.buf.buffer, m_vertices.buf.buffer, 1, &vCopy);
-        // Meshlets: the base's, contiguous per mesh (registerMesh appends a mesh's at once).
-        const auto firstCopy = static_cast<uint32_t>(m_meshlets.used);
+        // Meshlets: the base's, one range per mesh (registerMesh places a mesh's at once).
         if (meshletCount > 0) {
             const VkBufferCopy mCopy{VkDeviceSize{baseFirst} * sizeof(gpu::shared::MeshletGpu),
-                                     m_meshlets.used * sizeof(gpu::shared::MeshletGpu),
+                                     VkDeviceSize{firstCopy} * sizeof(gpu::shared::MeshletGpu),
                                      VkDeviceSize{meshletCount} * sizeof(gpu::shared::MeshletGpu)};
             vkCmdCopyBuffer(cmd, m_meshlets.buf.buffer, m_meshlets.buf.buffer, 1, &mCopy);
         }
@@ -182,6 +248,9 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
             if (sm[1] > 0) sm[0] = firstCopy + (sm[0] - baseFirst);
         mesh.firstMeshlet = firstCopy;
         mesh.meshletCount = meshletCount;
+        mesh.meshletRange = {firstCopy, meshletCount};
+        mesh.meshletVertexRange = {};     // the base's
+        mesh.meshletTriangleRange = {};
         const MeshGpu entry{mesh.vertexOffset, mesh.indexOffset, mesh.indexCount, mesh.triangleSlotOffset};
         staging = m_ctx.allocator->createBuffer(sizeof(MeshGpu), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                 AllocationUsage::CpuToGpu, true);
@@ -189,7 +258,7 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
         if (ok) {
             std::memcpy(staging.getMappedData(), &entry, sizeof(entry));
             m_ctx.allocator->flushBuffer(staging);
-            const VkBufferCopy eCopy{0, m_meshTable.used * sizeof(MeshGpu), sizeof(MeshGpu)};
+            const VkBufferCopy eCopy{0, VkDeviceSize{index} * sizeof(MeshGpu), sizeof(MeshGpu)};
             vkCmdCopyBuffer(cmd, staging.buffer, m_meshTable.buf.buffer, 1, &eCopy);
         }
     }
@@ -201,15 +270,14 @@ MeshHandle MeshRegistry::registerSkinnedCopy(MeshHandle baseHandle, std::vector<
                          nullptr, 0, nullptr);
     endOneShot(cmd);
     m_ctx.allocator->destroyBuffer(staging);
-    if (!ok) return {};
-
-    m_vertices.used += mesh.vertexCount;
-    m_meshTable.used += 1;
-    m_meshlets.used += meshletCount;
+    if (!ok) {
+        if (tookVertices) give(m_vertices, mesh.vertexOffset, mesh.vertexCount);
+        if (tookMeshlets) give(m_meshlets, firstCopy, meshletCount);
+        if (tookIndex) m_freeIndices.push_back(index);
+        return {};
+    }
     buildBlas(mesh, true);
-    const auto index = static_cast<uint32_t>(m_meshes.size());
-    m_meshes.push_back(std::move(mesh));
-    return MeshHandle{index, 0};
+    return place(index, std::move(mesh));
 }
 
 MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffer>& retired,
@@ -301,20 +369,28 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         return {};
     }
 
-    bool ok = reserve(m_vertices, vertexCount, cmd, retired, grown);
-    ok = ok && reserve(m_indices, indexCount, cmd, retired, grown);
-    ok = ok && reserve(m_triangleSlots, triangleCount, cmd, retired, grown);
-    ok = ok && reserve(m_meshTable, 1, cmd, retired, grown);
-    ok = ok && reserve(m_meshlets, meshletCount, cmd, retired, grown);
-    ok = ok && reserve(m_meshletVertices, meshletVertexCount, cmd, retired, grown);
-    ok = ok && reserve(m_meshletTriangles, meshletTriangleCount, cmd, retired, grown);
+    // Each range as it is taken, so that a failure gives back exactly what was.
+    uint32_t index = 0, meshletBase = 0, vertexBase = 0, triangleBase = 0;
+    int took = 0;
+    bool ok = true;
+    const auto takeNext = [&](Arena& a, VkDeviceSize count, uint32_t& first) {
+        ok = ok && take(a, count, cmd, retired, grown, first);
+        took += ok ? 1 : 0;
+    };
+    takeNext(m_vertices, vertexCount, mesh.vertexOffset);
+    takeNext(m_indices, indexCount, mesh.indexOffset);
+    takeNext(m_triangleSlots, triangleCount, mesh.triangleSlotOffset);
+    takeNext(m_meshlets, meshletCount, meshletBase);
+    takeNext(m_meshletVertices, meshletVertexCount, vertexBase);
+    takeNext(m_meshletTriangles, meshletTriangleCount, triangleBase);
+    ok = ok && takeIndex(cmd, retired, grown, index);
+    took += ok ? 1 : 0;
 
     if (ok) {
-        mesh.vertexOffset = static_cast<uint32_t>(m_vertices.used);
-        mesh.indexOffset = static_cast<uint32_t>(m_indices.used);
-        mesh.triangleSlotOffset = static_cast<uint32_t>(m_triangleSlots.used);
+        mesh.meshletRange = {meshletBase, meshletCount};
+        mesh.meshletVertexRange = {vertexBase, meshletVertexCount};
+        mesh.meshletTriangleRange = {triangleBase, meshletTriangleCount};
         const MeshGpu entry{mesh.vertexOffset, mesh.indexOffset, mesh.indexCount, mesh.triangleSlotOffset};
-        const auto meshletBase = static_cast<uint32_t>(m_meshlets.used);
         for (auto& sm : submeshMeshlets) sm[0] += meshletBase;
         mesh.submeshMeshlets = std::move(submeshMeshlets);
 
@@ -326,8 +402,6 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         // Meshlets with arena offsets; their vertices stay mesh-local (a draw adds its
         // vertex offset, as for the index arena).
         auto* gpuMeshlets = reinterpret_cast<gpu::shared::MeshletGpu*>(dst + meshletAt);
-        const auto vertexBase = static_cast<uint32_t>(m_meshletVertices.used);
-        const auto triangleBase = static_cast<uint32_t>(m_meshletTriangles.used);
         for (uint32_t i = 0; i < meshletCount; ++i) {
             const Meshlet& s = meshlets.meshlets[i];
             gpu::shared::MeshletGpu g{};
@@ -342,26 +416,26 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         m_ctx.allocator->flushBuffer(staging);
 
         // Growth copies (old -> new) and these writes touch disjoint ranges.
-        const VkBufferCopy vCopy{0, m_vertices.used * kVertexStride, vBytes};
+        const VkBufferCopy vCopy{0, VkDeviceSize{mesh.vertexOffset} * kVertexStride, vBytes};
         vkCmdCopyBuffer(cmd, staging.buffer, m_vertices.buf.buffer, 1, &vCopy);
-        const VkBufferCopy iCopy{vBytes, m_indices.used * sizeof(uint32_t), iBytes};
+        const VkBufferCopy iCopy{vBytes, VkDeviceSize{mesh.indexOffset} * sizeof(uint32_t), iBytes};
         vkCmdCopyBuffer(cmd, staging.buffer, m_indices.buf.buffer, 1, &iCopy);
         if (tBytes) {
-            const VkBufferCopy tCopy{vBytes + iBytes, m_triangleSlots.used * sizeof(uint32_t), tBytes};
+            const VkBufferCopy tCopy{vBytes + iBytes, VkDeviceSize{mesh.triangleSlotOffset} * sizeof(uint32_t), tBytes};
             vkCmdCopyBuffer(cmd, staging.buffer, m_triangleSlots.buf.buffer, 1, &tCopy);
         }
-        const VkBufferCopy eCopy{vBytes + iBytes + tBytes, m_meshTable.used * sizeof(MeshGpu), eBytes};
+        const VkBufferCopy eCopy{vBytes + iBytes + tBytes, VkDeviceSize{index} * sizeof(MeshGpu), eBytes};
         vkCmdCopyBuffer(cmd, staging.buffer, m_meshTable.buf.buffer, 1, &eCopy);
         if (mBytes) {
-            const VkBufferCopy mCopy{meshletAt, m_meshlets.used * sizeof(gpu::shared::MeshletGpu), mBytes};
+            const VkBufferCopy mCopy{meshletAt, VkDeviceSize{meshletBase} * sizeof(gpu::shared::MeshletGpu), mBytes};
             vkCmdCopyBuffer(cmd, staging.buffer, m_meshlets.buf.buffer, 1, &mCopy);
         }
         if (mvBytes) {
-            const VkBufferCopy mvCopy{meshletAt + mBytes, m_meshletVertices.used * sizeof(uint32_t), mvBytes};
+            const VkBufferCopy mvCopy{meshletAt + mBytes, VkDeviceSize{vertexBase} * sizeof(uint32_t), mvBytes};
             vkCmdCopyBuffer(cmd, staging.buffer, m_meshletVertices.buf.buffer, 1, &mvCopy);
         }
         if (mtBytes) {
-            const VkBufferCopy mtCopy{meshletAt + mBytes + mvBytes, m_meshletTriangles.used * sizeof(uint32_t), mtBytes};
+            const VkBufferCopy mtCopy{meshletAt + mBytes + mvBytes, VkDeviceSize{triangleBase} * sizeof(uint32_t), mtBytes};
             vkCmdCopyBuffer(cmd, staging.buffer, m_meshletTriangles.buf.buffer, 1, &mtCopy);
         }
     }
@@ -375,23 +449,21 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
     endOneShot(cmd);
     m_ctx.allocator->destroyBuffer(staging);
-    if (!ok) return {};
-
-    m_vertices.used += vertexCount;
-    m_indices.used += indexCount;
-    m_triangleSlots.used += triangleCount;
-    m_meshTable.used += 1;
-    m_meshlets.used += meshletCount;
-    m_meshletVertices.used += meshletVertexCount;
-    m_meshletTriangles.used += meshletTriangleCount;
+    if (!ok) {
+        if (took > 0) give(m_vertices, mesh.vertexOffset, vertexCount);
+        if (took > 1) give(m_indices, mesh.indexOffset, indexCount);
+        if (took > 2) give(m_triangleSlots, mesh.triangleSlotOffset, triangleCount);
+        if (took > 3) give(m_meshlets, meshletBase, meshletCount);
+        if (took > 4) give(m_meshletVertices, vertexBase, meshletVertexCount);
+        if (took > 5) give(m_meshletTriangles, triangleBase, meshletTriangleCount);
+        if (took > 6) m_freeIndices.push_back(index);
+        return {};
+    }
 
     // A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so
     // existing BLASes survive arena growth untouched.
     buildBlas(mesh);
-
-    const auto index = static_cast<uint32_t>(m_meshes.size());
-    m_meshes.push_back(std::move(mesh));
-    return MeshHandle{index, 0};
+    return place(index, std::move(mesh));
 }
 
 BlasHandle MeshRegistry::release(MeshHandle h) {
@@ -404,7 +476,26 @@ BlasHandle MeshRegistry::release(MeshHandle h) {
     mesh.submeshes.shrink_to_fit();
     mesh.submeshMeshlets.clear();
     mesh.submeshMeshlets.shrink_to_fit();
+    --m_live;
     return blas;
+}
+
+void MeshRegistry::reclaim(uint32_t index) {
+    if (index >= m_meshes.size() || !m_meshes[index].released || m_meshes[index].vertexCount == 0) return;
+    MeshInfo& mesh = m_meshes[index];
+    give(m_vertices, mesh.vertexOffset, mesh.vertexCount);
+    give(m_meshlets, mesh.meshletRange[0], mesh.meshletRange[1]);
+    if (!mesh.skinned) {   // a skinned copy's indices, slots and meshlet data are its base's
+        give(m_indices, mesh.indexOffset, mesh.indexCount);
+        give(m_triangleSlots, mesh.triangleSlotOffset, mesh.indexCount / 3);
+        give(m_meshletVertices, mesh.meshletVertexRange[0], mesh.meshletVertexRange[1]);
+        give(m_meshletTriangles, mesh.meshletTriangleRange[0], mesh.meshletTriangleRange[1]);
+    }
+    mesh = MeshInfo{};
+    mesh.released = true;   // vertexCount 0: reclaimed
+    --m_meshTable.live;
+    ++m_generations[index];
+    m_freeIndices.push_back(index);
 }
 
 std::vector<Vertex> MeshRegistry::readVertices(MeshHandle h) {
@@ -454,7 +545,8 @@ bool MeshRegistry::setBounds(MeshHandle h, const glm::vec3& mn, const glm::vec3&
 }
 
 const MeshInfo* MeshRegistry::info(MeshHandle h) const {
-    if (!h.valid() || h.index >= m_meshes.size() || h.generation != 0 || m_meshes[h.index].released) return nullptr;
+    if (!h.valid() || h.index >= m_meshes.size() || h.generation != m_generations[h.index] || m_meshes[h.index].released)
+        return nullptr;
     return &m_meshes[h.index];
 }
 

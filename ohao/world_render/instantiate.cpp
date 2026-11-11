@@ -124,8 +124,9 @@ public:
         m_reg.on_construct<Material>().disconnect(this);
         m_reg.on_update<Material>().disconnect(this);
         m_reg.on_destroy<Material>().disconnect(this);
-        // The World is going away: release every mesh it still holds.
-        for (auto& [key, entry] : m_meshes) m_scene.releaseMesh(entry.mesh);
+        // The World is going away: give back every mesh, material and texture it still holds.
+        for (auto& [key, entry] : m_meshes) release(entry);
+        for (auto& [key, shared] : m_materials) m_scene.releaseMaterial(shared.handle);
     }
 
     void run() {
@@ -133,6 +134,7 @@ public:
         // what instantiate made from an entity that lives on.
         for (const entt::entity e : m_sourceGone) {
             dropUser(e);
+            dropMaterial(e);
             if (m_reg.valid(e) && !m_reg.all_of<MeshSource>(e)) clearDerived(e);
         }
         m_sourceGone.clear();
@@ -159,8 +161,17 @@ private:
     struct MeshEntry {
         render::MeshHandle mesh;
         std::vector<render::MaterialHandle> modelMaterials;   // non-empty: the model has materials
+        std::vector<uint32_t> textures;                       // one hold per texture those materials use
         uint32_t users{0};
     };
+
+    // What a mesh entry holds in the renderer, given back.
+    void release(const MeshEntry& entry) {
+        m_scene.releaseMesh(entry.mesh);
+        for (const render::MaterialHandle h : entry.modelMaterials) m_scene.releaseMaterial(h);
+        if (m_textures)
+            for (const uint32_t t : entry.textures) m_textures->releaseContent(BindlessTextureHandle{t});
+    }
 
     void instantiate(entt::entity e, const MeshSource& ms) {
         std::string key = meshKey(ms);
@@ -181,9 +192,10 @@ private:
             if (!entry.mesh.valid())
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' could not be uploaded to the render scene");
             // The mesh's own materials, their textures by content from the cooked cache.
-            for (const render::MaterialDesc& d : render::meshMaterials(
-                     m_textures, *mesh, [this](const ContentHash& name) { return m_assets.texture(name); }))
-                entry.modelMaterials.push_back(m_scene.registerMaterial(d));
+            render::MeshMaterials own = render::meshMaterials(
+                m_textures, *mesh, [this](const ContentHash& name) { return m_assets.texture(name); });
+            for (const render::MaterialDesc& d : own.descs) entry.modelMaterials.push_back(m_scene.registerMaterial(d));
+            entry.textures = std::move(own.held);
             it = m_meshes.emplace(std::move(key), std::move(entry)).first;
         }
         MeshEntry& entry = it->second;
@@ -195,17 +207,26 @@ private:
             m_userOf[e] = it->first;
         }
 
-        const auto* overrideMat = m_reg.try_get<Material>(e);
-        const render::MaterialDesc desc = overrideMat ? describe(*overrideMat) : render::MaterialDesc{};
-        std::vector<render::MaterialHandle> materials =
-            entry.modelMaterials.empty() ? std::vector<render::MaterialHandle>{material(desc)} : entry.modelMaterials;
+        // A mesh without materials of its own takes the entity's (or the default's values): one table row per
+        // distinct value, held by the entities that use it.
+        std::vector<render::MaterialHandle> materials = entry.modelMaterials;
+        if (materials.empty()) {
+            const auto* overrideMat = m_reg.try_get<Material>(e);
+            const MaterialKey shared = keyOf(overrideMat ? describe(*overrideMat) : render::MaterialDesc{});
+            materials.push_back(hold(shared, overrideMat ? describe(*overrideMat) : render::MaterialDesc{}));
+            dropMaterial(e);   // after the hold: the same value keeps its row
+            m_materialOf.emplace(e, shared);
+        } else {
+            dropMaterial(e);
+        }
         const auto* previous = m_reg.try_get<MeshRenderer>(e);
         const bool visible = previous ? previous->visible : true;
         m_reg.emplace_or_replace<MeshRenderer>(e, MeshRenderer{entry.mesh, std::move(materials), visible});
         m_reg.remove<InstantiateError>(e);
     }
 
-    render::MaterialHandle material(const render::MaterialDesc& d) {
+    using MaterialKey = std::array<uint32_t, 53>;   // keyOf's values, one each
+    static MaterialKey keyOf(const render::MaterialDesc& d) {
         // Every value a scene material sets, bit for bit: two materials differing in any of them
         // are two table entries.
         const float values[] = {d.baseColor.r, d.baseColor.g, d.baseColor.b, d.roughness, d.metallic,
@@ -225,10 +246,24 @@ private:
         static_assert(std::size(values) == std::tuple_size_v<MaterialKey>, "a key holds every value");
         MaterialKey key{};
         for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);
-        if (const auto it = m_materials.find(key); it != m_materials.end()) return it->second;
-        const render::MaterialHandle h = m_scene.registerMaterial(d);
-        m_materials.emplace(key, h);
-        return h;
+        return key;
+    }
+
+    render::MaterialHandle hold(const MaterialKey& key, const render::MaterialDesc& d) {
+        auto it = m_materials.find(key);
+        if (it == m_materials.end()) it = m_materials.emplace(key, SharedMaterial{m_scene.registerMaterial(d), 0}).first;
+        ++it->second.users;
+        return it->second.handle;
+    }
+
+    void dropMaterial(entt::entity e) {
+        const auto of = m_materialOf.find(e);
+        if (of == m_materialOf.end()) return;
+        const auto it = m_materials.find(of->second);
+        m_materialOf.erase(of);
+        if (it == m_materials.end() || --it->second.users > 0) return;
+        m_scene.releaseMaterial(it->second.handle);
+        m_materials.erase(it);
     }
 
     void fail(entt::entity e, const std::string& code, const std::string& message) {
@@ -242,6 +277,7 @@ private:
 
     // What instantiate put on the entity.
     void clearDerived(entt::entity e) {
+        dropMaterial(e);
         m_reg.remove<MeshRenderer>(e);
         m_reg.remove<InstantiateError>(e);
     }
@@ -252,7 +288,7 @@ private:
         const auto it = m_meshes.find(user->second);
         m_userOf.erase(user);
         if (it == m_meshes.end() || --it->second.users > 0) return;
-        m_scene.releaseMesh(it->second.mesh);
+        release(it->second);
         m_meshes.erase(it);
     }
 
@@ -268,8 +304,12 @@ private:
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
-    using MaterialKey = std::array<uint32_t, 53>;   // material()'s values, one each
-    std::map<MaterialKey, render::MaterialHandle> m_materials;
+    struct SharedMaterial {
+        render::MaterialHandle handle;
+        uint32_t users;
+    };
+    std::map<MaterialKey, SharedMaterial> m_materials;
+    ankerl::unordered_dense::map<entt::entity, MaterialKey> m_materialOf;
     std::vector<entt::entity> m_sourceGone, m_overrideGone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;
     std::unordered_set<std::string> m_logged;

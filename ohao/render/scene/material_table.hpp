@@ -26,6 +26,11 @@ public:
     // Full table: logs and returns the default material.
     MaterialHandle add(const MaterialDesc& desc);
     [[nodiscard]] uint32_t count() const noexcept { return static_cast<uint32_t>(m_packs.size()); }
+    // Gives a material's row back: the next add takes it. The default (index 0) is never released. The caller has
+    // taken the material off every instance first; a frame already submitted read the row before any rewrite of
+    // it (the table is written by copies recorded in a later frame's commands).
+    void release(MaterialHandle h);
+    [[nodiscard]] uint32_t liveCount() const noexcept { return count() - static_cast<uint32_t>(m_free.size()); }
     [[nodiscard]] bool doubleSided(uint32_t index) const noexcept {
         return index >= m_doubleSided.size() || m_doubleSided[index] != 0;
     }
@@ -66,7 +71,10 @@ private:
     std::vector<uint8_t> m_alphaMode;     // host only: AlphaMode
     std::vector<uint8_t> m_emissive;      // host only: emits
     std::vector<MaterialSmoothness> m_smoothness;   // host only: caustics' casters
+    std::vector<uint8_t> m_isLayered;     // host only: layered(), counted in m_layered
     uint32_t m_layered{0};                // materials with layers (layered())
+    std::vector<uint32_t> m_free;         // released rows
+    std::vector<uint8_t> m_live;
     std::set<uint32_t> m_dirty;
 };
 

@@ -52,7 +52,10 @@ struct RenderScene::Impl {
 
     // A retired entry holds a buffer, TLAS storage / scratch, or a released mesh's BLAS
     // (RT only).
-    struct Retired { uint64_t retireAt; GpuBuffer buf; RetiredTlas tlas; BlasHandle blas{INVALID_BLAS}; };
+    struct Retired {
+        uint64_t retireAt; GpuBuffer buf; RetiredTlas tlas; BlasHandle blas{INVALID_BLAS};
+        uint32_t mesh{UINT32_MAX};   // a released mesh: its arena ranges and index go back to the registry
+    };
     std::vector<Retired> retireQueue;
     uint64_t frameCounter{0};
 
@@ -126,6 +129,7 @@ struct RenderScene::Impl {
         if (rtAccel && (r.tlas.as != VK_NULL_HANDLE || r.tlas.buffer != VK_NULL_HANDLE))
             rtAccel->destroyRetired(r.tlas);
         if (rtAccel && r.blas != INVALID_BLAS) rtAccel->destroyBLAS(r.blas);
+        if (r.mesh != UINT32_MAX) meshes.reclaim(r.mesh);
     }
 
     [[nodiscard]] GpuBuffer createTlasInstanceBuffer(uint32_t capacity) {
@@ -145,7 +149,7 @@ struct RenderScene::Impl {
         if (slot >= tlasHost.size())
             tlasHost.resize(std::max<std::size_t>(slot + 1, tlasHost.size() * 2), VkAccelerationStructureInstanceKHR{});
         const InstanceGpu& g = instances.gpu(slot);
-        const MeshInfo* mesh = meshes.info(MeshHandle{g.mesh, 0});
+        const MeshInfo* mesh = meshes.infoAt(g.mesh);
 
         VkAccelerationStructureInstanceKHR vi{};
         const glm::mat4 rowMajor = glm::transpose(g.world);   // rows 0..2 = the 3x4 matrix
@@ -287,7 +291,7 @@ struct RenderScene::Impl {
             if (!instances.live(slot)) continue;
             const InstanceGpu& g = instances.gpu(slot);
             if ((g.flags & kInstanceVisible) == 0) continue;
-            const MeshInfo* mesh = meshes.info(MeshHandle{g.mesh, 0});
+            const MeshInfo* mesh = meshes.infoAt(g.mesh);
             if (!mesh) continue;
             for (std::size_t s = 0; s < mesh->submeshes.size(); ++s) {
                 const SubmeshDesc& sub = mesh->submeshes[s];
@@ -560,10 +564,11 @@ MeshHandle RenderScene::registerMesh(const MeshData& data) {
 
 void RenderScene::releaseMesh(MeshHandle h) {
     if (!m->initialized) return;
-    // Frames in flight may still trace the BLAS: it is destroyed once they retire.
+    if (!m->meshes.info(h)) return;
+    // Frames in flight may still trace the BLAS and draw the arenas' ranges: the BLAS is destroyed and the ranges
+    // given back once they retire.
     const BlasHandle blas = m->meshes.release(h);
-    if (blas != INVALID_BLAS)
-        m->retireQueue.push_back(Impl::Retired{m->frameCounter + MAX_FRAMES_IN_FLIGHT, GpuBuffer{}, {}, blas});
+    m->retireQueue.push_back(Impl::Retired{m->frameCounter + MAX_FRAMES_IN_FLIGHT, GpuBuffer{}, {}, blas, h.index});
     m->skinned.erase(h.index);
     m->stats.skinning.instances = static_cast<uint32_t>(m->skinned.size());
 }
@@ -700,6 +705,10 @@ MaterialHandle RenderScene::registerMaterial(const MaterialDesc& desc) {
     return m->materials.add(desc);
 }
 
+void RenderScene::releaseMaterial(MaterialHandle h) {
+    if (m->initialized) m->materials.release(h);
+}
+
 uint32_t RenderScene::createInstance(const InstanceDesc& desc) {
     if (!m->initialized) return kInvalidIndex;
     if (!m->meshes.info(desc.mesh)) {
@@ -776,7 +785,7 @@ std::vector<RenderScene::EmissiveInstance> RenderScene::emissiveInstances() cons
     if (!m->initialized) return out;
     out.reserve(m->emissiveSlots.size());
     for (const uint32_t slot : m->emissiveSlots) {
-        const MeshInfo* mesh = m->meshes.info(MeshHandle{m->instances.gpu(slot).mesh, 0});
+        const MeshInfo* mesh = m->meshes.infoAt(m->instances.gpu(slot).mesh);
         if (mesh && mesh->indexCount >= 3) out.push_back({slot, mesh->indexCount / 3});
     }
     return out;
@@ -963,6 +972,8 @@ RenderScene::GeometryMemory RenderScene::geometryMemory() const {
     const MeshRegistry::Memory mm = m->meshes.memory();
     g.meshBytes = mm.used;
     g.meshCapacityBytes = mm.capacity;
+    g.meshes = m->meshes.liveCount();
+    g.materials = m->materials.liveCount();
     if (const RTAccelerationStructure* rt = rtAccel()) {
         const auto b = rt->blasMemory();
         g.blas = b.count;

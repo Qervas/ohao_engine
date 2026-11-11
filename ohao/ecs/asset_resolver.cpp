@@ -73,7 +73,7 @@ Result<cooked::Texture> FileAssetResolver::texture(const ContentHash& key) const
     return cooked::openTexture(m_cache.texture(key));
 }
 
-void FileAssetResolver::clearCache() {
+void FileAssetResolver::forgetAll() {
     std::lock_guard lock(m_mutex);
     m_files.clear();
 }

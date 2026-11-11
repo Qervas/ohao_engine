@@ -221,6 +221,9 @@ struct MeshInfo {
     bool skinned{false};
     uint32_t baseVertexOffset{0};   // the base mesh's first vertex (the bind pose the pass reads)
     uint32_t firstMeshlet{0}, meshletCount{0};   // its own meshlet copies, all submeshes
+    // What the mesh owns in the meshlet arenas, {first, count} each (a skinned copy owns its meshlets only): given
+    // back with its vertices and indices when the released mesh is reclaimed (MeshRegistry::reclaim).
+    std::array<uint32_t, 2> meshletRange{}, meshletVertexRange{}, meshletTriangleRange{};
 };
 
 // A skinned mesh's BLAS is refit while its pose changes and rebuilt after this many refits (the
