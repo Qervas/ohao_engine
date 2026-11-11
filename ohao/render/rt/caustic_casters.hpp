@@ -37,9 +37,6 @@ struct MaterialSmoothness {
 [[nodiscard]] bool baseCanBeSmooth(const MaterialSmoothness& m, float cut);
 [[nodiscard]] bool coatCanBeSmooth(const MaterialSmoothness& m, float cut);
 
-// The smallest value of one channel of an RGBA8 image, over 255.
-[[nodiscard]] float textureChannelMin(std::span<const uint8_t> rgba, int width, int height, int channel);
-
 // A draw whose material can be smooth: its world bounds and the instance it belongs to (a caster is
 // an instance; its draws' bounds are merged).
 struct CausticCasterInput {

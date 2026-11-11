@@ -100,6 +100,6 @@ void skinPalette(const Skeleton& skeleton, std::span<const glm::mat4> model, std
 
 // A mesh's bone order (ModelLoader's bone names) to the skeleton's joints, by name; -1 for a bone
 // that names no joint.
-[[nodiscard]] std::vector<int> boneToJointMap(const Skeleton& skeleton, std::span<const std::string> boneNames);
+[[nodiscard]] std::vector<int> boneToJointMap(const Skeleton& skeleton, std::span<const std::string_view> boneNames);
 
 } // namespace ohao::anim

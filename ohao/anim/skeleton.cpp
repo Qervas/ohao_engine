@@ -179,7 +179,7 @@ void skinPalette(const Skeleton& skeleton, std::span<const glm::mat4> model, std
     }
 }
 
-std::vector<int> boneToJointMap(const Skeleton& skeleton, std::span<const std::string> boneNames) {
+std::vector<int> boneToJointMap(const Skeleton& skeleton, std::span<const std::string_view> boneNames) {
     std::vector<int> map(boneNames.size(), -1);
     for (std::size_t b = 0; b < boneNames.size(); ++b) map[b] = skeleton.find(boneNames[b]);
     return map;

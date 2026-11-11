@@ -292,7 +292,7 @@ std::string hexId(uint64_t id) {
     return w.str().substr(1, 16);
 }
 
-// W_UNSAVEABLE_MESH: a mesh made in code (spawnModel) has no MeshSource, so the file
+// W_UNSAVEABLE_MESH: a MeshRenderer put on an entity in code has no MeshSource, so the file
 // cannot rebuild it. `order` is the saved entities in file order.
 void unsaveableMeshes(const World& world, const std::vector<std::pair<uint64_t, entt::entity>>& order,
                       SaveReport& report) {

@@ -8,7 +8,7 @@
 #include "vfx/tracer_math.hpp"
 
 #include "render/scene/render_scene.hpp"
-#include "asset/model.hpp"
+#include "asset/vertex.hpp"
 #include "vfx/particle_math.hpp"
 #include "core/log.hpp"
 

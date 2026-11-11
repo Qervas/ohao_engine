@@ -171,7 +171,7 @@ Rendering needs a GPU. The first capture starts the renderer (a second or so); `
 the result includes that. A capture renders `--frames` frames from a reset and keeps the
 last: by default 1 deferred frame (10 with TAA) or `--spp` path-traced ones. The hybrid's
 RT GI keeps a history, so give `--frames` (about 10) for converged indirect light. Without
-`--post` no post effect is on; `model_viewer` turns on `--post taa,bloom --ev100 0`.
+`--post` no post effect is on.
 `--hud` (`render.capture {hud: true}`) draws the game's HUDs over a deferred frame (the slice's: the
 player's health, ammunition and crosshair, the hit marker, the damage vignette, the round's
 end). Without it no capture has a HUD.
@@ -415,7 +415,7 @@ that id.
 | `Transform` | Local position, rotation (quaternion `[x, y, z, w]`), scale, relative to the parent. |
 | `Parent` | The parent entity's id. |
 | `Light` | Point, Directional, Spot or AreaRect light; direction is the entity's −Z. |
-| `MeshSource` | Where the mesh comes from: `ModelAsset` (a glb/gltf/fbx/obj path) or a primitive (`SpherePrim`, `CubePrim`, `PlatformPrim`, `CylinderPrim`, `ConePrim`, `QuadPrim`, `BoxPrim`). |
+| `MeshSource` | Where the mesh comes from: `ModelAsset` (a glb or gltf path) or a primitive (`SpherePrim`, `CubePrim`, `PlatformPrim`, `CylinderPrim`, `ConePrim`, `QuadPrim`, `BoxPrim`). |
 | `Material` | The material of a primitive, OpenPBR Surface's base under its names and defaults: `base_color`, `base_weight`, `base_metalness`, `base_diffuse_roughness`, `specular_weight`, `specular_color`, `specular_roughness`, `specular_ior`, `emission_luminance`, `emission_color`, `subsurface_weight`, `alpha_mode`, `geometry_opacity`. |
 | `Camera` | The scene camera (one per world); looks along −Z of its entity. With several (a level's own camera, a player's head), the view is the first active one in creation order. |
 | `Environment` | The HDRI that lights the scene (one per world). |

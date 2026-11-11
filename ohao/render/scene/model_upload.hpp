@@ -1,41 +1,27 @@
 #pragma once
+// A cooked mesh (asset/cooked.hpp) into the render scene: its geometry, and its materials with their textures.
+#include "asset/cooked.hpp"
 #include "render/scene/render_scene_types.hpp"
 
-#include <glm/glm.hpp>
-
-#include <optional>
+#include <functional>
 #include <string_view>
 #include <vector>
 
-namespace ohao { class BindlessTextureManager; class Model; }
+namespace ohao { class BindlessTextureManager; }
 
 namespace ohao::render {
 
 class RenderScene;
 
-struct UploadedModel {
-    MeshHandle mesh;
-    // Indexed by the model's material index (= SubmeshDesc::materialSlot).
-    std::vector<MaterialHandle> materials;
-};
+// The geometry as one mesh (one BLAS), with a submesh per run of triangles of one material slot.
+MeshHandle uploadMesh(RenderScene& scene, const cooked::Mesh& mesh, std::string_view debugName);
 
-// Registers the model's mesh (one BLAS), its materials and textures in the scene.
-// Materials and textures are derived exactly as the old deferred path did
-// (GBufferPass::execute + VulkanRenderer::uploadDeferredTextures): one material per
-// materialColors entry, submeshes from contiguous runs of materialPerTriangle. A model
-// without materialColors gets one material, `overrideMaterial` or the default.
-// `textures` may be null: the materials then carry no textures.
-UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, const Model& model,
-                          std::string_view debugName, const MaterialDesc* overrideMaterial = nullptr);
+// Opens a texture a material names (ecs::AssetResolver::texture).
+using TextureSource = std::function<Result<cooked::Texture>(const ContentHash&)>;
 
-// uploadModel in two parts, for callers that share a mesh between entities and register
-// materials themselves (ecs instantiate). uploadModel == uploadModelMesh + registering
-// each of modelMaterials.
-//   uploadModelMesh: the geometry, submeshes from material runs, one BLAS.
-//   modelMaterials: one desc per model material (its textures uploaded), or for a model
-//     without materials the override (or MaterialDesc{}); each with its legacy RT tint.
-MeshHandle uploadModelMesh(RenderScene& scene, const Model& model, std::string_view debugName);
-[[nodiscard]] std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const Model& model,
-                                                       const MaterialDesc* overrideMaterial);
+// One desc per material of the mesh. Each texture is the table entry of its content, uploaded the first time any
+// mesh asks for it (BindlessTextureManager::contentTexture). `textures` null: the materials carry no textures.
+[[nodiscard]] std::vector<MaterialDesc> meshMaterials(BindlessTextureManager* textures, const cooked::Mesh& mesh,
+                                                      const TextureSource& open);
 
 } // namespace ohao::render

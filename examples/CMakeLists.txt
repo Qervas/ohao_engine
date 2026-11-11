@@ -1,4 +1,4 @@
-# OHAO Examples — standalone programs that link against the engine
+# The windowed game host (ohao_game), linked against the engine.
 
 function(ohao_example name)
     add_executable(${name} ${name}.cpp)
@@ -24,12 +24,6 @@ function(ohao_example name)
     endif()
     add_dependencies(${name} shaders)   # every example renders: never with stale SPIR-V
 endfunction()
-
-ohao_example(cornell_box)
-ohao_example(model_viewer)
-ohao_example(env_demo)
-ohao_example(turntable)
-
 
 # The windowed game: a scene file played by the live host (ohao_runtime).
 ohao_example(ohao_game)

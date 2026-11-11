@@ -1,7 +1,8 @@
 #pragma once
-// Turns AssetRefs (project-relative paths) into loaded assets. Instantiate loads models
-// through it; validation (checkAssets) asks it whether a file exists. Tests and tools
-// substitute their own implementation, so nothing below them touches the disk.
+// Turns AssetRefs (project-relative paths) into loaded assets: a mesh is a cooked mesh (asset/cooked.hpp), read in
+// place from the cooked cache and cooked first when the cache does not hold its source's content (ohao/cook).
+// Instantiate, physics, animation and audio load meshes through it; validation (checkAssets) asks it whether a file
+// exists.
 #include "asset/cooked.hpp"
 #include "cook/cook.hpp"
 #include "core/result.hpp"
@@ -14,8 +15,6 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace ohao { class Model; }
-
 namespace ohao::ecs {
 
 struct AssetError {
@@ -27,8 +26,11 @@ class AssetResolver {
 public:
     virtual ~AssetResolver() = default;
     // `mesh` empty: the whole file; else one glTF mesh by name or "#<index>" (ModelAsset::mesh).
-    [[nodiscard]] virtual Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& ref,
-                                                                                     std::string_view mesh = {}) = 0;
+    // The pointer keeps the mesh's arrays alive.
+    [[nodiscard]] virtual Result<std::shared_ptr<const cooked::Mesh>, AssetError> loadMesh(const AssetRef& ref,
+                                                                                         std::string_view mesh = {}) = 0;
+    // A texture a cooked material names (cooked::Material::textures), mapped from the cache.
+    [[nodiscard]] virtual Result<cooked::Texture> texture(const ContentHash& key) const = 0;
     [[nodiscard]] virtual bool exists(const AssetRef& ref) const = 0;   // no load
     // Empty for a path the resolver rejects (absolute, or outside the project).
     [[nodiscard]] virtual std::filesystem::path absolutePath(const AssetRef& ref) const = 0;
@@ -38,14 +40,15 @@ public:
 };
 
 // Files under a project root. Paths are '/'-separated and relative; absolute paths and
-// paths that leave the root ("../") are rejected. Loaded models are cached by normalized
-// path (and mesh) until clearCache().
+// paths that leave the root ("../") are rejected. A source file's cooked model stays mapped
+// until forget() or clearCache(), and for as long as a mesh of it is held.
 class FileAssetResolver final : public AssetResolver {
 public:
     explicit FileAssetResolver(std::filesystem::path projectRoot);
 
-    [[nodiscard]] Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& ref,
-                                                                             std::string_view mesh = {}) override;
+    [[nodiscard]] Result<std::shared_ptr<const cooked::Mesh>, AssetError> loadMesh(const AssetRef& ref,
+                                                                                 std::string_view mesh = {}) override;
+    [[nodiscard]] Result<cooked::Texture> texture(const ContentHash& key) const override;
     [[nodiscard]] bool exists(const AssetRef& ref) const override;
     [[nodiscard]] std::filesystem::path absolutePath(const AssetRef& ref) const override;
     void forget(const AssetRef& ref) override;
@@ -56,7 +59,6 @@ public:
 private:
     std::filesystem::path m_root;
     std::mutex m_mutex;
-    std::unordered_map<std::string, std::shared_ptr<const Model>> m_models;
     // A source file's cooked model, by its path and what was asked of it (its meshes, or the whole file).
     std::unordered_map<std::string, std::shared_ptr<const cooked::ModelFile>> m_files;
     cook::Cache m_cache;   // <root>/.ohao/cooked

@@ -6,10 +6,10 @@
 #include "ecs/physics_scene.hpp"
 
 #include "core/log.hpp"
-#include "ecs/primitive_model.hpp"
+#include "ecs/primitive_mesh.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
-#include "asset/model.hpp"
+#include "asset/cooked.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -306,7 +306,7 @@ struct PhysicsScene::Impl {
     [[nodiscard]] bool ownCollider(entt::entity e) const;
 
     // The mesh a collider is fitted to: a CollisionMesh, else the entity's MeshSource.
-    [[nodiscard]] std::shared_ptr<const Model> meshOf(entt::entity e);
+    [[nodiscard]] std::shared_ptr<const cooked::Mesh> meshOf(entt::entity e);
 
     // One collider as a backend shape in the body's frame (scale baked), or nullopt.
     std::optional<pb::ShapeInfo> shapeOf(entt::entity e, const Collider& c, glm::vec3 scale, Motion motion,

@@ -76,9 +76,3 @@ if(MSVC)
     target_link_options(feel_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
 add_dependencies(feel_bench shaders)
-
-# Temporary (step 5): a hash of every mesh the asset resolver loads, to hold the loader's output through the cooker.
-add_executable(model_hash model_hash.cpp)
-target_compile_features(model_hash PRIVATE cxx_std_20)
-target_link_libraries(model_hash PRIVATE ohao_ecs ohao_level ohao_asset ohao_core)
-target_compile_definitions(model_hash PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

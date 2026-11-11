@@ -115,6 +115,7 @@ void BindlessTextureManager::cleanup() {
 
     m_pathToHandle.clear();
     m_nameToHandle.clear();
+    m_byContent.clear();
     m_freeSlots.clear();
     m_loadedCount = 0;
     m_totalMemoryUsage = 0;
@@ -445,6 +446,27 @@ BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(std::span<co
     return handle;
 }
 
+ContentTexture BindlessTextureManager::contentTexture(const TextureContentKey& key,
+                                                      const std::function<TexturePixels()>& open) {
+    if (const auto it = m_byContent.find(key); it != m_byContent.end()) return it->second;
+    const TexturePixels px = open();
+    const std::size_t n = static_cast<std::size_t>(px.width) * px.height;
+    if (n == 0 || px.rgba8.size() < n * 4) return {getDefaultTexture(key.type), {}};
+    ContentTexture made;
+    for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t c = 0; c < 4; ++c) made.channelMin[c] = std::min(made.channelMin[c], px.rgba8[i * 4 + c]);
+    if (key.opaque) {
+        std::vector<uint8_t> opaque(px.rgba8.begin(), px.rgba8.begin() + static_cast<std::ptrdiff_t>(n * 4));
+        for (std::size_t i = 0; i < n; ++i) opaque[i * 4 + 3] = 255;
+        made.handle = loadTextureFromMemory(opaque, px.width, px.height, key.format, key.type);
+    } else {
+        made.handle = loadTextureFromMemory(px.rgba8, px.width, px.height, key.format, key.type);
+    }
+    if (made.handle == getDefaultTexture(key.type)) return made;   // not uploaded: not remembered
+    m_byContent.emplace(key, made);
+    return made;
+}
+
 bool BindlessTextureManager::updateTextureFromMemory(BindlessTextureHandle handle,
                                                      std::span<const uint8_t> data,
                                                      uint32_t width, uint32_t height) {
@@ -598,6 +620,8 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
         if (it->second.index == handle.index) it = m_pathToHandle.erase(it);
         else ++it;
     }
+
+    std::erase_if(m_byContent, [&](const auto& entry) { return entry.second.handle == handle; });
 
     // Destroy resources
     if (tex.view != VK_NULL_HANDLE) {

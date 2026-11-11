@@ -236,7 +236,7 @@ auto PhysicsScene::Impl::ownCollider(entt::entity e) const -> bool {
 }
 
 // The mesh a collider is fitted to: a CollisionMesh, else the entity's MeshSource.
-auto PhysicsScene::Impl::meshOf(entt::entity e) -> std::shared_ptr<const Model> {
+auto PhysicsScene::Impl::meshOf(entt::entity e) -> std::shared_ptr<const cooked::Mesh> {
     const MeshSource* source = nullptr;
     MeshSource fromCollision;
     if (const auto* cm = reg.try_get<CollisionMesh>(e)) {
@@ -247,14 +247,14 @@ auto PhysicsScene::Impl::meshOf(entt::entity e) -> std::shared_ptr<const Model> 
     }
     if (!source) return nullptr;
     if (const auto* asset = std::get_if<ModelAsset>(&source->source)) {
-        auto loaded = assets.loadModel(asset->asset, asset->mesh);
+        auto loaded = assets.loadMesh(asset->asset, asset->mesh);
         if (!loaded) {
             warn(e, "W_COLLIDER_NO_MESH", "its mesh did not load (" + loaded.error().message + "); no collider");
             return nullptr;
         }
         return std::move(loaded.value());
     }
-    return primitiveModel(*source);
+    return primitiveMesh(*source);
 }
 
 // One collider as a backend shape in the body's frame (scale baked), or nullopt.
@@ -283,7 +283,7 @@ auto PhysicsScene::Impl::shapeOf(entt::entity e, const Collider& c, glm::vec3 sc
         MeshData data;
         data.positions.reserve(model->vertices.size());
         for (const auto& v : model->vertices) data.positions.push_back(v.position);
-        if (shape == ColliderShape::Mesh) data.indices = model->indices;
+        if (shape == ColliderShape::Mesh) data.indices.assign(model->indices.begin(), model->indices.end());
         *fitted = fitCollider(data, shape, scale);
     }
     if (fitted->roundedScale)

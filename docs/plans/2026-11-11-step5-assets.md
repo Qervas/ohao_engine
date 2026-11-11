@@ -166,6 +166,28 @@ Each is one or a few commits with the hooks green.
   - Uploads of a load go in one batch: one staging buffer and one submit for its textures, the bindless table
     written once; VMA for the images.
   - `ModelLoader`, Assimp and stb leave the runtime libraries for `ohao_cook`. FBX and OBJ are deleted.
+  - *As built, first piece (2026-11-11): the engine reads cooked meshes.*
+    - `AssetResolver::loadMesh` returns a `cooked::Mesh` (views into the file's mapping; the pointer keeps it
+      mapped) and `texture(name)` a cooked texture. Instantiate, physics, animation and audio read it; a primitive
+      is the same view over vectors made in code. `Model` is the importer's struct, inside `ohao/cook` with
+      `ModelLoader`, Assimp and stb_image's use for models. `cook::toModel` is gone.
+    - A texture is one table entry by content (`BindlessTextureManager::contentTexture`: the pixels' hash, the
+      format, the kind, whether alpha is forced). The smallest value of each channel is found at upload (caustics
+      read roughness's); it moves into the cooked texture with 5e, when that file changes anyway.
+    - **Deleted:** the FBX and OBJ loaders, ufbx, the eight OBJ and MTL files; Assimp's other formats (dae, blend,
+      3ds, ply) from what a `ModelAsset` accepts, untested and unused. The four example programs that pushed an
+      in-memory `Model` at the renderer (`cornell_box`, `model_viewer`, `env_demo`, `turntable`: `ohao run` and
+      `ohao serve` render any scene) with `model_spawn`, `SceneFramer`, `framing` and the `InstantiateBackend`
+      interface, which had one implementation. `model_hash` too: its job ended with 5b.
+    - **stb_image stays in the runtime** for the environment map and a vfx set's sprites, read from their source
+      files until 5e cooks them.
+    - Identical: an empty cache recooked gives the 12 model files of the five scenes byte for byte; the five
+      goldens; gates 6 of 6.
+    - Sponza's textures went from 384.0 MB (77 table entries) to 341.3 MB (69): eight uploads were of an image
+      already uploaded. The helmet's and flat42's are unchanged (no image shared).
+    - Resident memory after the first frame, the decoded copies gone: helmet 313.8 MB to 231.5, Sponza 566.8 to
+      255.9, flat42 320.6 to 233.9 (the play scene, with no model textures, 233.1 to 232.1). First frame, warm: play 0.28 s, helmet 0.32 s, Sponza 0.59 s
+      (0.64), flat42 0.33 s, kit2k 35.4 s.
 - **5d, release.**
   - Textures, materials and meshes are counted and freed when unused, their GPU memory after the frames in flight
     (no device wait); the mesh arena reuses released ranges; the manager drops unmapped cooked data.

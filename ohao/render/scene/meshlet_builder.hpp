@@ -12,7 +12,7 @@
 // triangle in index order; it closes the meshlet when the next triangle no longer fits.
 // Every triangle lands in exactly one meshlet. One function, so a better clusterer can
 // replace it.
-#include "asset/model.hpp"   // Vertex
+#include "asset/vertex.hpp"   // Vertex
 
 #include <glm/glm.hpp>
 

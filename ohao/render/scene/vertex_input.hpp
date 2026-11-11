@@ -1,5 +1,5 @@
 #pragma once
-// How a raster pipeline reads asset::Vertex (asset/model.hpp): one binding, eight attributes at their offsets.
+// How a raster pipeline reads ohao::Vertex (asset/vertex.hpp): one binding, eight attributes at their offsets.
 #include <vulkan/vulkan_core.h>
 
 #include <vector>

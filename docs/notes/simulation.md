@@ -30,7 +30,10 @@ step 2h, 2026-11-09), unchanged.
   - A `ModelAsset` without `mesh` merges every mesh in a file, collision hulls included;
     with `mesh` (a glTF mesh name or `#<index>`) it is that one mesh at its own origin,
     loaded through the cooked cache (`cook::cookedModel`, `<root>/.ohao/cooked/`: the file is imported once, for
-    all its meshes, and again only when its bytes change) and cached per `(path, mesh)`. A glTF's node tree,
+    all its meshes, and again only when its bytes change). Every consumer (instantiate, physics, animation, audio)
+    reads the cooked mesh in place from the file's mapping (`AssetResolver::loadMesh`, a `cooked::Mesh`); a
+    material names its textures by their pixels' hash, and a texture is uploaded once whoever uses it
+    (`BindlessTextureManager::contentTexture`). Only glTF and GLB are read. A glTF's node tree,
     `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
   - A `Level` component is a level file in the world: the `level` sync system
     (`ohao_level_world`, `level/level_system.hpp`, before `instantiate`) makes one entity per

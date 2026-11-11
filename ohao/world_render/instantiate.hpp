@@ -1,6 +1,6 @@
 #pragma once
 // Instantiate: builds each entity's MeshRenderer from its MeshSource and Material, so scene files and
-// commands describe meshes as data. The same data path as spawnModel.
+// commands describe meshes as data. 
 //
 //   - Trigger: constructing or replacing MeshSource or Material tags the entity
 //     InstantiateDirty; removing Material re-instantiates with the default
@@ -22,31 +22,16 @@
 #include <string_view>
 #include <vector>
 
-namespace ohao { class BindlessTextureManager; class Model; }
+namespace ohao { class BindlessTextureManager; }
 namespace ohao::render { class RenderScene; }
 
 namespace ohao::ecs {
-
-// What instantiate needs from the renderer. installInstantiate(world, scene, ...) uses
-// the RenderScene; tests and tools pass their own.
-class InstantiateBackend {
-public:
-    virtual ~InstantiateBackend() = default;
-    // The model's geometry as one mesh (render::uploadModelMesh). Invalid on failure.
-    [[nodiscard]] virtual render::MeshHandle uploadMesh(const Model& model, std::string_view debugName) = 0;
-    virtual void releaseMesh(render::MeshHandle mesh) = 0;
-    // A model's own materials, textures uploaded (render::modelMaterials), registered.
-    [[nodiscard]] virtual std::vector<render::MaterialHandle> modelMaterials(const Model& model) = 0;
-    // One material; the backend adds the legacy RT tint (render::modelMaterials' rule).
-    [[nodiscard]] virtual render::MaterialHandle material(const render::MaterialDesc& desc) = 0;
-};
 
 // Adds the "instantiate" system before "transform" (so a new mesh renders in the frame
 // its MeshSource appears). Install once per World, after installRenderExtract; the
 // scene, texture manager and resolver must outlive the World.
 void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
                         AssetResolver& assets);
-void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backend, AssetResolver& assets);
 
 // Entities whose mesh could not be built (they carry InstantiateError), in creation order.
 [[nodiscard]] std::vector<entt::entity> instantiateErrors(const World& world);

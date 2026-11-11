@@ -7,7 +7,7 @@
 // - A texture file holds one image, named by the hash of its pixels: 8-bit RGBA, level 0 (the mips are made at
 //   upload until 5e cooks them compressed). Whether it is colour or data is its user's to say, not the file's.
 #include "asset/content_hash.hpp"
-#include "asset/model.hpp"
+#include "asset/vertex.hpp"
 #include "core/result.hpp"
 
 #include <array>
@@ -27,7 +27,7 @@ enum class TextureSlot : uint32_t {
 };
 inline constexpr std::size_t kTextureSlots = static_cast<std::size_t>(TextureSlot::Count);
 
-// One material of a mesh, as the importer read it (the fields of ohao::Model's per-material arrays).
+// One material of a mesh, as the importer read it.
 struct Material {
     glm::vec4 colorRoughness{0.8f, 0.8f, 0.8f, 0.5f};
     glm::vec3 specularColor{1.0f};
@@ -47,6 +47,8 @@ struct Material {
 };
 static_assert(sizeof(Material) == 112 + 16 * kTextureSlots && alignof(Material) == 8);
 
+// A mesh as the engine reads it: views of arrays something else keeps alive (a cooked file's mapping, or the
+// vectors of a mesh made in code). The engine holds one through a shared_ptr that owns that something.
 struct Mesh {
     std::string_view name;
     std::string_view error;   // not empty: the importer could not make this mesh, and the rest is empty

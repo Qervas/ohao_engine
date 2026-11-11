@@ -8,7 +8,6 @@
 // the cache is ever stale, only unused.
 #include "asset/content_hash.hpp"
 #include "asset/cooked.hpp"
-#include "asset/model.hpp"
 #include "core/result.hpp"
 
 #include <filesystem>
@@ -37,9 +36,5 @@ struct Cache {
 [[nodiscard]] Result<std::shared_ptr<const cooked::ModelFile>> cookedModel(const Cache& cache,
                                                                          const std::filesystem::path& source,
                                                                          ModelKind kind, bool* cookedNow = nullptr);
-
-// Until the engine reads cooked meshes itself (5c): one cooked mesh as the Model the importer made of it.
-[[nodiscard]] Result<std::shared_ptr<Model>> toModel(const Cache& cache, const cooked::Mesh& mesh,
-                                                     const std::filesystem::path& source);
 
 } // namespace ohao::cook

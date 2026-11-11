@@ -25,14 +25,6 @@ bool canBeSmooth(const MaterialSmoothness& m, float cut) {
     return m.coatWeight > 0.0f && std::max(m.coatRoughness * m.coatTexMin, kMinRoughness) < cut;
 }
 
-float textureChannelMin(std::span<const uint8_t> rgba, int width, int height, int channel) {
-    const size_t n = static_cast<size_t>(std::max(width, 0)) * static_cast<size_t>(std::max(height, 0));
-    if (n == 0 || rgba.size() < n * 4 || channel < 0 || channel > 3) return 1.0f;
-    uint8_t lo = 255;
-    for (size_t i = 0; i < n; ++i) lo = std::min(lo, rgba[i * 4 + static_cast<size_t>(channel)]);
-    return static_cast<float>(lo) / 255.0f;
-}
-
 namespace {
 uint32_t pcg(uint32_t v) {
     const uint32_t state = v * 747796405u + 2891336453u;

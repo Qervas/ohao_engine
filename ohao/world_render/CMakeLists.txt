@@ -1,5 +1,5 @@
 # The world into the renderer (system design 4.1, step 3a): instantiate (MeshSources into meshes), the render
-# extract, the effects' draw, in-memory model spawning, framing and the HUD's list. The world (ohao_ecs) does not
+# extract, the effects' draw and the HUD's list. The world (ohao_ecs) does not
 # link the renderer; this does, both.
 file(GLOB WORLD_RENDER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
 add_library(ohao_world_render STATIC ${WORLD_RENDER_SOURCES})

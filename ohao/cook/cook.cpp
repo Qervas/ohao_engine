@@ -1,6 +1,6 @@
 #include "cook/cook.hpp"
 
-#include "asset/model_loader.hpp"
+#include "cook/model_loader.hpp"
 #include "core/log.hpp"
 
 #include <simdjson.h>
@@ -220,66 +220,6 @@ Result<std::shared_ptr<const cooked::ModelFile>> cookedModel(const Cache& cache,
     OHAO_LOG(Info, asset, "cooked '{}' ({}) in {:.0f} ms", source.generic_string(), kind == ModelKind::Whole ? "whole" : "meshes",
              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
     return cooked::ModelFile::open(path);
-}
-
-Result<std::shared_ptr<Model>> toModel(const Cache& cache, const cooked::Mesh& mesh, const fs::path& source) {
-    using R = Result<std::shared_ptr<Model>>;
-    if (!mesh.error.empty()) return R::err(std::string(mesh.error));
-    auto model = std::make_shared<Model>();
-    model->setSourcePath(source.generic_string());
-    model->vertices.assign(mesh.vertices.begin(), mesh.vertices.end());
-    model->indices.assign(mesh.indices.begin(), mesh.indices.end());
-    model->materialPerTriangle.assign(mesh.materialOfTriangle.begin(), mesh.materialOfTriangle.end());
-    for (const std::string_view b : mesh.bones) model->boneNames.emplace_back(b);
-    using Slot = cooked::TextureSlot;
-    const auto texture = [&](const cooked::Material& in, Slot slot, std::vector<int>& index,
-                             std::vector<Model::TextureData>& list, std::size_t m) -> VoidResult<> {
-        index.push_back(-1);
-        const ContentHash key = in.textures[static_cast<std::size_t>(slot)];
-        if (!key) return VoidResult<>::ok();
-        auto tex = cooked::openTexture(cache.texture(key));
-        if (!tex) return err_void(tex.error());
-        Model::TextureData data;
-        data.pixels.assign(tex.value().pixels.begin(), tex.value().pixels.end());
-        data.width = static_cast<int>(tex.value().width);
-        data.height = static_cast<int>(tex.value().height);
-        index.back() = static_cast<int>(list.size());
-        list.push_back(std::move(data));
-        return VoidResult<>::ok();
-    };
-    for (std::size_t m = 0; m < mesh.materials.size(); ++m) {
-        const cooked::Material& in = mesh.materials[m];
-        model->materialColors.push_back(in.colorRoughness);
-        model->materialMetallic.push_back(in.metallic);
-        model->materialDoubleSided.push_back(in.doubleSided);
-        model->materialAlphaMode.push_back(in.alphaMode);
-        model->materialAlphaCutoff.push_back(in.alphaCutoff);
-        model->materialBaseAlpha.push_back(in.baseAlpha);
-        model->materialIor.push_back(in.ior);
-        model->materialSpecularWeight.push_back(in.specularWeight);
-        model->materialSpecularColor.push_back(in.specularColor);
-        model->materialEmissionColor.push_back(in.emissionColor);
-        model->materialEmissionStrength.push_back(in.emissionStrength);
-        model->materialCoatWeight.push_back(in.coatWeight);
-        model->materialCoatRoughness.push_back(in.coatRoughness);
-        model->materialFuzzColor.push_back(in.fuzzColor);
-        model->materialFuzzRoughness.push_back(in.fuzzRoughness);
-        model->materialTransmission.push_back(in.transmission);
-        model->materialTransmissionColor.push_back(in.transmissionColor);
-        model->materialTransmissionDepth.push_back(in.transmissionDepth);
-        for (const auto& r : {texture(in, Slot::Albedo, model->materialTextureIndex, model->albedoTextures, m),
-                              texture(in, Slot::Normal, model->materialNormalTexIndex, model->normalTextures, m),
-                              texture(in, Slot::RoughMetal, model->materialRoughMetalTexIndex, model->roughMetalTextures, m),
-                              texture(in, Slot::Emissive, model->materialEmissiveTexIndex, model->emissiveTextures, m),
-                              texture(in, Slot::Occlusion, model->materialOcclusionTexIndex, model->occlusionTextures, m),
-                              texture(in, Slot::Coat, model->materialCoatTexIndex, model->coatTextures, m),
-                              texture(in, Slot::CoatRoughness, model->materialCoatRoughnessTexIndex, model->coatRoughnessTextures, m),
-                              texture(in, Slot::FuzzColor, model->materialFuzzColorTexIndex, model->fuzzColorTextures, m),
-                              texture(in, Slot::FuzzRoughness, model->materialFuzzRoughnessTexIndex, model->fuzzRoughnessTextures, m)})
-            if (!r) return R::err(r.error());
-        if (in.occlusionIsRoughMetal) model->materialOcclusionTexIndex.back() = Model::kOcclusionIsRoughMetal;
-    }
-    return R::ok(std::move(model));
 }
 
 } // namespace ohao::cook

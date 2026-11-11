@@ -1,6 +1,6 @@
 #pragma once
 
-#include "model.hpp"
+#include "cook/model.hpp"
 #include "core/result.hpp"
 
 #include <memory>
@@ -13,20 +13,10 @@ namespace Assimp { class Importer; }
 
 namespace ohao {
 
-// Unified model loader — handles FBX, GLB, GLTF, OBJ transparently.
-// Tries the best loader for each format:
-//   FBX  → ufbx (correct rotation orders), retried through Assimp for cleanup
-//   GLB  → Assimp (ufbx can't read GLB)
-//   GLTF → Assimp (consistent with GLB path)
-//   OBJ  → native parser
-//
-// Static geometry only — skeletal animation has been removed.
+// The importer: a glTF file (.glb, .gltf) read through Assimp. Only the cooker calls it (cook.cpp).
 class ModelLoader {
 public:
-    /// Load any supported model format. Returns nullptr on failure.
-    [[nodiscard]] static std::shared_ptr<Model> load(std::string_view path);
-
-    /// Same as load(), with an error string on failure.
+    /// The whole file as one Model, its nodes' transforms applied.
     [[nodiscard]] static Result<std::shared_ptr<Model>> loadResult(std::string_view path);
 
     /// Every mesh of a glTF file (.glb or .gltf) from one import, in the file's order: each untransformed (no
@@ -46,14 +36,13 @@ public:
     [[nodiscard]] static bool isSupportedExtension(std::string_view ext);
 
 private:
-    [[nodiscard]] static std::shared_ptr<Model> loadFBX(std::string_view path);
+    [[nodiscard]] static std::shared_ptr<Model> load(std::string_view path);
     // Assimp's scene of a file, post-processed; perMesh: without the steps that split a mesh.
     [[nodiscard]] static const aiScene* importScene(Assimp::Importer& importer, const std::string& path, bool perMesh);
     [[nodiscard]] static std::shared_ptr<Model> loadAssimp(std::string_view path);
     // A Model of the scene's meshes [first, first + count) only, untransformed; nullptr: the node tree.
     struct MeshRange { uint32_t first = 0, count = 0, total = 0; };
     [[nodiscard]] static std::shared_ptr<Model> emitModel(const aiScene* scene, const std::string& path, const MeshRange* range);
-    [[nodiscard]] static std::shared_ptr<Model> loadOBJ(std::string_view path);
 };
 
 } // namespace ohao

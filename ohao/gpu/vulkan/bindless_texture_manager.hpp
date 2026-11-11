@@ -8,6 +8,9 @@
 #include <string>
 #include <string_view>
 #include <span>
+#include <array>
+#include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <cstdint>
@@ -62,6 +65,28 @@ struct BindlessTextureInfo {
     bool persistent{false};  // If true, not unloaded during streaming
 };
 
+// A texture named by what it is made of: the hash of its pixels, and how they are uploaded. Two users of the same
+// content get one table entry (BindlessTextureManager::contentTexture).
+struct TextureContentKey {
+    uint64_t hi{0}, lo{0};                         // the pixels' content hash (asset/content_hash.hpp)
+    VkFormat format{VK_FORMAT_R8G8B8A8_SRGB};
+    BindlessTextureType type{BindlessTextureType::Custom};
+    bool opaque{false};                            // alpha written as 255 whatever the pixels hold
+    [[nodiscard]] constexpr auto operator<=>(const TextureContentKey&) const noexcept = default;
+};
+
+// RGBA8 pixels, level 0, and whatever keeps them alive (a cooked file's mapping).
+struct TexturePixels {
+    std::span<const uint8_t> rgba8;
+    uint32_t width{0}, height{0};
+    std::shared_ptr<const void> keep;
+};
+
+struct ContentTexture {
+    BindlessTextureHandle handle;
+    std::array<uint8_t, 4> channelMin{255, 255, 255, 255};   // each channel's smallest value in the pixels given
+};
+
 // Manages bindless texture array with dynamic updates
 class BindlessTextureManager {
 public:
@@ -88,6 +113,11 @@ public:
                                                   VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
                                                   BindlessTextureType type = BindlessTextureType::Custom,
                                                   bool generateMips = true);
+
+    // The texture of this content, uploaded when nobody has asked for it before: `open` is called only then. A
+    // texture that cannot be opened or uploaded is the type's default (and is asked for again next time).
+    [[nodiscard]] ContentTexture contentTexture(const TextureContentKey& key, const std::function<TexturePixels()>& open);
+    [[nodiscard]] std::size_t contentTextureCount() const noexcept { return m_byContent.size(); }
 
     /// Overwrite an existing texture's texels in place (same WxH). No new slot / no unload.
     /// Used by Diff dense-map FD loop for fast beauty SoT updates.
@@ -196,6 +226,7 @@ private:
     std::vector<uint32_t> m_freeSlots;
     std::unordered_map<std::string, BindlessTextureHandle> m_pathToHandle;
     std::unordered_map<std::string, BindlessTextureHandle> m_nameToHandle;
+    std::map<TextureContentKey, ContentTexture> m_byContent;
 
     // Default textures
     BindlessTextureHandle m_defaultWhite;

@@ -99,24 +99,6 @@ FetchContent_MakeAvailable(stb)
 add_library(ohao_stb_image STATIC ${CMAKE_SOURCE_DIR}/external/stb_image.cpp)
 target_include_directories(ohao_stb_image PUBLIC ${stb_SOURCE_DIR})
 
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/models)
-
-# Copy assets
-add_custom_target(copy_assets ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/models/cornell_box.obj
-        ${CMAKE_BINARY_DIR}/assets/models/cornell_box.obj
-
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/models/cornell_box.mtl
-        ${CMAKE_BINARY_DIR}/assets/models/cornell_box.mtl
-
-    COMMENT "Copying assets to build directory"
-)
-
-
-
 add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(ohao)

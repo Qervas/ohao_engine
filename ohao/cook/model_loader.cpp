@@ -1,7 +1,6 @@
-// Unified Model Loader — routes to the best backend per format.
-// FBX → ufbx, GLB/GLTF → Assimp, OBJ → native.
+// The importer: a glTF file (.glb, .gltf) into Models, through Assimp.
 
-#include "model_loader.hpp"
+#include "cook/model_loader.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -56,8 +55,7 @@ std::string ModelLoader::getExtension(std::string_view path) {
 bool ModelLoader::isSupportedExtension(std::string_view ext) {
     // Accept with or without leading dot
     if (!ext.empty() && ext.front() == '.') ext.remove_prefix(1);
-    return ext == "obj" || ext == "fbx" || ext == "glb" || ext == "gltf" ||
-           ext == "dae" || ext == "blend" || ext == "3ds" || ext == "ply";
+    return ext == "glb" || ext == "gltf";
 }
 
 // A normal the file did not give: the loaders leave zero there (or a non-finite value when a
@@ -141,48 +139,9 @@ static void repairMeshNormals(std::vector<Vertex>& vertices, const std::vector<u
 // === Main Entry Point ===
 
 std::shared_ptr<Model> ModelLoader::load(std::string_view path) {
-    std::string ext = getExtension(path);
-
-    std::shared_ptr<Model> model;
-    if (ext == "obj") {
-        model = loadOBJ(path);
-    } else if (ext == "fbx") {
-        // Try ufbx first (correct rotation orders, embedded textures)
-        model = loadFBX(path);
-        // Retry through Assimp for better mesh processing
-        // (JoinIdenticalVertices, GenSmoothNormals, FixInfacingNormals fix AI-generated meshes)
-        if (model) {
-            auto assimpModel = loadAssimp(path);
-            if (assimpModel && !assimpModel->vertices.empty()) {
-                OHAO_LOG(Info, asset, "ModelLoader: FBX: using Assimp geometry (better mesh cleanup)");
-                // Keep ufbx textures if Assimp didn't find any (ufbx extracts embedded textures better)
-                if (assimpModel->albedoTextures.empty() && !model->albedoTextures.empty()) {
-                    assimpModel->albedoTextures = std::move(model->albedoTextures);
-                    assimpModel->normalTextures = std::move(model->normalTextures);
-                    assimpModel->roughMetalTextures = std::move(model->roughMetalTextures);
-                    assimpModel->emissiveTextures = std::move(model->emissiveTextures);
-                    assimpModel->materialTextureIndex = std::move(model->materialTextureIndex);
-                    assimpModel->materialNormalTexIndex = std::move(model->materialNormalTexIndex);
-                    assimpModel->materialRoughMetalTexIndex = std::move(model->materialRoughMetalTexIndex);
-                    assimpModel->materialEmissiveTexIndex = std::move(model->materialEmissiveTexIndex);
-                    // ufbx loads no occlusion map; Assimp's would not match ufbx's textures.
-                    assimpModel->occlusionTextures.clear();
-                    assimpModel->materialOcclusionTexIndex.assign(assimpModel->materialOcclusionTexIndex.size(), -1);
-                    OHAO_LOG(Info, asset, "ModelLoader: kept ufbx textures ({} albedo)", assimpModel->albedoTextures.size());
-                }
-                model = assimpModel;
-            }
-        }
-    } else {
-        // GLB, GLTF, DAE, etc → Assimp
-        model = loadAssimp(path);
-    }
-
-    // Post-load: give vertices the file left without a normal their faces' smooth normal
-    if (model && !model->vertices.empty()) {
-        repairMeshNormals(model->vertices, model->indices);
-    }
-
+    std::shared_ptr<Model> model = loadAssimp(path);
+    // Give vertices the file left without a normal their faces' smooth normal.
+    if (model && !model->vertices.empty()) repairMeshNormals(model->vertices, model->indices);
     return model;
 }
 
@@ -246,24 +205,6 @@ Result<std::shared_ptr<const ModelLoader::FileMeshes>> ModelLoader::loadMeshes(s
     }
     return R::ok(std::move(file));
 }
-
-// === OBJ Loader (native) ===
-
-std::shared_ptr<Model> ModelLoader::loadOBJ(std::string_view path) {
-    auto model = std::make_shared<Model>();
-    if (model->loadFromOBJ(path)) return model;
-    return nullptr;
-}
-
-// === FBX Loader (ufbx) ===
-
-std::shared_ptr<Model> ModelLoader::loadFBX(std::string_view path) {
-    auto model = std::make_shared<Model>();
-    if (model->loadFromFBX(path)) return model;
-    return nullptr;
-}
-
-// === Assimp Loader (GLB, GLTF, Collada, etc.) ===
 
 // Load texture from Assimp material (embedded or file)
 // The material's `index`-th texture of `type` (glTF's extensions number theirs: clearcoat's
@@ -370,7 +311,6 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
 
 std::shared_ptr<Model> ModelLoader::emitModel(const aiScene* scene, const std::string& pathStr, const MeshRange* range) {
     auto model = std::make_shared<Model>();
-    model->setSourcePath(pathStr);
     std::string modelDir = std::filesystem::path(pathStr).parent_path().string();
 
     // --- Materials --- (one mesh: only those its primitives use, renumbered from 0)

@@ -1,7 +1,7 @@
 #include "ecs/asset_resolver.hpp"
 
-#include "asset/model.hpp"
-#include "asset/model_loader.hpp"
+#include <algorithm>
+#include <cctype>
 
 namespace ohao::ecs {
 
@@ -27,22 +27,13 @@ bool FileAssetResolver::exists(const AssetRef& ref) const {
     return !p.empty() && fs::is_regular_file(p, ec);
 }
 
-Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(const AssetRef& ref, std::string_view mesh) {
-    using R = Result<std::shared_ptr<const Model>, AssetError>;
+Result<std::shared_ptr<const cooked::Mesh>, AssetError> FileAssetResolver::loadMesh(const AssetRef& ref, std::string_view mesh) {
+    using R = Result<std::shared_ptr<const cooked::Mesh>, AssetError>;
     const fs::path p = absolutePath(ref);
     if (p.empty())
         return R::err({"E_ASSET_NOT_FOUND", ref.path.empty() ? "the asset path is empty"
                                                              : "'" + ref.path + "' is not a relative path inside the project"});
     const std::string file = p.generic_string();
-    const std::string key = mesh.empty() ? file : file + "\n" + std::string(mesh);
-    {
-        std::lock_guard lock(m_mutex);
-        if (const auto it = m_models.find(key); it != m_models.end()) return R::ok(it->second);
-    }
-    std::error_code ec;
-    if (!fs::is_regular_file(p, ec)) return R::err({"E_ASSET_NOT_FOUND", "no file '" + ref.path + "' in the project"});
-    if (!ModelLoader::isSupportedExtension(ModelLoader::getExtension(file)))
-        return R::err({"E_ASSET_INVALID", "'" + ref.path + "' is not a supported model format (glb, gltf, fbx, obj, dae, blend, 3ds, ply)"});
     const auto invalid = [&](const std::string& why) {
         return R::err({"E_ASSET_INVALID", "'" + ref.path + "' could not be loaded: " + why});
     };
@@ -55,6 +46,12 @@ Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(co
         if (const auto it = m_files.find(fileKey); it != m_files.end()) cookedFile = it->second;
     }
     if (!cookedFile) {
+        std::error_code ec;
+        if (!fs::is_regular_file(p, ec)) return R::err({"E_ASSET_NOT_FOUND", "no file '" + ref.path + "' in the project"});
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".glb" && ext != ".gltf")
+            return R::err({"E_ASSET_INVALID", "'" + ref.path + "' is not a supported model format (glb, gltf)"});
         auto loaded = cook::cookedModel(m_cache, p, kind);
         if (!loaded) return invalid(loaded.error());
         cookedFile = std::move(loaded.value());
@@ -67,17 +64,17 @@ Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(co
         if (!found) return invalid(found.error());
         index = found.value();
     }
-    auto made = cook::toModel(m_cache, cookedFile->mesh(index), p);
-    if (!made) return invalid(made.error());
-    std::shared_ptr<const Model> model = std::move(made.value());
-    std::lock_guard lock(m_mutex);
-    m_models.emplace(key, model);
-    return R::ok(std::move(model));
+    const cooked::Mesh& m = cookedFile->mesh(index);
+    if (!m.error.empty()) return invalid(std::string(m.error));
+    return R::ok(std::shared_ptr<const cooked::Mesh>(cookedFile, &m));
+}
+
+Result<cooked::Texture> FileAssetResolver::texture(const ContentHash& key) const {
+    return cooked::openTexture(m_cache.texture(key));
 }
 
 void FileAssetResolver::clearCache() {
     std::lock_guard lock(m_mutex);
-    m_models.clear();
     m_files.clear();
 }
 
@@ -88,10 +85,6 @@ void FileAssetResolver::forget(const AssetRef& ref) {
     std::lock_guard lock(m_mutex);
     m_files.erase(file + "\nwhole");
     m_files.erase(file + "\nmeshes");
-    std::erase_if(m_models, [&](const auto& entry) {   // the whole file and each mesh of it ("file\nmesh")
-        return entry.first == file || (entry.first.size() > file.size() && entry.first.starts_with(file) &&
-                                       entry.first[file.size()] == '\n');
-    });
 }
 
 } // namespace ohao::ecs

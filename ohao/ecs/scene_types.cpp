@@ -94,7 +94,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
 
     // Mesh sources: an asset or a parametric primitive.
     r.type<ModelAsset>("ModelAsset")
-        .doc("A model file (glb, gltf, fbx, obj, dae, blend, 3ds, ply) loaded through the asset resolver; its own "
+        .doc("A model file (glb, gltf) loaded through the asset resolver; its own "
              "materials are used.")
         .field("asset", &ModelAsset::asset).doc("Project-relative path of the model file, '/' separators")
         .field("mesh", &ModelAsset::mesh)
