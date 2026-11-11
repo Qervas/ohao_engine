@@ -73,8 +73,31 @@ Result<cooked::Texture> FileAssetResolver::texture(const ContentHash& key) const
     return cooked::openTexture(m_cache.texture(key));
 }
 
+uint32_t FileAssetResolver::generation(const AssetRef& ref) const {
+    const fs::path p = absolutePath(ref);
+    std::lock_guard lock(m_mutex);
+    const auto it = m_generations.find(p.generic_string());
+    return m_generation + (it == m_generations.end() ? 0u : it->second);
+}
+
+std::vector<AssetResolver::Loaded> FileAssetResolver::loaded() const {
+    std::vector<Loaded> out;
+    std::lock_guard lock(m_mutex);
+    for (const auto& [key, file] : m_files) {
+        const fs::path source = key.substr(0, key.find('\n'));
+        Loaded l;
+        l.path = source.lexically_relative(m_root).generic_string() + (key.ends_with("\nwhole") ? "" : " (meshes)");
+        l.cookedBytes = file->bytes();
+        l.meshes = static_cast<uint32_t>(file->meshCount());
+        out.push_back(std::move(l));
+    }
+    std::sort(out.begin(), out.end(), [](const Loaded& a, const Loaded& b) { return a.path < b.path; });
+    return out;
+}
+
 void FileAssetResolver::forgetAll() {
     std::lock_guard lock(m_mutex);
+    ++m_generation;
     m_files.clear();
 }
 
@@ -83,6 +106,7 @@ void FileAssetResolver::forget(const AssetRef& ref) {
     if (p.empty()) return;
     const std::string file = p.generic_string();
     std::lock_guard lock(m_mutex);
+    ++m_generations[file];
     m_files.erase(file + "\nwhole");
     m_files.erase(file + "\nmeshes");
 }

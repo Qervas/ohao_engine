@@ -216,6 +216,11 @@ struct LevelInfoParams {
 struct LevelReloadParams {
     std::optional<uint64_t> entity;
 };
+// Assets (system design step 5h).
+struct AssetInfoParams {};
+struct AssetReloadParams {
+    std::optional<std::string> path;   // absent: every file
+};
 struct PhysicsRaycastParams {
     glm::vec3 from{0.0f};
     glm::vec3 dir{0.0f};

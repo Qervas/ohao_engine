@@ -269,6 +269,9 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("entity", &LevelInfoParams::entity).doc("The Level entity's id, 16 hex digits; absent: the only level");
     r.type<LevelReloadParams>("LevelReloadParams").doc("level.reload params")
         .field("entity", &LevelReloadParams::entity).doc("The Level entity's id, 16 hex digits; absent: the only level");
+    r.type<AssetInfoParams>("AssetInfoParams").doc("asset.info params");
+    r.type<AssetReloadParams>("AssetReloadParams").doc("asset.reload params")
+        .field("path", &AssetReloadParams::path).doc("A model file's project-relative path; absent: every file");
     // max has no field limits: outside (0, 1e5] is E_PARAMS, as a zero dir is.
     r.type<PhysicsRaycastParams>("PhysicsRaycastParams").doc("physics.raycast params")
         .field("from", &PhysicsRaycastParams::from).doc("Ray origin [x, y, z]").unit("m").required()

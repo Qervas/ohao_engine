@@ -108,6 +108,7 @@ public:
     [[nodiscard]] static Result<std::shared_ptr<const ModelFile>> open(const std::filesystem::path& path,
                                                                        const ContentHash& key);
     [[nodiscard]] std::size_t meshCount() const noexcept { return m_meshes.size(); }
+    [[nodiscard]] std::size_t bytes() const noexcept { return m_map ? m_map->bytes().size() : 0; }
     [[nodiscard]] const Mesh& mesh(std::size_t i) const { return m_meshes[i]; }
     // The index of the mesh named `mesh`, or "#<index>"; the error names `path`.
     [[nodiscard]] Result<std::size_t> find(std::string_view path, std::string_view mesh) const;

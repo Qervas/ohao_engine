@@ -346,6 +346,19 @@ Each is one or a few commits with the hooks green.
   - A watcher (inotify) on the sources in use: a changed file is cooked and swapped where it is used.
   - `asset.info` (what is loaded, its bytes, who uses it), `asset.reload`; `ohao doctor`'s `assets.present` covers
     every `AssetRef`, not three of the eight.
+  - *As built (2026-11-11).*
+    - **`asset.info`:** the model files mapped now, the entities whose mesh or collision mesh each is, its meshes
+      and cooked bytes (the first 32). GPU bytes stay `render.stats`' `memory`.
+    - **`asset.reload {path?}`:** the resolver forgets the file (or all), whose generation moves; instantiate keys
+      an uploaded mesh with it, so the entities patched by the call load the file again and the old mesh, its
+      materials and textures are released. In a session on the helmet: an unchanged file 6 ms and the same pixels;
+      the file swapped for another model 12 ms, the new one drawn, textures 27.9 MB back to none.
+    - **`ohao doctor`'s `assets.present`** (scene.validate's `checkAssets`) covers every component that names a
+      file: the collision mesh, the skin, the animation graph, the audio bank and the effect set joined the model,
+      the environment image and the level. Planted: a scene naming a missing animation graph fails it.
+    - **Not built: the file watcher.** An agent that writes a file calls `asset.reload` after it; watching the
+      disk automates a call nobody has yet had to make by hand. Built when Frank edits assets beside a running
+      window and asks for it.
 - **5i, close.** nlohmann leaves the libraries that no longer need it; the record; the docs; the temporary
   comparison tool deleted.
 

@@ -918,6 +918,15 @@ const std::vector<Method>& methodTable() {
            "E_NOT_FOUND for no level or a non-level entity."}, methodLevelInfo},
         {{"level.reload", p.find<LevelReloadParams>(), "as level.info",
            "Re-reads the level's file and rebuilds its entities and bodies in place; an unchanged file keeps world.hash."}, methodLevelReload, true},
+        {{"asset.info", p.find<AssetInfoParams>(),
+           "{models: [{path, entities, meshes, cookedBytes}], more?, cache}",
+           "The model files loaded now: the entities whose mesh or collision mesh each one is, its meshes and its "
+           "cooked file's bytes (the first 32 by path), and the cooked cache's folder. What they hold on the GPU is "
+           "render.stats' memory."}, methodAssetInfo},
+        {{"asset.reload", p.find<AssetReloadParams>(), "{entities}",
+           "Forgets a model file (or every one) and rebuilds the meshes and colliders of the entities that use it: a "
+           "file edited since is cooked again, an unchanged one costs its naming. A Level's file is level.reload's."},
+         methodAssetReload, true},
         {{"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
            "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."}, methodPhysicsRaycast},
         {{"physics.info", p.find<PhysicsInfoParams>(),

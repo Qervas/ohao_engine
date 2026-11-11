@@ -36,7 +36,7 @@ static_assert(sizeof(SpherePrim) == 12 && sizeof(CubePrim) == 4 && sizeof(Platfo
               sizeof(BoxPrim) == 36);
 
 // One string per distinct MeshSource value: the alternative, then its bytes (or path).
-std::string meshKey(const MeshSource& ms) {
+std::string meshKey(const MeshSource& ms, const AssetResolver& assets) {
     std::string key(1, static_cast<char>(ms.source.index()));
     std::visit(Overloaded{
                    [&](const ModelAsset& m) {
@@ -45,6 +45,9 @@ std::string meshKey(const MeshSource& ms) {
                        key += m.asset.guid;
                        key.push_back('\n');   // one GPU mesh per (file, mesh): every user of a glTF mesh shares it
                        key += m.mesh;
+                       // A file forgotten since (asset.reload, a replaced scene) is another mesh.
+                       key.push_back('\n');
+                       key += std::to_string(assets.generation(m.asset));
                    },
                    [&](const auto& prim) { key.append(reinterpret_cast<const char*>(&prim), sizeof(prim)); },
                },
@@ -174,7 +177,7 @@ private:
     }
 
     void instantiate(entt::entity e, const MeshSource& ms) {
-        std::string key = meshKey(ms);
+        std::string key = meshKey(ms, m_assets);
         auto it = m_meshes.find(key);
         if (it == m_meshes.end()) {
             std::shared_ptr<const cooked::Mesh> mesh;

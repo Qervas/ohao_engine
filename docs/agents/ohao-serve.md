@@ -94,6 +94,8 @@ nodes' hints; then:
   pairs in `contacts`, `buildMs`, and the collision warnings (`W_LEVEL_DYNAMIC_MESH`, …).
 - `level_reload {entity?}` re-reads the file and rebuilds the level's entities and bodies in
   place; an unchanged file keeps `world_hash`. Meshes already on the GPU stay as they were.
+- `asset_info` → the model files loaded, who uses each, their cooked bytes. `asset_reload {path?}` after
+  editing a model or one of its textures: the file is cooked again and the entities that use it show it.
 
 These need no renderer, and work right after `scene_load` or `world_apply` (they bring the
 level, transforms and bodies up to date first). No level is `E_NOT_FOUND`, as is an entity
