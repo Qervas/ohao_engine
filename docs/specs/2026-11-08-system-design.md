@@ -280,6 +280,11 @@ data; the world without the renderer; hot reload of the module.
 *Done when* the engine libraries hold no game code, `replay_test` passes with the slice as a module, a hot reload keeps
 `world.hash`, and a second minimal game builds against the same API.
 
+**Order (Frank, 2026-11-11):** step 5 is built before step 4. The play scene's CPU frame is 0.44 ms (record and
+submit, measured 2026-11-10), so 4b's jobs have nothing to speed up yet, and assets give results that are seen.
+Step 5's streamer then loads on threads of its own and uploads through the graphics queue until 4a and 4b bring the
+jobs and the transfer queue.
+
 **Step 4, the frame (large).**
 - 4a: the frame graph over every pass, VMA everywhere, dynamic rendering, the bindless table and generated parameter
   blocks, the pipeline library with shader hot reload, the transfer queue.
