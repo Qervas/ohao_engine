@@ -361,6 +361,10 @@ Each is one or a few commits with the hooks green.
       window and asks for it.
 - **5i, close.** nlohmann leaves the libraries that no longer need it; the record; the docs; the temporary
   comparison tool deleted.
+  - *As built (2026-11-11):* `ohao_asset` and `ohao_physics` no longer name nlohmann (the GPU fault report, one
+    renderer header and the benches still use it); the spec's 4.8 says what was built; the record is
+    `docs/changes/2026-11-11-step5-assets.md`; `model_hash` went in 5c. The two JSON readers were not measured
+    against each other: nothing in step 5 depends on which one stays.
 
 ## Done when (the spec's criteria)
 

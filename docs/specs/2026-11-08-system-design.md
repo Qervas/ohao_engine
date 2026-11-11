@@ -229,15 +229,22 @@ added and removed, 74 tests built and cut to 10).
 
 ![Cook and stream](2026-11-08-system-design/7-assets.svg)
 
-- **Asset database:** a GUID per source file in a `.meta` beside it, dependencies between assets, content hashes.
-  Scenes refer to GUIDs; paths are for people.
-- **Cooker** (`tools/cook`, on jobs, cached by content hash): mesh streams split for depth and RT, meshlets prebuilt;
-  textures compressed (BC7, BC5 for normals, BC6H for HDR) with mips, in KTX2; clips; audio. One glTF reader, in the
-  cooker only.
-- **Runtime:** an asset manager with handles, reference counts and a release path; a streamer that loads on jobs and
-  uploads through the transfer queue, by distance and priority, under a memory budget.
-- **Hot reload:** a file watcher recooks the changed source and swaps it by GUID.
-- One JSON reader (simdjson) and our writer; nlohmann goes where nothing else needs it.
+As built in step 5 (2026-11-11; `docs/changes/2026-11-11-step5-assets.md`), which corrected this section:
+
+- **Asset identity is content.** A cooked asset is named by a hash of what it was made from; scenes refer to source
+  paths, which agents write. No GUID and no `.meta`: a rename is a search and replace, and costs the cache nothing.
+  Built when a rename breaks something.
+- **Cooker** (`ohao/cook`, a library every host links; cached by content in `<root>/.ohao/cooked/`): a source is
+  cooked the first time a host asks for it. Meshes with their submeshes and meshlets; textures as BC7 (colour, data)
+  and BC5 (normals) with mips, in a format of our own read by `mmap`; collision shapes as the physics backend's
+  bytes. Assimp, the one glTF reader for meshes, is inside the cooker only. No `tools/cook` until a build ships
+  without the cooker; no split vertex streams, BC6H, clips or audio until a measurement asks.
+- **Runtime:** consumers read cooked data in place. Textures are held by count, materials and mesh ranges are given
+  back, GPU memory after the frames in flight. A load is submitted and not waited for. Preparing a load on another
+  thread, a memory budget and loading by distance are 4b's (its jobs) and the first open level's.
+- **Hot reload:** `asset.reload` recooks an edited source and swaps it where it is used. No file watcher yet.
+- nlohmann is left in the GPU fault report, one renderer header and the benches. Whether simdjson or our own reader
+  reads scenes was not settled here.
 
 ### 4.9 Build, CI, platforms
 
@@ -294,8 +301,8 @@ jobs and the transfer queue.
 *Done when* no barrier is placed outside the graph, `render_bench` is no slower on any scene, `replay_test` is
 identical at 1 and N threads, and the play scene's CPU frame time drops with more cores (measured).
 
-**Step 5, assets (large).** The asset database, the cooker, compressed textures, the asset manager with release, the
-streamer, hot reload by GUID.
+**Step 5, assets (large; built 2026-11-11).** The cooker and its content-addressed cache, compressed textures, release,
+loads that do not wait for the device, reload on request.
 *Done when* the play scene loads from cooked data faster than from source (measured), its texture memory drops by the
 compression ratio, loading has no `WaitIdle`, and a load-unload loop returns memory to its baseline.
 
