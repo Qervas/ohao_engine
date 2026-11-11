@@ -4,7 +4,7 @@
 // scene's node tree with each node's TRS, mesh, camera and KHR_lights_punctual light,
 // its `extras` verbatim, the lights and cameras themselves, and each mesh's primitive and
 // triangle counts. Geometry and materials are not read here: ModelLoader loads them
-// through Assimp, one glTF mesh at a time (loadMesh), using these primitive counts.
+// through Assimp, every mesh from one import (ModelLoader::loadMeshes), using these primitive counts.
 #include "core/result.hpp"
 
 #include <glm/glm.hpp>
@@ -40,7 +40,7 @@ struct GltfCamera {
 struct GltfMesh {
     std::string name;
     uint32_t primitives = 0;
-    uint64_t triangles = 0;   // what loadMesh emits: triangles, strips and fans; lines and points are none
+    uint64_t triangles = 0;   // what loadMeshes emits: triangles, strips and fans; lines and points are none
 };
 
 struct GltfStructure {

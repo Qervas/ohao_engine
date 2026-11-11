@@ -203,8 +203,8 @@ Result<std::shared_ptr<Model>> ModelLoader::loadResult(std::string_view path) {
     return Result<std::shared_ptr<Model>>::ok(std::move(model));
 }
 
-Result<std::shared_ptr<Model>> ModelLoader::loadMesh(std::string_view path, std::string_view mesh) {
-    using R = Result<std::shared_ptr<Model>>;
+Result<std::shared_ptr<const ModelLoader::FileMeshes>> ModelLoader::loadMeshes(std::string_view path) {
+    using R = Result<std::shared_ptr<const FileMeshes>>;
     const std::string where = "'" + std::string(path) + "'";
     const std::string ext = getExtension(path);
     if (ext != "glb" && ext != "gltf") return R::err(where + ": per-mesh loading needs a glTF file (.glb or .gltf)");
@@ -215,15 +215,50 @@ Result<std::shared_ptr<Model>> ModelLoader::loadMesh(std::string_view path, std:
     if (!structure) return R::err(where + ": " + structure.error().message);
     const auto& meshes = structure.value().meshes;
 
+    // One import for the whole file: each glTF mesh is then Assimp's meshes [first, first + count).
+    Assimp::Importer importer;
+    const std::string pathStr{path};
+    const aiScene* scene = importScene(importer, pathStr, true);
+    MeshRange range;
+    for (const auto& m : meshes) range.total += m.primitives;
+    if (scene && scene->mNumMeshes != range.total) {
+        OHAO_LOG(Error, asset, "ModelLoader: {}: Assimp made {} meshes of the file's {} primitives", pathStr,
+                 scene->mNumMeshes, range.total);
+        scene = nullptr;
+    }
+    auto file = std::make_shared<FileMeshes>();
+    for (const auto& m : meshes) {
+        range.count = m.primitives;
+        std::shared_ptr<Model> model = scene ? emitModel(scene, pathStr, &range) : nullptr;
+        range.first += m.primitives;
+        const std::string mesh = "mesh '#" + std::to_string(file->meshes.size()) + "'";
+        std::string error;
+        if (!model) {
+            error = where + ": " + mesh + " could not be loaded";
+        } else {
+            repairMeshNormals(model->vertices, model->indices);
+            if (model->empty()) error = where + ": " + mesh + " has no triangles";
+        }
+        if (!error.empty()) model = nullptr;
+        file->names.push_back(m.name);
+        file->meshes.push_back(std::move(model));
+        file->errors.push_back(std::move(error));
+    }
+    return R::ok(std::move(file));
+}
+
+Result<std::size_t> ModelLoader::findMesh(const FileMeshes& file, std::string_view path, std::string_view mesh) {
+    using R = Result<std::size_t>;
+    const std::string where = "'" + std::string(path) + "'";
+    const int count = static_cast<int>(file.names.size());
     int index = -1;
     if (!mesh.empty() && mesh.front() == '#') {
         int value = 0;
         const auto [end, ec] = std::from_chars(mesh.data() + 1, mesh.data() + mesh.size(), value);
-        if (ec == std::errc() && end == mesh.data() + mesh.size() && value >= 0 && value < static_cast<int>(meshes.size()))
-            index = value;
+        if (ec == std::errc() && end == mesh.data() + mesh.size() && value >= 0 && value < count) index = value;
     } else {
-        for (int i = 0; i < static_cast<int>(meshes.size()); ++i) {
-            if (meshes[i].name != mesh) continue;
+        for (int i = 0; i < count; ++i) {
+            if (file.names[static_cast<std::size_t>(i)] != mesh) continue;
             if (index >= 0)
                 return R::err(where + ": meshes " + std::to_string(index) + " and " + std::to_string(i) + " are both named '" +
                               std::string(mesh) + "'; use '#" + std::to_string(index) + "'");
@@ -231,19 +266,8 @@ Result<std::shared_ptr<Model>> ModelLoader::loadMesh(std::string_view path, std:
         }
     }
     if (index < 0)
-        return R::err(where + " has no mesh '" + std::string(mesh) + "' (" + std::to_string(meshes.size()) + " meshes)");
-
-    MeshRange range;
-    for (int i = 0; i < static_cast<int>(meshes.size()); ++i) {
-        if (i < index) range.first += meshes[i].primitives;
-        range.total += meshes[i].primitives;
-    }
-    range.count = meshes[index].primitives;
-    auto model = loadAssimp(path, &range);
-    if (!model) return R::err(where + ": mesh '" + std::string(mesh) + "' could not be loaded");
-    repairMeshNormals(model->vertices, model->indices);
-    if (model->empty()) return R::err(where + ": mesh '" + std::string(mesh) + "' has no triangles");
-    return R::ok(std::move(model));
+        return R::err(where + " has no mesh '" + std::string(mesh) + "' (" + std::to_string(count) + " meshes)");
+    return R::ok(static_cast<std::size_t>(index));
 }
 
 // === OBJ Loader (native) ===
@@ -321,10 +345,7 @@ static int loadAssimpTexture(const aiScene* scene, const aiMaterial* mat,
     return -1;
 }
 
-std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const MeshRange* range) {
-    Assimp::Importer importer;
-    const std::string pathStr{path};
-
+const aiScene* ModelLoader::importScene(Assimp::Importer& importer, const std::string& pathStr, bool perMesh) {
     unsigned int flags =
         aiProcess_Triangulate |
         aiProcess_GenSmoothNormals |
@@ -340,7 +361,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     // step splits a mesh. SortByPType splits a mesh of mixed primitive types, and
     // FindDegenerates turns degenerate triangles into lines and points that it would then
     // split off, so neither runs here (non-triangle faces are skipped when emitting anyway).
-    if (range) flags &= ~(aiProcess_FindDegenerates | aiProcess_SortByPType);
+    if (perMesh) flags &= ~(aiProcess_FindDegenerates | aiProcess_SortByPType);
 
     // Read first, post-process second: a file with skinned meshes keeps its vertices as written.
     // JoinIdenticalVertices compares position, normal and UVs, not joints or weights, so it merged
@@ -357,19 +378,23 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
         OHAO_LOG(Error, asset, "ModelLoader: Assimp error: {}", importer.GetErrorString());
         return nullptr;
     }
-    if (range && (scene->mNumMeshes != range->total || range->first + range->count > scene->mNumMeshes)) {
-        OHAO_LOG(Error, asset, "ModelLoader: {}: Assimp made {} meshes of the file's {} primitives", pathStr,
-                 scene->mNumMeshes, range->total);
-        return nullptr;
-    }
-
-    auto model = std::make_shared<Model>();
-    model->setSourcePath(pathStr);
-    std::string modelDir = std::filesystem::path(pathStr).parent_path().string();
-
     OHAO_LOG(Info, asset, "ModelLoader: Assimp: {} meshes, {} materials, {} textures, {} animations",
              scene->mNumMeshes, scene->mNumMaterials, scene->mNumTextures,
              scene->mNumAnimations);
+    return scene;
+}
+
+std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
+    Assimp::Importer importer;
+    const std::string pathStr{path};
+    const aiScene* scene = importScene(importer, pathStr, false);
+    return scene ? emitModel(scene, pathStr, nullptr) : nullptr;
+}
+
+std::shared_ptr<Model> ModelLoader::emitModel(const aiScene* scene, const std::string& pathStr, const MeshRange* range) {
+    auto model = std::make_shared<Model>();
+    model->setSourcePath(pathStr);
+    std::string modelDir = std::filesystem::path(pathStr).parent_path().string();
 
     // --- Materials --- (one mesh: only those its primitives use, renumbered from 0)
     std::vector<unsigned> usedMaterials;

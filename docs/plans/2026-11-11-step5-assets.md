@@ -129,6 +129,15 @@ Each is one or a few commits with the hooks green.
   - The content hash, the cache directory, the `(path, size, mtime)` index, `ohao cook [paths]`.
   - Proven by the bit-for-bit comparison against today's loader, and by a planted change to a source file cooking
     again while an untouched one does not.
+  - *As built, first piece (2026-11-11): a file is imported once.* `ModelLoader::loadMeshes` imports a glTF file
+    once and makes every mesh of it from that one Assimp scene; the resolver keeps the file's meshes
+    (`FileAssetResolver::m_files`). `loadMesh` is gone.
+    - Identical: `model_hash` (temporary, `tools/bench/model_hash.cpp`) hashes everything the resolver hands the
+      engine for each mesh (by index, by name, and the whole file) of the 18 tracked and local glTF files and of
+      kit2k: 188 lines, the same before and after. A planted wrong primitive range fails it.
+    - The 188 loads took 9.0 s + 29.3 s before and 6.4 s + 6.9 s after.
+    - kit2k's load went from 45.6 s to 33.5 s only: the rest is its 2,000 mesh colliders, each built from its
+      25,000 triangles (5f's shape cache). `blockout_load_ms` 1.24 ms (budget 20).
 - **5c, the runtime reads cooked data only.**
   - The asset manager replaces `FileAssetResolver`'s model cache: handles to cooked assets, mapped from the cache,
     cooked on demand. A texture is one asset by content: decoded never, uploaded once whoever uses it.
