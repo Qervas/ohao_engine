@@ -71,7 +71,7 @@ From a survey of the tree at `c536dafd` and runs on this machine (4060, 2026-11-
 Each by AGENTS.md's "Deciding"; the ones that leave the spec are also under "Spec corrections".
 
 - **Cook on demand, in the host.** A host asked for an asset whose cooked data is missing cooks it then and there
-  (the cooker is a library, `ohao_cook`), and `ohao cook` cooks ahead. An agent never runs a second step, and never
+  (the cooker is a library, `ohao_cook`); `ohao cook`, cooking ahead, comes with the first build that ships without it. An agent never runs a second step, and never
   sees stale data: the cache key is the source's content.
   - *Refuted:* a ship build must not carry the importers. It will not: only `ohao_cook` links them, and a host
     built without it fails on a missing cooked asset by name. That build is not made in this step.
@@ -202,8 +202,8 @@ Each is one or a few commits with the hooks green.
 
 To be made in the spec when the part that settles each is built:
 - **4.8, the database:** no GUID and no `.meta` in step 5; scenes refer to paths, the cache to content.
-- **4.8, the cooker:** a private cooked format in place of KTX2; cooked on demand by the host as well as by
-  `tools/cook`; "on jobs" waits for 4b.
+- **4.8, the cooker:** a private cooked format in place of KTX2; cooked on demand by the host, with no
+  `tools/cook` until a build ships without the cooker; "on jobs" waits for 4b.
 - **4.8, the runtime:** the streamer's jobs and transfer queue wait for step 4.
 - **4.8, one JSON reader:** not settled here. The scene reader is our own (`ecs::parseJson`,
   `reflect::JsonCursor`) and simdjson reads the other formats; 5i measures both on a scene file before either goes.
