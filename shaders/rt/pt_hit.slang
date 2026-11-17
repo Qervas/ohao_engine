@@ -150,6 +150,27 @@ Corners cornersOf(uint slot, uint primitive)
 
 float4 sampleTex(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0); }
 
+// A normal map's tangent-space normal at uv as the caustic pass solves it (ruling M10): the four texels round uv at mip 0
+// (the square between their centres is a cell), each decoded, blended bilinearly in fp32. The hardware's filter
+// quantises its weights to 1/256 of a texel: a normal piecewise constant at that scale, not the cell's polynomial.
+// Addressing repeats, as the table's sampler does.
+float3 mapNormalAt(uint index, float2 uv)
+{
+    uint w, h;
+    textures[NonUniformResourceIndex(index)].GetDimensions(w, h);
+    const int2 size = int2(int(w), int(h));
+    const float2 x = uv * float2(size) - 0.5;
+    const float2 x0 = floor(x);
+    const float2 f = x - x0;
+    const int2 a = ((int2(x0) % size) + size) % size;
+    const int2 b = (a + 1) % size;
+    const float3 c00 = normalFromMap(textures[NonUniformResourceIndex(index)].Load(int3(a.x, a.y, 0)).rg);
+    const float3 c10 = normalFromMap(textures[NonUniformResourceIndex(index)].Load(int3(b.x, a.y, 0)).rg);
+    const float3 c01 = normalFromMap(textures[NonUniformResourceIndex(index)].Load(int3(a.x, b.y, 0)).rg);
+    const float3 c11 = normalFromMap(textures[NonUniformResourceIndex(index)].Load(int3(b.x, b.y, 0)).rg);
+    return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
+}
+
 // MikkTSpace's frame at the hit, as the G-buffer's vertex stage makes it: per vertex the unit world normal (inverse
 // transpose), the unit world tangent (the world matrix) and w n x t, interpolated as they are.
 void mikkFrameAt(Corners c, HitContext hc, float w, float2 bary, out float3 n, out float3 t, out float3 b)
@@ -232,7 +253,7 @@ void fillHitAt(inout PathPayload payload, HitContext hc)
         mikkFrameAt(c, hc, w, bary, vn, vt, vb);
         if (dot(vt, vt) > 1e-12)
         {
-            const float3 tn = normalFromMap(sampleTex(normalTex, uv).rg);
+            const float3 tn = mapNormalAt(normalTex, uv);
             const float side = dot(n, vn) < 0.0 ? -1.0 : 1.0;   // n was turned toward the ray: the map turns with it
             n = side * mikkTSpaceNormal(tn, vn, vt, vb);
         }

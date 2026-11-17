@@ -70,6 +70,13 @@ Owned normal-mapped materials read their map as four `Load`s blended in fp32 in 
 same expression), not the hardware's 1/256-quantised filter. `m13_fp32_normal`: the tracer's normal equals the twin's
 to 1 ulp. Goldens with normal maps measured and updated after looking.
 
+*As built (2026-11-17).* `mapNormalAt` (rt/pt_hit.slang): the four texels round uv at mip 0, each decoded by
+`normalFromMap`, blended bilinearly in fp32, repeating as the sampler does; the pass calls the same function, so the two
+agree by construction (no twin since 2026-11-09). Every normal map the tracer reads takes it, not owned materials only:
+one path, and no golden path-traces a normal map (all five exact). Checked against the hardware filter on the helmet
+(640x360, 64 spp, one seed): mean within 6e-6, mean absolute difference 6.5e-5, 0.5% of the pixels more than 1% apart;
+a half-texel shift would move every bump.
+
 ### Task 5: pruning to cells (CPU twin, then GPU)
 
 A pyramid of normal cones per normal map, built at upload; a triangle's cone composed with the pyramid's over its uv
