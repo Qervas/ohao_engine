@@ -298,12 +298,12 @@ bool PathTracer::ensureCausticsPipeline() {
 bool PathTracer::ensureManifoldPipeline() {
     if (m_manifoldPipelineFailed) return false;
     if (m_manifoldPipeline) return true;
-    static constexpr const char* kRounds[5] = {"manifoldWalkGroups", "manifoldWalkClusters", "manifoldWalkSubs",
-                                               "manifoldSolveRound", "manifoldConnect"};
-    std::array<std::string, 5> spv;
-    std::array<Raygen, 5> rounds;
-    std::array<VkStridedDeviceAddressRegionKHR*, 5> regions;
-    for (uint32_t i = 0; i < 5; ++i) {
+    static constexpr const char* kRounds[6] = {"manifoldWalkRecords", "manifoldWalkGroups", "manifoldWalkClusters",
+                                               "manifoldWalkSubs", "manifoldSolveRound", "manifoldConnect"};
+    std::array<std::string, 6> spv;
+    std::array<Raygen, 6> rounds;
+    std::array<VkStridedDeviceAddressRegionKHR*, 6> regions;
+    for (uint32_t i = 0; i < 6; ++i) {
         spv[i] = std::string("bin/shaders/rt_path_tracer.slang.") + kRounds[i] + ".spv";
         rounds[i] = {spv[i].c_str(), kRounds[i]};
         regions[i] = &m_manifoldRoundRegions[i];

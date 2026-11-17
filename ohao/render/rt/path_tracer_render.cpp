@@ -96,7 +96,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
     if (causticsOn && !manifoldOff && manifoldFrame) m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
     const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_manifold.active() &&
                             m_manifold.ensureRequests(m_width * m_height) &&
-                            (manifoldSplitOnly || (m_manifoldRounds.ensure(m_width, m_height) && ensureManifoldPipeline()));
+                            (manifoldSplitOnly || (m_manifoldRounds.ensure(m_width, m_height, m_caustics.lightCount()) && ensureManifoldPipeline()));
     const bool manifoldPass = manifoldOn && !manifoldSplitOnly;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
@@ -580,11 +580,11 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
             if (!stageTimes) timePass("pt.manifold");
             m_manifoldRounds.recordReset(frame);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_manifoldPipeline);
-            using Q = render::ManifoldRounds::Queue;
+            using R = render::ManifoldRounds;
             const VkDeviceAddress counts = getBufferDeviceAddress(m_manifoldRounds.counts());
-            const Q queues[5] = {Q::Groups, Q::Clusters, Q::Subs, Q::Candidates, Q::Roots};
-            // The batch is pushed as pc.jitter.z's bits (path guiding's word, which no pass after the trace reads; put
-            // back after the last batch).
+            const R::Queue queues[6] = {R::Records, R::Groups, R::Clusters, R::Subs, R::Candidates, R::Roots};
+            // The batch and pass are pushed as pc.jitter.z's bits (batch | pass << 16; path guiding's word, which no
+            // pass after the trace reads; put back after the last batch).
             constexpr uint32_t kBatchOffset = offsetof(PTPushConstants, jitter) + 2 * sizeof(float);
             const uint32_t rows = m_manifoldRounds.rowsPerBatch();
             for (uint32_t b = 0; b < m_manifoldRounds.batches(); ++b) {
@@ -601,25 +601,31 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                     vkCmdTraceRaysKHR(cmd, &m_manifoldRgenRegion, &m_manifoldMissRegion, &m_manifoldHitRegion,
                                       &m_callRegion, m_width, std::min(rows, m_height - b * rows), 1);
                 }
-                // The walk's rounds follow the levels (groups, clusters, sub-clusters), then the solve and the
-                // connect: each traces as many threads as the round before it queued (the batch's arguments).
-                for (uint32_t r = 0; r < 5; ++r) {
-                    if (r == 0) stage("pt.manifold.walk");
-                    if (r == 3) stage("pt.manifold.solve");
-                    if (r == 4) stage("pt.manifold.connect");
-                    Pass round(frame, nullptr, Pass::RayTracing);
-                    m_manifold.roundPass(round, frameSlot);
-                    if (r < 3) m_manifoldRounds.walkPass(round);
-                    else if (r == 3) m_manifoldRounds.solvePass(round);
-                    else {
-                        readsScene(round);
-                        m_caustics.manifoldPass(round);
-                        m_manifoldRounds.connectPass(round);
+                // Each pass the rounds follow the levels (records, groups, clusters, sub-clusters), then the solve and
+                // the connect: each traces as many threads as its queue holds this pass (the items the rounds before
+                // it queued, and those it carried from the last pass). A pass after the first is all carries.
+                for (uint32_t p = 0; p < R::kPasses; ++p) {
+                    const uint32_t bp = b | p << 16;
+                    if (p > 0) vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bp, &bp);
+                    for (uint32_t r = 0; r < 6; ++r) {
+                        if (p == 0 && r == 0) stage("pt.manifold.walk");
+                        if (p == 0 && r == 4) stage("pt.manifold.solve");
+                        if (p == 0 && r == 5) stage("pt.manifold.connect");
+                        if (p == 1 && r == 0) stage("pt.manifold.carry");
+                        Pass round(frame, nullptr, Pass::RayTracing);
+                        m_manifold.roundPass(round, frameSlot);
+                        if (r < 4) m_manifoldRounds.walkPass(round);
+                        else if (r == 4) m_manifoldRounds.solvePass(round);
+                        else {
+                            readsScene(round);
+                            m_caustics.manifoldPass(round);
+                            m_manifoldRounds.connectPass(round);
+                        }
+                        round.begin();
+                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[r], &m_manifoldMissRegion,
+                                                  &m_manifoldHitRegion, &m_callRegion,
+                                                  counts + R::argsOffset(b, p, queues[r]));
                     }
-                    round.begin();
-                    vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[r], &m_manifoldMissRegion,
-                                              &m_manifoldHitRegion, &m_callRegion,
-                                              counts + render::ManifoldRounds::argsOffset(b, queues[r]));
                 }
             }
             vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof(float), &pc.jitter.z);

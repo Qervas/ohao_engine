@@ -47,6 +47,7 @@ public:
     // Something to trace: a directional light and a caster.
     [[nodiscard]] bool active() const noexcept { return m_casters.totalPower > 0.0f; }
     [[nodiscard]] uint32_t casterCount() const noexcept { return m_casterCount; }
+    [[nodiscard]] uint32_t lightCount() const noexcept { return uint32_t(m_casters.lightIrradiance.size()); }
 
     // The splat buffer for `pixels` pixels (the one it replaces is retired). False: the pass stays off.
     bool ensure(uint32_t pixels);
@@ -66,10 +67,11 @@ public:
     // connections that carried light, the pruning's cluster, sub-cluster and triangle tests, and step 2b's walks, paths
     // found, connections through solids and paths at the re-find trials' ceiling.
     [[nodiscard]] std::array<uint32_t, 11> manifoldCounts() const;
-    // The manifold rounds' words since the last clear (words 12-21): items that did not fit their queue, fixed-point
-    // words clamped, two unused, then the peak counts of the records, groups, clusters, sub-clusters, candidates and
-    // roots in a frame (render/rt/manifold_rounds.hpp).
-    [[nodiscard]] std::array<uint32_t, 10> manifoldRoundCounts() const;
+    // The manifold rounds' words since the last clear (words 12-22): items lost past the last pass, fixed-point words
+    // clamped, items carried to a later pass, the passes that held an item (the most), then the peak counts in a batch
+    // and pass of the records and of the records' items, groups, clusters, sub-clusters, candidates and roots
+    // (render/rt/manifold_rounds.hpp).
+    [[nodiscard]] std::array<uint32_t, 11> manifoldRoundCounts() const;
     void clearCounts() noexcept { m_clearCounts = true; }
 
     [[nodiscard]] VkBuffer table() const noexcept { return m_table.buffer; }

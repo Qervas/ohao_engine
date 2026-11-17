@@ -11,10 +11,12 @@
 //                words: rt/path_tracer.slang, "the manifold pass as rounds")
 //   62 sum       3 words a pixel: the frame's light in fixed point (kCausticSplatScale), cleared by the resolve
 //
-// The frame's pixels are taken in batches of whole rows, at most kBatchPixels each: a batch's setup and rounds run on
-// its rows, into the one fixed-point sum, and the resolve runs once after the last. The queues hold a batch: their
-// capacities are the batch's pixels times the peaks a pixel measured, with headroom; an item past its queue's capacity
-// is still counted (the stats' word 12) and never written, which no measured frame has done.
+// The frame's pixels are taken in batches of whole rows, at most kBatchPixels each, and each batch in kPasses passes:
+// pass 0 runs the setup and every round on the batch's rows; an item whose outputs do not fit their queue is carried
+// into its own queue's next pass, where every round runs again. Into the one fixed-point sum; the resolve runs once
+// after the last batch. The queues' capacities are the batch's pixels times the peaks a pixel measured, with headroom
+// (the records' exact: kManifoldDepths a pixel and light), so carries are rare; an item still carried after the last
+// pass is counted lost (the stats' word 12).
 
 #include <vulkan/vulkan.h>
 
@@ -28,23 +30,30 @@ namespace ohao::render {
 
 class ManifoldRounds {
 public:
-    // The queues whose items the walk and the solve read, in manifoldItems' order, then the roots.
-    enum Queue : uint32_t { Groups = 0, Clusters = 1, Subs = 2, Candidates = 3, Roots = 4 };
-    // A batch's pixels at most (whole rows: a row more when a row is wider), and the batches a frame at most.
+    // The queues, in the order the rounds read them: the records' items (R0), groups, clusters, sub-clusters,
+    // candidates (each two regions of manifoldItems, a pass's input and the next pass's carries), then the roots.
+    enum Queue : uint32_t { Records = 0, Groups = 1, Clusters = 2, Subs = 3, Candidates = 4, Roots = 5 };
+    static constexpr uint32_t kQueues = 6;
+    // A batch's pixels at most (whole rows: a row more when a row is wider), the batches a frame at most, and the passes
+    // a batch: every round runs once a pass, on the items the last pass carried and what they yield. Measured on the
+    // showcase at 1920x1080 (2026-11-17) with the queues planted smaller: at a tenth of their capacities (a fifth of
+    // the fullest band's peaks) 6 passes held an item, at a sixteenth (an eighth of the peaks) 10, none lost; an empty
+    // pass costs its six traces, about 10 us each.
     static constexpr uint32_t kBatchPixels = 131072u;
     static constexpr uint32_t kMaxBatches = 256u;
+    static constexpr uint32_t kPasses = 12u;
 
     bool create(VkDevice device, GpuAllocator& allocator);
     void destroy();
 
-    // The batches and buffers for a width x height frame (the buffers they replace are retired). False: the pass
-    // stays off.
-    bool ensure(uint32_t width, uint32_t height);
+    // The batches and buffers for a width x height frame lit by `lights` directional lights (the buffers they replace
+    // are retired). False: the pass stays off.
+    bool ensure(uint32_t width, uint32_t height, uint32_t lights);
     [[nodiscard]] uint32_t batches() const noexcept { return m_batches; }
     [[nodiscard]] uint32_t rowsPerBatch() const noexcept { return m_rows; }
 
-    // The frame's counts reset (dispatch arguments, counts, counters; the capacities and regions written), and the
-    // sum cleared on the first frame after it was (re)allocated.
+    // The frame's counts reset (trace arguments, counts, counters; the capacities and regions written), and the sum
+    // cleared on the first frame after it was (re)allocated.
     void recordReset(const Frame& frame);
 
     // What each round declares (besides the scene and the casters).
@@ -54,10 +63,10 @@ public:
     void connectPass(Pass& pass);
     void resolvePass(Pass& pass);
 
-    // A batch's queue's trace arguments (VkTraceRaysIndirectCommandKHR: its items rounded up to 64) in the counts
-    // buffer.
-    [[nodiscard]] static VkDeviceSize argsOffset(uint32_t batch, Queue q) noexcept {
-        return 4u * (64u + 32u * VkDeviceSize{batch}) + VkDeviceSize{q} * 16u;
+    // A batch and pass's queue's trace arguments (VkTraceRaysIndirectCommandKHR: its items rounded up to 64) in the
+    // counts buffer.
+    [[nodiscard]] static VkDeviceSize argsOffset(uint32_t batch, uint32_t pass, Queue q) noexcept {
+        return 4u * (64u + 32u * (VkDeviceSize{batch} * kPasses + pass)) + VkDeviceSize{q} * 16u;
     }
 
     [[nodiscard]] VkBuffer records() const noexcept { return m_records.buffer; }
@@ -73,11 +82,11 @@ private:
     GpuAllocator* m_allocator{nullptr};
     GpuBuffer m_records, m_items, m_roots, m_counts, m_sum;
     uint32_t m_rows{1}, m_batches{1};
-    uint32_t m_queuePixels{0}, m_sumPixels{0};
+    uint32_t m_queuePixels{0}, m_queueLights{0}, m_sumPixels{0};
     bool m_queues{false};
     bool m_clearSum{true};
     uint32_t m_recordCap{0};
-    std::array<uint32_t, 5> m_caps{};   // the queues', Groups to Roots
+    std::array<uint32_t, kQueues> m_caps{};
 };
 
 } // namespace ohao::render

@@ -125,7 +125,20 @@ in Setup, into the same sum.
   the raygen build 1,984, a compute build of the same SPIR-V 1,948; neither accepts one the double rejects. The
   stages differ because the driver lowers `dot(v, v)` in a different order (an fma chain from x or from y; a few ulp
   through `manifoldMap`'s lengths), which is why the rounds are raygens. To be fixed by proof, not a wider tolerance:
-  a root accepted by Krawczyk's existence test (2a's `manifoldCertify`), so the count does not depend on rounding.
+  a root accepted by a proof, so the count does not depend on rounding.
+- **No light lost when a queue is full** (stage 1b): each band runs in 12 passes; an item whose outputs do not fit is
+  carried, with a resume index, into its queue's next pass (two halves a queue: this pass's input, the next's
+  carries). Setup queues one record item; a first round emits the record's groups, 256 a pass. Lost is only what is
+  still carried after pass 12 (counted). Planted at 1/16 of the 1080p showcase's queues: 10 passes, 3.44 M items
+  carried, none lost, the image and counters 1-7 identical to the unplanted run. Cost: `pt.manifold` 1080p 72-76 ->
+  83 ms (the empty passes about 6 ms), 640x360 8.0 -> 9.3 ms.
+- **2a's triangle certifier is not the proof** (measured, reverted): Krawczyk on the triangle's slope map
+  (`manifoldCertify`) in Solve, against a double-precision search of 2,002 roots at 160x90: 1,945 proven, 57 missed,
+  none false (Newton today: 1,984). Around every missed root K(B) neither fits nor excludes down to the minimum box:
+  grazing reflections (|H . n| at the 10th percentile 0.03), where the map's interval Jacobian stays wide at any width.
+  T1's finding again (the map's natural enclosures overestimate). **Decided:** a plain triangle is a normal-mapped
+  cell whose texels are (0, 0, 1); 2a's triangles go to the polynomial solver with 2c's cells (stage 3), one exact
+  solver; until then Newton, its 0.25% loss recorded.
 
 
 

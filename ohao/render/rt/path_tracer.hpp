@@ -404,11 +404,11 @@ private:
         VkStridedDeviceAddressRegionKHR rgen{}, miss{}, hit{}, extra{};
     };
     GuidedProgram m_guided[2];
-    // Caustics step 2's program (ensureManifoldPipeline): manifoldSetup, then a raygen a round (the walk's three
+    // Caustics step 2's program (ensureManifoldPipeline): manifoldSetup, then a raygen a round (the walk's four
     // levels, the solve, the connect: m_manifoldRoundRegions in that order), and manifoldResolve on the tracer's
     // layout as compute.
     VkPipeline m_manifoldPipeline = VK_NULL_HANDLE;
-    std::array<VkStridedDeviceAddressRegionKHR, 5> m_manifoldRoundRegions{};
+    std::array<VkStridedDeviceAddressRegionKHR, 6> m_manifoldRoundRegions{};
     VkPipeline m_manifoldResolvePipe = VK_NULL_HANDLE;
     bool m_manifoldPipelineFailed = false;
     GpuBuffer m_manifoldSbt;
