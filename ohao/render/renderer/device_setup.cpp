@@ -446,6 +446,9 @@ bool VulkanRenderer::createLogicalDevice() {
     rtFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     rtFeatures.pNext = &asFeatures;
     rtFeatures.rayTracingPipeline = VK_TRUE;
+    // The manifold pass's rounds trace as many threads as a queue holds (vkCmdTraceRaysIndirectKHR); required of every
+    // device with rayTracingPipeline.
+    rtFeatures.rayTracingPipelineTraceRaysIndirect = VK_TRUE;
 
     // Inline ray tracing from compute, for consumers that need the whole
     // traversal inside a single function rather than split across a ray

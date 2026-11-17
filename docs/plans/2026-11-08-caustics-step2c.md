@@ -77,7 +77,35 @@ one path, and no golden path-traces a normal map (all five exact). Checked again
 (640x360, 64 spp, one seed): mean within 6e-6, mean absolute difference 6.5e-5, 0.5% of the pixels more than 1% apart;
 a half-texel shift would move every bump.
 
-### Task 5: pruning to cells (CPU twin, then GPU)
+### The pass as rounds (decided 2026-11-17, before tasks 5 and 6)
+
+**Where it starts.** `manifoldConnect` (rt/path_tracer.slang) is one thread a pixel: for each request and light it
+picks one owned draw by solid angle and walks that draw's whole hierarchy in the lane (groups, clusters, sub-clusters,
+triangles; 2a's disc test at each), then for each candidate triangle Newton, a visibility ray, the retrace of y, the
+connection, summed into the pixel. Its work is bounded only by the chosen draw's size: tolerable for 2a's spheres,
+not once 2c owns Sponza's draws and the helmet (tens of thousands of triangles each, their cones widened by the map),
+and not with cells (47 a request on the helmet, up to 425, each 27 to 620 Krawczyk boxes). Step 2b's in-lane loop of
+up to 4,096 walks is the one that took the GPU's firmware down twice.
+
+**Decided:** the pass becomes rounds of items of bounded cost, in queues, across dispatches; 2a's walk moves onto them
+first, so the machinery is written once and 2c's cells are one more kind of item.
+- **Setup** (raygen, a thread a request): retraces X, picks the draw and the slope (the same hashes as today), writes
+  a request record and the draw's group items.
+- **Walk** (compute, a thread an item): an item is (request record, light, node); it tests the node's children (at
+  most 8 clusters, 8 sub-clusters or 16 triangles) and appends those that pass to the next round's queue. The rounds
+  follow the levels: groups, clusters, sub-clusters, triangles; for a mapped triangle, its uv footprint's pyramid
+  nodes down to cells.
+- **Solve** (compute): a plain triangle, 2a's Newton (16 steps); a cell, `cellPolySolve` with a box budget an item,
+  set by measurement; a cell at the budget is a counted miss. Roots go to the connect queue.
+- **Connect** (raygen, a thread a root): the shadow ray, the retrace of y, X's surface again (its retrace from the
+  request), the contribution added to the pixel as fixed-point integers (`InterlockedAdd`: the sum is the same in any
+  order, so two captures stay identical; a clamp is counted), resolved into the accumulation by one pass.
+- **Bounded:** each dispatch's work per thread is a small fixed maximum; queue capacities are set by measurement and
+  an overflow is counted, never silent; dispatches are indirect from the queues' counts.
+- **Proof for 2a's move:** the same scene and seed give the same candidates, roots and connections (counted exactly:
+  the same tests on the same numbers) and the same image within the fixed point's rounding.
+
+
 
 A pyramid of normal cones per normal map, built at upload; a triangle's cone composed with the pyramid's over its uv
 box, 2a's disc test at each node down to cells. Proven conservative on random triangles and maps

@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <string>
 #include <thread>
 #include <vector>
 #include "core/log.hpp"
@@ -104,24 +105,24 @@ bool PathTracer::createRTPipeline() {
         OHAO_LOG(Error, render, "PathTracer: failed to create pipeline layout");
         return false;
     }
-    m_rtPipeline = buildRtPipeline(m_shaderSet.raygenSpv, m_shaderSet.raygenEntry, m_shaderSet.cacheUpdateSpv,
-                                   m_shaderSet.cacheUpdateEntry, "path_tracer");
+    const Raygen cacheUpdate[] = {{m_shaderSet.cacheUpdateSpv, m_shaderSet.cacheUpdateEntry}};
+    m_rtPipeline = buildRtPipeline(m_shaderSet.raygenSpv, m_shaderSet.raygenEntry, cacheUpdate, "path_tracer");
     if (!m_rtPipeline) return false;
     OHAO_LOG(Debug, render, "PathTracer: RT pipeline created");
     return true;
 }
 
-VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntry, const char* extraSpv,
-                                       const char* extraEntry, const char* cacheName) {
+VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntry, std::span<const Raygen> extras,
+                                       const char* cacheName) {
     auto rgenCode = readFile(rgenSpv);
     auto rmissCode = readFile(m_shaderSet.missSpv);
     auto rchitCode = readFile(m_shaderSet.closestHitSpv);
     auto rahitCode = readFile(m_shaderSet.anyHitSpv);
-    // A program without a second raygen (the manifold pass's) passes no extra.
-    const bool hasExtra = extraSpv != nullptr;
-    auto extraCode = hasExtra ? readFile(extraSpv) : std::vector<char>{};
+    std::vector<std::vector<char>> extraCode;
+    for (const Raygen& r : extras) extraCode.push_back(readFile(r.spv));
 
-    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty() || (hasExtra && extraCode.empty())) {
+    const bool extraMissing = std::any_of(extraCode.begin(), extraCode.end(), [](const auto& c) { return c.empty(); });
+    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty() || extraMissing) {
         OHAO_LOG(Error, render, "PathTracer: failed to load RT shader SPVs ({})", cacheName);
         return VK_NULL_HANDLE;
     }
@@ -141,12 +142,13 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
     VkShaderModule rmissModule = createModule(rmissCode);
     VkShaderModule rchitModule = createModule(rchitCode);
     VkShaderModule rahitModule = hasAnyHit ? createModule(rahitCode) : VK_NULL_HANDLE;
-    VkShaderModule extraModule = hasExtra ? createModule(extraCode) : VK_NULL_HANDLE;
+    std::vector<VkShaderModule> extraModules;
+    for (const auto& c : extraCode) extraModules.push_back(createModule(c));
 
-    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional), then the second raygen.
+    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional), then the extra raygens.
     const uint32_t extraStage = hasAnyHit ? 4 : 3;
-    uint32_t stageCount = hasExtra ? extraStage + 1 : extraStage;
-    VkPipelineShaderStageCreateInfo stages[5] = {};
+    const uint32_t stageCount = extraStage + uint32_t(extras.size());
+    std::vector<VkPipelineShaderStageCreateInfo> stages(stageCount);
 
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
@@ -169,15 +171,15 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
         stages[3].module = rahitModule;
         stages[3].pName = m_shaderSet.anyHitEntry;
     }
-    if (hasExtra) {
-        stages[extraStage].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[extraStage].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        stages[extraStage].module = extraModule;
-        stages[extraStage].pName = extraEntry;
+    for (uint32_t i = 0; i < extras.size(); ++i) {
+        stages[extraStage + i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[extraStage + i].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        stages[extraStage + i].module = extraModules[i];
+        stages[extraStage + i].pName = extras[i].entry;
     }
 
-    // Shader groups: raygen, miss, the hit group (closest-hit + any-hit), the second raygen
-    VkRayTracingShaderGroupCreateInfoKHR groups[4] = {};
+    // Shader groups: raygen, miss, the hit group (closest-hit + any-hit), the extra raygens
+    std::vector<VkRayTracingShaderGroupCreateInfoKHR> groups(3 + extras.size());
 
     groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
@@ -201,28 +203,32 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
     groups[2].anyHitShader = hasAnyHit ? 3 : VK_SHADER_UNUSED_KHR;
     groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-    groups[3].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-    groups[3].generalShader = extraStage;
-    groups[3].closestHitShader = VK_SHADER_UNUSED_KHR;
-    groups[3].anyHitShader = VK_SHADER_UNUSED_KHR;
-    groups[3].intersectionShader = VK_SHADER_UNUSED_KHR;
+    for (uint32_t i = 0; i < extras.size(); ++i) {
+        VkRayTracingShaderGroupCreateInfoKHR& g = groups[3 + i];
+        g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+        g.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        g.generalShader = extraStage + i;
+        g.closestHitShader = VK_SHADER_UNUSED_KHR;
+        g.anyHitShader = VK_SHADER_UNUSED_KHR;
+        g.intersectionShader = VK_SHADER_UNUSED_KHR;
+    }
 
     VkRayTracingPipelineCreateInfoKHR pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
     pipelineInfo.stageCount = stageCount;
-    pipelineInfo.pStages = stages;
-    pipelineInfo.groupCount = hasExtra ? 4 : 3;
-    pipelineInfo.pGroups = groups;
+    pipelineInfo.pStages = stages.data();
+    pipelineInfo.groupCount = uint32_t(groups.size());
+    pipelineInfo.pGroups = groups.data();
     pipelineInfo.maxPipelineRayRecursionDepth = 2;  // path tracing needs bounce recursion
     pipelineInfo.layout = m_pipelineLayout;
     if (rtc::pipelineStats()) pipelineInfo.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
 
     // Minutes cold: kept in a file so the next process (a headless host beside a window) loads it.
     PipelineDiskCache cache;
-    const std::vector<char>* modules[] = {&rgenCode, &rmissCode, &rchitCode, &rahitCode, &extraCode};
-    std::vector<std::vector<char>> keyed;
-    for (const auto* m : modules) keyed.push_back(*m);
+    // Keyed by every module (a program without an extra raygen keyed with an empty one, as it always was).
+    std::vector<std::vector<char>> keyed{rgenCode, rmissCode, rchitCode, rahitCode};
+    for (const auto& c : extraCode) keyed.push_back(c);
+    if (extraCode.empty()) keyed.emplace_back();
     cache.open(m_device, m_physicalDevice, cacheName, pipelineContentKey(keyed));
     VkPipeline pipeline = VK_NULL_HANDLE;
     // Timed: seconds cold (sub-project 25, W1c-W1d), on 4 threads (a program has at most 5 stages; cold, the default
@@ -243,7 +249,7 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
     vkDestroyShaderModule(m_device, rmissModule, nullptr);
     vkDestroyShaderModule(m_device, rchitModule, nullptr);
     if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
-    if (extraModule) vkDestroyShaderModule(m_device, extraModule, nullptr);
+    for (VkShaderModule m : extraModules) vkDestroyShaderModule(m_device, m, nullptr);
 
     if (result != VK_SUCCESS) {
         OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline {} (err={})", cacheName, static_cast<int>(result));
@@ -259,7 +265,7 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
         const VkDeviceSize raygenStack =
             stackSize ? stackSize(m_device, pipeline, 0, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
         const VkDeviceSize extraStack =
-            stackSize && hasExtra ? stackSize(m_device, pipeline, 3, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
+            stackSize && !extras.empty() ? stackSize(m_device, pipeline, 3, VK_SHADER_GROUP_SHADER_GENERAL_KHR) : 0;
         OHAO_LOG(Info, render, "pipeline stats {}: raygen stack {} bytes, second raygen {} bytes", cacheName,
                  raygenStack, extraStack);
     }
@@ -269,11 +275,12 @@ VkPipeline PathTracer::buildRtPipeline(const char* rgenSpv, const char* rgenEntr
 bool PathTracer::ensureCausticsPipeline() {
     if (m_causticsPipeline) return true;
     if (m_causticsPipelineFailed) return false;
-    m_causticsPipeline = buildRtPipeline(m_shaderSet.raygenCausticsSpv, m_shaderSet.raygenCausticsEntry,
-                                         m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry, "path_tracer_caustics");
+    const Raygen causticTrace[] = {{m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry}};
+    m_causticsPipeline = buildRtPipeline(m_shaderSet.raygenCausticsSpv, m_shaderSet.raygenCausticsEntry, causticTrace,
+                                         "path_tracer_caustics");
     if (!m_causticsPipeline ||
-        !buildShaderBindingTable(m_causticsPipeline, m_causticsSbt, m_causticsRgenRegion,
-                                 m_causticsMissRegion, m_causticsHitRegion, &m_causticTraceRegion)) {
+        !buildShaderBindingTable(m_causticsPipeline, m_causticsSbt, m_causticsRgenRegion, m_causticsMissRegion,
+                                 m_causticsHitRegion, std::array{&m_causticTraceRegion})) {
         OHAO_LOG(Error, render, "PathTracer: caustics' pipeline unavailable: caustics stay off");
         m_causticsPipelineFailed = true;
         return false;
@@ -281,17 +288,44 @@ bool PathTracer::ensureCausticsPipeline() {
     return true;
 }
 
-// Caustics step 2's program: manifoldConnect alone (a raygen of its own, so neither caustics' program nor the default
-// one carries its code), made the first time a frame runs the manifold pass.
+// Caustics step 2's program: manifoldSetup, then a raygen a round (a program of its own, so neither caustics' program
+// nor the default one carries their code), and manifoldResolve as compute on the tracer's layout (the same set and push
+// constants), made the first time a frame runs the manifold pass. The walk and the solve are raygens, not compute: from
+// the same SPIR-V NVIDIA's driver (620.70) lowers a vector's dot with itself (OpDot, inside length and normalize) as
+// fma(z, z, fma(y, y, x x)) in a raygen and fma(z, z, fma(x, x, y y)) in compute (each on all of 55,296 inputs,
+// 2026-11-17), and Newton's test against a tolerance of 1e-6 is at fp32's noise there: as compute it lost 2.1% of the
+// roots a double-precision Newton finds (caustics, 160x90), as a raygen 0.25%, step 2a's own count.
 bool PathTracer::ensureManifoldPipeline() {
-    if (m_manifoldPipeline) return true;
     if (m_manifoldPipelineFailed) return false;
-    m_manifoldPipeline = buildRtPipeline(m_shaderSet.manifoldSpv, m_shaderSet.manifoldEntry, nullptr, nullptr,
+    if (m_manifoldPipeline) return true;
+    static constexpr const char* kRounds[5] = {"manifoldWalkGroups", "manifoldWalkClusters", "manifoldWalkSubs",
+                                               "manifoldSolveRound", "manifoldConnect"};
+    std::array<std::string, 5> spv;
+    std::array<Raygen, 5> rounds;
+    std::array<VkStridedDeviceAddressRegionKHR*, 5> regions;
+    for (uint32_t i = 0; i < 5; ++i) {
+        spv[i] = std::string("bin/shaders/rt_path_tracer.slang.") + kRounds[i] + ".spv";
+        rounds[i] = {spv[i].c_str(), kRounds[i]};
+        regions[i] = &m_manifoldRoundRegions[i];
+    }
+    m_manifoldPipeline = buildRtPipeline(m_shaderSet.manifoldSpv, m_shaderSet.manifoldEntry, rounds,
                                          "path_tracer_manifold");
-    if (!m_manifoldPipeline ||
-        !buildShaderBindingTable(m_manifoldPipeline, m_manifoldSbt, m_manifoldRgenRegion,
-                                 m_manifoldMissRegion, m_manifoldHitRegion, nullptr)) {
-        OHAO_LOG(Error, render, "PathTracer: the manifold pass's pipeline unavailable: caustics' step 2 stays off");
+    bool ok = m_manifoldPipeline && buildShaderBindingTable(m_manifoldPipeline, m_manifoldSbt, m_manifoldRgenRegion,
+                                                            m_manifoldMissRegion, m_manifoldHitRegion, regions);
+    if (ok) {
+        const VkShaderModule module = rtc::loadShaderModule(m_device, m_shaderSet.manifoldResolveSpv);
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = module;
+        ci.stage.pName = m_shaderSet.manifoldResolveEntry;
+        ci.layout = m_pipelineLayout;
+        ok = module != VK_NULL_HANDLE &&
+             vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_manifoldResolvePipe) == VK_SUCCESS;
+        if (module) vkDestroyShaderModule(m_device, module, nullptr);
+    }
+    if (!ok) {
+        OHAO_LOG(Error, render, "PathTracer: the manifold pass's pipelines unavailable: caustics' step 2 stays off");
         m_manifoldPipelineFailed = true;
         return false;
     }
@@ -305,13 +339,14 @@ bool PathTracer::ensureGuidedProgram(bool caustics) {
     GuidedProgram& g = m_guided[caustics ? 1 : 0];
     if (g.pipeline) return true;
     if (g.failed) return false;
+    const Raygen causticTrace[] = {{m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry}};
     g.pipeline = caustics ? buildRtPipeline(m_shaderSet.raygenCausticsGuidedSpv, m_shaderSet.raygenCausticsGuidedEntry,
-                                            m_shaderSet.causticTraceSpv, m_shaderSet.causticTraceEntry,
-                                            "path_tracer_caustics_guided")
-                          : buildRtPipeline(m_shaderSet.raygenGuidedSpv, m_shaderSet.raygenGuidedEntry, nullptr, nullptr,
+                                            causticTrace, "path_tracer_caustics_guided")
+                          : buildRtPipeline(m_shaderSet.raygenGuidedSpv, m_shaderSet.raygenGuidedEntry, {},
                                             "path_tracer_guided");
-    if (!g.pipeline ||
-        !buildShaderBindingTable(g.pipeline, g.sbt, g.rgen, g.miss, g.hit, caustics ? &g.extra : nullptr)) {
+    VkStridedDeviceAddressRegionKHR* const extra[] = {&g.extra};
+    if (!g.pipeline || !buildShaderBindingTable(g.pipeline, g.sbt, g.rgen, g.miss, g.hit,
+                                                std::span(extra, caustics ? 1u : 0u))) {
         OHAO_LOG(Error, render, "PathTracer: path guiding's {} pipeline unavailable: guiding stays off",
                  caustics ? "caustics" : "default");
         g.failed = true;
@@ -324,14 +359,14 @@ bool PathTracer::ensureGuidedProgram(bool caustics) {
 
 bool PathTracer::createShaderBindingTable() {
     return buildShaderBindingTable(m_rtPipeline, m_sbt, m_rgenRegion, m_missRegion, m_hitRegion,
-                                   &m_cacheRgenRegion);
+                                   std::array{&m_cacheRgenRegion});
 }
 
 bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
                                          VkStridedDeviceAddressRegionKHR& rgenRegion,
                                          VkStridedDeviceAddressRegionKHR& missRegion,
                                          VkStridedDeviceAddressRegionKHR& hitRegion,
-                                         VkStridedDeviceAddressRegionKHR* extraRegion) {
+                                         std::span<VkStridedDeviceAddressRegionKHR* const> extraRegions) {
     // Query RT pipeline properties for handle size/alignment
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps{};
     rtProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
@@ -347,8 +382,9 @@ bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
     // Aligned handle size (each entry in the SBT must be aligned)
     uint32_t handleSizeAligned = (handleSize + handleAlignment - 1) & ~(handleAlignment - 1);
 
-    // 4 groups: rgen, miss, closest-hit, the second rgen (3 without one: no extra region)
-    const uint32_t groupCount = extraRegion ? 4 : 3;
+    // The groups: rgen, miss, closest-hit, then the extra raygens.
+    const uint32_t extras = uint32_t(extraRegions.size());
+    const uint32_t groupCount = 3 + extras;
 
     // Get shader group handles from the pipeline
     std::vector<uint8_t> handles(groupCount * handleSize);
@@ -362,7 +398,7 @@ bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
     uint32_t rgenSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t missSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
     uint32_t hitSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t totalSize = rgenSize + missSize + hitSize + (extraRegion ? rgenSize : 0);   // the second rgen last
+    uint32_t totalSize = rgenSize + missSize + hitSize + extras * rgenSize;   // the extra raygens last
 
     // The table: host-written once, read by every trace through its device address.
     sbt = m_allocator->createBuffer(totalSize,
@@ -379,8 +415,9 @@ bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
     memcpy(dst + rgenSize, handles.data() + 1 * handleSize, handleSize);
     // Closest-hit at offset rgenSize + missSize
     memcpy(dst + rgenSize + missSize, handles.data() + 2 * handleSize, handleSize);
-    // The second raygen after the hit group
-    if (extraRegion) memcpy(dst + rgenSize + missSize + hitSize, handles.data() + 3 * handleSize, handleSize);
+    // The extra raygens after the hit group, a region each
+    for (uint32_t i = 0; i < extras; ++i)
+        memcpy(dst + rgenSize + missSize + hitSize + i * rgenSize, handles.data() + (3 + i) * handleSize, handleSize);
     m_allocator->flushBuffer(sbt);
 
     // Set up strided device address regions
@@ -400,10 +437,10 @@ bool PathTracer::buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
     hitRegion.stride = handleSizeAligned;
     hitRegion.size = hitSize;
 
-    if (extraRegion) {
-        extraRegion->deviceAddress = sbtAddr + rgenSize + missSize + hitSize;
-        extraRegion->stride = rgenSize;
-        extraRegion->size = rgenSize;
+    for (uint32_t i = 0; i < extras; ++i) {
+        extraRegions[i]->deviceAddress = sbtAddr + rgenSize + missSize + hitSize + i * rgenSize;
+        extraRegions[i]->stride = rgenSize;
+        extraRegions[i]->size = rgenSize;
     }
 
     m_callRegion = {};  // not used

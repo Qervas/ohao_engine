@@ -57,7 +57,7 @@ bool PathTracer::createDescriptorResources() {
     add(P::accumBuffer.binding, IMAGE, RGEN);                                           // accumulation, this frame's (RGBA32F)
     add(P::outputImage.binding, IMAGE, RGEN);                                           // output (RGBA8)
     add(P::accumHistory.binding, IMAGE, RGEN);                                           // accumulation, the previous frame's (read)
-    // RenderScene scene data, read by the hit shaders (closestHit / anyHit) and by manifoldConnect's glass walk
+    // RenderScene scene data, read by the hit shaders (closestHit / anyHit) and by manifoldSetup's glass walk
     // (caustics step 2b: the solid's triangles):
     add(P::vertices.binding, BUFFER, RGEN | HIT);    // vertex arena (Vertex = 25 floats)
     add(P::indices.binding, BUFFER, RGEN | HIT);    // index arena (mesh-local indices)
@@ -102,6 +102,11 @@ bool PathTracer::createDescriptorResources() {
     add(P::manifoldNodes.binding, BUFFER, RGEN);  // their clusters and groups,
     add(P::manifoldDraws.binding, BUFFER, RGEN);  // the owned draws and a word a material,
     add(P::manifoldRequests.binding, BUFFER, RGEN);  // the camera side's requests
+    add(P::manifoldRecords.binding, BUFFER, RGEN);  // the manifold rounds (render/rt/manifold_rounds.hpp): records,
+    add(P::manifoldItems.binding, BUFFER, RGEN);  // the queues' items,
+    add(P::manifoldRoots.binding, BUFFER, RGEN);  // the roots,
+    add(P::manifoldCounts.binding, BUFFER, RGEN);  // the counts and dispatch arguments,
+    add(P::manifoldSum.binding, BUFFER, RGEN);  // the frame's fixed-point sum
 
     if (bindings.size() != P::kSet0.size()) {   // a binding the shader declares and this layout lacks, or the reverse
         OHAO_LOG(Error, render, "PathTracer: the layout has {} bindings, rt/path_tracer.slang's set 0 {}", bindings.size(),
@@ -128,7 +133,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 26 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50 + caustics 51-53 + manifold 54-57
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 31 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50 + caustics 51-53 + manifold 54-62
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 * kSets},   // the emissive lights' power 43
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };

@@ -34,6 +34,7 @@
 #include "render/rt/path_guiding.hpp"
 #include "render/rt/caustic_pass.hpp"
 #include "render/rt/manifold_casters.hpp"
+#include "render/rt/manifold_rounds.hpp"
 #include "render/rt/radiance_cache.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
@@ -86,9 +87,12 @@ struct PathTracerShaderSet {
     const char* raygenCausticsEntry{"raygenCaustics"};
     const char* causticTraceSpv{"bin/shaders/rt_path_tracer.slang.causticTrace.spv"};
     const char* causticTraceEntry{"causticTrace"};
-    // Caustics step 2: the manifold pass, a program of its own.
-    const char* manifoldSpv{"bin/shaders/rt_path_tracer.slang.manifoldConnect.spv"};
-    const char* manifoldEntry{"manifoldConnect"};
+    // Caustics step 2: the manifold pass's rounds, a program of its own: manifoldSetup its first raygen, then
+    // ManifoldRound's (bin/shaders/rt_path_tracer.slang.<entry>.spv); manifoldResolve is compute.
+    const char* manifoldSpv{"bin/shaders/rt_path_tracer.slang.manifoldSetup.spv"};
+    const char* manifoldEntry{"manifoldSetup"};
+    const char* manifoldResolveSpv{"rt_path_tracer.slang.manifoldResolve.spv"};
+    const char* manifoldResolveEntry{"manifoldResolve"};
     // Path guiding (sub-project 23): raygen and raygenCaustics with guiding compiled in.
     const char* raygenGuidedSpv{"bin/shaders/rt_path_tracer.slang.raygenGuided.spv"};
     const char* raygenGuidedEntry{"raygenGuided"};
@@ -225,17 +229,23 @@ private:
     [[nodiscard]] bool createDescriptorResources();
     [[nodiscard]] bool createRTPipeline();
     [[nodiscard]] bool createShaderBindingTable();
-    // A program: raygen, the miss, the hit group and a second raygen (none when extraSpv is null), on the shared layout.
-    [[nodiscard]] VkPipeline buildRtPipeline(const char* rgenSpv, const char* rgenEntry, const char* extraSpv,
-                                             const char* extraEntry, const char* cacheName);
+    // A raygen of a program: its SPIR-V and entry point.
+    struct Raygen {
+        const char* spv;
+        const char* entry;
+    };
+    // A program: raygen, the miss, the hit group and more raygens after it (`extras`, maybe none), on the shared layout.
+    [[nodiscard]] VkPipeline buildRtPipeline(const char* rgenSpv, const char* rgenEntry, std::span<const Raygen> extras,
+                                             const char* cacheName);
+    // Its table: one region each for the raygen, the miss and the hit group, and one for each extra raygen.
     [[nodiscard]] bool buildShaderBindingTable(VkPipeline pipeline, GpuBuffer& sbt,
                                                VkStridedDeviceAddressRegionKHR& rgenRegion,
                                                VkStridedDeviceAddressRegionKHR& missRegion,
                                                VkStridedDeviceAddressRegionKHR& hitRegion,
-                                               VkStridedDeviceAddressRegionKHR* extraRegion);
+                                               std::span<VkStridedDeviceAddressRegionKHR* const> extraRegions);
     // Caustics' program, made the first time a frame needs it (minutes cold, as the default one).
     [[nodiscard]] bool ensureCausticsPipeline();
-    // Caustics step 2's program (manifoldConnect), made the first time a frame runs the manifold pass.
+    // Caustics step 2's program (the manifold rounds), made the first time a frame runs the manifold pass.
     [[nodiscard]] bool ensureManifoldPipeline();
     // Path guiding's program beside the default one's raygen (caustics false: raygenGuided) or caustics' (true:
     // raygenCausticsGuided with causticTrace), made the first time a frame guides.
@@ -321,6 +331,8 @@ private:
     bool m_causticsRan = false;
     // Caustics step 2's casters and requests (bindings 54-57; render/rt/manifold_casters.hpp).
     render::ManifoldCasters m_manifold;
+    // Its rounds' records, queues, counts and sum (bindings 58-62; render/rt/manifold_rounds.hpp).
+    render::ManifoldRounds m_manifoldRounds;
     bool m_manifoldRan = false;
     const render::RenderScene* m_scene = nullptr;   // setSceneBuffers': its casters, when a frame has caustics
     // The emissive triangle lights (bindings 42-45), from the scene's emissive instances.
@@ -392,8 +404,12 @@ private:
         VkStridedDeviceAddressRegionKHR rgen{}, miss{}, hit{}, extra{};
     };
     GuidedProgram m_guided[2];
-    // Caustics step 2's program (ensureManifoldPipeline): manifoldConnect.
+    // Caustics step 2's program (ensureManifoldPipeline): manifoldSetup, then a raygen a round (the walk's three
+    // levels, the solve, the connect: m_manifoldRoundRegions in that order), and manifoldResolve on the tracer's
+    // layout as compute.
     VkPipeline m_manifoldPipeline = VK_NULL_HANDLE;
+    std::array<VkStridedDeviceAddressRegionKHR, 5> m_manifoldRoundRegions{};
+    VkPipeline m_manifoldResolvePipe = VK_NULL_HANDLE;
     bool m_manifoldPipelineFailed = false;
     GpuBuffer m_manifoldSbt;
     VkStridedDeviceAddressRegionKHR m_manifoldRgenRegion{};
@@ -439,6 +455,7 @@ private:
     PFN_vkCreateRayTracingPipelinesKHR vkCreateRayTracingPipelinesKHR = nullptr;
     PFN_vkGetRayTracingShaderGroupHandlesKHR vkGetRayTracingShaderGroupHandlesKHR = nullptr;
     PFN_vkCmdTraceRaysKHR vkCmdTraceRaysKHR = nullptr;
+    PFN_vkCmdTraceRaysIndirectKHR vkCmdTraceRaysIndirectKHR = nullptr;
     PFN_vkGetBufferDeviceAddress vkGetBufferDeviceAddressFn = nullptr;
 
     // Helpers

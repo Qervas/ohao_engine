@@ -278,4 +278,8 @@ void ManifoldCasters::manifoldPass(Pass& pass, uint32_t frameSlot) {
     pass.write(m_requests, BufferUse::Storage);
 }
 
+void ManifoldCasters::roundPass(Pass& pass, uint32_t frameSlot) {
+    pass.read(m_tris, BufferUse::Storage).read(m_nodes, BufferUse::Storage).read(m_draws[frameSlot], BufferUse::Storage);
+}
+
 } // namespace ohao::render

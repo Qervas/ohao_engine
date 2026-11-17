@@ -55,7 +55,7 @@ public:
     void recordBeginFrame(const Frame& frame);
     // What the traces declare: the light pass (causticTrace) reads the table, adds to the splats and counts the
     // clamped ones; the camera pass (raygenCaustics) reads and clears the splats; the manifold pass
-    // (manifoldConnect) reads the table and counts.
+    // (its rounds, render/rt/manifold_rounds.hpp) reads the table and counts.
     void lightPass(Pass& pass);
     void cameraPass(Pass& pass);
     void manifoldPass(Pass& pass);
@@ -66,6 +66,10 @@ public:
     // connections that carried light, the pruning's cluster, sub-cluster and triangle tests, and step 2b's walks, paths
     // found, connections through solids and paths at the re-find trials' ceiling.
     [[nodiscard]] std::array<uint32_t, 11> manifoldCounts() const;
+    // The manifold rounds' words since the last clear (words 12-21): items that did not fit their queue, fixed-point
+    // words clamped, two unused, then the peak counts of the records, groups, clusters, sub-clusters, candidates and
+    // roots in a frame (render/rt/manifold_rounds.hpp).
+    [[nodiscard]] std::array<uint32_t, 10> manifoldRoundCounts() const;
     void clearCounts() noexcept { m_clearCounts = true; }
 
     [[nodiscard]] VkBuffer table() const noexcept { return m_table.buffer; }
@@ -74,8 +78,8 @@ public:
 
     // The packed table (float4 rows), as rt/caustics.slang reads it; at most kRows rows.
     static constexpr uint32_t kRows = 4096;
-    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters.
-    static constexpr uint32_t kStatsBytes = 64;
+    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters, 12-21 its rounds'.
+    static constexpr uint32_t kStatsBytes = 128;
     [[nodiscard]] static std::vector<glm::vec4> pack(const CausticCasters& c, glm::vec3 sceneCenter, float sceneRadius);
 
 private:

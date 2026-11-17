@@ -49,10 +49,12 @@ public:
     // The gather from the scene's arenas, and the requests cleared on the first frame after they were
     // (re)allocated.
     void record(const Frame& frame, const RenderScene& scene);
-    // What the traces declare: the camera pass (raygenCaustics) reads the casters and writes its requests; the
-    // manifold pass (manifoldConnect) reads the casters and their triangles, and answers and clears the requests.
+    // What the passes declare: the camera pass (raygenCaustics) reads the casters and writes its requests; the
+    // manifold pass's setup (manifoldSetup) reads the casters and their triangles, and answers and clears the
+    // requests; its later rounds (render/rt/manifold_rounds.hpp) read the casters and their triangles.
     void cameraPass(Pass& pass, uint32_t frameSlot);
     void manifoldPass(Pass& pass, uint32_t frameSlot);
+    void roundPass(Pass& pass, uint32_t frameSlot);
 
     [[nodiscard]] VkBuffer tris() const noexcept { return m_tris.buffer; }
     [[nodiscard]] VkBuffer nodes() const noexcept { return m_nodes.buffer; }

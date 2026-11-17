@@ -1,6 +1,6 @@
 // Manifold connections (sub-project 24 step 2, docs/specs/2026-11-04-caustics-step2-design.md, "Step 2a as
 // designed"): the pieces of the estimator that solve for the point y on a smooth triangle where the sun's light
-// reflects toward a rough point p. Pure functions: rt/path_tracer.slang's manifoldConnect calls them, and
+// reflects toward a rough point p. Pure functions: rt/path_tracer.slang's manifold rounds call them, and
 // tools/caustics/manifold_kernel.slang runs them on the CPU for tests/renderer/manifold_tests.
 //
 // The map. On a triangle y(u, v) = p0 + u e1 + v e2, its interpolated shading normal N(u, v) = n0 + u a1 + v a2

@@ -28,7 +28,7 @@
 
 namespace ohao::render {
 
-inline constexpr uint32_t kMaxTimedPasses = 64;   // per frame
+inline constexpr uint32_t kMaxTimedPasses = 128;   // per frame
 
 struct FrameTiming {
     uint64_t frame{0};   // the renderer's frame number
