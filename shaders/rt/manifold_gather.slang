@@ -6,15 +6,21 @@
 // (Index order made clusters strips round a sphere's rings, their cones a third of the sphere wide: nothing pruned.)
 //
 // draws (host-written): row 0 (D draws, C * 128, C clusters, G groups); then three rows a draw:
-//   (first meshlet, meshlets, vertex offset, instance slot), (first cluster, first group, material, 0), its world
-//   bounding sphere (centre, radius as float bits); then a word a material (manifold bits, at 1 + 3 D rows: rows of 4).
+//   (first meshlet, meshlets, vertex offset, instance slot), (first cluster, first group, material, step 2b's glass
+//   owner | its first mapped cluster << 1), its world bounding sphere (centre, radius as float bits); then a word a
+//   material (manifold bits, at 1 + 3 D rows: rows of 4; kManifoldMapped: a normal-mapped one).
 // tris: 9 float4 a triangle slot: (p0, c.x), (e1, c.y), (e2, c.z), (n0, 0), (a1, 0), (a2, 0), and its bounds
 //   (box min, the cone's half angle), (box max, 0), (the cone's axis, its disc term); normals by the instance's inverse
-//   transpose, unnormalised (fillHit's direction).
+//   transpose, unnormalised (fillHit's direction). Then, after the C * 128 slots, the mapped side table: 9 float4 a
+//   slot of a mapped draw's clusters (its first mapped cluster on): MikkTSpace's frame at each vertex as the tracer's
+//   mikkFrameAt builds it (the unit world normal, the unit world tangent, w n x t) and the uvs: (n0, uv0.x), (n1,
+//   uv0.y), (n2, uv1.x), (t0, uv1.y), (t1, uv2.x), (t2, uv2.y), (b0, 0), (b1, 0), (b2, 0).
 // nodes: 4 float4 a node, the groups, then the clusters, then a record a draw, then 8 sub-clusters a cluster (16 of
 //   its triangles each, in the meshlet's order: the builder grows a meshlet as a compact patch): (box min, the cone's
 //   half angle), (box max, triangles as bits), (the cone's axis, its disc term: rt/manifold.slang), (c, 0); a draw's record holds its lobes' alpha
-//   bounds in its first row's xy (0 for a lobe that cannot be smooth).
+//   bounds in its first row's xy (0 for a lobe that cannot be smooth). Then the same N nodes' mapped rows (a mapped
+//   draw's; rt/manifold.slang, manifoldMappedTest): (the frame M' = [t b n]'s t, delta), (b, g), (n, 0), (its
+//   triangles' uv box); delta < 0 for a node without triangles.
 import shared.layout;
 import material.openpbr;
 import material.material_layers;
@@ -74,6 +80,52 @@ groupshared float3 gsAxis[kSlots];
 groupshared float gsHalf[kSlots];
 groupshared uint gsValid[kSlots];
 groupshared float3 gsC;
+// Step 2c: each child's frame M' (t, b, n), delta and uv box (a mapped draw's).
+groupshared float3 gsMt[kSlots];
+groupshared float3 gsMb[kSlots];
+groupshared float3 gsMn[kSlots];
+groupshared float gsDelta[kSlots];
+groupshared float4 gsUv[kSlots];
+
+static const uint kMappedBit = 8u;
+
+// A mapped node's rows from its children in the shared arrays: M' their frames' mean, delta the largest of a child's
+// delta plus its frame's distance from M' (the triangle inequality), the uv box around theirs.
+void writeMappedNode(uint node, uint count, uint first = 0u)
+{
+    const uint4 h = draws[0];
+    const uint r = (h.w + 9u * h.z + h.x + node) * kNodeRows;
+    float3 t = float3(0.0), b = float3(0.0), n = float3(0.0);
+    float4 uv = float4(1e30, 1e30, -1e30, -1e30);
+    uint valid = 0u;
+    for (uint k = first; k < first + count; ++k)
+    {
+        if (gsValid[k] == 0u) continue;
+        t += gsMt[k];
+        b += gsMb[k];
+        n += gsMn[k];
+        uv = float4(min(uv.xy, gsUv[k].xy), max(uv.zw, gsUv[k].zw));
+        ++valid;
+    }
+    float delta = -1.0;
+    if (valid > 0u)
+    {
+        t /= float(valid);
+        b /= float(valid);
+        n /= float(valid);
+        delta = 0.0;
+        for (uint k = first; k < first + count; ++k)
+        {
+            if (gsValid[k] == 0u) continue;
+            delta = max(delta, gsDelta[k] + manifoldFrameDistance(gsMt[k], gsMb[k], gsMn[k], t, b, n));
+        }
+        delta = delta * (1.0 + 1e-5) + 1e-6;
+    }
+    nodes[r] = float4(t, delta);
+    nodes[r + 1u] = float4(b, manifoldFrameNorm(t, b, n));
+    nodes[r + 2u] = float4(n, 0.0);
+    nodes[r + 3u] = uv;
+}
 
 // The node over `count` children in the shared arrays: the box around theirs, the cone's axis the normalised sum of
 // theirs, its half angle the largest angle to a child's axis plus the child's half angle (pi past 90 degrees: a cone
@@ -118,6 +170,8 @@ void clusters(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
     const uint m = a.x + (c - b.x);
     const uint4 range = meshlets[m * 3u];   // first vertex entry, first triangle entry, vertices, triangles
     const uint count = min(range.w, kSlots);
+    const bool mapped = (materialBits(b.z) & kMappedBit) != 0u;
+    const uint stride = kInstanceGpuStride / 16u;
     gsValid[lane] = 0u;
     const uint slot = c * kSlots + lane;
     ManifoldTri tri;
@@ -127,7 +181,6 @@ void clusters(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
         const uint v0 = a.z + meshletVertices[range.x + (packed & 0xFFu)];
         const uint v1 = a.z + meshletVertices[range.x + ((packed >> 8u) & 0xFFu)];
         const uint v2 = a.z + meshletVertices[range.x + ((packed >> 16u) & 0xFFu)];
-        const uint stride = kInstanceGpuStride / 16u;
         tri = manifoldTriangleFrom(instances[a.w * stride], instances[a.w * stride + 1u], instances[a.w * stride + 2u],
                                    instances[a.w * stride + 3u], vertexF3(v0, 0u), vertexF3(v1, 0u), vertexF3(v2, 0u),
                                    vertexF3(v0, 6u), vertexF3(v1, 6u), vertexF3(v2, 6u));
@@ -145,15 +198,55 @@ void clusters(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
         tris[slot * kTriRows + 5u] = float4(tri.a2, 0.0);
         tris[slot * kTriRows + 6u] = float4(lo, half);
         tris[slot * kTriRows + 7u] = float4(hi, 0.0);
+        if (mapped)
+        {
+            // MikkTSpace's frame at each vertex (rt/pt_hit.slang's mikkFrameAt), the triangle's M' (their mean) and
+            // delta (the largest distance of a vertex's frame from it), and its uvs.
+            const uint v[3] = { v0, v1, v2 };
+            const float4 m0 = instances[a.w * stride], m1 = instances[a.w * stride + 1u], m2 = instances[a.w * stride + 2u];
+            const float3 ix = cross(m1.xyz, m2.xyz), iy = cross(m2.xyz, m0.xyz), iz = cross(m0.xyz, m1.xyz);
+            float3 fn[3], ft[3], fb[3];
+            float2 fuv[3];
+            for (uint k = 0u; k < 3u; ++k)
+            {
+                const float3 o = vertexF3(v[k], 6u), ot = vertexF3(v[k], 13u);
+                const float3 nw0 = ix * o.x + iy * o.y + iz * o.z;
+                const float3 tw0 = m0.xyz * ot.x + m1.xyz * ot.y + m2.xyz * ot.z;
+                fn[k] = dot(o, o) > 1e-20 && dot(nw0, nw0) > 0.0 ? normalize(nw0) : float3(0.0);
+                ft[k] = dot(tw0, tw0) > 1e-20 ? normalize(tw0) : float3(0.0);
+                fb[k] = (vertices[v[k] * kVertexFloats + 16u] < 0.0 ? -1.0 : 1.0) * cross(fn[k], ft[k]);
+                fuv[k] = float2(vertices[v[k] * kVertexFloats + 9u], vertices[v[k] * kVertexFloats + 10u]);
+            }
+            const uint ms = h.y + (b.w >> 1u) * kSlots + (c - b.x) * kSlots + lane;
+            tris[ms * kTriRows] = float4(fn[0], fuv[0].x);
+            tris[ms * kTriRows + 1u] = float4(fn[1], fuv[0].y);
+            tris[ms * kTriRows + 2u] = float4(fn[2], fuv[1].x);
+            tris[ms * kTriRows + 3u] = float4(ft[0], fuv[1].y);
+            tris[ms * kTriRows + 4u] = float4(ft[1], fuv[2].x);
+            tris[ms * kTriRows + 5u] = float4(ft[2], fuv[2].y);
+            tris[ms * kTriRows + 6u] = float4(fb[0], 0.0);
+            tris[ms * kTriRows + 7u] = float4(fb[1], 0.0);
+            tris[ms * kTriRows + 8u] = float4(fb[2], 0.0);
+            const float3 mt = (ft[0] + ft[1] + ft[2]) / 3.0, mb = (fb[0] + fb[1] + fb[2]) / 3.0, mn = (fn[0] + fn[1] + fn[2]) / 3.0;
+            float delta = 0.0;
+            for (uint k = 0u; k < 3u; ++k) delta = max(delta, manifoldFrameDistance(ft[k], fb[k], fn[k], mt, mb, mn));
+            gsMt[lane] = mt;
+            gsMb[lane] = mb;
+            gsMn[lane] = mn;
+            gsDelta[lane] = delta * (1.0 + 1e-5) + 1e-6;
+            gsUv[lane] = float4(min(fuv[0], min(fuv[1], fuv[2])), max(fuv[0], max(fuv[1], fuv[2])));
+        }
     }
     GroupMemoryBarrierWithGroupSync();
     if (lane == 0u) gsC = writeNode(h.w + c, count, count);
+    if (mapped && lane == 1u) writeMappedNode(h.w + c, count);
     GroupMemoryBarrierWithGroupSync();
     // The sub-clusters (in the cluster's frame: one frame for every triangle of it).
     if (lane < 8u && lane * 16u < count)
     {
         const uint sub = h.w + h.z + h.x + c * 8u + lane;
         writeNode(sub, min(16u, count - lane * 16u), min(16u, count - lane * 16u), lane * 16u, true, gsC);
+        if (mapped) writeMappedNode(sub, min(16u, count - lane * 16u), lane * 16u);
     }
     if (lane < count)
     {
@@ -175,6 +268,7 @@ void groups(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
     const uint d = drawOf(g, 1u);
     const uint4 a = draws[1u + 3u * d], b = draws[2u + 3u * d];
     const uint c = (g - b.y) * kManifoldCluster + lane;
+    const bool mapped = (materialBits(b.z) & kMappedBit) != 0u;
     gsValid[lane] = 0u;
     if (lane < kManifoldCluster && c < a.y)
     {
@@ -185,8 +279,20 @@ void groups(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
         gsHalf[lane] = r0.w;
         gsAxis[lane] = r2.xyz;
         gsValid[lane] = asuint(r1.w) > 0u ? 1u : 0u;
+        if (mapped)
+        {
+            const uint m = (h.w + 9u * h.z + h.x + node) * kNodeRows;
+            const float4 q0 = nodes[m], q1 = nodes[m + 1u], q2 = nodes[m + 2u];
+            gsMt[lane] = q0.xyz;
+            gsMb[lane] = q1.xyz;
+            gsMn[lane] = q2.xyz;
+            gsDelta[lane] = q0.w;
+            gsUv[lane] = nodes[m + 3u];
+            if (q0.w < 0.0) gsValid[lane] = 0u;
+        }
     }
     GroupMemoryBarrierWithGroupSync();
+    if (mapped && lane == 1u) writeMappedNode(g, kManifoldCluster);
     if (lane == 0u)
     {
         writeNode(g, kManifoldCluster, 0u);

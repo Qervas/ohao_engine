@@ -14,16 +14,20 @@ namespace {
 constexpr uint32_t kRecordBytes = 6 * 16;   // 6 float4
 constexpr uint32_t kItemBytes = 8;          // uint2
 constexpr uint32_t kRootBytes = 4 * 16;     // 4 uint4
-// The counts (rt/path_tracer.slang's kMC*): a header of 64 words, then 32 a batch and pass; all reset every frame.
-constexpr uint32_t kHeaderWords = 64;
-constexpr uint32_t kBlockWords = 32;
+// The counts (rt/path_tracer.slang's kMC*): a header, then a block a batch and pass, all reset every frame; then two
+// words a record (step 2c's cell statistics), cleared by the statistics' pass.
+constexpr uint32_t kHeaderWords = ManifoldRounds::kHeaderWords;
+constexpr uint32_t kBlockWords = ManifoldRounds::kBlockWords;
 constexpr uint32_t kCountWords = kHeaderWords + kBlockWords * ManifoldRounds::kMaxBatches * ManifoldRounds::kPasses;
 
 // Capacities a pixel of a batch. A batch is a band of rows, and a band over the showcase's casters is denser than the
 // frame: the fullest 1280x720 band (102 rows) held 0.92 records, 6.5 groups, 6.4 clusters, 18.3 sub-clusters, 10.6
 // candidates and 0.89 roots a pixel (2026-11-17), against the frame's 0.60, 4.2, 3.7, 10.5, 5.9 and 0.58. Records: a
-// request a depth and light, kManifoldDepths with one light; the queues about 2.3 times the fullest band.
-constexpr std::array<uint32_t, 5> kPerPixel{16, 16, 48, 24, 2};   // groups, clusters, sub-clusters, candidates, roots
+// request a depth and light, kManifoldDepths with one light; the queues about 2.3 times the fullest band. Step 2c's
+// pyramid nodes (over a pass's segments) and cells, uint4 items: 8 each, a placeholder (the showcase's mapped walk
+// asked for 2,700 pyramid nodes a pixel at 320x180, stage 2's measurement, far past any capacity; carried or lost).
+constexpr std::array<uint32_t, 7> kPerPixel{16, 16, 48, 24, 2, 8, 8};   // groups, clusters, sub-clusters, candidates,
+                                                                          // roots, pyramid nodes, cells
 
 } // namespace
 
@@ -64,19 +68,24 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
         m_caps[Records] = m_recordCap;
         uint64_t items = 0;
         for (uint32_t q = Groups; q < kQueues; ++q) m_caps[q] = batchPixels * kPerPixel[q - 1];
-        for (uint32_t q = 0; q < Roots; ++q) items += 2ull * m_caps[q];   // two regions each
+        for (uint32_t q = 0; q < kQueues; ++q)
+            if (q != Roots) items += (q >= Pyramid ? 4ull : 2ull) * m_caps[q];   // two regions each (uint4: two slots)
         m_queues = allocate(m_records, VkDeviceSize{m_recordCap} * kRecordBytes) &&
                    allocate(m_items, VkDeviceSize{items} * kItemBytes) &&
-                   allocate(m_roots, VkDeviceSize{m_caps[Roots]} * kRootBytes);
+                   allocate(m_roots, VkDeviceSize{m_caps[Roots]} * kRootBytes) &&
+                   allocate(m_counts, (VkDeviceSize{kCountWords} + 2ull * m_recordCap) * 4u,
+                            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
         if (!m_queues) {
             OHAO_LOG(Error, render, "manifold rounds: the queues for a batch of {} pixels could not be allocated; the "
                      "pass stays off", batchPixels);
             allocate(m_records, kRecordBytes);
             allocate(m_items, kItemBytes);
             allocate(m_roots, kRootBytes);
+            allocate(m_counts, kCountWords * 4u, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
             m_queuePixels = 0;
             return false;
         }
+        m_clearRecordStats = true;
         m_queuePixels = batchPixels;
         m_queueLights = lights;
         OHAO_LOG(Debug, render, "manifold rounds: batches of {} pixels: {} records, {} items, {} roots ({} MB)",
@@ -100,27 +109,35 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
 }
 
 void ManifoldRounds::recordReset(const Frame& frame) {
-    // The header (rt/path_tracer.slang's kMC*: capacities at 16, regions at 24, rows, batches and passes at 29-31,
-    // counters from 32); the batches' blocks zero (a reservation sets its arguments' height and depth).
+    // The header (rt/path_tracer.slang's kMC*: capacities at 16, regions at 25 (in slots), rows, batches and passes at
+    // 33-35, the dumped pixel at 36, the records' statistics at 37 (0: off), counters from 40); the batches' blocks zero
+    // (a reservation sets its arguments' height and depth).
     std::array<uint32_t, kHeaderWords> words{};
     words[16] = m_recordCap;
     uint32_t offset = 0;
     for (uint32_t q = 0; q < kQueues; ++q) {
         words[17 + q] = m_caps[q];
         if (q != Roots) {
-            words[24 + q] = offset;
-            offset += 2 * m_caps[q];
+            words[25 + q] = offset;
+            offset += (q >= Pyramid ? 4 : 2) * m_caps[q];
         }
     }
-    words[29] = m_rows;
-    words[30] = m_batches;
-    words[31] = kPasses;
+    words[33] = m_rows;
+    words[34] = m_batches;
+    words[35] = kPasses;
+    words[36] = m_dumpPixel;
+    words[37] = m_cellStats ? kCountWords : 0u;
+    words[38] = m_sparse;
     Pass pass(frame, nullptr, Pass::Transfer);
     pass.write(m_counts, BufferUse::CopyDst);
     if (m_clearSum) pass.write(m_sum, BufferUse::CopyDst);
     pass.begin();
     vkCmdUpdateBuffer(frame.cmd, m_counts.buffer, 0, sizeof words, words.data());
     vkCmdFillBuffer(frame.cmd, m_counts.buffer, sizeof words, VkDeviceSize{kBlockWords} * 4u * m_batches * kPasses, 0u);
+    if (m_clearRecordStats) {
+        vkCmdFillBuffer(frame.cmd, m_counts.buffer, VkDeviceSize{kCountWords} * 4u, VK_WHOLE_SIZE, 0u);
+        m_clearRecordStats = false;
+    }
     if (m_clearSum) {
         vkCmdFillBuffer(frame.cmd, m_sum.buffer, 0, VK_WHOLE_SIZE, 0u);
         m_clearSum = false;

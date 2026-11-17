@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
@@ -93,7 +94,8 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
     // specular inputs, so a denoiser that builds the frame from those (NRD) would never show it, while the camera side
     // dropped step 2a's share: under NRD the pass stays off and the camera side keeps those terms.
     const bool manifoldFrame = !denoiseNeedsDiffSpecSplit(m_renderSettings.denoiseMode);
-    if (causticsOn && !manifoldOff && manifoldFrame) m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
+    if (causticsOn && !manifoldOff && manifoldFrame)
+        m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough, m_bindlessImageViews);
     const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_manifold.active() &&
                             m_manifold.ensureRequests(m_width * m_height) &&
                             (manifoldSplitOnly || (m_manifoldRounds.ensure(m_width, m_height, m_caustics.lightCount()) && ensureManifoldPipeline()));
@@ -108,9 +110,10 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
         m_manifold.record(frame, *m_scene);
     }
     // The frame's setup is timed with its first trace.
-    timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update"
-             : causticsOn                                                     ? "pt.caustics"
-                                                                              : "pt.trace");
+    const char* const firstTrace = m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update"
+                                   : causticsOn                                                     ? "pt.caustics"
+                                                                                                    : "pt.trace";
+    timePass(firstTrace);
 
 #ifdef OHAO_DLSS_ENABLED
     // --- Phase 1: lazy DLSS-RR NGX init + feature creation ---
@@ -252,6 +255,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
         {P::manifoldTris.binding, m_manifold.tris()}, {P::manifoldNodes.binding, m_manifold.nodes()}, {P::manifoldDraws.binding, m_manifold.draws(frameSlot)}, {P::manifoldRequests.binding, m_manifold.requests()},
         {P::manifoldRecords.binding, m_manifoldRounds.records()}, {P::manifoldItems.binding, m_manifoldRounds.items()}, {P::manifoldRoots.binding, m_manifoldRounds.roots()},
         {P::manifoldCounts.binding, m_manifoldRounds.counts()}, {P::manifoldSum.binding, m_manifoldRounds.sum()},
+        {P::manifoldPyramid.binding, m_manifold.pyramid()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
@@ -463,6 +467,23 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
 
     vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
 
+    // Caustics step 2c: a normal map's pyramid the first frame one of its draws is owned, before any trace reads it
+    // (render/rt/manifold_casters.hpp, "the pyramid"; rt/path_tracer.slang, manifoldPyramidBuild): a dispatch a level,
+    // its texture and level pushed as pc.jitter.z's bits (put back after).
+    if (manifoldPass && m_manifold.pyramidsPending()) {
+        timePass("pt.manifold.pyramid");
+        constexpr uint32_t kJobOffset = offsetof(PTPushConstants, jitter) + 2 * sizeof(float);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &set, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_manifoldPyramidPipe);
+        m_manifold.recordPyramids(frame, [&](uint32_t tex, uint32_t level, uint32_t nodes) {
+            const uint32_t job = tex | level << 16;
+            vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kJobOffset, sizeof job, &job);
+            vkCmdDispatch(cmd, (nodes + 63u) / 64u, 1, 1);
+        });
+        vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kJobOffset, sizeof(float), &pc.jitter.z);
+        timePass(firstTrace);
+    }
+
     // --- What the frame's passes declare ---
     // What every trace reads: the scene's tables and acceleration structures, the emissive lights and their power
     // image (every level, sampled in GENERAL), OpenPBR's tables, the environment (in the texture table) and its CDF.
@@ -578,11 +599,34 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                 if (stageTimes) timePass(name);
             };
             if (!stageTimes) timePass("pt.manifold");
+            // Step 2c's measurements: each mapped request's cells binned (OHAO_MANIFOLD_CELL_STATS=1), one pixel's
+            // requests dumped for a CPU brute force (OHAO_MANIFOLD_DUMP=x,y; render/rt/caustic_pass.hpp).
+            static const bool cellStats = [] {
+                const char* v = std::getenv("OHAO_MANIFOLD_CELL_STATS");
+                return v != nullptr && std::string_view(v) != "0";
+            }();
+            static const char* dumpAt = std::getenv("OHAO_MANIFOLD_DUMP");
+            uint32_t dumpPixel = ~0u;
+            if (dumpAt) {
+                // x,y: that pixel's mapped requests; "any": the frame's first (four at most).
+                unsigned x = 0, y = 0;
+                if (std::string_view(dumpAt) == "any") dumpPixel = ~1u;
+                else if (std::sscanf(dumpAt, "%u,%u", &x, &y) == 2 && x < m_width && y < m_height) dumpPixel = y * m_width + x;
+            }
+            static const uint32_t sparse = [] {
+                const char* v = std::getenv("OHAO_MANIFOLD_SPARSE");
+                return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 0u;
+            }();
+            m_manifoldRounds.setSparse(sparse);
+            m_manifoldRounds.setCellStats(cellStats);
+            m_manifoldRounds.setDumpPixel(m_caustics.dumping() ? dumpPixel : ~0u);
             m_manifoldRounds.recordReset(frame);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_manifoldPipeline);
             using R = render::ManifoldRounds;
             const VkDeviceAddress counts = getBufferDeviceAddress(m_manifoldRounds.counts());
-            const R::Queue queues[6] = {R::Records, R::Groups, R::Clusters, R::Subs, R::Candidates, R::Roots};
+            // The rounds a pass: the walk's four, the pyramid's (a segment each), the cells, the solve, the connect.
+            constexpr uint32_t kRounds = 4 + R::kPyramidRounds + 3;
+            const auto regionOf = [](uint32_t r) { return r < 4 ? r : r < 4 + R::kPyramidRounds ? 4u : r - R::kPyramidRounds + 1u; };
             // The batch and pass are pushed as pc.jitter.z's bits (batch | pass << 16; path guiding's word, which no
             // pass after the trace reads; put back after the last batch).
             constexpr uint32_t kBatchOffset = offsetof(PTPushConstants, jitter) + 2 * sizeof(float);
@@ -607,25 +651,52 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                 for (uint32_t p = 0; p < R::kPasses; ++p) {
                     const uint32_t bp = b | p << 16;
                     if (p > 0) vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bp, &bp);
-                    for (uint32_t r = 0; r < 6; ++r) {
+                    for (uint32_t r = 0; r < kRounds; ++r) {
+                        const uint32_t region = regionOf(r);
+                        // Without a mapped draw the pyramid's and the cells' rounds have nothing to do.
+                        if ((region == 4 || region == 5) && !m_manifold.mapped()) continue;
                         if (p == 0 && r == 0) stage("pt.manifold.walk");
-                        if (p == 0 && r == 4) stage("pt.manifold.solve");
-                        if (p == 0 && r == 5) stage("pt.manifold.connect");
+                        if (p == 0 && r == 4) stage("pt.manifold.pyramid");
+                        if (p == 0 && region == 5) stage("pt.manifold.cells");
+                        if (p == 0 && region == 6) stage("pt.manifold.solve");
+                        if (p == 0 && region == 7) stage("pt.manifold.connect");
                         if (p == 1 && r == 0) stage("pt.manifold.carry");
+                        // A pyramid round's segment, pushed with the batch and pass (pc.jitter.z's high byte).
+                        const uint32_t seg = region == 4 ? r - 4 : 0u;
+                        if (region == 4 || r == 4 + R::kPyramidRounds) {
+                            const uint32_t bps = bp | seg << 24;
+                            vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bps, &bps);
+                        }
                         Pass round(frame, nullptr, Pass::RayTracing);
                         m_manifold.roundPass(round, frameSlot);
-                        if (r < 4) m_manifoldRounds.walkPass(round);
-                        else if (r == 4) m_manifoldRounds.solvePass(round);
+                        if (region < 6) m_manifoldRounds.walkPass(round);
+                        else if (region == 6) m_manifoldRounds.solvePass(round);
                         else {
                             readsScene(round);
-                            m_caustics.manifoldPass(round);
                             m_manifoldRounds.connectPass(round);
                         }
+                        if (region == 5 || region == 7) m_caustics.manifoldPass(round);
                         round.begin();
-                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[r], &m_manifoldMissRegion,
-                                                  &m_manifoldHitRegion, &m_callRegion,
-                                                  counts + R::argsOffset(b, p, queues[r]));
+                        const VkDeviceSize args = region == 4 ? R::segmentOffset(b, p, seg)
+                                                  : region == 5 ? R::argsOffset(b, p, R::Cells)
+                                                  : region == 6 ? R::argsOffset(b, p, R::Candidates)
+                                                  : region == 7 ? R::argsOffset(b, p, R::Roots)
+                                                                : R::argsOffset(b, p, static_cast<R::Queue>(r));
+                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[region], &m_manifoldMissRegion,
+                                                  &m_manifoldHitRegion, &m_callRegion, counts + args);
                     }
+                }
+                if (cellStats) {
+                    // The batch's records' cells into the histograms (manifoldCellStats; the batch pushed above).
+                    vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof b, &b);
+                    Pass bins(frame, nullptr, Pass::Compute);
+                    m_manifold.roundPass(bins, frameSlot);
+                    m_manifoldRounds.walkPass(bins);
+                    m_caustics.manifoldPass(bins);
+                    bins.begin();
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &set, 0, nullptr);
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_manifoldCellStatsPipe);
+                    vkCmdDispatch(cmd, (m_manifoldRounds.recordCapacity() + 63u) / 64u, 1, 1);
                 }
             }
             vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof(float), &pc.jitter.z);
@@ -639,6 +710,17 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &set, 0, nullptr);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_manifoldResolvePipe);
                 vkCmdDispatch(cmd, (m_width * m_height + 63u) / 64u, 1, 1);
+            }
+            if (dumpPixel != ~0u && m_caustics.dumping()) {
+                // The dumped requests' draw and map (manifoldDumpDraw, manifoldDumpMap: each a fixed grid of threads).
+                Pass dump(frame, nullptr, Pass::Compute);
+                m_manifold.roundPass(dump, frameSlot);
+                m_caustics.manifoldPass(dump);
+                dump.begin();
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_manifoldDumpDrawPipe);
+                vkCmdDispatch(cmd, 131072u / 64u, 1, 1);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_manifoldDumpMapPipe);
+                vkCmdDispatch(cmd, 2048u * 2048u / 64u, 1, 1);
             }
         }
     } else {

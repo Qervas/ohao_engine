@@ -302,3 +302,250 @@ bool manifoldDiscTest(float3 boxMin, float3 boxMax, float3 axis, float halfAngle
 {
     return manifoldDiscTestTerm(boxMin, boxMax, axis, halfAngle, manifoldDiscTerm(axis, halfAngle, c), c, sigma, p, L);
 }
+
+// ---- step 2c: a normal-mapped triangle's composed cone ------------------------------------------------------------
+// MikkTSpace's frame (material/material_layers.slang, mikkTSpaceNormal; rt/manifold_poly.slang, polyFrameAt): per
+// vertex the unit world normal n, the unit world tangent t and w n x t, interpolated as they are, M = [t b n] a 3 x 3
+// matrix affine in the triangle's (u, v). The drawn slope sigma (the vertex tangent frame's, cellPolyOf's) means the
+// microfacet normal h = m - sigma.x t - sigma.y b = M (tn - s), s = (sigma, 0), tn the map's tangent-space normal there.
+//
+// The bound. On a region of the triangle (a convex polygon, the hull of its vertices v_k), with M' the frame at their
+// mean, delta = max_k |M(v_k) - M'|_F (|M - M'|_F is convex, so the max over the region is at a vertex), g >= |M'|_2,
+// and every tn of the region in the ball B(c, rho):
+//   |h - M'(c - s)| <= |M'(tn - c)| + |(M - M')(tn - s)| <= g rho + delta (|c - s| + rho) = r,
+// so h lies within asin(r / |a|) of a = M'(c - s) when r < |a| (else nothing is pruned). A cell's tn is the bilinear
+// blend of its four texels' normals at weights >= 0 summing to 1, so it lies in their convex hull, inside any ball
+// holding the four (the pyramid's: render/rt/manifold_casters.hpp). The cone goes to manifoldConeTest at the angle 0
+// (h along the half vector from the region's box, either way round), the box's own bound unchanged.
+
+// g >= |M|_2 for M = [mt mb mn]: the square root of Gershgorin's bound on M^T M's largest eigenvalue.
+float manifoldFrameNorm(float3 mt, float3 mb, float3 mn)
+{
+    const float tt = dot(mt, mt), bb = dot(mb, mb), nn = dot(mn, mn);
+    const float tb = abs(dot(mt, mb)), tn = abs(dot(mt, mn)), bn = abs(dot(mb, mn));
+    return sqrt(max(tt + tb + tn, max(tb + bb + bn, tn + bn + nn))) * (1.0 + 1e-6);
+}
+
+// |M1 - M2|_F.
+float manifoldFrameDistance(float3 t1, float3 b1, float3 n1, float3 t2, float3 b2, float3 n2)
+{
+    const float3 dt = t1 - t2, db = b1 - b2, dn = n1 - n2;
+    return sqrt(dot(dt, dt) + dot(db, db) + dot(dn, dn));
+}
+
+// Whether a region of a mapped triangle (its box; its frame M' = [mt mb mn], delta and g; the ball (c, rho) holding
+// its tangent-space normals, rho < 0 for none) can hold a point whose h for the slope sigma is along the half vector
+// toward p and the light L. False only when none can. The margins cover fp32's rounding of a and r (a few ulps of
+// their terms; manifoldConeTest adds 1e-4 rad).
+bool manifoldMappedTest(float3 boxMin, float3 boxMax, float3 mt, float3 mb, float3 mn, float delta, float g, float4 ball,
+                        float2 sigma, float3 p, float3 L)
+{
+    if (ball.w < 0.0 || delta < 0.0) return false;
+    const float3 c = ball.xyz - float3(sigma, 0.0);
+    const float3 a = mt * c.x + mb * c.y + mn * c.z;
+    const float la = length(a), lc = length(c);
+    const float r = g * ball.w + delta * (lc + ball.w);
+    const float rr = r * (1.0 + 1e-5) + 1e-5 * (g * lc + r) + 1e-12;
+    if (!(rr < la)) return true;
+    return manifoldConeTest(boxMin, boxMax, a / la, asin(rr / la), p, L, 0.0);
+}
+
+// A mapped triangle as the walk reads it (render/rt/manifold_casters.hpp's side table): world corners, MikkTSpace's
+// frame at each vertex and the texture coordinates.
+struct ManifoldMapTri
+{
+    float3 p0, e1, e2;
+    float3 n0, n1, n2, t0, t1, t2, b0, b1, b2;
+    float2 uv0, uv1, uv2;
+};
+
+// The frame at the triangle's (u, v).
+void manifoldMapFrameAt(ManifoldMapTri tri, float2 w, out float3 t, out float3 b, out float3 n)
+{
+    t = tri.t0 + (tri.t1 - tri.t0) * w.x + (tri.t2 - tri.t0) * w.y;
+    b = tri.b0 + (tri.b1 - tri.b0) * w.x + (tri.b2 - tri.b0) * w.y;
+    n = tri.n0 + (tri.n1 - tri.n0) * w.x + (tri.n2 - tri.n0) * w.y;
+}
+
+// A region of the triangle for manifoldMappedTest: its box, frame, delta and g.
+struct ManifoldMapRegion
+{
+    float3 lo, hi, mt, mb, mn;
+    float delta, g;
+};
+
+// The region from its vertices in the triangle's (u, v) (at most 8; n of them).
+ManifoldMapRegion manifoldMapRegionOf(ManifoldMapTri tri, float2 w[8], uint n)
+{
+    ManifoldMapRegion r;
+    r.lo = float3(1e30);
+    r.hi = float3(-1e30);
+    float2 mean = float2(0.0);
+    for (uint k = 0u; k < 8u; ++k)
+    {
+        if (k >= n) break;
+        const float3 y = tri.p0 + tri.e1 * w[k].x + tri.e2 * w[k].y;
+        r.lo = min(r.lo, y);
+        r.hi = max(r.hi, y);
+        mean += w[k];
+    }
+    mean /= float(max(n, 1u));
+    manifoldMapFrameAt(tri, mean, r.mt, r.mb, r.mn);
+    r.delta = 0.0;
+    for (uint k = 0u; k < 8u; ++k)
+    {
+        if (k >= n) break;
+        float3 t, b, nn;
+        manifoldMapFrameAt(tri, w[k], t, b, nn);
+        r.delta = max(r.delta, manifoldFrameDistance(t, b, nn, r.mt, r.mb, r.mn));
+    }
+    r.delta = r.delta * (1.0 + 1e-5) + 1e-6;
+    r.g = manifoldFrameNorm(r.mt, r.mb, r.mn);
+    // The box grown by its corners' rounding (the positions' and the vertices' (u, v)).
+    const float3 grow = (abs(r.lo) + abs(r.hi) + abs(tri.e1) + abs(tri.e2)) * 1e-6 + 1e-7;
+    r.lo -= grow;
+    r.hi += grow;
+    return r;
+}
+
+// The whole triangle's region.
+ManifoldMapRegion manifoldMapRegionTri(ManifoldMapTri tri)
+{
+    float2 w[8];
+    for (uint k = 0u; k < 8u; ++k) w[k] = float2(0.0);
+    w[1] = float2(1.0, 0.0);
+    w[2] = float2(0.0, 1.0);
+    return manifoldMapRegionOf(tri, w, 3u);
+}
+
+// The part of the triangle whose texture coordinates lie in the rectangle (x0, y0, x1, y1) (grown by its coordinates'
+// rounding): the rectangle clipped by the triangle's three edges in uv (Sutherland and Hodgman), its vertices taken to
+// (u, v). False when it is empty. A triangle whose uvs are degenerate (no (u, v) for a uv) is kept whole wherever the
+// rectangle meets its uvs' box (`degenerate` set).
+bool manifoldMapClip(ManifoldMapTri tri, float4 rect, out ManifoldMapRegion region, out bool degenerate)
+{
+    const float eps = (1.0 + max(max(abs(rect.x), abs(rect.y)), max(abs(rect.z), abs(rect.w)))) * 4e-6;
+    rect += float4(-eps, -eps, eps, eps);
+    const float2 q0 = tri.uv0, qa = tri.uv1 - tri.uv0, qb = tri.uv2 - tri.uv0;
+    const float det = qa.x * qb.y - qa.y * qb.x;
+    const float scale = max(max(abs(qa.x), abs(qa.y)), max(abs(qb.x), abs(qb.y)));
+    degenerate = !(abs(det) > 1e-10 * scale * scale) || !(scale > 0.0);
+    if (degenerate)
+    {
+        const float2 lo = min(tri.uv0, min(tri.uv1, tri.uv2)), hi = max(tri.uv0, max(tri.uv1, tri.uv2));
+        region = manifoldMapRegionTri(tri);
+        return !(lo.x > rect.z || lo.y > rect.w || hi.x < rect.x || hi.y < rect.y);
+    }
+    float2 poly[8], next[8];
+    for (uint k = 0u; k < 8u; ++k)
+    {
+        poly[k] = float2(0.0);
+        next[k] = float2(0.0);
+    }
+    poly[0] = rect.xy;
+    poly[1] = rect.zy;
+    poly[2] = rect.zw;
+    poly[3] = rect.xw;
+    uint n = 4u;
+    const float side = det > 0.0 ? 1.0 : -1.0;
+    [ForceUnroll]
+    for (uint e = 0u; e < 3u; ++e)
+    {
+        const float2 a = e == 0u ? tri.uv0 : e == 1u ? tri.uv1 : tri.uv2;
+        const float2 b = e == 0u ? tri.uv1 : e == 1u ? tri.uv2 : tri.uv0;
+        const float2 ab = b - a;
+        uint m = 0u;
+        for (uint k = 0u; k < 8u; ++k)
+        {
+            if (k >= n) break;
+            const float2 p = poly[k], q = poly[k + 1u < n ? k + 1u : 0u];
+            const float dp = side * (ab.x * (p.y - a.y) - ab.y * (p.x - a.x));
+            const float dq = side * (ab.x * (q.y - a.y) - ab.y * (q.x - a.x));
+            if (dp >= 0.0 && m < 8u) next[m++] = p;
+            if ((dp >= 0.0) != (dq >= 0.0) && m < 8u) next[m++] = p + (q - p) * (dp / (dp - dq));
+        }
+        n = m;
+        for (uint k = 0u; k < 8u; ++k) poly[k] = next[k];
+    }
+    if (n == 0u)
+    {
+        region = manifoldMapRegionTri(tri);
+        return false;
+    }
+    // uv to (u, v): the inverse of [qa qb].
+    float2 w[8];
+    for (uint k = 0u; k < 8u; ++k)
+    {
+        const float2 d = poly[k] - q0;
+        w[k] = float2(qb.y * d.x - qb.x * d.y, qa.x * d.y - qa.y * d.x) / det;
+    }
+    region = manifoldMapRegionOf(tri, w, n);
+    return true;
+}
+
+// A cell's own test, tighter than its ball's (manifoldMappedTest): the cell's tangent-space normals lie in the convex
+// hull of its four texels' (cNN), so its h = M (tn - s) lie in the hull of M v_k, v_k = cNN - s. Seen along the half
+// vector Hc from the region's box centre (the half vectors from the box within dh of it: manifoldConeTest's bound), a
+// root needs some w in that hull with |w x Hc| <= tan(dh) |w . Hc|. With M = M' + E, |E| <= delta: the hull of M' v_k
+// projected on the plane across Hc must come within max_k delta |v_k| + tan(dh) max_k (|M' v_k . Hc| + delta |v_k|) of
+// its origin. False only when no point of the region can reflect (exact as the region shrinks: the line test).
+float manifoldSegmentDistance(float2 a, float2 b)
+{
+    const float2 ab = b - a;
+    const float t = clamp(-dot(a, ab) / max(dot(ab, ab), 1e-30), 0.0, 1.0);
+    return length(a + ab * t);
+}
+
+bool manifoldCellHullTest(float3 boxMin, float3 boxMax, float3 mt, float3 mb, float3 mn, float delta, float3 c00,
+                          float3 c10, float3 c01, float3 c11, float2 sigma, float3 p, float3 L)
+{
+    const float3 centre = 0.5 * (boxMin + boxMax);
+    const float radius = 0.5 * length(boxMax - boxMin);
+    const float3 d = p - centre;
+    const float dist = length(d);
+    if (!(dist > radius * 1.0001 + 1e-6)) return true;
+    const float3 wc = d / dist;
+    const float dw = asin(min(radius / dist, 1.0));
+    const float gammaMax = acos(clamp(dot(wc, L), -1.0, 1.0)) + dw;
+    if (gammaMax >= kManifoldPi - 1e-3) return true;
+    const float dh = dw / (2.0 * cos(0.5 * gammaMax)) + 1e-4;
+    if (dh >= 1.5) return true;
+    const float3 hc = normalize(wc + L);
+    const float3 e1 = normalize(cross(hc, abs(hc.x) < 0.9 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0)));
+    const float3 e2 = cross(hc, e1);
+    const float3 s = float3(sigma, 0.0);
+    float2 P[4];
+    float pert = 0.0, depth = 0.0, scale = 0.0;
+    [ForceUnroll]
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        const float3 v = (k == 0u ? c00 : k == 1u ? c10 : k == 2u ? c01 : c11) - s;
+        const float3 w = mt * v.x + mb * v.y + mn * v.z;
+        P[k] = float2(dot(w, e1), dot(w, e2));
+        const float lv = length(v);
+        pert = max(pert, delta * lv);
+        depth = max(depth, abs(dot(w, hc)) + delta * lv);
+        scale = max(scale, length(w));
+    }
+    const float slack = pert + tan(dh) * depth + 1e-5 * scale + 1e-12;
+    // Inside one of the four points' triangles (their union is the hull): distance 0.
+    [ForceUnroll]
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        // (0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)
+        const float2 A = P[k == 3u ? 1u : 0u], B = P[k <= 1u ? 1u : 2u], C = P[k == 0u ? 2u : 3u];
+        // A triangle of no area holds nothing its edges (the segments below) do not.
+        const float area = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+        if (!(abs(area) > 0.0)) continue;
+        const float d1 = (B.x - A.x) * (-A.y) - (B.y - A.y) * (-A.x);
+        const float d2 = (C.x - B.x) * (-B.y) - (C.y - B.y) * (-B.x);
+        const float d3 = (A.x - C.x) * (-C.y) - (A.y - C.y) * (-C.x);
+        if ((d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0) || (d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0)) return true;
+    }
+    float m = 1e30;
+    [ForceUnroll]
+    for (uint i = 0u; i < 3u; ++i)
+        [ForceUnroll]
+        for (uint j = i + 1u; j < 4u; ++j) m = min(m, manifoldSegmentDistance(P[i], P[j]));
+    return m <= slack;
+}

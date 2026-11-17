@@ -146,6 +146,37 @@ A pyramid of normal cones per normal map, built at upload; a triangle's cone com
 box, 2a's disc test at each node down to cells. Proven conservative on random triangles and maps
 (`t8_disc_conservative`'s method). Measured on the helmet: cells a request (T1 counted 47 at least, 0 to 425).
 
+*Stage 2 as built (2026-11-17; the walk opt-in, for measurement):* the pyramid holds balls of tangent normals, not
+cones (a ball survives the slope's subtraction `tn - s`; a cone of directions does not), built on the GPU at upload
+from the tracer's own `Load` + `normalFromMap` (`manifoldPyramidBuild`), so the BC5 decode is the GPU's by
+construction: no format or cooker bump. A leaf covers 4x4 cells (one cell a leaf would be about 4x the memory): 23.2 MB
+for the showcase's 14 maps (the helmet's 2048^2 5.33 MB, a 1024^2 Sponza map 1.33 MB), built in 0.97 ms once. A
+mapped triangle's frames and uvs (9 float4) sit after the plain slots in a side table (the helmet: 112,512 slots,
+15.45 MB). The bound: nodes and triangles `|h - M'(c - s)| <= g rho + delta (|c - s| + rho)`, then
+`manifoldConeTest` at angle 0; a cell, the hull of its four texels projected along the half vector, with delta and the
+half vector's spread as slack. 2a's disc term is not conservative in the vertex tangent frame's slope and is not used
+on mapped triangles. Mapped materials have their own owned bit, off unless `OHAO_MANIFOLD_MAPS=lo,hi` (map widths);
+with it every frame, the showcase took 870 ms at 320x180 and 99.75% of requests picked a mapped draw, so the image is
+unchanged by default. Measuring: `OHAO_MANIFOLD_SPARSE=k`, `OHAO_MANIFOLD_CELL_STATS=1`, `OHAO_MANIFOLD_DUMP=x,y|any`.
+- **Cells a request** (sparse grid, nothing lost): the helmet 11,594 mean / 11,264 median / 17,135 max at 320x180,
+  11,945 / 10,880 / 18,884 at 640x360; Sponza 15,789 / 1,536 / 118,366 and 11,362 / 2,240 / 64,273. Pyramid tests a
+  request: the helmet 286 K, Sponza 665-912 K (max 6.2 M). About 6,700 helmet triangles a request pass the triangle
+  test. T1's 47 counted cells whose four corners' slopes bracket the drawn slope, which is not a conservative test.
+- **Proofs:** the bound, a float32 copy of the GPU's code against double samples: 142,935 samples in 2,667 regions,
+  none outside (worst margin 0.019 rad). Completeness, a CPU brute force over every cell of every helmet triangle
+  (6.33 M pairs, 4 dumped requests): on a quarter-texel grid of points in the triangle, the line
+  `s + lambda M(y)^-1 (normalize(p - y) + L)` meeting the hull of the cell's four GPU-decoded normals flags 680-986
+  cells a request; the walk emitted 10,670-11,801, none flagged and not emitted (sampled points: strong evidence, not
+  a proof). Walk off: the caustics scene and the showcase (320x180, 4 spp, twice) counters and PFMs byte-identical to
+  stage 1b. Synchronization validation silent with the walk off and on. `pt.manifold` with the walk off 1.51 -> 1.62 ms
+  (caustics), 2.64 -> 2.84 ms (showcase) at 320x180.
+- **Refuted: the exact cell route does not fit a frame.** At 640x360 the helmet alone is 26-100 K requests; the walk
+  at about 1.1e9 tests/s is about 26 s a frame, and the solve, 11.6 K cells x about 30 boxes x about 2,000 flops, about
+  0.7 Gflop a request, 3-4 orders over. The walk is about 12x looser than the brute force's test (delta and the half
+  vector's slack at a cell's size); the floor (cells that hold a root) is not yet measured. Found on the way: a
+  point-in-hull test that called four equal normals inside every degenerate triangle (the GPU's and the brute force's;
+  16.5 K -> 11.6 K cells), and a write-after-write on the pyramid's directory (synchronization validation).
+
 ### Task 6: the pass on the GPU, bounded
 
 Requests -> candidate cells -> cell solves as work items of bounded cost (a box budget an item), spread across threads

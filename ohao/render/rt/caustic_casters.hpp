@@ -27,7 +27,10 @@ struct MaterialSmoothness {
     float coatWeight{0.0f};
     float coatRoughness{0.0f};
     float coatTexMin{1.0f};
-    bool normalMap{false};   // caustics step 2: a normal-mapped material stays with the camera side (ruling M7)
+    // Caustics step 2c: its normal map's table index (UINT32_MAX: none) and size (0: unknown, as for a map not cooked
+    // from a model: such a material stays with the camera side).
+    uint32_t normalTex{UINT32_MAX};
+    uint32_t normalWidth{0}, normalHeight{0};
 };
 
 // Whether any lobe can be under `cut` anywhere on the material (the module clamps roughness at 0.01;
@@ -99,6 +102,9 @@ void causticBasis(glm::vec3 n, glm::vec3& t, glm::vec3& b);
 constexpr uint32_t kManifoldOwned = 1u;       // the pass owns its smooth reflections' cores
 constexpr uint32_t kManifoldBaseSmooth = 2u;  // its base's specular can be smooth somewhere
 constexpr uint32_t kManifoldCoatSmooth = 4u;  // its coat can be smooth somewhere
+// Step 2c: owned and normal-mapped. Its draws are gathered with their frames and walked through its map's pyramid down
+// to cells, which are counted, not yet solved; until they are (stage 3) the camera side keeps its smooth reflections.
+constexpr uint32_t kManifoldMapped = 8u;
 
 // One draw as the host sees it, for choosing the owned set (pure: manifold tests drive it without a GPU).
 struct ManifoldDrawInput {
@@ -115,12 +121,15 @@ struct ManifoldSelection {
     std::vector<uint32_t> materialBits;   // a word a material (0 to the largest material index used + 1)
 };
 
-// The owned materials and the draws to gather. `smoothness(material)` the host's record of it.
-template <class Smoothness>
-ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness, float cut);
+// The owned materials and the draws to gather. `smoothness(material)` the host's record of it; `mapReady(material)`
+// whether its normal map has a pyramid (step 2c; a normal-mapped material without one stays with the camera side).
+template <class Smoothness, class MapReady>
+ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness,
+                                      MapReady&& mapReady, float cut);
 
-template <class Smoothness>
-ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness, float cut) {
+template <class Smoothness, class MapReady>
+ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness,
+                                      MapReady&& mapReady, float cut) {
     ManifoldSelection s;
     uint32_t materials = 0;
     for (const auto& d : draws) materials = std::max(materials, d.material + 1);
@@ -131,11 +140,14 @@ ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, 
         uint32_t bits = 0;
         if (baseCanBeSmooth(m, cut)) bits |= kManifoldBaseSmooth;
         if (coatCanBeSmooth(m, cut)) bits |= kManifoldCoatSmooth;
+        if (m.normalTex != UINT32_MAX) bits |= kManifoldMapped;
         s.materialBits[d.material] = bits;
-        if (bits == 0 || m.normalMap || d.skinned || d.emitter || d.viewModel || !d.hasMeshlets) blocked[d.material] = 1;
+        if ((bits & ~kManifoldMapped) == 0 || ((bits & kManifoldMapped) != 0 && !mapReady(d.material)) || d.skinned ||
+            d.emitter || d.viewModel || !d.hasMeshlets)
+            blocked[d.material] = 1;
     }
     for (uint32_t k = 0; k < materials; ++k)
-        if (s.materialBits[k] != 0 && !blocked[k]) s.materialBits[k] |= kManifoldOwned;
+        if ((s.materialBits[k] & ~kManifoldMapped) != 0 && !blocked[k]) s.materialBits[k] |= kManifoldOwned;
     for (uint32_t i = 0; i < draws.size(); ++i)
         if ((s.materialBits[draws[i].material] & kManifoldOwned) != 0 && draws[i].triangles > 0) s.draws.push_back(i);
     return s;

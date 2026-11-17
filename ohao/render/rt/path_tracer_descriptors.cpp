@@ -107,6 +107,7 @@ bool PathTracer::createDescriptorResources() {
     add(P::manifoldRoots.binding, BUFFER, RGEN);  // the roots,
     add(P::manifoldCounts.binding, BUFFER, RGEN);  // the counts and dispatch arguments,
     add(P::manifoldSum.binding, BUFFER, RGEN);  // the frame's fixed-point sum
+    add(P::manifoldPyramid.binding, BUFFER, RGEN);  // step 2c: the normal maps' pyramids (render/rt/manifold_casters.hpp)
 
     if (bindings.size() != P::kSet0.size()) {   // a binding the shader declares and this layout lacks, or the reverse
         OHAO_LOG(Error, render, "PathTracer: the layout has {} bindings, rt/path_tracer.slang's set 0 {}", bindings.size(),
@@ -133,7 +134,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 14 * kSets},  // 1-3, 6, 7, 13, 19-26
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 31 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50 + caustics 51-53 + manifold 54-62
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + the env CDF 17 + OpenPBR tables 38 + the cache 39-41 + emissive 42,44,45 + guiding 46,49,50 + caustics 51-53 + manifold 54-63
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 * kSets},   // the emissive lights' power 43
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };

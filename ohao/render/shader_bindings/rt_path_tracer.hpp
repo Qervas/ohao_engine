@@ -41,6 +41,7 @@ inline constexpr Binding manifoldItems{0, 59, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 inline constexpr Binding manifoldRoots{0, 60, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 inline constexpr Binding manifoldCounts{0, 61, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 inline constexpr Binding manifoldSum{0, 62, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+inline constexpr Binding manifoldPyramid{0, 63, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 inline constexpr Binding materials{0, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 inline constexpr Binding lightData{0, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 inline constexpr Binding textures{0, 12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096};
@@ -57,7 +58,7 @@ inline constexpr Binding materialRefs{0, 37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 
 inline constexpr Binding openpbrTables{0, 38, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
 
 // Set 0, in binding order: its descriptor set layout (layoutBindings).
-inline constexpr std::array<Binding, 48> kSet0{scene, accumBuffer, outputImage, accumHistory, vertices, indices, albedoAOV, normalAOV, meshes, triangleSlots, materials, lightData, textures, emissionAOV, envCdf, motionVector, depthAOV, roughnessAOV, diffuseRadiance, specularRadiance, diffuseAlbedoAOV, specColorAOV, normalRoughnessAOV, instances, materialRefs, openpbrTables, cacheKeys, cacheAccum, cacheResolved, emissiveLights, emissivePower, emissiveRanges, emissiveFirst, guideStates, guideProposals, guidePixel, causticCasters, causticSplat, causticStats, manifoldTris, manifoldNodes, manifoldDraws, manifoldRequests, manifoldRecords, manifoldItems, manifoldRoots, manifoldCounts, manifoldSum};
+inline constexpr std::array<Binding, 49> kSet0{scene, accumBuffer, outputImage, accumHistory, vertices, indices, albedoAOV, normalAOV, meshes, triangleSlots, materials, lightData, textures, emissionAOV, envCdf, motionVector, depthAOV, roughnessAOV, diffuseRadiance, specularRadiance, diffuseAlbedoAOV, specColorAOV, normalRoughnessAOV, instances, materialRefs, openpbrTables, cacheKeys, cacheAccum, cacheResolved, emissiveLights, emissivePower, emissiveRanges, emissiveFirst, guideStates, guideProposals, guidePixel, causticCasters, causticSplat, causticStats, manifoldTris, manifoldNodes, manifoldDraws, manifoldRequests, manifoldRecords, manifoldItems, manifoldRoots, manifoldCounts, manifoldSum, manifoldPyramid};
 
 // The push constants (the shader's PushConstants).
 

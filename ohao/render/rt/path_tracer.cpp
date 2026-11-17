@@ -387,7 +387,9 @@ void PathTracer::destroy() {
     if (m_causticsPipeline) { vkDestroyPipeline(m_device, m_causticsPipeline, nullptr); m_causticsPipeline = VK_NULL_HANDLE; }
     m_causticsPipelineFailed = false;
     if (m_manifoldPipeline) { vkDestroyPipeline(m_device, m_manifoldPipeline, nullptr); m_manifoldPipeline = VK_NULL_HANDLE; }
-    if (m_manifoldResolvePipe) { vkDestroyPipeline(m_device, m_manifoldResolvePipe, nullptr); m_manifoldResolvePipe = VK_NULL_HANDLE; }
+    for (VkPipeline* p : {&m_manifoldResolvePipe, &m_manifoldPyramidPipe, &m_manifoldCellStatsPipe, &m_manifoldDumpDrawPipe,
+                          &m_manifoldDumpMapPipe})
+        if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     m_manifoldPipelineFailed = false;
     if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
 

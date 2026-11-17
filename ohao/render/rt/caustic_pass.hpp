@@ -72,6 +72,12 @@ public:
     // and pass of the records and of the records' items, groups, clusters, sub-clusters, candidates and roots
     // (render/rt/manifold_rounds.hpp).
     [[nodiscard]] std::array<uint32_t, 11> manifoldRoundCounts() const;
+    // Step 2c's (words 23-29): the peak pyramid nodes and cells in a batch and pass, cells reached, pyramid tests,
+    // mapped triangles queued, records on a mapped draw, mapped triangles with degenerate uvs.
+    [[nodiscard]] std::array<uint32_t, 7> manifoldMappedCounts() const;
+    // Step 2c's dump (OHAO_MANIFOLD_DUMP=x,y, written at destroy to OHAO_MANIFOLD_DUMP_FILE): the stats grown to hold
+    // it (rt/path_tracer.slang, kManifoldDump).
+    [[nodiscard]] bool dumping() const noexcept { return m_dumping; }
     void clearCounts() noexcept { m_clearCounts = true; }
 
     [[nodiscard]] VkBuffer table() const noexcept { return m_table.buffer; }
@@ -80,8 +86,10 @@ public:
 
     // The packed table (float4 rows), as rt/caustics.slang reads it; at most kRows rows.
     static constexpr uint32_t kRows = 4096;
-    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters, 12-21 its rounds'.
-    static constexpr uint32_t kStatsBytes = 128;
+    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters, 12-24 its rounds', 25-29 step 2c's,
+    // from word 32 the cell statistics' histograms (rt/path_tracer.slang, kManifoldHist); from word 4096 the dump.
+    static constexpr uint32_t kStatsBytes = 4096 * 4;
+    static constexpr VkDeviceSize kDumpBytes = 19927168ull * 4;   // rt/path_tracer.slang's kManifoldDumpMap + 3 x 2048^2
     [[nodiscard]] static std::vector<glm::vec4> pack(const CausticCasters& c, glm::vec3 sceneCenter, float sceneRadius);
 
 private:
@@ -96,6 +104,7 @@ private:
     bool m_splatFull{false};
     bool m_clearSplat{true};
     bool m_clearCounts{true};
+    bool m_dumping{false};
     CausticCasters m_casters;
     uint32_t m_casterCount{0};
     std::vector<glm::vec4> m_packed, m_uploaded;

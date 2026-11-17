@@ -83,6 +83,9 @@ import display.display;
 [[vk::binding(60, 0)]] RWStructuredBuffer<uint4> manifoldRoots;
 [[vk::binding(61, 0)]] RWStructuredBuffer<uint> manifoldCounts;
 [[vk::binding(62, 0)]] RWStructuredBuffer<uint> manifoldSum;
+// Step 2c: the normal maps' pyramids of balls (render/rt/manifold_casters.hpp, "the pyramid"): a directory of
+// kManifoldMapRows rows a texture index, then the nodes (float4: a ball's centre and radius, radius < 0 for none).
+[[vk::binding(63, 0)]] RWStructuredBuffer<float4> manifoldPyramid;
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -126,6 +129,9 @@ static const uint kFlagManifoldGlass = 1u << 23u;
 static const uint kManifoldOwnedBit = 1u;
 static const uint kManifoldBaseBit = 2u;
 static const uint kManifoldCoatBit = 4u;
+// Step 2c: a normal-mapped owned material: its draws are gathered and walked to its map's cells, which are counted, not
+// yet solved (docs/plans/2026-11-08-caustics-step2c.md); until they are, the camera side keeps its smooth reflections.
+static const uint kManifoldMappedBit = 8u;
 // A material's word (the draws buffer after its draws: row 1 + 2 D + w / 4).
 uint manifoldMaterialBits(uint material)
 {
@@ -981,7 +987,7 @@ void tracePixel<let CAUSTICS : bool, let GUIDING : bool>(uint2 pixel)
                     // A directional light through an all-smooth chain from the first hit: the light pass's.
                     c -= chainThroughput * smoothNee * le;
                 }
-                if (manifold && ls.pdf == 0.0 && any(chainOne > 0.0) && (manifoldMaterialBits(hit.material) & kManifoldOwnedBit) != 0u)
+                if (manifold && ls.pdf == 0.0 && any(chainOne > 0.0) && (manifoldMaterialBits(hit.material) & (kManifoldOwnedBit | kManifoldMappedBit)) == kManifoldOwnedBit)
                 {
                     // A directional light through the core of a smooth reflection after a rough one: the manifold pass's.
                     c -= chainOne * coreNee * le;
@@ -1511,72 +1517,115 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
 // is counted lost (the stats' word 12). All into the one fixed-point sum; the resolve runs once.
 //
 // manifoldCounts (uint words): the header (the host's capacities, regions, rows, batches and passes; the frame's
-// counters), then a block of 32 words a batch and pass: a queue q's trace arguments (width, 1, 1) and count at 4q, the
-// records' count at 24 (pass 0's).
+// counters), then a block of kMCBlockWords a batch and pass: a queue q's trace arguments (width, 1, 1) and count at 4q,
+// the records' count at 32, the pyramid queue's segments 1 to kManifoldPyramidRounds - 1 at 36 + 4 (j - 1) (its segment
+// 0 is its queue's words); then two words a record (its cells and pyramid tests: the cell statistics).
 static const uint kMQRecords = 0u;      // the records' items (R0's input): (record, the next group)
 static const uint kMQGroups = 1u;
 static const uint kMQClusters = 2u;
 static const uint kMQSubs = 3u;
 static const uint kMQCandidates = 4u;
 static const uint kMQRoots = 5u;        // 4 uint4 each, in manifoldRoots
+static const uint kMQPyramid = 6u;      // step 2c: a mapped triangle's pyramid nodes (uint4 items: two slots each)
+static const uint kMQCells = 7u;        // and its cells (uint4 items)
 static const uint kMCCapRecords = 16u;  // the header: capacities (records, then a queue each)
 static const uint kMCCap = 17u;
-static const uint kMCOffset = 24u;      // a queue's first region in manifoldItems (its second at + its capacity)
-static const uint kMCRows = 29u;
-static const uint kMCBatches = 30u;
-static const uint kMCPasses = 31u;
-static const uint kMCCandidates = 32u;  // the frame's counters: candidates, roots, connections, cluster, sub-cluster
+static const uint kMCOffset = 25u;      // a queue's first region in manifoldItems (its second at + its capacity, in slots)
+static const uint kMCRows = 33u;
+static const uint kMCBatches = 34u;
+static const uint kMCPasses = 35u;
+static const uint kMCDumpPixel = 36u;   // the pixel whose requests are dumped (~0: none, ~1: any; caustic_pass.hpp)
+static const uint kMCRecordStats = 37u; // the first word of the records' statistics
+static const uint kMCSparse = 38u;      // only pixels on a grid of this step make requests (0, 1: all; a measurement)
+static const uint kMCCandidates = 40u;  // the frame's counters: candidates, roots, connections, cluster, sub-cluster
                                         // and triangle tests
-static const uint kMCLost = 38u;        // items carried past the last pass (or a record past its capacity)
-static const uint kMCClamped = 39u;     // fixed-point words clamped
-static const uint kMCCarried = 40u;     // items carried to a later pass
-static const uint kMCBlocks = 64u;      // then a block of 32 words a batch and pass
-static const uint kMCRecords = 24u;     // in a block: the records' count (pass 0's)
+static const uint kMCLost = 46u;        // items carried past the last pass (or a record past its capacity)
+static const uint kMCClamped = 47u;     // fixed-point words clamped
+static const uint kMCCarried = 48u;     // items carried to a later pass
+static const uint kMCCells = 49u;       // step 2c: cells reached (each a cell item), the pyramid's node and cell tests,
+static const uint kMCPyramidTests = 50u;
+static const uint kMCMappedTris = 51u;  // mapped triangles that passed (their footprints queued), records on a mapped
+static const uint kMCMappedRecords = 52u;   // draw, and mapped triangles that passed with degenerate uvs
+static const uint kMCDegenerate = 53u;
+static const uint kMCBlocks = 128u;     // then a block of kMCBlockWords words a batch and pass
+static const uint kMCBlockWords = 96u;
+static const uint kMCRecords = 32u;     // in a block: the records' count (pass 0's)
 // An item: (record | its children already emitted << 24 | counted << 31, kind << 30 | its node). Kind 0: a
-// triangle's hierarchy (1 is kept for a normal map's cells); counted: an item carried, whose tests are already counted.
+// triangle's hierarchy; counted: an item carried, whose tests are already counted. The pyramid's items are uint4:
+// (record | emitted << 24 | counted << 31, the triangle slot | level << 27, x, y), x and y a node's absolute
+// coordinates at its level; a cell's (record, the triangle slot, x, y), its absolute cell coordinates (manifoldNodeCells).
 static const uint kManifoldItemTriangle = 0u;
 static const uint kManifoldItemIndex = 0x3FFFFFFFu;
 static const uint kManifoldRecordMask = 0x00FFFFFFu;
 static const uint kManifoldCounted = 0x80000000u;
 static const uint kManifoldChunk = 256u;   // groups a record's item emits a pass at most
+static const uint kManifoldSlotMask = 0x07FFFFFFu;
+// A pass's pyramid rounds: a mapped triangle's footprint, a level a round, down to its leaves' cells. A node still
+// above the leaves after the last is carried to the next pass.
+static const uint kManifoldPyramidRounds = 10u;
 // A record: 6 float4 (origin, pixel), (ray direction, slot | light << 8 | (channel + 1) << 24), (beta, 1 / the
 // draw's probability), (X, the draw), (the slope, its angle, Newton's tolerance), (L, the hash the slope came from).
 static const uint kManifoldRecordRows = 6u;
 
 // The batch and pass this dispatch runs (pc.jitter.z's bits: batch | pass << 16), and a block of words.
 uint manifoldBatch() { return asuint(pc.jitter.z) & 0xFFFFu; }
-uint manifoldPassIndex() { return asuint(pc.jitter.z) >> 16u; }
-uint manifoldBlockAt(uint pass) { return kMCBlocks + 32u * (manifoldBatch() * manifoldCounts[kMCPasses] + pass); }
+uint manifoldPassIndex() { return (asuint(pc.jitter.z) >> 16u) & 0xFFu; }
+uint manifoldSegment() { return asuint(pc.jitter.z) >> 24u; }   // a pyramid round's: its segment of the queue
+uint manifoldBlockAt(uint pass) { return kMCBlocks + kMCBlockWords * (manifoldBatch() * manifoldCounts[kMCPasses] + pass); }
 uint manifoldBlock() { return manifoldBlockAt(manifoldPassIndex()); }
-// A queue's region in a pass: two a queue, a pass's input in one while the carries for the next go to the other.
-uint manifoldRegion(uint q, uint pass) { return manifoldCounts[kMCOffset + q] + (pass & 1u) * manifoldCounts[kMCCap + q]; }
+// A queue's region in a pass: two a queue, a pass's input in one while the carries for the next go to the other (in
+// slots: a uint4 queue's item takes two).
+uint manifoldRegion(uint q, uint pass)
+{
+    return manifoldCounts[kMCOffset + q] + (pass & 1u) * manifoldCounts[kMCCap + q] * (q >= kMQPyramid ? 2u : 1u);
+}
 
-// Reserves n slots of queue q in a block: the first index. Those below the capacity are the caller's to write; past it
-// the caller carries what it could not write. The block's trace arguments (width, 1, 1) are its items below the
-// capacity rounded up to 64: every 64th slot reserved adds 64.
-uint manifoldReserveIn(uint block, uint q, uint n)
+// Reserves n slots of a queue's (or a segment's) four words, `cap` of them its to fill: the first index. Those below
+// cap are the caller's to write; past it the caller carries what it could not write. The trace arguments (width, 1, 1)
+// are the items below cap rounded up to 64: every 64th slot reserved adds 64.
+uint manifoldReserveWords(uint word, uint cap, uint n)
 {
     uint base;
-    InterlockedAdd(manifoldCounts[block + q * 4u + 3u], n, base);
-    const uint cap = manifoldCounts[kMCCap + q];
+    InterlockedAdd(manifoldCounts[word + 3u], n, base);
     const uint started = (min(base + n, cap) + 63u) / 64u - (min(base, cap) + 63u) / 64u;
     if (started > 0u)
     {
-        InterlockedAdd(manifoldCounts[block + q * 4u], started * 64u);
-        manifoldCounts[block + q * 4u + 1u] = 1u;
-        manifoldCounts[block + q * 4u + 2u] = 1u;
+        InterlockedAdd(manifoldCounts[word], started * 64u);
+        manifoldCounts[word + 1u] = 1u;
+        manifoldCounts[word + 2u] = 1u;
     }
     return base;
 }
 
+// Queue q's in a block.
+uint manifoldReserveIn(uint block, uint q, uint n) { return manifoldReserveWords(block + q * 4u, manifoldCounts[kMCCap + q], n); }
+
 // The same for a wave: every active lane calls it (n may be 0), one atomic for them all; the lane's first index.
-uint manifoldAppendWaveIn(uint block, uint q, uint n)
+uint manifoldAppendWaveWords(uint word, uint cap, uint n)
 {
     const uint offset = WavePrefixSum(n);
     const uint total = WaveActiveSum(n);
     uint base = 0u;
-    if (WaveIsFirstLane() && total > 0u) base = manifoldReserveIn(block, q, total);
+    if (WaveIsFirstLane() && total > 0u) base = manifoldReserveWords(word, cap, total);
     return WaveReadLaneFirst(base) + offset;
+}
+
+uint manifoldAppendWaveIn(uint block, uint q, uint n) { return manifoldAppendWaveWords(block + q * 4u, manifoldCounts[kMCCap + q], n); }
+
+// The pyramid queue's segment j in a block (round j of a pass reads it, round j - 1 or, for j = 0, the sub-clusters'
+// round and the last pass's carries fill it): its four words, and its first item in the pass's region (the segments
+// before it, each at most what was left of the queue).
+uint manifoldSegmentWord(uint block, uint j) { return j == 0u ? block + kMQPyramid * 4u : block + 36u + 4u * (j - 1u); }
+uint manifoldSegmentBase(uint block, uint j)
+{
+    const uint cap = manifoldCounts[kMCCap + kMQPyramid];
+    uint base = 0u;
+    for (uint k = 0u; k < kManifoldPyramidRounds; ++k)
+    {
+        if (k >= j) break;
+        base += min(manifoldCounts[manifoldSegmentWord(block, k) + 3u], cap - base);
+    }
+    return base;
 }
 
 // A counter of this frame (kMCCandidates + i, ...), a wave's sum at a time.
@@ -1601,6 +1650,27 @@ void manifoldCarryWave(uint q, bool carry, uint2 item)
     const uint at = manifoldAppendWaveIn(manifoldBlockAt(next), q, carry ? 1u : 0u);
     if (!carry) return;
     if (at < manifoldCounts[kMCCap + q]) manifoldItems[manifoldRegion(q, next) + at] = item;
+    else InterlockedAdd(manifoldCounts[kMCLost], 1u);
+}
+
+// The same for a uint4 queue's item (two slots).
+void manifoldCarryWave4(uint q, bool carry, uint4 item)
+{
+    const uint next = manifoldPassIndex() + 1u;
+    manifoldCountWave(kMCCarried, carry ? 1u : 0u);
+    if (next >= manifoldCounts[kMCPasses])
+    {
+        manifoldCountWave(kMCLost, carry ? 1u : 0u);
+        return;
+    }
+    const uint at = manifoldAppendWaveIn(manifoldBlockAt(next), q, carry ? 1u : 0u);
+    if (!carry) return;
+    if (at < manifoldCounts[kMCCap + q])
+    {
+        const uint r = manifoldRegion(q, next) + 2u * at;
+        manifoldItems[r] = item.xy;
+        manifoldItems[r + 1u] = item.zw;
+    }
     else InterlockedAdd(manifoldCounts[kMCLost], 1u);
 }
 
@@ -1663,6 +1733,394 @@ bool manifoldItem(uint q, uint i, out uint2 item)
     return true;
 }
 
+// ---- step 2c: a normal map's pyramid (render/rt/manifold_casters.hpp, "the pyramid") ------------------------------
+// A cell is the square between four texel centres: cell i of a W-texel axis covers x = uv W in [i + 0.5, i + 1.5), its
+// texels i and i + 1 (mod W), as mapNormalAt reads them; cells are numbered across the tiles the sampler repeats
+// (cell i + W is cell i a tile on). A leaf covers kManifoldPyramidLeaf x kManifoldPyramidLeaf cells; a tile's leaves are
+// padded to P (a power of two) a side, so a node of level l is a 2^l x 2^l block of leaves, absolute leaf A = tile P +
+// k. A node at a level at or above the tile's top covers whole tiles: its ball the top's.
+static const uint kManifoldMapRows = 8u;   // the directory: (W, H, Pw, Ph), (Lx | Ly << 8 | Lmax << 16, offsets...)
+
+struct ManifoldMapInfo
+{
+    int W, H, Pw, Ph, Lx, Ly, Lmax;
+    uint tex;
+};
+
+ManifoldMapInfo manifoldMapInfo(uint tex)
+{
+    const uint4 r0 = asuint(manifoldPyramid[tex * kManifoldMapRows]);
+    const uint r1 = asuint(manifoldPyramid[tex * kManifoldMapRows + 1u].x);
+    ManifoldMapInfo mi;
+    mi.W = int(r0.x);
+    mi.H = int(r0.y);
+    mi.Pw = int(r0.z);
+    mi.Ph = int(r0.w);
+    mi.Lx = int(r1 & 255u);
+    mi.Ly = int((r1 >> 8u) & 255u);
+    mi.Lmax = int(r1 >> 16u);
+    mi.tex = tex;
+    return mi;
+}
+
+// Level l's first node (a float4 row of manifoldPyramid), l <= Lmax.
+uint manifoldMapLevel(ManifoldMapInfo mi, int l)
+{
+    const uint w = 5u + uint(l);
+    return asuint(manifoldPyramid[mi.tex * kManifoldMapRows + w / 4u][w & 3u]);
+}
+
+// The ball of node (l, X, Y) (absolute coordinates); radius < 0: no cell of the map is in it.
+float4 manifoldMapNode(ManifoldMapInfo mi, int l, int X, int Y)
+{
+    if (l >= mi.Lmax) return manifoldPyramid[manifoldMapLevel(mi, mi.Lmax)];
+    const int ix = l < mi.Lx ? (X & ((mi.Pw >> l) - 1)) : 0;
+    const int iy = l < mi.Ly ? (Y & ((mi.Ph >> l) - 1)) : 0;
+    const int nx = max(mi.Pw >> l, 1);
+    return manifoldPyramid[manifoldMapLevel(mi, l) + uint(iy * nx + ix)];
+}
+
+int manifoldFloorDiv(int a, int b) { return a >= 0 ? a / b : -((-a - 1) / b) - 1; }
+
+// An axis's absolute leaf holding cell i (W cells and P leaves a tile).
+int manifoldLeafOf(int i, int W, int P)
+{
+    const int tile = manifoldFloorDiv(i, W);
+    return tile * P + (i - tile * W) / int(kManifoldPyramidLeaf);
+}
+
+// An axis's cells [x, y) of node X at level l (L the tile's levels): empty when x >= y.
+int2 manifoldNodeCells(int X, int l, int W, int P, int L)
+{
+    if (l >= L) return int2((X << (l - L)) * W, ((X + 1) << (l - L)) * W);
+    const int tile = X >> (L - l);
+    const int k0 = (X << l) & (P - 1);
+    const int c0 = k0 * int(kManifoldPyramidLeaf), c1 = min((k0 + (1 << l)) * int(kManifoldPyramidLeaf), W);
+    return int2(tile * W + c0, tile * W + max(c1, c0));
+}
+
+// Cells [c.x, c.y) of an axis as texture coordinates (the squares between texel centres).
+float2 manifoldCellsUv(int2 c, int W) { return (float2(c) + 0.5) / float(W); }
+
+// Uvs as far as the pyramid's coordinates reach: a footprint past them is a counted loss.
+static const float kManifoldMapUvReach = 64.0;
+
+// The footprint of a uv box (x0, y0, x1, y1): the level at which its cells' leaves span at most two nodes a side, and
+// those nodes' coordinates (x0, y0, x1, y1: one or two a side). False past kManifoldMapUvReach.
+bool manifoldMapFootprint(ManifoldMapInfo mi, float4 box, out int l, out int4 nodes)
+{
+    l = 0;
+    nodes = int4(0);
+    if (!(all(abs(box) < kManifoldMapUvReach))) return false;
+    const float2 eps = 1e-5 * float2(mi.W, mi.H);
+    const float2 lo = box.xy * float2(mi.W, mi.H) - 0.5 - eps, hi = box.zw * float2(mi.W, mi.H) - 0.5 + eps;
+    const int4 A = int4(manifoldLeafOf(int(floor(lo.x)), mi.W, mi.Pw), manifoldLeafOf(int(floor(lo.y)), mi.H, mi.Ph),
+                        manifoldLeafOf(int(floor(hi.x)), mi.W, mi.Pw), manifoldLeafOf(int(floor(hi.y)), mi.H, mi.Ph));
+    const int d = max(A.z - A.x, A.w - A.y);
+    l = d <= 1 ? 0 : int(firstbithigh(uint(d - 1))) + 1;
+    nodes = int4(A.x >> l, A.y >> l, A.z >> l, A.w >> l);
+    return true;
+}
+
+// The ball enclosing balls a and b (radius < 0: none), grown by its rounding.
+float4 manifoldBallUnion(float4 a, float4 b)
+{
+    if (a.w < 0.0) return b;
+    if (b.w < 0.0) return a;
+    const float3 lo = min(a.xyz - a.w, b.xyz - b.w), hi = max(a.xyz + a.w, b.xyz + b.w);
+    const float3 c = 0.5 * (lo + hi);
+    const float r = max(length(a.xyz - c) + a.w, length(b.xyz - c) + b.w);
+    return float4(c, r * (1.0 + 1e-6) + 1e-6);
+}
+
+// The ball over a uv box's footprint (its at most four nodes); radius < 0 when the box is past the pyramid's reach (the
+// caller counts it) or holds no cell.
+float4 manifoldMapBall(ManifoldMapInfo mi, float4 box)
+{
+    int l;
+    int4 n;
+    if (!manifoldMapFootprint(mi, box, l, n)) return manifoldMapNode(mi, mi.Lmax, 0, 0);
+    float4 ball = manifoldMapNode(mi, l, n.x, n.y);
+    if (n.z != n.x) ball = manifoldBallUnion(ball, manifoldMapNode(mi, l, n.z, n.y));
+    if (n.w != n.y) ball = manifoldBallUnion(ball, manifoldMapNode(mi, l, n.x, n.w));
+    if (n.z != n.x && n.w != n.y) ball = manifoldBallUnion(ball, manifoldMapNode(mi, l, n.z, n.w));
+    return ball;
+}
+
+// A draw's normal map, when its material is a mapped one (kManifoldMappedBit).
+bool manifoldDrawMap(uint d, out uint tex)
+{
+    const uint material = manifoldDraws[2u + 3u * d].z;
+    tex = asuint(materials[material * kMaterialRows + 1u].z);
+    return (manifoldMaterialBits(material) & kManifoldMappedBit) != 0u && tex < 4096u;
+}
+
+// The mapped side table (render/rt/manifold_casters.hpp): a mapped triangle slot's 9 rows after the T slots'.
+uint manifoldMappedSlot(uint t, uint d)
+{
+    const uint4 db = manifoldDraws[2u + 3u * d];
+    return manifoldDraws[0].y + ((db.w >> 1u) + (t >> 7u) - db.x) * 128u + (t & 127u);
+}
+
+ManifoldMapTri manifoldMapTriAt(uint t, uint d)
+{
+    const uint i = t * 9u, j = manifoldMappedSlot(t, d) * 9u;
+    ManifoldMapTri tri;
+    tri.p0 = manifoldTris[i].xyz;
+    tri.e1 = manifoldTris[i + 1u].xyz;
+    tri.e2 = manifoldTris[i + 2u].xyz;
+    const float4 r0 = manifoldTris[j], r1 = manifoldTris[j + 1u], r2 = manifoldTris[j + 2u];
+    const float4 r3 = manifoldTris[j + 3u], r4 = manifoldTris[j + 4u], r5 = manifoldTris[j + 5u];
+    tri.n0 = r0.xyz;
+    tri.n1 = r1.xyz;
+    tri.n2 = r2.xyz;
+    tri.t0 = r3.xyz;
+    tri.t1 = r4.xyz;
+    tri.t2 = r5.xyz;
+    tri.b0 = manifoldTris[j + 6u].xyz;
+    tri.b1 = manifoldTris[j + 7u].xyz;
+    tri.b2 = manifoldTris[j + 8u].xyz;
+    tri.uv0 = float2(r0.w, r1.w);
+    tri.uv1 = float2(r2.w, r3.w);
+    tri.uv2 = float2(r4.w, r5.w);
+    return tri;
+}
+
+float4 manifoldUvBox(ManifoldMapTri tri)
+{
+    return float4(min(tri.uv0, min(tri.uv1, tri.uv2)), max(tri.uv0, max(tri.uv1, tri.uv2)));
+}
+
+// A node's composed test for a mapped draw: its box (rows 0 and 1), its mapped rows (the frame, delta, g and its
+// triangles' uv box: manifold_gather.slang) and the map's ball over that box.
+bool manifoldMappedNodeTest(uint node, float3 lo, float3 hi, ManifoldMapInfo mi, float2 sigma, float3 p, float3 L)
+{
+    const uint4 h = manifoldDraws[0];
+    const uint r = (h.w + 9u * h.z + h.x + node) * 4u;
+    const float4 r0 = manifoldNodes[r], r1 = manifoldNodes[r + 1u], r2 = manifoldNodes[r + 2u], r3 = manifoldNodes[r + 3u];
+    return manifoldMappedTest(lo, hi, r0.xyz, r1.xyz, r2.xyz, r0.w, r1.w, manifoldMapBall(mi, r3), sigma, p, L);
+}
+
+// A cell's four texels' decoded normals as mapNormalAt reads them: c00, c10, c01, c11.
+void manifoldCellTexels(ManifoldMapInfo mi, int cx, int cy, out float3 c[4])
+{
+    const int2 size = int2(mi.W, mi.H);
+    const int2 a = ((int2(cx, cy) % size) + size) % size;
+    const int2 b = (a + 1) % size;
+    c[0] = normalFromMap(textures[NonUniformResourceIndex(mi.tex)].Load(int3(a.x, a.y, 0)).rg);
+    c[1] = normalFromMap(textures[NonUniformResourceIndex(mi.tex)].Load(int3(b.x, a.y, 0)).rg);
+    c[2] = normalFromMap(textures[NonUniformResourceIndex(mi.tex)].Load(int3(a.x, b.y, 0)).rg);
+    c[3] = normalFromMap(textures[NonUniformResourceIndex(mi.tex)].Load(int3(b.x, b.y, 0)).rg);
+}
+
+// The pyramid's build (render/rt/manifold_casters.hpp, "the pyramid"), once a map: its leaves (level 0) from the
+// texels as mapNormalAt reads them (Load, normalFromMap), then each level from the one below, a dispatch each, a thread
+// a node; pc.jitter.z's bits: the texture index | the level << 16. A ball's centre is its box's (of the texels' normals,
+// or of the children's balls), its radius the farthest of them, grown by its rounding; a node without a cell of the
+// map (a tile's padding) is -1.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void manifoldPyramidBuild(uint3 id: SV_DispatchThreadID)
+{
+    const uint job = asuint(pc.jitter.z);
+    const int l = int(job >> 16u);
+    const ManifoldMapInfo mi = manifoldMapInfo(job & 0xFFFFu);
+    const int nx = max(mi.Pw >> l, 1), ny = max(mi.Ph >> l, 1);
+    if (id.x >= uint(nx * ny)) return;
+    const int ix = int(id.x) % nx, iy = int(id.x) / nx;
+    float4 ball = float4(0.0, 0.0, 0.0, -1.0);
+    if (l == 0)
+    {
+        const int K = int(kManifoldPyramidLeaf);
+        const int x0 = ix * K, y0 = iy * K, x1 = min(x0 + K, mi.W), y1 = min(y0 + K, mi.H);
+        if (x0 < mi.W && y0 < mi.H)
+        {
+            float3 n[(kManifoldPyramidLeaf + 1u) * (kManifoldPyramidLeaf + 1u)];
+            float3 lo = float3(1e30), hi = float3(-1e30);
+            for (int k = 0; k < (K + 1) * (K + 1); ++k)
+            {
+                const int a = k % (K + 1), b = k / (K + 1);
+                n[k] = float3(0.0);
+                if (x0 + a > x1 || y0 + b > y1) continue;
+                n[k] = normalFromMap(textures[NonUniformResourceIndex(mi.tex)].Load(int3((x0 + a) % mi.W, (y0 + b) % mi.H, 0)).rg);
+                lo = min(lo, n[k]);
+                hi = max(hi, n[k]);
+            }
+            const float3 c = 0.5 * (lo + hi);
+            float r = 0.0;
+            for (int k = 0; k < (K + 1) * (K + 1); ++k)
+            {
+                const int a = k % (K + 1), b = k / (K + 1);
+                if (x0 + a > x1 || y0 + b > y1) continue;
+                r = max(r, length(n[k] - c));
+            }
+            ball = float4(c, r * (1.0 + 1e-6) + 1e-6);
+        }
+    }
+    else
+    {
+        const int cnx = max(mi.Pw >> (l - 1), 1), cny = max(mi.Ph >> (l - 1), 1);
+        const uint below = manifoldMapLevel(mi, l - 1);
+        for (uint k = 0u; k < 4u; ++k)
+        {
+            const int a = int(k & 1u), b = int(k >> 1u);
+            if ((cnx == nx && a == 1) || (cny == ny && b == 1)) continue;
+            const int cx = cnx == nx ? ix : 2 * ix + a, cy = cny == ny ? iy : 2 * iy + b;
+            ball = manifoldBallUnion(ball, manifoldPyramid[below + uint(cy * cnx + cx)]);
+        }
+    }
+    manifoldPyramid[manifoldMapLevel(mi, l) + id.x] = ball;
+}
+
+// ---- step 2c's dump (render/rt/caustic_pass.hpp, OHAO_MANIFOLD_DUMP): one pixel's mapped requests, the cells their
+// walks reached, their draw's triangles and its map, for a CPU brute force. In causticStats from kManifoldDump: (the
+// frame dumped + 1, records, cells, the draw, its map, W, H, triangle slots, the first slot), the records (16 words: X,
+// L, the slope, the draw, slot | light << 8, the record, the pixel, the map), the cells (4 words: the record's place
+// among the dumped, the triangle slot, the cell), the draw's slots (48 words: p0 and whether the slot holds a triangle,
+// e1, e2, the side table's 9 rows), the map's texels (3 words: the decoded normal).
+static const uint kManifoldDump = 4096u;
+static const uint kManifoldDumpRecords = kManifoldDump + 16u;
+static const uint kManifoldDumpCells = kManifoldDump + 128u;
+static const uint kManifoldDumpCellCap = 262144u;
+static const uint kManifoldDumpTris = kManifoldDumpCells + 4u * kManifoldDumpCellCap;
+static const uint kManifoldDumpTriCap = 131072u;
+static const uint kManifoldDumpMap = kManifoldDumpTris + 48u * kManifoldDumpTriCap;
+static const uint kManifoldDumpTexels = 2048u * 2048u;
+
+void manifoldDumpRecord(uint rec, float3 pX, float3 L, float2 target, uint d, uint slotLight, uint pixel, uint tex)
+{
+    uint orig;
+    InterlockedCompareExchange(causticStats[kManifoldDump], 0u, pc.params.z + 1u, orig);
+    if (orig != 0u && orig != pc.params.z + 1u) return;
+    uint k;
+    InterlockedAdd(causticStats[kManifoldDump + 1u], 1u, k);
+    if (k >= 4u) return;
+    const uint o = kManifoldDumpRecords + 16u * k;
+    const float v[8] = { pX.x, pX.y, pX.z, L.x, L.y, L.z, target.x, target.y };
+    for (uint j = 0u; j < 8u; ++j) causticStats[o + j] = asuint(v[j]);
+    causticStats[o + 8u] = d;
+    causticStats[o + 9u] = slotLight;
+    causticStats[o + 10u] = rec;
+    causticStats[o + 11u] = pixel;
+    causticStats[o + 12u] = tex;
+    if (k == 0u)
+    {
+        uint w, h;
+        textures[NonUniformResourceIndex(tex)].GetDimensions(w, h);
+        causticStats[kManifoldDump + 3u] = d;
+        causticStats[kManifoldDump + 4u] = tex;
+        causticStats[kManifoldDump + 5u] = w;
+        causticStats[kManifoldDump + 6u] = h;
+    }
+}
+
+void manifoldDumpCell(uint rec, uint4 item)
+{
+    if (causticStats[kManifoldDump] != pc.params.z + 1u) return;
+    const uint n = min(causticStats[kManifoldDump + 1u], 4u);
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        if (k >= n) break;
+        if (causticStats[kManifoldDumpRecords + 16u * k + 10u] != rec) continue;
+        uint at;
+        InterlockedAdd(causticStats[kManifoldDump + 2u], 1u, at);
+        if (at < kManifoldDumpCellCap)
+        {
+            const uint o = kManifoldDumpCells + 4u * at;
+            causticStats[o] = k;
+            causticStats[o + 1u] = item.y;
+            causticStats[o + 2u] = item.z;
+            causticStats[o + 3u] = item.w;
+        }
+    }
+}
+
+// The dumped draw's triangle slots (a thread a slot, kManifoldDumpTriCap at most).
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void manifoldDumpDraw(uint3 id: SV_DispatchThreadID)
+{
+    if (causticStats[kManifoldDump] != pc.params.z + 1u || id.x >= kManifoldDumpTriCap) return;
+    const uint4 header = manifoldDraws[0];
+    const uint d = causticStats[kManifoldDump + 3u];
+    if (d >= header.x) return;
+    const uint4 da = manifoldDraws[1u + 3u * d], db = manifoldDraws[2u + 3u * d];
+    if (id.x >= da.y * 128u) return;
+    const uint t = db.x * 128u + id.x;
+    if (id.x == 0u)
+    {
+        causticStats[kManifoldDump + 7u] = min(da.y * 128u, kManifoldDumpTriCap);
+        causticStats[kManifoldDump + 8u] = db.x * 128u;
+    }
+    const uint count = asuint(manifoldNodes[(header.w + (t >> 7u)) * 4u + 1u].w);
+    const uint o = kManifoldDumpTris + 48u * id.x;
+    const bool valid = (t & 127u) < count;
+    for (uint k = 0u; k < 3u; ++k)
+    {
+        const float4 r = manifoldTris[t * 9u + k];
+        causticStats[o + 4u * k] = asuint(r.x);
+        causticStats[o + 4u * k + 1u] = asuint(r.y);
+        causticStats[o + 4u * k + 2u] = asuint(r.z);
+        causticStats[o + 4u * k + 3u] = k == 0u ? (valid ? 1u : 0u) : 0u;
+    }
+    if (!valid) return;
+    const uint j = manifoldMappedSlot(t, d) * 9u;
+    for (uint k = 0u; k < 9u; ++k)
+    {
+        const float4 r = manifoldTris[j + k];
+        causticStats[o + 12u + 4u * k] = asuint(r.x);
+        causticStats[o + 12u + 4u * k + 1u] = asuint(r.y);
+        causticStats[o + 12u + 4u * k + 2u] = asuint(r.z);
+        causticStats[o + 12u + 4u * k + 3u] = asuint(r.w);
+    }
+}
+
+// The dumped draw's map: each texel's decoded normal (normalFromMap of its Load), a thread a texel.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void manifoldDumpMap(uint3 id: SV_DispatchThreadID)
+{
+    if (causticStats[kManifoldDump] != pc.params.z + 1u) return;
+    const uint W = causticStats[kManifoldDump + 5u], H = causticStats[kManifoldDump + 6u];
+    if (W * H > kManifoldDumpTexels || id.x >= W * H) return;
+    const uint tex = causticStats[kManifoldDump + 4u];
+    const float3 n = normalFromMap(textures[NonUniformResourceIndex(tex)].Load(int3(int(id.x % W), int(id.x / W), 0)).rg);
+    const uint o = kManifoldDumpMap + 3u * id.x;
+    causticStats[o] = asuint(n.x);
+    causticStats[o + 1u] = asuint(n.y);
+    causticStats[o + 2u] = asuint(n.z);
+}
+
+// The cell statistics (OHAO_MANIFOLD_CELL_STATS=1): after a batch's passes, a thread a record of it: a mapped record's
+// cells and pyramid tests into the histograms (causticStats from kManifoldHist: one for maps of 2048 texels or more,
+// one for the smaller; render/rt/caustic_pass.cpp reads them), its words cleared.
+static const uint kManifoldHist = 32u;
+static const uint kManifoldHistWords = 1040u;   // 1024 bins, max, requests, max tests, sums
+// A count's bin: itself below 512, then 64 a bin (the last: 33,216 or more).
+uint manifoldHistBin(uint v) { return v < 512u ? v : min(512u + (v - 512u) / 64u, 1023u); }
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void manifoldCellStats(uint3 id: SV_DispatchThreadID)
+{
+    const uint stats = manifoldCounts[kMCRecordStats];
+    if (stats == 0u) return;
+    const uint n = min(manifoldCounts[manifoldBlockAt(0u) + kMCRecords], manifoldCounts[kMCCapRecords]);
+    if (id.x >= n) return;
+    const uint cells = manifoldCounts[stats + 2u * id.x], tests = manifoldCounts[stats + 2u * id.x + 1u];
+    manifoldCounts[stats + 2u * id.x] = 0u;
+    manifoldCounts[stats + 2u * id.x + 1u] = 0u;
+    uint tex;
+    if (!manifoldDrawMap(asuint(manifoldRecords[id.x * kManifoldRecordRows + 3u].w), tex)) return;
+    const uint h = kManifoldHist + (asuint(manifoldPyramid[tex * kManifoldMapRows].x) >= 2048u ? 0u : kManifoldHistWords);
+    InterlockedAdd(causticStats[h + manifoldHistBin(cells)], 1u);
+    InterlockedMax(causticStats[h + 1024u], cells);
+    InterlockedAdd(causticStats[h + 1025u], 1u);
+    InterlockedMax(causticStats[h + 1026u], tests);
+    InterlockedAdd(causticStats[h + 1027u], cells);
+    InterlockedAdd(causticStats[h + 1028u], tests);
+}
+
 // The caustics step 2 debug stop (OHAO_MANIFOLD_STAGE): 3 after X, 1 at the candidates, 2 at the roots.
 uint manifoldDebugStage() { return (pc.control.x >> 21u) & 3u; }
 
@@ -1685,6 +2143,8 @@ void manifoldSetup()
     float3 glass = float3(0.0);
     uint requests = 0u;
     uint4 glassCounts = uint4(0u);   // step 2b: walks, paths found, connections, at the trials' ceiling
+    const uint sparse = manifoldCounts[kMCSparse];
+    const bool onGrid = sparse <= 1u || (pixel.x % sparse == 0u && pixel.y % sparse == 0u);
     for (uint slot = 0u; slot < kManifoldDepths; ++slot)
     {
         const uint r = (pixelIndex * kManifoldDepths + slot) * 3u;
@@ -1692,6 +2152,7 @@ void manifoldSetup()
         const uint meta = asuint(r0.w);
         if ((meta & 1u) == 0u) continue;
         manifoldRequests[r] = float4(0.0);
+        if (!onGrid) continue;
         ++requests;
         const float3 rayDir = manifoldRequests[r + 1u].xyz;
         const float3 beta = manifoldRequests[r + 2u].xyz;
@@ -1763,15 +2224,23 @@ void manifoldSetup()
                     if (at < manifoldCounts[kMCCap + kMQRecords])
                         manifoldItems[manifoldRegion(kMQRecords, 0u) + at] = uint2(rec, 0u);
                     else InterlockedAdd(manifoldCounts[kMCLost], 1u);
+                    uint tex;
+                    if (manifoldDrawMap(d, tex))
+                    {
+                        InterlockedAdd(manifoldCounts[kMCMappedRecords], 1u);
+                        const uint dumpPixel = manifoldCounts[kMCDumpPixel];
+                        if (pixelIndex == dumpPixel || dumpPixel == 0xFFFFFFFEu)
+                            manifoldDumpRecord(rec, pX, L, target, d, slot | l << 8u, pixelIndex, tex);
+                    }
                 }
                 else InterlockedAdd(manifoldCounts[kMCLost], 1u);
             }
             // Step 2b: the same draw, a transmissive solid, refracting the sun through itself onto X. The walk takes
-            // the whole instance, so one draw of each (instance, material) runs it (db.w, the host's mark: a merged
+            // the whole instance, so one draw of each (instance, material) runs it (db.w bit 0, the host's mark: a merged
             // model's runs of one glass are several draws), with that draw's own choice probability. Not for a solid
             // that cannot refract (metalness 1, thin-walled), nor for a coat or a specular-weight texture (the walk's
             // single interface and IOR would not be the BSDF's: manifoldGlass).
-            if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0 && db.w != 0u)
+            if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0 && (db.w & 1u) != 0u)
             {
                 const uint mrow = db.z * kMaterialRows;
                 const float4 row12 = materials[mrow + kTransmissionRowFirst];
@@ -1830,7 +2299,8 @@ uint manifoldFit(uint q, uint at, uint want)
     return at >= cap ? 0u : min(want, cap - at);
 }
 
-// Walk, the groups' round: a group's cone test, then its clusters' disc tests (at most kManifoldCluster).
+// Walk, the groups' round: a group's cone test, then its clusters' disc tests (at most kManifoldCluster); a mapped draw's
+// by their composed cones (manifoldMappedNodeTest).
 [shader("raygeneration")]
 void manifoldWalkGroups()
 {
@@ -1844,10 +2314,14 @@ void manifoldWalkGroups()
         const ManifoldRecord m = manifoldRecord(rec);
         const uint4 header = manifoldDraws[0];
         const uint4 da = manifoldDraws[1u + 3u * m.d], db = manifoldDraws[2u + 3u * m.d];
+        uint tex;
+        const bool mapped = manifoldDrawMap(m.d, tex);
+        const ManifoldMapInfo mi = manifoldMapInfo(mapped ? tex : 0u);
         const uint g = item.y & kManifoldItemIndex;
         const uint gn = (db.y + g) * 4u;
         const float4 g0 = manifoldNodes[gn], g1 = manifoldNodes[gn + 1u], g2 = manifoldNodes[gn + 2u];
-        if (manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, m.pX, m.L, m.thetaS))
+        if (mapped ? manifoldMappedNodeTest(db.y + g, g0.xyz, g1.xyz, mi, m.target, m.pX, m.L)
+                   : manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, m.pX, m.L, m.thetaS))
         {
             cFirst = g * kManifoldCluster;
             const uint cEnd = min(da.y, (g + 1u) * kManifoldCluster);
@@ -1857,7 +2331,8 @@ void manifoldWalkGroups()
                 const uint cn = (header.w + db.x + c) * 4u;
                 const float4 c0 = manifoldNodes[cn], c1 = manifoldNodes[cn + 1u], c2 = manifoldNodes[cn + 2u];
                 const float3 cRef = manifoldNodes[cn + 3u].xyz;   // the cluster's frame of reference
-                if (manifoldDiscTestTerm(c0.xyz, c1.xyz, c2.xyz, c0.w, c2.w, cRef, m.target, m.pX, m.L))
+                if (mapped ? manifoldMappedNodeTest(header.w + db.x + c, c0.xyz, c1.xyz, mi, m.target, m.pX, m.L)
+                           : manifoldDiscTestTerm(c0.xyz, c1.xyz, c2.xyz, c0.w, c2.w, cRef, m.target, m.pX, m.L))
                     pass |= 1u << (c - cFirst);
             }
         }
@@ -1892,15 +2367,21 @@ void manifoldWalkClusters()
         const ManifoldRecord m = manifoldRecord(rec);
         const uint4 header = manifoldDraws[0];
         const uint4 db = manifoldDraws[2u + 3u * m.d];
+        uint tex;
+        const bool mapped = manifoldDrawMap(m.d, tex);
+        const ManifoldMapInfo mi = manifoldMapInfo(mapped ? tex : 0u);
         const uint cn = (header.w + db.x + c) * 4u;
         const uint count = asuint(manifoldNodes[cn + 1u].w);
         const float3 cRef = manifoldNodes[cn + 3u].xyz;
         for (uint sc = 0u; sc < 8u && sc * 16u < count; ++sc)
         {
             ++tests;
-            const uint sn = (header.w + header.z + header.x + (db.x + c) * 8u + sc) * 4u;
+            const uint node = header.w + header.z + header.x + (db.x + c) * 8u + sc;
+            const uint sn = node * 4u;
             const float4 s0 = manifoldNodes[sn], s1 = manifoldNodes[sn + 1u], s2 = manifoldNodes[sn + 2u];
-            if (manifoldDiscTestTerm(s0.xyz, s1.xyz, s2.xyz, s0.w, s2.w, cRef, m.target, m.pX, m.L)) pass |= 1u << sc;
+            if (mapped ? manifoldMappedNodeTest(node, s0.xyz, s1.xyz, mi, m.target, m.pX, m.L)
+                       : manifoldDiscTestTerm(s0.xyz, s1.xyz, s2.xyz, s0.w, s2.w, cRef, m.target, m.pX, m.L))
+                pass |= 1u << sc;
         }
     }
     manifoldCountWave(kMCCandidates + 4u, counted ? 0u : tests);
@@ -1918,7 +2399,9 @@ void manifoldWalkClusters()
     manifoldCarryWave(kMQClusters, live && fit < want, uint2(rec | (start + fit) << 24u | kManifoldCounted, item.y));
 }
 
-// Walk, the sub-clusters' round: a sub-cluster's triangles (at most 16), those that pass the candidates.
+// Walk, the sub-clusters' round: a sub-cluster's triangles (at most 16), those that pass the candidates. A mapped
+// draw's triangle is tested by its composed cone over its whole uv box, and one that passes becomes its footprint's
+// pyramid nodes (at most four a triangle: manifoldMapFootprint) in the pyramid queue's first segment.
 [shader("raygeneration")]
 void manifoldWalkSubs()
 {
@@ -1926,12 +2409,18 @@ void manifoldWalkSubs()
     const bool live = manifoldItem(kMQSubs, DispatchRaysIndex().x, item);
     const uint rec = item.x & kManifoldRecordMask, start = (item.x >> 24u) & 127u;
     const bool counted = (item.x & kManifoldCounted) != 0u;
-    uint pass = 0u, tests = 0u, tFirst = 0u;
+    uint pass = 0u, tests = 0u, tFirst = 0u, outs = 0u, degenerate = 0u, beyond = 0u;
+    bool mapped = false;
+    ManifoldRecord m;
+    ManifoldMapInfo mi = manifoldMapInfo(0u);
     if (live)
     {
-        const ManifoldRecord m = manifoldRecord(rec);
+        m = manifoldRecord(rec);
         const uint4 header = manifoldDraws[0];
         const uint4 db = manifoldDraws[2u + 3u * m.d];
+        uint tex;
+        mapped = manifoldDrawMap(m.d, tex);
+        if (mapped) mi = manifoldMapInfo(tex);
         const uint c = (item.y & kManifoldItemIndex) >> 3u, sc = item.y & 7u;
         const uint cn = (header.w + db.x + c) * 4u;
         const uint count = asuint(manifoldNodes[cn + 1u].w);
@@ -1942,26 +2431,221 @@ void manifoldWalkSubs()
         {
             const uint i = ((db.x + c) * 128u + k) * 9u;
             ++tests;
+            if (mapped)
+            {
+                const ManifoldMapTri tri = manifoldMapTriAt(tFirst + k - sc * 16u, m.d);
+                const ManifoldMapRegion rg = manifoldMapRegionTri(tri);
+                const float4 box = manifoldUvBox(tri);
+                if (!manifoldMappedTest(rg.lo, rg.hi, rg.mt, rg.mb, rg.mn, rg.delta, rg.g, manifoldMapBall(mi, box),
+                                        m.target, m.pX, m.L))
+                    continue;
+                int l;
+                int4 n;
+                if (!manifoldMapFootprint(mi, box, l, n))
+                {
+                    ++beyond;
+                    continue;
+                }
+                pass |= 1u << (k - sc * 16u);
+                outs += (n.z != n.x ? 2u : 1u) * (n.w != n.y ? 2u : 1u);
+                const float2 qa = tri.uv1 - tri.uv0, qb = tri.uv2 - tri.uv0;
+                const float scale = max(max(abs(qa.x), abs(qa.y)), max(abs(qb.x), abs(qb.y)));
+                if (!(abs(qa.x * qb.y - qa.y * qb.x) > 1e-10 * scale * scale) || !(scale > 0.0)) ++degenerate;
+                continue;
+            }
             const float4 b0 = manifoldTris[i + 6u], b1 = manifoldTris[i + 7u], b2 = manifoldTris[i + 8u];
             if (manifoldDiscTestTerm(b0.xyz, b1.xyz, b2.xyz, b0.w, b2.w, cRef, m.target, m.pX, m.L))
                 pass |= 1u << (k - sc * 16u);
         }
     }
     manifoldCountWave(kMCCandidates + 5u, counted ? 0u : tests);
-    manifoldCountWave(kMCCandidates, counted ? 0u : countbits(pass));
+    manifoldCountWave(kMCCandidates, counted || mapped ? 0u : countbits(pass));
+    manifoldCountWave(kMCMappedTris, counted || !mapped ? 0u : countbits(pass));
+    manifoldCountWave(kMCDegenerate, counted ? 0u : degenerate);
+    manifoldCountWave(kMCLost, counted ? 0u : beyond);   // footprints past the pyramid's reach
     const bool emit = manifoldDebugStage() != 1u;
-    const uint want = live && emit ? countbits(pass) - start : 0u;
-    const uint at = manifoldAppendWaveIn(manifoldBlock(), kMQCandidates, want);
-    const uint fit = manifoldFit(kMQCandidates, at, want), region = manifoldRegion(kMQCandidates, manifoldPassIndex());
+    const uint block = manifoldBlock(), passIndex = manifoldPassIndex();
+    // A plain draw's candidates.
+    const uint want = live && emit && !mapped ? countbits(pass) - start : 0u;
+    const uint at = manifoldAppendWaveIn(block, kMQCandidates, want);
+    const uint fit = manifoldFit(kMQCandidates, at, want), region = manifoldRegion(kMQCandidates, passIndex);
+    // A mapped draw's footprints (`start` counts the nodes already emitted).
+    const uint wantNodes = live && emit && mapped ? outs - start : 0u;
+    const uint atNodes = manifoldAppendWaveIn(block, kMQPyramid, wantNodes);
+    const uint fitNodes = manifoldFit(kMQPyramid, atNodes, wantNodes), regionNodes = manifoldRegion(kMQPyramid, passIndex);
     uint j = 0u;
     for (uint k = 0u; k < 16u; ++k)
         if ((pass & (1u << k)) != 0u)
         {
+            if (!mapped)
+            {
+                if (j >= start && j < start + fit)
+                    manifoldItems[region + at + j - start] = uint2(rec, kManifoldItemTriangle << 30u | (tFirst + k));
+                ++j;
+                continue;
+            }
+            const ManifoldMapTri tri = manifoldMapTriAt(tFirst + k, m.d);
+            int l;
+            int4 n;
+            manifoldMapFootprint(mi, manifoldUvBox(tri), l, n);
+            for (uint q = 0u; q < 4u; ++q)
+            {
+                const int X = (q & 1u) != 0u ? n.z : n.x, Y = (q & 2u) != 0u ? n.w : n.y;
+                if (((q & 1u) != 0u && n.z == n.x) || ((q & 2u) != 0u && n.w == n.y)) continue;
+                if (j >= start && j < start + fitNodes)
+                {
+                    const uint r = regionNodes + 2u * (atNodes + j - start);
+                    manifoldItems[r] = uint2(rec, (tFirst + k) | uint(l) << 27u);
+                    manifoldItems[r + 1u] = uint2(asuint(X), asuint(Y));
+                }
+                ++j;
+            }
+        }
+    manifoldCarryWave(kMQSubs, live && (mapped ? fitNodes < wantNodes : fit < want),
+                      uint2(rec | (start + (mapped ? fitNodes : fit)) << 24u | kManifoldCounted, item.y));
+}
+
+// The pyramid's round (step 2c), a level of mapped triangles' footprints a round, kManifoldPyramidRounds a pass (the
+// round's segment of the queue: manifoldSegment): a node's at most four children, or a leaf's at most
+// kManifoldPyramidLeaf^2 cells, each clipped to the triangle in uv (a child outside it dropped) and tested by its
+// composed cone (manifoldMappedTest: the region's box and frame, the child's ball or the cell's four texels'). A child
+// that passes goes to the next segment, a cell to the cells' queue. A node still above the leaves in the last round is
+// carried to the next pass untested.
+[shader("raygeneration")]
+void manifoldWalkPyramid()
+{
+    const uint block = manifoldBlock(), seg = manifoldSegment(), passIndex = manifoldPassIndex();
+    const uint cap = manifoldCounts[kMCCap + kMQPyramid];
+    const uint base = manifoldSegmentBase(block, seg);
+    const uint n = min(manifoldCounts[manifoldSegmentWord(block, seg) + 3u], cap - base);
+    const uint i = DispatchRaysIndex().x;
+    const bool live = i < n;
+    uint4 item = uint4(0u);
+    if (live)
+    {
+        const uint r = manifoldRegion(kMQPyramid, passIndex) + 2u * (base + i);
+        item = uint4(manifoldItems[r], manifoldItems[r + 1u]);
+    }
+    const uint rec = item.x & kManifoldRecordMask, start = (item.x >> 24u) & 127u;
+    const bool counted = (item.x & kManifoldCounted) != 0u;
+    const uint t = item.y & kManifoldSlotMask;
+    const int l = int(item.y >> 27u), X = asint(item.z), Y = asint(item.w);
+    const bool last = seg + 1u >= kManifoldPyramidRounds;
+    const bool defer = live && l > 0 && last;
+    uint pass = 0u, tests = 0u;
+    int2 cx = int2(0), cy = int2(0);
+    if (live && !defer)
+    {
+        const ManifoldRecord m = manifoldRecord(rec);
+        uint tex;
+        manifoldDrawMap(m.d, tex);
+        const ManifoldMapInfo mi = manifoldMapInfo(tex);
+        const ManifoldMapTri tri = manifoldMapTriAt(t, m.d);
+        if (l == 0)
+        {
+            cx = manifoldNodeCells(X, 0, mi.W, mi.Pw, mi.Lx);
+            cy = manifoldNodeCells(Y, 0, mi.H, mi.Ph, mi.Ly);
+            for (uint k = 0u; k < kManifoldPyramidLeaf * kManifoldPyramidLeaf; ++k)
+            {
+                const int ix = cx.x + int(k % kManifoldPyramidLeaf), iy = cy.x + int(k / kManifoldPyramidLeaf);
+                if (ix >= cx.y || iy >= cy.y) continue;
+                ++tests;
+                const float2 ux = manifoldCellsUv(int2(ix, ix + 1), mi.W), uy = manifoldCellsUv(int2(iy, iy + 1), mi.H);
+                ManifoldMapRegion rg;
+                bool degenerate;
+                if (!manifoldMapClip(tri, float4(ux.x, uy.x, ux.y, uy.y), rg, degenerate)) continue;
+                float3 c[4];
+                manifoldCellTexels(mi, ix, iy, c);
+                if (manifoldCellHullTest(rg.lo, rg.hi, rg.mt, rg.mb, rg.mn, rg.delta, c[0], c[1], c[2], c[3], m.target,
+                                         m.pX, m.L))
+                    pass |= 1u << k;
+            }
+        }
+        else
+        {
+            for (uint k = 0u; k < 4u; ++k)
+            {
+                const int CX = 2 * X + int(k & 1u), CY = 2 * Y + int(k >> 1u);
+                const int2 nx = manifoldNodeCells(CX, l - 1, mi.W, mi.Pw, mi.Lx);
+                const int2 ny = manifoldNodeCells(CY, l - 1, mi.H, mi.Ph, mi.Ly);
+                if (nx.x >= nx.y || ny.x >= ny.y) continue;
+                ++tests;
+                const float2 ux = manifoldCellsUv(nx, mi.W), uy = manifoldCellsUv(ny, mi.H);
+                ManifoldMapRegion rg;
+                bool degenerate;
+                if (!manifoldMapClip(tri, float4(ux.x, uy.x, ux.y, uy.y), rg, degenerate)) continue;
+                if (manifoldMappedTest(rg.lo, rg.hi, rg.mt, rg.mb, rg.mn, rg.delta, rg.g, manifoldMapNode(mi, l - 1, CX, CY),
+                                       m.target, m.pX, m.L))
+                    pass |= 1u << k;
+            }
+        }
+    }
+    manifoldCountWave(kMCPyramidTests, counted ? 0u : tests);
+    const uint stats = manifoldCounts[kMCRecordStats];
+    if (stats != 0u && tests > 0u && !counted) InterlockedAdd(manifoldCounts[stats + 2u * rec + 1u], tests);
+    const uint want = live && !defer ? countbits(pass) - start : 0u;
+    // A leaf's cells.
+    const uint wantCells = l == 0 ? want : 0u;
+    const uint atCells = manifoldAppendWaveIn(block, kMQCells, wantCells);
+    const uint fitCells = manifoldFit(kMQCells, atCells, wantCells), regionCells = manifoldRegion(kMQCells, passIndex);
+    // A node's children, into the next segment (after this one's items).
+    const uint wantNodes = l > 0 ? want : 0u;
+    uint atNodes = 0u, fitNodes = 0u;
+    const uint nextBase = base + n;
+    if (!last)
+    {
+        atNodes = manifoldAppendWaveWords(manifoldSegmentWord(block, seg + 1u), cap - nextBase, wantNodes);
+        fitNodes = atNodes >= cap - nextBase ? 0u : min(wantNodes, cap - nextBase - atNodes);
+    }
+    const uint fit = l == 0 ? fitCells : fitNodes;
+    const uint region = manifoldRegion(kMQPyramid, passIndex);
+    uint j = 0u;
+    for (uint k = 0u; k < kManifoldPyramidLeaf * kManifoldPyramidLeaf; ++k)
+        if ((pass & (1u << k)) != 0u)
+        {
             if (j >= start && j < start + fit)
-                manifoldItems[region + at + j - start] = uint2(rec, kManifoldItemTriangle << 30u | (tFirst + k));
+            {
+                if (l == 0)
+                {
+                    const uint r = regionCells + 2u * (atCells + j - start);
+                    manifoldItems[r] = uint2(rec, t);
+                    manifoldItems[r + 1u] = uint2(asuint(cx.x + int(k % kManifoldPyramidLeaf)),
+                                                  asuint(cy.x + int(k / kManifoldPyramidLeaf)));
+                }
+                else
+                {
+                    const uint r = region + 2u * (nextBase + atNodes + j - start);
+                    manifoldItems[r] = uint2(rec, t | uint(l - 1) << 27u);
+                    manifoldItems[r + 1u] = uint2(asuint(2 * X + int(k & 1u)), asuint(2 * Y + int(k >> 1u)));
+                }
+            }
             ++j;
         }
-    manifoldCarryWave(kMQSubs, live && fit < want, uint2(rec | (start + fit) << 24u | kManifoldCounted, item.y));
+    const bool carry = live && (defer || fit < want);
+    manifoldCarryWave4(kMQPyramid, carry,
+                       uint4(defer ? item.x : (rec | (start + fit) << 24u | kManifoldCounted), item.yzw));
+}
+
+// The cells' round (step 2c, stage 2): a cell a mapped triangle's walk reached is counted (the frame's counter, its
+// record's when the cell statistics are on, the dump's when its record is dumped) and dropped. Stage 3 solves it here.
+[shader("raygeneration")]
+void manifoldCells()
+{
+    const uint i = DispatchRaysIndex().x;
+    const uint block = manifoldBlock();
+    const bool live = i < min(manifoldCounts[block + kMQCells * 4u + 3u], manifoldCounts[kMCCap + kMQCells]);
+    uint4 item = uint4(0u);
+    if (live)
+    {
+        const uint r = manifoldRegion(kMQCells, manifoldPassIndex()) + 2u * i;
+        item = uint4(manifoldItems[r], manifoldItems[r + 1u]);
+    }
+    const uint rec = item.x & kManifoldRecordMask;
+    manifoldCountWave(kMCCells, live ? 1u : 0u);
+    if (!live) return;
+    const uint stats = manifoldCounts[kMCRecordStats];
+    if (stats != 0u) InterlockedAdd(manifoldCounts[stats + 2u * rec], 1u);
+    if (manifoldCounts[kMCDumpPixel] != 0xFFFFFFFFu) manifoldDumpCell(rec, item);
 }
 
 // A triangle slot's ManifoldTri (its frame of reference its cluster's).
@@ -2089,8 +2773,8 @@ void manifoldConnect()
 
 // Resolve: a pixel's fixed-point sum (cleared for the next frame) added to the running mean the raygen wrote, as
 // sum / frames, and the displayed pixel redrawn; thread 0 adds the frame's counters to the stats (words 2-7, 12 the
-// items lost past the last pass, 13 the clamped words, 14 the items carried, 15 the passes that held an item, 16-22 the
-// peak counts in a batch and pass of the records and the six queues).
+// items lost past the last pass, 13 the clamped words, 14 the items carried, 15 the passes that held an item, 16-24 the
+// peak counts in a batch and pass of the records and the eight queues, 25-29 step 2c's counters).
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void manifoldResolve(uint3 id: SV_DispatchThreadID)
@@ -2103,19 +2787,25 @@ void manifoldResolve(uint3 id: SV_DispatchThreadID)
         if (manifoldCounts[kMCLost] > 0u) InterlockedAdd(causticStats[12], manifoldCounts[kMCLost]);
         if (manifoldCounts[kMCClamped] > 0u) InterlockedAdd(causticStats[13], manifoldCounts[kMCClamped]);
         if (manifoldCounts[kMCCarried] > 0u) InterlockedAdd(causticStats[14], manifoldCounts[kMCCarried]);
-        // The peaks (the fullest batch and pass's) and the passes that held an item (at most kMaxBatches x kMCPasses
-        // blocks).
+        // Step 2c's: cells, pyramid tests, mapped triangles queued, mapped records, mapped triangles with degenerate uvs.
+        for (uint k = 0u; k < 5u; ++k)
+            if (manifoldCounts[kMCCells + k] > 0u) InterlockedAdd(causticStats[25u + k], manifoldCounts[kMCCells + k]);
+        // The peaks (the fullest batch and pass's; the pyramid queue's over its segments) and the passes that held an
+        // item (at most kMaxBatches x kMCPasses blocks).
         const uint passes = manifoldCounts[kMCPasses];
         for (uint b = 0u; b < manifoldCounts[kMCBatches]; ++b)
             for (uint p = 0u; p < passes; ++p)
             {
-                const uint block = kMCBlocks + 32u * (b * passes + p);
+                const uint block = kMCBlocks + kMCBlockWords * (b * passes + p);
                 InterlockedMax(causticStats[16], manifoldCounts[block + kMCRecords]);
                 uint any = 0u;
-                for (uint q = 0u; q < 6u; ++q)
+                for (uint q = 0u; q < 8u; ++q)
                 {
-                    InterlockedMax(causticStats[17u + q], manifoldCounts[block + q * 4u + 3u]);
-                    any |= manifoldCounts[block + q * 4u + 3u];
+                    uint n = manifoldCounts[block + q * 4u + 3u];
+                    if (q == kMQPyramid)
+                        for (uint j = 1u; j < kManifoldPyramidRounds; ++j) n += manifoldCounts[block + 36u + 4u * (j - 1u) + 3u];
+                    InterlockedMax(causticStats[17u + q], n);   // 17-24
+                    any |= n;
                 }
                 if (any != 0u) InterlockedMax(causticStats[15], p + 1u);
             }

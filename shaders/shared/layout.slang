@@ -73,6 +73,8 @@ static const float kManifoldCoreSlope2 = 99.0;
 static const float kManifoldCoreMinSlope2 = 0.01;
 // caustics step 2: a request whose owned casters' summed solid angle from X (over 2 pi) is under this runs with probability its ratio to it, weighed by the inverse (Russian roulette: exact; a caster's glint at X scales with its solid angle)
 static const float kManifoldRouletteWeight = 0.1;
+// caustics step 2c: cells a side a normal map's pyramid leaf covers (render/rt/manifold_casters.hpp, the pyramid; a power of two)
+static const uint kManifoldPyramidLeaf = 4u;
 // caustics step 2: clusters (meshlets) a group in the manifold pass's pruning (a box and a cone of normals each); 32 made a group a third of a sphere, which its ring test never pruned
 static const uint kManifoldCluster = 8u;
 // vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread

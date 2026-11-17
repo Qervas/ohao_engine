@@ -59,6 +59,8 @@ inline constexpr PassInfo kPasses[] = {
     {"pt.manifold", PassKind::RayTracing, "caustics step 2: each request's sun reflected by a smooth surface onto its rough point, solved on the casters' triangles, added to the running mean (its rounds, below, timed whole)"},
     {"pt.manifold.setup", PassKind::RayTracing, "caustics step 2 with OHAO_MANIFOLD_TIMING=stages: each request's X retraced, a draw and a slope drawn, its record and the draw's groups queued"},
     {"pt.manifold.walk", PassKind::RayTracing, "caustics step 2 with OHAO_MANIFOLD_TIMING=stages: each record's groups queued, and the casters' groups, clusters and sub-clusters pruned in rounds of queued items (a batch's first pass)"},
+    {"pt.manifold.pyramid", PassKind::RayTracing, "caustics step 2c: a new normal map's pyramid built (compute, once a map); with OHAO_MANIFOLD_TIMING=stages the mapped triangles' footprints walked down the pyramid in its rounds (a batch's first pass)"},
+    {"pt.manifold.cells", PassKind::RayTracing, "caustics step 2c with OHAO_MANIFOLD_TIMING=stages: the cells the pyramid's walk reached, counted (a batch's first pass)"},
     {"pt.manifold.solve", PassKind::RayTracing, "caustics step 2 with OHAO_MANIFOLD_TIMING=stages: Newton on each candidate triangle, the roots queued (a batch's first pass)"},
     {"pt.manifold.carry", PassKind::RayTracing, "caustics step 2 with OHAO_MANIFOLD_TIMING=stages: the passes after a batch's first, every round on the items carried (a queue was full)"},
     {"pt.manifold.connect", PassKind::RayTracing, "caustics step 2 with OHAO_MANIFOLD_TIMING=stages: each root's shadow ray, retrace and contribution, added in fixed point (a batch's first pass)"},
