@@ -184,33 +184,47 @@ added and removed, 74 tests built and cut to 10).
 
 ![Game thread, render thread, GPU](2026-11-08-system-design/5-threads.svg)
 
-- **Game thread:** steps the world and ends each frame with an extract into an immutable **frame packet** (draws,
-  lights, camera, effects, the HUD list).
-- **Render thread:** records frame N from packet N while the game thread simulates N+1; the GPU executes N-1.
-  Nothing the renderer reads is written by the simulation while it reads it.
-- **Job system:** a work-stealing pool; the scheduler's waves, Jolt (through Jolt's own `JobSystem` interface),
-  culling preparation, meshlet building, the cooker and the streamer run on it. Jolt's determinism with N workers is
-  checked by `replay_test` at 1 and at N workers before it is relied on; Jolt's `CROSS_PLATFORM_DETERMINISTIC`
-  option is measured for the MSVC/GCC ulp difference.
+Measured in step 4 (2026-11-11; `docs/changes/2026-11-17-step4-frame.md`), which corrected this section: the CPU has
+nothing to give yet. Recording and submitting a frame is 0.07 to 0.8 ms (`render_bench`, 100,000 instances included);
+every simulation system is 0.0002 to 0.06 ms a step (`physics_bench`); the GPU frame is 2 to 37 ms. So, until a
+measurement asks:
+
+- **One thread steps, extracts and records**, as today. The target stays the picture above: the game thread ends
+  each frame with an immutable frame packet, a render thread records frame N while the game thread simulates N+1.
+  Built when recording is measured over a few milliseconds.
+- **No job system yet.** Systems declare an order (step 3), not their accesses; waves of non-conflicting systems on
+  jobs come when a game's step is measured over a millisecond in systems that could overlap.
+- **Jolt stays on the calling thread.** Measured on its own pool: 1,000 boxes piling up 2.50 ms at 0 workers, 0.85 at
+  7; every scene that exists slower (the blockout's step 0.009 to 0.034 ms). One flag
+  (`BackendConfig::enableMultithreading`) when a game piles bodies; its replay at N workers is checked first.
 - **RPC** keeps its reader thread and posts commands into the step's queue, as `input.inject` does.
 
 ### 4.6 The renderer
 
 ![Frame graph](2026-11-08-system-design/6-frame-graph.svg)
 
-- **A frame graph that owns every pass:** deferred, path tracer, post, readback, present. A pass declares the
-  images and buffers it creates, reads and writes; the compiler culls, orders by dependency, places `sync2` barriers
-  per mip and layer, aliases transient memory through VMA, assigns graphics or async compute, and puts a breadcrumb
-  after each pass. Dynamic rendering replaces the 13 `VkRenderPass` objects.
-- **All memory through VMA.** No raw `vkAllocateMemory`.
-- **Descriptors:** one global bindless table (textures, samplers, buffers by device address) plus a per-pass
-  parameter block whose C++ struct is generated from the shader (4.2). The 31 descriptor pools and 34 layouts go.
-- **Pipelines:** one pipeline library creates every pipeline through one disk cache and hot-reloads a changed shader
-  at a frame boundary. Shader dependencies are per module, not every SPIR-V on every `.slang`.
-- **Uploads** go through a transfer queue with timeline semaphores. `WaitIdle` is allowed at resize and shutdown
-  only.
-- `PathTracer::render` and `DeferredRenderer::render` become graph passes; readback is a pass type, not ten
-  functions.
+As built in step 4 (2026-11-17), which corrected this section:
+
+- **Every pass declares what it touches** (`render::Pass`, `render/graph/pass.hpp`): sampled, storage, attachment and
+  copy uses of images (per mip and layer) and buffers. The barriers (`synchronization2`, one call per pass), the
+  layouts, dynamic rendering's attachments, the timer and breadcrumb follow from the declarations and from the state
+  each resource carries across passes and frames. No graph object: passes run in the order the frame's code writes
+  them, so nothing needs the whole frame before the first pass records; there is no reordering, culling or async
+  compute (one queue, and nothing measured to overlap). Code with barriers of its own (NRD, DLSS) is one pass that
+  says what it needs and what it leaves. The build refuses a barrier, render pass, framebuffer or raw allocation
+  outside `render/graph` and `gpu/vulkan`.
+- **One allocator** (VMA): every image (`gpu::Image`, named) and buffer of the renderer, the scene and the texture
+  table; retired after the frames in flight, never destroyed under one. `render.stats` lists the images by name.
+- **Pipelines:** graphics through one helper for dynamic rendering (`render::createGraphicsPipeline`), compute
+  through `rtc::createComputePipeline`, ray tracing through its disk cache. No pipeline library or shader hot reload:
+  a new `ohao serve` shows a first frame in 0.23 s after a 1 s shader build.
+- **Descriptors** stay per pass, their layouts from the generated bindings (4.2); the bindless texture table is one
+  set. One table and generated parameter blocks were not built: nothing measured asks for them.
+- **Uploads** go through `gpu::SubmittedWork` on the one queue (step 5); no transfer queue. `WaitIdle` is left at
+  shutdown, a swapchain or render-size change, a sky-map replace, and the debug readbacks.
+- **Not acted on yet:** a 1080p frame's targets are 1,048 MB deferred, 608 MB of it ReSTIR DI's images (allocated at
+  full resolution in its half-resolution mode), and the path tracer's 375 MB and the deferred frame's are both kept
+  once each has run. Aliasing transient images was not built: each would be a renderer change with its own measure.
 
 ### 4.7 Fault containment
 
@@ -292,14 +306,13 @@ submit, measured 2026-11-10), so 4b's jobs have nothing to speed up yet, and ass
 Step 5's streamer then loads on threads of its own and uploads through the graphics queue until 4a and 4b bring the
 jobs and the transfer queue.
 
-**Step 4, the frame (large).**
-- 4a: the frame graph over every pass, VMA everywhere, dynamic rendering, the bindless table and generated parameter
-  blocks, the pipeline library with shader hot reload, the transfer queue.
-- 4b: the job system, the systems' declared accesses and parallel waves, Jolt on jobs, the frame packet and the render
-  thread.
-
-*Done when* no barrier is placed outside the graph, `render_bench` is no slower on any scene, `replay_test` is
-identical at 1 and N threads, and the play scene's CPU frame time drops with more cores (measured).
+**Step 4, the frame (large; built 2026-11-17).** Every pass declares what it touches and records through one pass
+type; one allocator; dynamic rendering; the build refuses a barrier outside the frame's owners. 4b (jobs, waves,
+Jolt on jobs, the frame packet, the render thread) was measured and not built (4.5).
+*Done when* no barrier is placed outside the pass type, `render_bench` is no slower on any scene, the goldens are
+unchanged and synchronization validation is silent, and a frame's memory is known by image. (This said `replay_test`
+identical at 1 and N threads and the play scene's CPU frame dropping with more cores: the CPU frame is under half a
+millisecond.)
 
 **Step 5, assets (large; built 2026-11-11).** The cooker and its content-addressed cache, compressed textures, release,
 loads that do not wait for the device, reload on request.
@@ -318,10 +331,11 @@ would be built twice. Its CPU solver (`901b4a37`) is done and stays.
 the order of section 5, with the boundary before the frame because games are built by other people's agents.
 
 **Open, each decided by measurement in its step's plan:**
-- The job system: our own work-stealing pool, or enkiTS (zlib) or Taskflow (MIT).
+- The job system: our own work-stealing pool, or enkiTS (zlib) or Taskflow (MIT). Deferred with the jobs (4.5).
 - The scene writers: the generic reflection writer if it meets the 10 ms save budget on bench10k, else generated.
 - The texture compressor and container: bc7enc_rdo or Compressonator, KTX-Software for KTX2.
-- Descriptor buffers (`VK_EXT_descriptor_buffer`) or classic descriptor sets for the bindless table.
+- Descriptor buffers (`VK_EXT_descriptor_buffer`) or classic descriptor sets for the bindless table. Classic sets
+  stay (step 4): nothing measured asks.
 - Jolt's `CROSS_PLATFORM_DETERMINISTIC`: its cost against matching hashes across MSVC and GCC.
 
 ## 7. Not doing

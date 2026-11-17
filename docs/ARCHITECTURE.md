@@ -425,8 +425,9 @@ Followed once in sub-project 4, step 11, with a throwaway compute pass (the mean
 luminance of each 8x8 tile of the lit HDR image): it built, ran validation-clean through
 a resize and teardown, left every golden exact, and was then removed, since nothing read
 its output. Deferred passes live in `ohao/render/deferred/`; `SSSPass` is the compute
-model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), the post
-stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
+model to copy, `BloomPass` the raster one (fullscreen draws into the levels of one image). Every
+pass records through `render::Pass` (`ohao/render/graph/pass.hpp`, step 4a): it declares what it
+reads and writes, and the barriers, layouts and the rendering's begin and end follow from that.
 
 1. **The shader**, Slang, under `shaders/<area>/<name>.slang` (the glob in
    `shaders/CMakeLists.txt`; every shader is Slang, there is no GLSL). The next build picks
@@ -449,38 +450,50 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    fails while they are out of date.
 2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
    (set `m_device`/`m_physicalDevice`, then create everything; return false on any
-   failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base
-   helpers (`createSampler`, `safeDestroy`; `createRenderTarget`, `transitionImage` for
-   raster passes) or, for a Slang compute pass, `rtc::createImage`, `rtc::transition` and
-   `rtc::createComputePipeline(device, spvName, entry, setLayout, pushBytes, …)` (it loads
-   the SPIR-V by its flattened name). Push constants stay within 128 bytes, the size every
-   device guarantees. The destructor calls `cleanup()`.
+   failure), `cleanup`, `execute(cmd, frameIndex)` or a `record(const render::Frame&)`,
+   `onResize`, `getName`. Its owner calls `setAllocator` before `initialize`. Images come from
+   `m_allocator->createImage({"<pass>.<what>", format, width, height, usage, mips})`
+   (`gpu::Image`, `gpu/vulkan/gpu_image.hpp`: named, with its views, `subView(mip, layer)`
+   for one level) and go back with `m_allocator->retire(image)`, destroyed after the frames
+   in flight; buffers likewise (`createBuffer`, `retire`). Raster pipelines come from
+   `render::createGraphicsPipeline` (`render/graph/pipeline.hpp`: formats, not a render
+   pass), compute ones from `rtc::createComputePipeline(device, spvName, entry, setLayout,
+   pushBytes, …)` (it loads the SPIR-V by its flattened name). Push constants stay within 128
+   bytes, the size every device guarantees. The destructor calls `cleanup()`. The build
+   refuses `vkCmdPipelineBarrier`, `vkCreateRenderPass`, `vkCreateFramebuffer`,
+   `vkAllocateMemory` or `vkCreateImage` outside `render/graph` and `gpu/vulkan`
+   (`tools/check.py`, `FRAME_RULE`).
 3. **Descriptors written at record time need one set per frame in flight**: a
    `std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>`, a pool sized ×
    `MAX_FRAMES_IN_FLIGHT`, and `execute` writing only `m_descriptorSets[frameIndex]`
    (`if (frameIndex >= MAX_FRAMES_IN_FLIGHT) return;`). A single set rewritten every frame
    races the frame still reading it (VUID 03047).
-4. **Barriers are the pass's own** unless it joins the render graph: transition its output
-   before writing (`UNDEFINED` → `GENERAL` for a storage image it rewrites whole) and to
-   `SHADER_READ_ONLY_OPTIMAL` after, with the stages of its readers. Inputs keep the
-   layouts their producers leave: the lit HDR image in `SHADER_READ_ONLY_OPTIMAL`, the
-   G-buffer depth in `DEPTH_STENCIL_READ_ONLY_OPTIMAL`. (Passes that run before lighting
-   go through `RenderGraph` instead: `addComputePass`, `readComputeTexture`, imports
-   refreshed in `importGraphTextures`.)
+4. **Declare, then record.** `render::Pass pass(frame, "name", render::Pass::Compute)`, then
+   every image and buffer it touches: `sampled`, `storageRead`, `storageWrite` (whole: its old
+   contents discarded unless `Old::Keep`), `storageReadWrite`, `color(image, Load::Clear)`,
+   `depth`, `depthRead`, `copySrc`/`copyDst`, and `read`/`write(buffer, BufferUse::…)`; then
+   `pass.begin()`, bind and dispatch or draw; `end()` (or the scope's end). Each resource
+   keeps what last touched it across passes and frames, so a pass needs to know nothing about
+   its neighbours, and a history image needs no first-use flag. A descriptor's `imageLayout`
+   is the declaration's (`sampled` → SHADER_READ_ONLY_OPTIMAL, a sampled depth →
+   DEPTH_STENCIL_READ_ONLY_OPTIMAL, storage → GENERAL). Several passes under one timer:
+   `render::Timed`, the passes inside named null. Code with barriers of its own (NRD, DLSS)
+   is one pass that declares what it needs and `leaves(image, layout)` what it leaves.
 5. **Wire it into `DeferredRenderer`** (`deferred_renderer.{hpp,cpp}`): a
    `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
    and `reset()` on failure, as SSS does); record it in `render()` at its place in the
-   frame (after lighting: sky, vfx.expand, vfx.sort, SSS, transparent, post, gizmo) inside
-   `timerBegin("name") … timerEnd()`; resize it in `onResize`, and hand it again any view
-   of another pass that a resize recreates. A pass left at its creation size is invisible
-   to validation and wrong on screen. A graph pass is timed under its `addPass` name.
-   Either way the name goes in the **pass registry** (`ohao/render/frame/pass_registry.hpp`,
+   frame (after lighting: vfx.expand, vfx.sort, SSS, transparent, post, gizmo), handing it the
+   `render::Frame` `render()` made (command buffer, timer, slot); resize it in `onResize`, and
+   hand it again any image of another pass that a resize recreates. A pass left at its creation
+   size is invisible to validation and wrong on screen. It is timed under the name its
+   `render::Pass` carries, which goes in the **pass registry** (`ohao/render/frame/pass_registry.hpp`,
    `kPasses`, at its place in frame order, lowercase and dotted: `rt.gi.denoise`): the
    timer (`GpuPassTimer`, `render/frame/gpu_pass_timer.hpp`) times only registered names,
    logs an unknown one once as an error. The pass's time then shows in `render.stats` and
    `render_bench`; a budget for it goes in `tests/bench/render_budgets.json`, judged by hand.
 6. **Check it:** build (the shader comes with any target that renders); run validation
-   with a resize; run the goldens — a pass that changes pixels changes the deferred goldens
+   with a resize, and once with `OHAO_VALIDATION=sync` (a wrong declaration is a hazard it
+   names); run the goldens — a pass that changes pixels changes the deferred goldens
    on purpose, so look at the diff (`build/golden_diff/`), then `--update`. The deferred
    goldens are exact, so they also hold the frame bit-identical run to run.
    A post effect that agents switch on also needs its name in `PostEffect`

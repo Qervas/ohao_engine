@@ -38,6 +38,13 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
   the laptop across two distros and two driver versions; the production branch and the closed kernel module without
   GSP (`NVreg_EnableGpuFirmware=0`) are untried. **Never ship a dispatch whose work is unbounded**: a GPU dispatch
   is not preempted, and a few lanes walking for seconds hold their warps.
+- **An MMU fault the engine caused (2026-11-11, driver 620.70):** `Xid 31 ... MMU Fault: ENGINE GRAPHICS`, one
+  second after the engine's own hang report (`rt.gi` unfinished at the 2 s fence). Not the GSP: the engine's bug. A
+  step 4 check replaced the sky map three times with the device wait before a replace removed; the texture table
+  freed the old map's slot and handed it straight to the new map (slots are reused last in, first out), rewriting a
+  descriptor that frames on the GPU were still reading. Validation cannot see this: the table's
+  `UPDATE_UNUSED_WHILE_PENDING` makes it the application's promise. Fixed (an outside view's slot is retired after
+  the frames in flight); the wait is back. A full power-off followed; the sequence ran clean three times after.
 - **Linux, found by the port (2026-11-05):**
   - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
     binding one whose layout was destroyed segfaulted in the driver. Keep every pipeline's layout until teardown

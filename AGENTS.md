@@ -111,6 +111,11 @@ git config core.hooksPath .githooks      # the light CI, once per clone ("Gates"
   only the headers whose text changed; C++ names them (`shader::write`, `shader::layoutBindings`) and never types a
   binding number, and a hand-written push struct carries `OHAO_CHECK_PUSH`. `tools/check.py` fails the build on a
   typed number. See ARCHITECTURE.md, "add a render pass".
+- **A pass declares what it touches** (`render::Pass`, `ohao/render/graph/pass.hpp`; step 4a): the barriers, layouts
+  and attachments follow from the declarations and the state each `gpu::Image` and `GpuBuffer` carries across frames.
+  Its images and buffers come from the renderer's one `GpuAllocator`, named, and are retired, never destroyed under a
+  frame in flight. `tools/check.py` fails the build on `vkCmdPipelineBarrier`, `vkCreateRenderPass`,
+  `vkCreateFramebuffer`, `vkAllocateMemory` or `vkCreateImage` outside `render/graph` and `gpu/vulkan`.
 - **`GLFW_INCLUDE_NONE`** before GLFW's header (`ohao/runtime/window.cpp`): without it GLFW includes `GL/gl.h`,
   which Fedora does not ship by default. The engine is Vulkan only.
 
@@ -226,7 +231,7 @@ What every change must respect. The build checks some of these; the rest are her
   A new submit uses `gpu::submit` or `gpu::submitAndWait`, never `vkQueueSubmit` + `vkQueueWaitIdle`; a load's work
   (an upload, a BLAS build) goes through `gpu::SubmittedWork`, which does not wait for it (the queue runs it before the
   next frame); a new pass is
-  timed (`GpuPassTimer::begin`/`end`), or a fault inside it is reported as its neighbour's. A single submit that
+  a named `render::Pass` (timed, with a breadcrumb), or a fault inside it is reported as its neighbour's. A single submit that
   legitimately needs over 2 s is an unbounded dispatch: split it. `OHAO_INJECT_GPU_FAULT=lost:N` or `hang:N` fakes one
   at frame N without touching the GPU. Windows are capped at the display's refresh rate (`--fps N`, 0 uncapped; fifo
   is paced by the display).
