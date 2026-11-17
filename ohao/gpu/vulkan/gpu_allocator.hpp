@@ -140,6 +140,8 @@ public:
 
     void flushBuffer(GpuBuffer& buffer, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE);
     void invalidateBuffer(GpuBuffer& buffer, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE);
+    // The buffer's memory needs no flush or invalidate: the host sees what the GPU wrote as it is written.
+    [[nodiscard]] bool hostCoherent(const GpuBuffer& buffer) const;
 
     [[nodiscard]] const AllocationStats& getStats() const noexcept { return m_stats; }
     void printStats() const;

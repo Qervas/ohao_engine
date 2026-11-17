@@ -40,20 +40,6 @@ inline float half_to_float(uint16_t h) {
 }
 }  // namespace
 
-// Helper function implementation
-uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
-        }
-    }
-
-    throw std::runtime_error("Failed to find suitable memory type!");
-}
-
 VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     : m_width(width), m_height(height)
 {
@@ -64,25 +50,6 @@ VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     // size never resizes, and resize() is the only other place this is set.
     if (width > 0 && height > 0)
         m_camera->setAspectRatio(static_cast<float>(width) / static_cast<float>(height));
-
-    // Try to find shader base path
-    std::vector<std::string> searchPaths = {
-        "bin/shaders/",
-        "build/shaders/",
-        "../build/shaders/",
-        "../../build/shaders/",
-        "../../../build/shaders/",
-        "shaders/",
-        "../shaders/"
-    };
-
-    for (const auto& path : searchPaths) {
-        std::ifstream test(path + "core_deferred_lighting.slang.spv");
-        if (test.good()) {
-            m_shaderBasePath = path;
-            break;
-        }
-    }
 }
 
 VulkanRenderer::~VulkanRenderer() {
@@ -123,10 +90,15 @@ bool VulkanRenderer::initialize() {
             return false;
         }
 
+        // The one allocator: every image and buffer of the renderer, its passes, the scene and the texture table.
+        if (!m_allocator.initialize(m_instance, m_physicalDevice, m_device)) {
+            OHAO_LOG(Error, gpu, "the renderer's allocator did not start");
+            return false;
+        }
+
 // Bindless texture manager: the deferred G-buffer pass binds its set
         m_textureManager = std::make_unique<BindlessTextureManager>();
-        if (!m_textureManager->initialize(m_instance, m_device, m_physicalDevice, 4096,
-                                           m_graphicsQueueFamily, m_graphicsQueue)) {
+        if (!m_textureManager->initialize(m_device, m_allocator, 4096, m_graphicsQueueFamily, m_graphicsQueue)) {
             OHAO_LOG(Warn, gpu, "Failed to initialize BindlessTextureManager (textures unavailable)");
             m_textureManager.reset();
         } else {
@@ -140,21 +112,14 @@ bool VulkanRenderer::initialize() {
         }
         // Per-pass GPU timing: one query pool per frame slot. Without timestamps the
         // renderer still renders; it just reports no timings.
-        (void)m_passTimer.init(m_device, m_physicalDevice, m_graphicsQueueFamily, MAX_FRAMES_IN_FLIGHT,
+        (void)m_passTimer.init(m_device, m_physicalDevice, m_allocator, m_graphicsQueueFamily, MAX_FRAMES_IN_FLIGHT,
                                m_bufferMarkerEnabled);
         gpu::setFaultContext([this] { return m_passTimer.describe(); });
 
-        if (!m_allocator.initialize(m_instance, m_physicalDevice, m_device)) {
-            OHAO_LOG(Error, gpu, "the renderer's allocator did not start");
-            return false;
-        }
         if (!createStagingBuffers()) {
             OHAO_LOG(Error, gpu, "the readback staging buffers could not be created");
             return false;
         }
-
-        // Set shader base path for all render passes
-        RenderPassBase::setShaderBasePath(m_shaderBasePath);
 
         // Initialize deferred renderer (AAA quality rendering)
         // Set texture manager BEFORE init so GBufferPass pipeline includes bindless layout
@@ -176,7 +141,7 @@ bool VulkanRenderer::initialize() {
         // created lazily on setRenderMode() (eager dual init at 4K can OOM).
         m_renderScene = std::make_unique<render::RenderScene>();
         if (!m_renderScene->initialize(render::RenderScene::InitInfo{
-                m_instance, m_physicalDevice, m_device, m_graphicsQueue, m_graphicsQueueFamily,
+                m_physicalDevice, m_device, &m_allocator, m_graphicsQueue, m_graphicsQueueFamily,
                 m_commandPool, /*rayTracing=*/true, m_rayQueryEnabled})) {
             OHAO_LOG(Error, gpu, "Failed to initialize RenderScene");
             m_renderScene.reset();
@@ -226,9 +191,9 @@ void VulkanRenderer::shutdown() {
         if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }
         if (m_rtOfflineRenderer) { m_rtOfflineRenderer->destroy(); m_rtOfflineRenderer.reset(); }
 
-        // The env map's view is owned by the texture manager: release it first.
+        // The env map leaves the texture table first.
         destroyEnvMapImage();
-        destroyEnvSamplingBuffer();
+        m_allocator.retire(m_envCdf);
         m_envPrefilter.reset();
         if (m_envSampler) { vkDestroySampler(m_device, m_envSampler, nullptr); m_envSampler = VK_NULL_HANDLE; }
 
@@ -251,6 +216,8 @@ void VulkanRenderer::shutdown() {
         // Presentation: semaphores and swapchain belong to the device.
         vkDeviceWaitIdle(m_device);
         destroyStagingBuffers();
+        gpu::setFaultContext({});
+        m_passTimer.destroy();
         m_allocator.shutdown();   // what the passes retired goes now: the device is idle
         for (auto& sem : m_imageAcquired) {
             if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_device, sem, nullptr);
@@ -261,8 +228,6 @@ void VulkanRenderer::shutdown() {
         m_swapchain.reset();
 
         // Cleanup multi-frame resources
-        gpu::setFaultContext({});
-        m_passTimer.destroy();
         m_frameResources.shutdown();
 
         // Cleanup command pool
@@ -300,7 +265,7 @@ void VulkanRenderer::render() {
     // The environment (and the dummy CDF buffer without one), again whenever what it is changes:
     // another HDRI, a directional light come or gone (while there is one, it stands for the HDRI's
     // sun), the sky's sun moved. A new map joins the bindless table and an old one goes, so frames
-    // in flight must finish first.
+    // in flight must finish first: a replace is rare, and nothing is gained by racing it.
     m_envMapSunless = m_renderScene && m_renderScene->hasDirectionalLight();
     if (const std::string key = environmentKey(); !m_envMapChecked || key != m_envMapAttemptedKey) {
         if (key != m_envMapLoadedKey) vkDeviceWaitIdle(m_device);
@@ -518,10 +483,8 @@ void VulkanRenderer::prepareRTSceneForFrame(const RTRenderSettings& defaults) {
     // No rebuilds: the RenderScene's tables and TLAS are current once recordUpdates
     // ran (renderRTPipeline binds them after it). Textures, env map and env scale:
     bindRTTextures(*rtRenderer);
-    rtRenderer->setEnvSampling(m_envCdfBuffer, envMapLoaded() ? m_envMapWidth : 0u,
+    rtRenderer->setEnvSampling(&m_envCdf, envMapLoaded() ? &m_envMap : nullptr, envMapLoaded() ? m_envMapWidth : 0u,
                                envMapLoaded() ? m_envMapHeight : 0u);
-    rtRenderer->setEnvMapResource(envMapLoaded() ? m_envMapImageView : VK_NULL_HANDLE,
-                                  envMapLoaded() ? m_envSampler : VK_NULL_HANDLE);
     m_renderScene->setEnvIntensity(m_envIntensityScale);
 }
 

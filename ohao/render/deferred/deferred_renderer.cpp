@@ -405,7 +405,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             gi.alphaTables = alphaSets ? &m_alphaTables : nullptr;
             gi.textures = texturesSet;
             gi.lights = m_renderScene->lights();
-            gi.envMap = m_envView;
+            gi.envMap = m_envMap;
             gi.envIntensity = m_envIntensity;
             gi.emissionIsDirect = rtDirect;
             m_rtGI->render(frame, gi);
@@ -494,7 +494,7 @@ void DeferredRenderer::setRenderScale(float scale) {
     if (scale == m_renderScale) return;
     m_renderScale = scale;
     if (m_outWidth == 0) return;
-    vkDeviceWaitIdle(m_device);   // frames in flight read the targets a resize replaces
+    vkDeviceWaitIdle(m_device);   // frames in flight read the targets and descriptor sets a resize replaces
     onResize(m_outWidth, m_outHeight);
     resetTemporalState();
 }
@@ -560,9 +560,9 @@ void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
     }
 }
 
-void DeferredRenderer::setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance,
+void DeferredRenderer::setEnvMap(gpu::Image* source, gpu::Image* prefiltered, gpu::Image* irradiance,
                                  VkSampler iblSampler, float intensity) {
-    m_envView = source;   // RT GI's misses read the environment itself
+    m_envMap = source;   // RT GI's misses read the environment itself
     m_envIntensity = intensity;
     m_envPrefiltered = prefiltered;   // the transparent pass lights blended surfaces as lighting does
     m_envIrradiance = irradiance;

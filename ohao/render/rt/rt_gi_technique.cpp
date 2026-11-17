@@ -141,7 +141,7 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAl
         OHAO_LOG(Error, render, "RTGI: failed to create its images");
         return false;
     }
-    if (!m_openpbrTables.create(device, physicalDevice)) {
+    if (!m_openpbrTables.create(allocator)) {
         OHAO_LOG(Error, render, "RTGI: failed to upload OpenPBR's energy tables");
         return false;
     }
@@ -350,9 +350,8 @@ void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
     pass.sampled(*input.positionBuffer).sampled(*input.normalBuffer).sampled(*input.albedoBuffer).sampled(*input.layersBuffer);
     input.alphaTables->declare(pass, m_slot, *input.scene);
     pass.read(m_lights[m_slot], render::BufferUse::Storage);
-    // LEGACY(step 4a): the environment map is EnvUpload's and OpenPBR's tables an OpenPBRTablesBuffer, not tracked
-    // yet.
-    if (!input.envMap) pass.sampled(m_envDummy);
+    pass.read(m_openpbrTables.tracked(), render::BufferUse::Storage);
+    pass.sampled(input.envMap ? *input.envMap : m_envDummy);
     if (reference) {
         m_historyValid = false;
         m_traceExtent = {m_width, m_height};
@@ -389,7 +388,7 @@ void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
                                            {VK_NULL_HANDLE, input.albedoBuffer->view, kReadOnly}};
     const VkDescriptorBufferInfo instancesInfo{input.scene->instanceBuffer(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo lightsInfo{m_lights[m_slot].buffer, 0, VK_WHOLE_SIZE};
-    const VkDescriptorImageInfo envInfo{VK_NULL_HANDLE, input.envMap ? input.envMap : m_envDummy.view, kReadOnly};
+    const VkDescriptorImageInfo envInfo{VK_NULL_HANDLE, input.envMap ? input.envMap->view : m_envDummy.view, kReadOnly};
     const VkDescriptorImageInfo samplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     const VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, reference ? m_output.view : m_noisy.view, kGeneral};
     const VkDescriptorImageInfo guideInfo{VK_NULL_HANDLE, reference ? m_guideDummy.view : m_guide[m_cur].view, kGeneral};

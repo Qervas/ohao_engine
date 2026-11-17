@@ -23,7 +23,8 @@ class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; 
 class RenderScene {
 public:
     struct InitInfo {
-        VkInstance instance; VkPhysicalDevice physical; VkDevice device;
+        VkPhysicalDevice physical; VkDevice device;
+        GpuAllocator* allocator;   // the renderer's, which outlives the scene: every buffer here is its
         VkQueue queue; uint32_t queueFamily; VkCommandPool commandPool;
         // Build BLASes on an RTAccelerationStructure owned by the RenderScene (never
         // shared with the legacy path, whose rebuild wipes and reuses BLAS indices).

@@ -13,6 +13,7 @@
 // host-coherent buffer as the GPU reaches its start (TOP_OF_PIPE) and as everything before its end finishes
 // (BOTTOM_OF_PIPE). After a lost device or a hang, describe() says for each frame in flight which pass last
 // finished and which began without finishing.
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/pass_registry.hpp"
 
 #include <vulkan/vulkan.h>
@@ -48,8 +49,9 @@ public:
     GpuPassTimer& operator=(const GpuPassTimer&) = delete;
 
     // False (and timing off) when the queue family has no timestamps. `markers`: the device has
-    // VK_AMD_buffer_marker enabled (breadcrumbs on).
-    bool init(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t queueFamily, uint32_t slots, bool markers);
+    // VK_AMD_buffer_marker enabled (breadcrumbs on); their buffer is `allocator`'s, which outlives destroy().
+    bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator, uint32_t queueFamily,
+              uint32_t slots, bool markers);
     void destroy();
     [[nodiscard]] bool enabled() const noexcept { return !m_slots.empty(); }
 
@@ -101,11 +103,11 @@ private:
 
     // Breadcrumbs: per slot, word 0 the frame (written at the top of the frame), then a pair per pass.
     static constexpr uint32_t kMarkerWords = 1 + kMaxTimedPasses * 2;
-    bool initMarkers(VkPhysicalDevice physicalDevice, uint32_t slots);
+    bool initMarkers(uint32_t slots);
     void destroyMarkers();
     void writeMarker(VkCommandBuffer cmd, VkPipelineStageFlagBits stage, uint32_t word);
-    VkBuffer m_markerBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_markerMemory{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
+    GpuBuffer m_markerBuffer;
     const volatile uint32_t* m_markers{nullptr};
     PFN_vkCmdWriteBufferMarkerAMD m_writeMarker{nullptr};
 

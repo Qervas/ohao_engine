@@ -42,7 +42,7 @@ bool DeferredLightingPass::initialize(VkDevice device, VkPhysicalDevice physical
     }
 
     // Create dummy resources for fallback descriptor bindings
-    if (!m_openpbrTables.create(device, physicalDevice)) {
+    if (!m_openpbrTables.create(*m_allocator)) {
         OHAO_LOG(Error, render, "DeferredLightingPass: failed to upload OpenPBR's energy tables");
         return false;
     }
@@ -112,8 +112,8 @@ void DeferredLightingPass::record(const render::Frame& frame) {
         for (gpu::Image* traced : {m_ssgi, m_giReflection, m_directDiffuse, m_directSpecular})
             if (traced) pass.sampled(*traced);
         if (m_materialBuffer) pass.read(*m_materialBuffer, render::BufferUse::Storage);
-        // LEGACY(step 4a): the environment's maps are EnvPrefilter's and OpenPBR's tables an OpenPBRTablesBuffer:
-        // not tracked yet.
+        pass.read(m_openpbrTables.tracked(), render::BufferUse::Storage);
+        if (hasEnvironment()) pass.sampled(*m_irradiance).sampled(*m_prefiltered);
         VkClearColorValue noSubsurface{};
         noSubsurface.uint32[0] = noSubsurface.uint32[1] = noSubsurface.uint32[2] = noSubsurface.uint32[3] = 0u;
         pass.color(m_lit, render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}})
@@ -132,8 +132,7 @@ void DeferredLightingPass::record(const render::Frame& frame) {
         m_params.lightCount = m_lightCount;
         m_params.flags = 0;
         // IBL (bit 0): the prefiltered environment and its irradiance are both bound.
-        if (m_prefilteredView != VK_NULL_HANDLE && m_irradianceView != VK_NULL_HANDLE)
-            m_params.flags |= 1;
+        if (hasEnvironment()) m_params.flags |= 1;
         if (m_directDiffuse)
             m_params.flags |= 32;  // RT direct light (bit 5)
         else if (shadowMap)
@@ -165,10 +164,10 @@ void DeferredLightingPass::setShadowMap(gpu::Image* shadowMap, VkSampler shadowS
     m_shadowSampler = shadowSampler;
 }
 
-void DeferredLightingPass::setEnvironment(VkImageView prefiltered, VkImageView irradiance, VkSampler sampler,
+void DeferredLightingPass::setEnvironment(gpu::Image* prefiltered, gpu::Image* irradiance, VkSampler sampler,
                                           float intensity) {
-    m_prefilteredView = prefiltered;
-    m_irradianceView = irradiance;
+    m_prefiltered = prefiltered;
+    m_irradiance = irradiance;
     m_iblSampler = sampler;
     m_params.envIntensity = intensity;
 }
@@ -257,8 +256,9 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     buffer(L::cascades, tracked(m_cascadeBuffer));
     // Image-based lighting: the environment's irradiance and GGX-prefiltered levels (flag bit 0 clear without).
     const VkSampler iblSampler = m_iblSampler != VK_NULL_HANDLE ? m_iblSampler : fallbackSampler;
-    image(L::envIrradiance, m_irradianceView, iblSampler);
-    image(L::envPrefiltered, m_prefilteredView, iblSampler);
+    const bool ibl = hasEnvironment();
+    image(L::envIrradiance, ibl ? m_irradiance->view : VK_NULL_HANDLE, iblSampler);
+    image(L::envPrefiltered, ibl ? m_prefiltered->view : VK_NULL_HANDLE, iblSampler);
     // RT GI's diffuse and reflection, RT direct light's diffuse and specular (or stand-ins: their flags clear).
     const VkSampler giSampler = m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler;
     const auto viewOf = [](const gpu::Image* i) { return i ? i->view : VkImageView{VK_NULL_HANDLE}; };

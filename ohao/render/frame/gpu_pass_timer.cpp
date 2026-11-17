@@ -8,9 +8,10 @@
 
 namespace ohao::render {
 
-bool GpuPassTimer::init(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t queueFamily, uint32_t slots,
-                        bool markers) {
+bool GpuPassTimer::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator, uint32_t queueFamily,
+                        uint32_t slots, bool markers) {
     destroy();
+    m_allocator = &allocator;
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(physicalDevice, &props);
     if (props.limits.timestampPeriod <= 0.0f) {
@@ -41,49 +42,33 @@ bool GpuPassTimer::init(VkDevice device, VkPhysicalDevice physicalDevice, uint32
             return false;
         }
     }
-    if (markers) initMarkers(physicalDevice, slots);
+    if (markers) initMarkers(slots);
     OHAO_LOG(Debug, render, "GPU pass timing: {} slots, {} passes a frame, {} ns a tick", slots, kMaxTimedPasses,
              props.limits.timestampPeriod);
     return true;
 }
 
-bool GpuPassTimer::initMarkers(VkPhysicalDevice physicalDevice, uint32_t slots) {
+bool GpuPassTimer::initMarkers(uint32_t slots) {
     m_writeMarker = reinterpret_cast<PFN_vkCmdWriteBufferMarkerAMD>(
         vkGetDeviceProcAddr(m_device, "vkCmdWriteBufferMarkerAMD"));
     if (!m_writeMarker) return false;
-    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size = sizeof(uint32_t) * kMarkerWords * slots;
-    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateBuffer(m_device, &bi, nullptr, &m_markerBuffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req{};
-    vkGetBufferMemoryRequirements(m_device, m_markerBuffer, &req);
-    VkPhysicalDeviceMemoryProperties mem{};
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &mem);
-    const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    uint32_t type = UINT32_MAX;
-    for (uint32_t i = 0; i < mem.memoryTypeCount && type == UINT32_MAX; ++i)
-        if ((req.memoryTypeBits & (1u << i)) && (mem.memoryTypes[i].propertyFlags & want) == want) type = i;
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    ai.allocationSize = req.size;
-    ai.memoryTypeIndex = type;
-    void* mapped = nullptr;
-    if (type == UINT32_MAX || vkAllocateMemory(m_device, &ai, nullptr, &m_markerMemory) != VK_SUCCESS ||
-        vkBindBufferMemory(m_device, m_markerBuffer, m_markerMemory, 0) != VK_SUCCESS ||
-        vkMapMemory(m_device, m_markerMemory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+    // Host-visible and coherent: after a fault the host reads what the GPU wrote, with no flush to ask for.
+    const VkDeviceSize bytes = sizeof(uint32_t) * kMarkerWords * slots;
+    m_markerBuffer = m_allocator->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, AllocationUsage::CpuToGpu, true);
+    void* const mapped = m_markerBuffer.getMappedData();
+    if (!mapped || !m_allocator->hostCoherent(m_markerBuffer)) {
         OHAO_LOG(Warn, render, "GPU breadcrumbs off: no host-coherent marker buffer");
         destroyMarkers();
         return false;
     }
-    std::memset(mapped, 0, static_cast<std::size_t>(bi.size));
+    std::memset(mapped, 0, static_cast<std::size_t>(bytes));
     m_markers = static_cast<const volatile uint32_t*>(mapped);
     return true;
 }
 
 void GpuPassTimer::destroyMarkers() {
-    if (m_markerMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_markerMemory, nullptr);   // unmaps it
-    if (m_markerBuffer != VK_NULL_HANDLE) vkDestroyBuffer(m_device, m_markerBuffer, nullptr);
-    m_markerMemory = VK_NULL_HANDLE;
-    m_markerBuffer = VK_NULL_HANDLE;
+    if (m_markerBuffer.buffer != VK_NULL_HANDLE) m_allocator->destroyBuffer(m_markerBuffer);
+    m_markerBuffer = GpuBuffer{};
     m_markers = nullptr;
     m_writeMarker = nullptr;
 }
@@ -92,7 +77,7 @@ void GpuPassTimer::writeMarker(VkCommandBuffer cmd, VkPipelineStageFlagBits stag
     if (!m_markers || m_current < 0) return;
     const Slot& s = m_slots[static_cast<std::size_t>(m_current)];
     const auto offset = sizeof(uint32_t) * (static_cast<std::size_t>(m_current) * kMarkerWords + word);
-    m_writeMarker(cmd, stage, m_markerBuffer, offset, static_cast<uint32_t>(s.frame));
+    m_writeMarker(cmd, stage, m_markerBuffer.buffer, offset, static_cast<uint32_t>(s.frame));
 }
 
 std::string GpuPassTimer::describe() const {

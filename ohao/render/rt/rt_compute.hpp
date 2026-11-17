@@ -11,8 +11,6 @@
 
 namespace ohao::rtc {
 
-uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
 // Pipeline statistics (OHAO_PIPELINE_STATS=1 on a device with VK_KHR_pipeline_executable_properties,
 // which the device then enables): every compute pipeline made below logs the driver's statistics
 // for it (registers, shared memory, ...) on the render channel. A kernel's occupancy is not in any

@@ -80,8 +80,8 @@ public:
         float sliceScale{0.0f}, sliceBias{0.0f};
         VkAccelerationStructureKHR tlas{VK_NULL_HANDLE};   // the scene's, for the sun's shadow ray (null: unshadowed)
         gpu::Image* giRadiance{nullptr};                    // RT GI's output (null: none)
-        VkImageView envIrradiance{VK_NULL_HANDLE};          // null: no environment
-        VkImageView envPrefiltered{VK_NULL_HANDLE};
+        gpu::Image* envIrradiance{nullptr};                 // EnvPrefilter's (null: no environment)
+        gpu::Image* envPrefiltered{nullptr};
         float envIntensity{1.0f};
     };
     // vfx.expand (after lighting) and vfx.sort; each records nothing without particles. Untimed, as

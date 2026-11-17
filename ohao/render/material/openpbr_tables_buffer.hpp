@@ -1,8 +1,10 @@
 #pragma once
 
-// OpenPBR's energy tables (render/material/openpbr_tables.hpp) as a storage buffer, written once:
-// what material/openpbr.slang's OpenPBRTables reads in the path tracer, deferred lighting and the
-// transparent pass.
+// OpenPBR's energy tables (render/material/openpbr_tables.hpp) as a storage buffer, written once by the host:
+// what material/openpbr.slang's OpenPBRTables reads in the path tracer, RT GI, RT direct light, deferred lighting
+// and the transparent pass. A pass that binds it declares tracked() as a BufferUse::Storage read.
+
+#include "gpu/vulkan/gpu_allocator.hpp"
 
 #include <vulkan/vulkan.h>
 
@@ -15,15 +17,15 @@ public:
     OpenPBRTablesBuffer& operator=(const OpenPBRTablesBuffer&) = delete;
     ~OpenPBRTablesBuffer() { destroy(); }
 
-    // Host-visible, coherent; false (logged by the caller) when it cannot be made.
-    [[nodiscard]] bool create(VkDevice device, VkPhysicalDevice physical);
-    void destroy();
-    [[nodiscard]] VkBuffer buffer() const noexcept { return m_buffer; }
+    // False (logged by the caller) when it cannot be made. `allocator` outlives destroy().
+    [[nodiscard]] bool create(GpuAllocator& allocator);
+    void destroy();   // retired: gone after the frames in flight
+    [[nodiscard]] VkBuffer buffer() const noexcept { return m_buffer.buffer; }
+    [[nodiscard]] GpuBuffer& tracked() noexcept { return m_buffer; }
 
 private:
-    VkDevice m_device{VK_NULL_HANDLE};
-    VkBuffer m_buffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_memory{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
+    GpuBuffer m_buffer;
 };
 
 } // namespace ohao::render

@@ -28,16 +28,6 @@ std::vector<char> readFile(const std::string& path) {
 
 } // namespace
 
-uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((typeFilter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties)
-            return i;
-    }
-    return UINT32_MAX;
-}
-
 bool createComputePipeline(VkDevice device, const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
                            uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline) {
     return createComputePipeline(device, spirv, entry, std::span<const VkDescriptorSetLayout>(&setLayout, 1), pushBytes,

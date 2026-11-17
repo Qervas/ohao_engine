@@ -31,7 +31,7 @@ struct RenderScene::Impl {
     InitInfo info{};
     bool initialized{false};
 
-    GpuAllocator allocator;
+    GpuAllocator* allocator{nullptr};   // the renderer's (InitInfo)
     std::unique_ptr<RTAccelerationStructure> rtAccel;   // own instance; see InitInfo::rayTracing
     MeshRegistry meshes;
     MaterialTable materials;
@@ -126,7 +126,7 @@ struct RenderScene::Impl {
     }
 
     void destroyRetired(Retired& r) {
-        allocator.destroyBuffer(r.buf);
+        allocator->destroyBuffer(r.buf);
         if (rtAccel && (r.tlas.as != VK_NULL_HANDLE || r.tlas.buffer.buffer != VK_NULL_HANDLE))
             rtAccel->destroyRetired(r.tlas);
         if (rtAccel && r.blas != INVALID_BLAS) rtAccel->destroyBLAS(r.blas);
@@ -134,7 +134,7 @@ struct RenderScene::Impl {
     }
 
     [[nodiscard]] GpuBuffer createTlasInstanceBuffer(uint32_t capacity) {
-        return allocator.createBuffer(VkDeviceSize{capacity} * kTlasInstanceBytes,
+        return allocator->createBuffer(VkDeviceSize{capacity} * kTlasInstanceBytes,
                                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -261,12 +261,12 @@ struct RenderScene::Impl {
 
     [[nodiscard]] bool ensureStaging(uint32_t slot, VkDeviceSize bytes) {
         if (stagingCapacity[slot] >= bytes) return true;
-        allocator.destroyBuffer(staging[slot]);   // the slot's fence was waited: unused
+        allocator->destroyBuffer(staging[slot]);   // the slot's fence was waited: unused
         const VkDeviceSize cap = std::max({bytes, stagingCapacity[slot] * 2, kMinStagingBytes});
-        staging[slot] = allocator.createBuffer(cap, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        staging[slot] = allocator->createBuffer(cap, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                AllocationUsage::CpuToGpu, true);
         if (!staging[slot].isValid() || !staging[slot].getMappedData()) {
-            allocator.destroyBuffer(staging[slot]);
+            allocator->destroyBuffer(staging[slot]);
             staging[slot] = GpuBuffer{};
             stagingCapacity[slot] = 0;
             OHAO_LOG(Error, render, "RenderScene: staging allocation failed ({} bytes)", cap);
@@ -317,7 +317,7 @@ struct RenderScene::Impl {
         if (n > drawTableCapacity) {
             uint32_t cap = std::max(drawTableCapacity, InstanceTable::kInitialCapacity);
             while (cap < n) cap *= 2;
-            GpuBuffer bigger = allocator.createBuffer(VkDeviceSize{cap} * sizeof(gpu::shared::DrawRecord),
+            GpuBuffer bigger = allocator->createBuffer(VkDeviceSize{cap} * sizeof(gpu::shared::DrawRecord),
                                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                       AllocationUsage::GpuOnly);
             if (!bigger.isValid()) {
@@ -473,22 +473,23 @@ RenderScene::~RenderScene() { shutdown(); }
 bool RenderScene::initialize(const InitInfo& info) {
     if (m->initialized) return true;
     m->info = info;
-    if (!m->allocator.initialize(info.instance, info.physical, info.device)) {
-        OHAO_LOG(Error, render, "RenderScene: GpuAllocator initialization failed");
+    if (!info.allocator || !info.allocator->isInitialized()) {
+        OHAO_LOG(Error, render, "RenderScene: no allocator");
         return false;
     }
+    m->allocator = info.allocator;
     if (info.rayTracing) {
         m->rtAccel = std::make_unique<RTAccelerationStructure>();
-        if (!m->rtAccel->init(info.device, info.physical, m->allocator)) {
+        if (!m->rtAccel->init(info.device, info.physical, *m->allocator)) {
             OHAO_LOG(Warn, render, "RenderScene: ray tracing unavailable: meshes get no BLAS");
             m->rtAccel.reset();
         }
     }
-    const MeshRegistry::Context ctx{&m->allocator, info.device, info.queue, info.commandPool,
+    const MeshRegistry::Context ctx{m->allocator, info.device, info.queue, info.commandPool,
                                     m->rt() ? m->rtAccel.get() : nullptr};
     m->initialized = true;   // so shutdown() releases whatever was created below
-    if (!m->meshes.initialize(ctx) || !m->materials.initialize(m->allocator) ||
-        !m->instances.initialize(m->allocator) || !m->lights.initialize(m->allocator)) {
+    if (!m->meshes.initialize(ctx) || !m->materials.initialize(*m->allocator) ||
+        !m->instances.initialize(*m->allocator) || !m->lights.initialize(*m->allocator)) {
         shutdown();
         return false;
     }
@@ -512,9 +513,9 @@ void RenderScene::shutdown() {
     m->skinPass.shutdown();
     m->skinPassTried = false;
     m->skinned.clear();
-    m->allocator.destroyBuffer(m->tlasInstances);
+    m->allocator->destroyBuffer(m->tlasInstances);
     m->tlasInstances = GpuBuffer{};
-    m->allocator.destroyBuffer(m->drawTable);
+    m->allocator->destroyBuffer(m->drawTable);
     m->drawTable = GpuBuffer{};
     m->drawTableCapacity = 0;
     m->uploadedVersion = ~0ull;
@@ -523,7 +524,7 @@ void RenderScene::shutdown() {
     m->tlasDirty.clear();
     m->tlasStructural = false;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        m->allocator.destroyBuffer(m->staging[i]);
+        m->allocator->destroyBuffer(m->staging[i]);
         m->staging[i] = GpuBuffer{};
         m->stagingCapacity[i] = 0;
     }
@@ -535,7 +536,7 @@ void RenderScene::shutdown() {
         m->rtAccel->destroy();
         m->rtAccel.reset();
     }
-    m->allocator.shutdown();
+    m->allocator = nullptr;
     m->draws.clear();
     m->emitterSlots.clear();
     m->presentedSlots.clear();
@@ -573,7 +574,7 @@ MeshHandle RenderScene::registerSkinnedInstance(MeshHandle base) {
     if (!m->initialized) return {};
     if (!m->skinPassTried) {
         m->skinPassTried = true;
-        if (!m->skinPass.initialize(m->info.device, m->allocator)) m->skinPass.shutdown();
+        if (!m->skinPass.initialize(m->info.device, *m->allocator)) m->skinPass.shutdown();
     }
     std::vector<GpuBuffer> retired;
     uint32_t grown = 0;
@@ -915,7 +916,7 @@ void RenderScene::recordUpdates(const Frame& frame) {
                 if (m->rt()) tlasUploaded = tlasFits;
                 if (drawsFit) m->recordDrawTable(batch);
             }
-            if (batch.used > 0) m->allocator.flushBuffer(m->staging[frameSlot], 0, batch.used);
+            if (batch.used > 0) m->allocator->flushBuffer(m->staging[frameSlot], 0, batch.used);
             m->retire(retired);
         }
     }

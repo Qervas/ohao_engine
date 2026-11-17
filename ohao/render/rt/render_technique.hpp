@@ -47,9 +47,8 @@ struct GIInput {
     // The scene's lights; a bounce is lit by every one of them (flashes excluded).
     // None: hits bring back no light.
     std::span<const render::LightDesc> lights;
-    // The environment a ray that leaves the scene sees (equirectangular, in
-    // SHADER_READ_ONLY_OPTIMAL); null: black.
-    VkImageView envMap = VK_NULL_HANDLE;
+    // The environment a ray that leaves the scene sees (equirectangular); null: black.
+    gpu::Image* envMap = nullptr;
     float envIntensity = 1.0f;     // Environment.intensity, as the path tracer's miss applies it
     // RT direct light runs this frame and lights emissive surfaces: a hit's emission is direct light
     // it already counts, so the bounce does not bring it back.

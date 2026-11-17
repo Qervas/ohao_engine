@@ -152,11 +152,11 @@ void VulkanRenderer::renderDeferred() {
     // levels and irradiance.
     if (envMapLoaded()) {
         const bool ibl = m_envPrefilter && m_envPrefilter->ready();
-        m_deferredRenderer->setEnvMap(m_envMapImageView, ibl ? m_envPrefilter->prefilteredView() : VK_NULL_HANDLE,
-                                      ibl ? m_envPrefilter->irradianceView() : VK_NULL_HANDLE,
+        m_deferredRenderer->setEnvMap(&m_envMap, ibl ? &m_envPrefilter->prefiltered() : nullptr,
+                                      ibl ? &m_envPrefilter->irradiance() : nullptr,
                                       ibl ? m_envPrefilter->sampler() : VK_NULL_HANDLE, m_envIntensityScale);
     } else {
-        m_deferredRenderer->setEnvMap(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, m_envIntensityScale);
+        m_deferredRenderer->setEnvMap(nullptr, nullptr, nullptr, VK_NULL_HANDLE, m_envIntensityScale);
     }
 
     // This frame's raster lights: the scene's light table. The deferred renderer writes them

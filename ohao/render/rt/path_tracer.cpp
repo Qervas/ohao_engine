@@ -87,7 +87,7 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAlloc
         return false;
     }
 
-    if (!m_openpbrTables.create(m_device, m_physicalDevice)) {
+    if (!m_openpbrTables.create(allocator)) {
         OHAO_LOG(Error, render, "PathTracer: failed to upload OpenPBR's energy tables");
         return false;
     }
@@ -356,7 +356,8 @@ void PathTracer::destroy() {
 
     // CDF buffers are owned by VulkanRenderer, not by the path tracer.
     // Clear the cached handles so later destroy calls or reuse don't touch freed memory.
-    m_envCdfBuffer = VK_NULL_HANDLE;
+    m_envCdf = nullptr;
+    m_envMap = nullptr;
     m_envWidth = 0;
     m_envHeight = 0;
 

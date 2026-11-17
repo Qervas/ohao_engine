@@ -48,8 +48,8 @@ public:
     }
     // Image-based lighting (render/deferred/env_prefilter.hpp): the environment GGX-prefiltered
     // by roughness (binding 15, kEnvPrefilterLevels mips) and its irradiance (binding 7), with
-    // their sampler, scaled by `intensity` (Environment.intensity). Null views: no IBL.
-    void setEnvironment(VkImageView prefiltered, VkImageView irradiance, VkSampler sampler, float intensity);
+    // their sampler, scaled by `intensity` (Environment.intensity). Null images: no IBL.
+    void setEnvironment(gpu::Image* prefiltered, gpu::Image* irradiance, VkSampler sampler, float intensity);
 
     // The lit image (RGBA16F): the lit scene, the environment in sky pixels.
     [[nodiscard]] gpu::Image& lit() { return m_lit; }
@@ -122,8 +122,12 @@ private:
     // The shadow map when one is bound and exists.
     [[nodiscard]] gpu::Image* boundShadowMap() const { return m_shadowMap && *m_shadowMap ? m_shadowMap : nullptr; }
     VkSampler m_shadowSampler{VK_NULL_HANDLE};
-    VkImageView m_irradianceView{VK_NULL_HANDLE};
-    VkImageView m_prefilteredView{VK_NULL_HANDLE};
+    gpu::Image* m_irradiance{nullptr};
+    gpu::Image* m_prefiltered{nullptr};
+    // Both of the environment's images are bound and exist.
+    [[nodiscard]] bool hasEnvironment() const {
+        return m_irradiance && *m_irradiance && m_prefiltered && *m_prefiltered;
+    }
     VkSampler m_iblSampler{VK_NULL_HANDLE};
     gpu::Image* m_ssgi{nullptr};
     gpu::Image* m_giReflection{nullptr};

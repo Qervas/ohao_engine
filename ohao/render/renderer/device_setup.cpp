@@ -428,7 +428,7 @@ bool VulkanRenderer::createLogicalDevice() {
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.pNext = &features12;
     features13.shaderDemoteToHelperInvocation = VK_TRUE;
-    features13.synchronization2 = VK_TRUE;   // NRD's NRI records vkCmdPipelineBarrier2 (core in 1.3)
+    features13.synchronization2 = VK_TRUE;   // render::Pass's and NRD's NRI's barriers (core in 1.3)
     features13.dynamicRendering = VK_TRUE;   // render::Pass begins every raster pass (render/graph/pass.hpp)
     // Pipelines outlive the layouts they were created with (GpuCulling keeps one of several identical layouts; others
     // destroy theirs once created): legal with maintenance4, mandatory in 1.3. Without it NVIDIA's Linux driver

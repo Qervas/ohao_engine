@@ -370,7 +370,7 @@ void GBufferPass::onResize(uint32_t width, uint32_t height) {
     m_height = height;
 
     // The passes that follow the new targets (the Hi-Z pyramid, the decals, the transparent pass) replace
-    // descriptor pools and framebuffers that frames in flight use.
+    // descriptor pools that frames in flight use.
     vkDeviceWaitIdle(m_device);
 
     destroyGBuffer();

@@ -285,8 +285,8 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
 
     // Binding 17: the environment's 2D CDF (a one-float buffer without an environment).
     VkDescriptorBufferInfo envCdfInfo{};
-    if (m_envCdfBuffer != VK_NULL_HANDLE) {
-        envCdfInfo.buffer = m_envCdfBuffer;
+    if (m_envCdf && m_envCdf->buffer != VK_NULL_HANDLE) {
+        envCdfInfo.buffer = m_envCdf->buffer;
         envCdfInfo.offset = 0;
         envCdfInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -461,9 +461,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
 
     // --- What the frame's passes declare ---
     // What every trace reads: the scene's tables and acceleration structures, the emissive lights and their power
-    // image (every level, sampled in GENERAL).
-    // LEGACY(step 4a): the environment's CDF is EnvUpload's and OpenPBR's tables an OpenPBRTablesBuffer, not tracked
-    // yet.
+    // image (every level, sampled in GENERAL), OpenPBR's tables, the environment (in the texture table) and its CDF.
     const render::RenderScene::Buffers sb = m_scene->buffers();
     const auto readsScene = [&](Pass& pass) {
         for (GpuBuffer* b : {&sb.vertices, &sb.indices, &sb.meshes, &sb.triangleSlots, &sb.materials, &sb.rtLights,
@@ -474,6 +472,9 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
             .read(m_emissive->ranges(frameSlot), BufferUse::Storage)
             .read(m_emissive->first(frameSlot), BufferUse::Storage);
         pass.sampledGeneral(m_emissive->power());
+        pass.read(m_openpbrTables.tracked(), BufferUse::Storage);
+        if (m_envCdf) pass.read(*m_envCdf, BufferUse::Storage);
+        if (m_envMap) pass.sampled(*m_envMap);
     };
     // The images the frame's trace writes, declared by the first trace of the frame: every program binds the one
     // set, and each image of it is in its descriptor's layout from that trace on. This frame's accumulation image

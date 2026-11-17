@@ -402,14 +402,12 @@ private:
     void bindRTTextures(IRTRendererProfile& renderer);
     // The bindless table as views and samplers (index = bindless index) in m_rtTextureViews/Samplers.
     void collectRTTextures();
-    void destroyEnvSamplingBuffer();
     [[nodiscard]] bool envMapLoaded() const noexcept {
-        return m_envMapImageView != VK_NULL_HANDLE && m_envMapTexIdx != 0xFFFFFFFFu;
+        return m_envMap && m_envMapTexIdx != 0xFFFFFFFFu;
     }
     std::vector<VkImageView> m_rtTextureViews;
     std::vector<VkSampler> m_rtTextureSamplers;
-    VkBuffer m_envCdfBuffer{VK_NULL_HANDLE};   // the path tracer's 2D CDF (render/rt/env_cdf.hpp)
-    VkDeviceMemory m_envCdfMemory{VK_NULL_HANDLE};
+    GpuBuffer m_envCdf;   // the path tracer's 2D CDF (render/rt/env_cdf.hpp); one float without an environment
     std::string m_envMapPath;
     std::string m_envMapLoadedKey;      // the environment uploaded (environmentKey()); empty: none
     std::string m_envMapAttemptedKey;   // the key render() last handed to uploadEnvironmentMap
@@ -419,9 +417,7 @@ private:
     // The environment lights without its sun while the scene has a directional light, which
     // stands for it (render/rt/env_sun.hpp): what render() asked for, and what is uploaded.
     bool m_envMapSunless{false};
-    VkImage m_envMapImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
-    VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered
+    gpu::Image m_envMap;                            // "env.map": RGBA32F, equirectangular; its view is in the bindless table
     VkSampler m_envSampler{VK_NULL_HANDLE};         // the old RT texture sampler (bilinear, base level)
     // The deferred frame's IBL: the environment GGX-prefiltered by roughness and its
     // irradiance, rebuilt with each env upload (render/deferred/env_prefilter.hpp).
@@ -519,9 +515,6 @@ private:
     // VK_EXT_mesh_shader (task and mesh shaders) was enabled: the G-buffer's meshlet path
     // draws through it, else through its compute + vertex-pulling fallback.
     bool m_meshShaderEnabled{false};
-
-    // Shader base path
-    std::string m_shaderBasePath;
 
     // Initialized flag
     bool m_initialized{false};

@@ -184,25 +184,15 @@ public:
     void setRadianceCacheCapacity(uint32_t entries) noexcept { m_radianceCacheCapacity = entries; }
     static constexpr uint32_t kDefaultBindlessCapacity = 4096;
 
-    // The environment's 2D CDF (binding 17, render/rt/env_cdf.hpp) and the map's size;
-    // envWidth 0: no environment to sample (the renderer still binds a one-float buffer).
-    void setEnvSampling(VkBuffer cdf, uint32_t envWidth, uint32_t envHeight) {
-        m_envCdfBuffer = cdf;
+    // The environment's 2D CDF (binding 17, render/rt/env_cdf.hpp), the map the traces sample through the
+    // texture table (null: none) and its size; envWidth 0: no environment to sample (the renderer still binds a
+    // one-float buffer). Both are the renderer's.
+    void setEnvSampling(GpuBuffer* cdf, gpu::Image* map, uint32_t envWidth, uint32_t envHeight) {
+        m_envCdf = cdf;
+        m_envMap = map;
         m_envWidth = envWidth;
         m_envHeight = envHeight;
     }
-
-    // Sub-plan 4.F T1: expose HDR env map view + sampler to the NRD tonemap
-    // compositor so it can composite the lit sky for miss-ray pixels. The
-    // renderer owns the view/sampler lifetime; PathTracer only holds borrowed
-    // handles. Pass {NULL, NULL} to indicate "no env loaded" — tonemap will
-    // set envIntensity=0 and sky pixels stay black (pre-4.F behavior).
-    void setEnvMapResource(VkImageView view, VkSampler sampler) {
-        m_envMapView    = view;
-        m_envMapSampler = sampler;
-    }
-    [[nodiscard]] VkImageView getEnvMapView()    const { return m_envMapView; }
-    [[nodiscard]] VkSampler   getEnvMapSampler() const { return m_envMapSampler; }
 
     // The view moved: the trace's running mean restarts at the next frame; a temporal denoiser's
     // history does not (it reprojects through the motion vectors).
@@ -314,7 +304,8 @@ private:
     VkBuffer m_lightBuffer = VK_NULL_HANDLE;
 
     // The environment's 2D CDF (binding 17) and the map's size.
-    VkBuffer m_envCdfBuffer = VK_NULL_HANDLE;
+    GpuBuffer* m_envCdf = nullptr;
+    gpu::Image* m_envMap = nullptr;
     uint32_t m_envWidth = 0;
     uint32_t m_envHeight = 0;
     // OpenPBR's energy tables, binding 38: written once at init.
@@ -345,8 +336,6 @@ private:
 
     // Sub-plan 4.F T1: HDR env map for NRD tonemap's sky composite. Borrowed —
     // the renderer owns the VkImage/VkImageView lifetime.
-    VkImageView m_envMapView    = VK_NULL_HANDLE;
-    VkSampler   m_envMapSampler = VK_NULL_HANDLE;
 
     // Bindless textures — individual sampler2D entries
     std::vector<VkImageView> m_bindlessImageViews;

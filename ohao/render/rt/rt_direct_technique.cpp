@@ -65,7 +65,7 @@ bool RTDirectTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, G
         OHAO_LOG(Error, render, "RT direct light: failed to create its images");
         return false;
     }
-    if (!m_openpbrTables.create(device, physicalDevice)) {
+    if (!m_openpbrTables.create(allocator)) {
         OHAO_LOG(Error, render, "RT direct light: failed to upload OpenPBR's energy tables");
         return false;
     }
@@ -296,7 +296,7 @@ void RTDirectTechnique::declareInputs(render::Pass& pass) {
     pass.read(scene.rtLights, render::BufferUse::Storage);   // the materials are among the alpha tables
     pass.read(in.emissive->lights(), render::BufferUse::Storage).read(in.emissive->ranges(m_slot), render::BufferUse::Storage);
     pass.sampledGeneral(in.emissive->power());
-    // LEGACY(step 4a): OpenPBR's tables are an OpenPBRTablesBuffer, not tracked yet.
+    pass.read(m_openpbrTables.tracked(), render::BufferUse::Storage);
     // The bindless textures are immutable once uploaded and always SHADER_READ_ONLY: nothing to declare.
 }
 

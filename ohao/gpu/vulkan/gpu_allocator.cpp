@@ -324,6 +324,13 @@ void GpuAllocator::flushBuffer(GpuBuffer& buffer, VkDeviceSize offset, VkDeviceS
     vmaFlushAllocation(m_allocator, buffer.allocation.allocation, offset, size);
 }
 
+bool GpuAllocator::hostCoherent(const GpuBuffer& buffer) const {
+    if (m_allocator == VK_NULL_HANDLE || buffer.buffer == VK_NULL_HANDLE) return false;
+    VkMemoryPropertyFlags flags = 0;
+    vmaGetMemoryTypeProperties(m_allocator, buffer.allocation.info.memoryType, &flags);
+    return (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+}
+
 void GpuAllocator::invalidateBuffer(GpuBuffer& buffer, VkDeviceSize offset, VkDeviceSize size) {
     if (m_allocator == VK_NULL_HANDLE || buffer.buffer == VK_NULL_HANDLE) {
         return;

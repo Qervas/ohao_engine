@@ -135,7 +135,7 @@ bool VfxRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, G
                              VkDescriptorSetLayout textures, VkDescriptorSetLayout gbufferScene) {
     m_device = device;
     m_allocator = &allocator;
-    if (!m_openpbrTables.create(device, physicalDevice)) return false;
+    if (!m_openpbrTables.create(allocator)) return false;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -557,7 +557,7 @@ void VfxRenderer::writeExpandSet(uint32_t slot, const Lighting& lighting) {
     }};
     const std::array<VkDescriptorImageInfo, 2> images{{
         {VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance->view : m_dummy.view, kReadOnly},
-        {VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance : m_dummy.view, kReadOnly},
+        {VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance->view : m_dummy.view, kReadOnly},
     }};
     const VkDescriptorImageInfo sampler{m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     VkWriteDescriptorSetAccelerationStructureKHR as{};
@@ -602,10 +602,10 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting, const
         {lighting.clusters ? lighting.clusters->buffer : dummy, 0, VK_WHOLE_SIZE},
     }};
     const VkDescriptorBufferInfo tables{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorImageInfo irradiance{VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance : m_dummy.view,
-                                           kReadOnly};
-    const VkDescriptorImageInfo prefiltered{VK_NULL_HANDLE,
-                                            lighting.envPrefiltered ? lighting.envPrefiltered : m_dummy.view, kReadOnly};
+    const VkDescriptorImageInfo irradiance{
+        VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance->view : m_dummy.view, kReadOnly};
+    const VkDescriptorImageInfo prefiltered{
+        VK_NULL_HANDLE, lighting.envPrefiltered ? lighting.envPrefiltered->view : m_dummy.view, kReadOnly};
     const VkDescriptorImageInfo sampler{m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     const VkDescriptorImageInfo gi{VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance->view : m_dummy.view,
                                    kReadOnly};
@@ -672,7 +672,7 @@ void VfxRenderer::expand(const render::Frame& frame, const render::RenderScene& 
     pass.read(lighting.lights ? *lighting.lights : m_dummyBuffer, render::BufferUse::Storage);
     pass.read(lighting.clusters ? *lighting.clusters : m_dummyBuffer, render::BufferUse::Storage);
     if (lighting.tlas != VK_NULL_HANDLE) scene.traced(pass);
-    // LEGACY(step 4a): the environment's irradiance is EnvPrefilter's, not tracked yet.
+    if (lighting.envIrradiance) pass.sampled(*lighting.envIrradiance);
     pass.sampled(m_dummy);
     if (lighting.giRadiance) pass.sampled(*lighting.giRadiance);
     pass.begin();
@@ -784,8 +784,9 @@ void VfxRenderer::drawTransparent(const render::Frame& frame, const render::Rend
         pass.read(lighting.lights ? *lighting.lights : m_dummyBuffer, render::BufferUse::Storage);
         pass.read(lighting.clusters ? *lighting.clusters : m_dummyBuffer, render::BufferUse::Storage);
         if (lighting.tlas != VK_NULL_HANDLE) scene.traced(pass);
-        // LEGACY(step 4a): the environment's maps are EnvPrefilter's and OpenPBR's tables an OpenPBRTablesBuffer:
-        // not tracked yet.
+        pass.read(m_openpbrTables.tracked(), render::BufferUse::Storage);
+        if (lighting.envIrradiance) pass.sampled(*lighting.envIrradiance);
+        if (lighting.envPrefiltered) pass.sampled(*lighting.envPrefiltered);
         pass.sampled(m_dummy);
         if (lighting.giRadiance) pass.sampled(*lighting.giRadiance);
         if (refracted) pass.sampled(m_refraction);

@@ -169,7 +169,7 @@ public:
     // The environment: `source` (RGBA32F, one level) for RT GI's misses; the prefiltered levels
     // and irradiance (EnvPrefilter) for lighting's IBL, null without them; `intensity`
     // (Environment.intensity) scales both, as the path tracer's miss does.
-    void setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance, VkSampler iblSampler,
+    void setEnvMap(gpu::Image* source, gpu::Image* prefiltered, gpu::Image* irradiance, VkSampler iblSampler,
                    float intensity);
 
     void setSunDirection(const glm::vec3& dir);
@@ -225,7 +225,7 @@ private:
     bool m_giFull{false};
     uint32_t m_giRays{2};
     bool m_sssWanted{true};
-    VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
+    gpu::Image* m_envMap{nullptr};           // setEnvMap: what RT GI's escaping rays see
     float m_envIntensity{1.0f};              // setEnvMap: Environment.intensity
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<SSSPass> m_sssPass;
@@ -279,8 +279,8 @@ private:
     std::unique_ptr<DecalPass> m_decals;   // the decals pass, after gbuffer.late (sub-project 12, step 3)
     bool m_decalsDrawn{true};
     bool m_smokeInGi{true};                // setSmokeInGi: the traces' smoke proxies
-    VkImageView m_envPrefiltered{VK_NULL_HANDLE};   // setEnvMap: the transparent pass's IBL
-    VkImageView m_envIrradiance{VK_NULL_HANDLE};
+    gpu::Image* m_envPrefiltered{nullptr};   // setEnvMap: the transparent pass's IBL
+    gpu::Image* m_envIrradiance{nullptr};
     float m_deltaTime{0.016f};
     uint32_t m_renderSeed{0};
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState

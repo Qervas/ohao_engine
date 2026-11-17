@@ -99,9 +99,9 @@ public:
     ~BindlessTextureManager();
 
     // Initialization
-    [[nodiscard]] bool initialize(VkInstance instance, VkDevice device, VkPhysicalDevice physicalDevice,
-                    uint32_t maxTextures = 4096, uint32_t graphicsQueueFamily = 0,
-                    VkQueue graphicsQueue = VK_NULL_HANDLE);
+    // `allocator`: the renderer's, which outlives this (the textures' images and the staging buffers are its).
+    [[nodiscard]] bool initialize(VkDevice device, GpuAllocator& allocator, uint32_t maxTextures = 4096,
+                    uint32_t graphicsQueueFamily = 0, VkQueue graphicsQueue = VK_NULL_HANDLE);
     void cleanup();
 
     // Texture loading
@@ -133,12 +133,8 @@ public:
     // afterwards samples them uploaded.
     void flushUploads();
 
-    /// Overwrite an existing texture's texels in place (same WxH). No new slot / no unload.
-    /// Used by Diff dense-map FD loop for fast beauty SoT updates.
-    [[nodiscard]] bool updateTextureFromMemory(BindlessTextureHandle handle,
-                                               std::span<const uint8_t> data,
-                                               uint32_t width, uint32_t height);
-
+    // A view somebody else owns, in the table until unloadTexture: never destroyed here. Its owner keeps it alive
+    // past the frames in flight that may still sample the slot (a gpu::Image: GpuAllocator::retire).
     [[nodiscard]] BindlessTextureHandle registerExternalTexture(VkImageView view, std::string_view name,
                                                     BindlessTextureType type = BindlessTextureType::Custom);
 
@@ -228,8 +224,7 @@ private:
                           uint32_t width, uint32_t height, uint32_t mipLevels);
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
-    GpuAllocator m_allocator;   // the textures' images and the staging buffers
+    GpuAllocator* m_allocator{nullptr};   // the renderer's: the textures' images and the staging buffers
     gpu::SubmittedWork m_work;  // the uploads the GPU has not finished
 
     // Descriptor resources

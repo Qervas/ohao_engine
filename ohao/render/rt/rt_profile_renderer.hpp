@@ -43,11 +43,8 @@ public:
     virtual void setBindlessTextures(std::span<const VkImageView> views,
                                      std::span<const VkSampler> samplers) = 0;
 
-    virtual void setEnvSampling(VkBuffer cdf, uint32_t envWidth, uint32_t envHeight) = 0;
-
-    // Sub-plan 4.F T1: wire HDR env map resource through to PathTracer for
-    // NRD tonemap's sky composite. Pass {NULL, NULL} to signal no env loaded.
-    virtual void setEnvMapResource(VkImageView view, VkSampler sampler) = 0;
+    // See PathTracer::setEnvSampling.
+    virtual void setEnvSampling(GpuBuffer* cdf, gpu::Image* map, uint32_t envWidth, uint32_t envHeight) = 0;
 
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
     // The display transform its output and denoisers' frames use (the post stack's).
@@ -103,12 +100,8 @@ public:
         m_pathTracer.setBindlessTextures(views, samplers);
     }
 
-    void setEnvSampling(VkBuffer cdf, uint32_t envWidth, uint32_t envHeight) override {
-        m_pathTracer.setEnvSampling(cdf, envWidth, envHeight);
-    }
-
-    void setEnvMapResource(VkImageView view, VkSampler sampler) override {
-        m_pathTracer.setEnvMapResource(view, sampler);
+    void setEnvSampling(GpuBuffer* cdf, gpu::Image* map, uint32_t envWidth, uint32_t envHeight) override {
+        m_pathTracer.setEnvSampling(cdf, map, envWidth, envHeight);
     }
 
     void setRenderSettings(const RTRenderSettings& settings) override {
