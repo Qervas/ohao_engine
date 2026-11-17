@@ -63,6 +63,7 @@ struct FsIn
     [[vk::location(7)]] float4 prevPos;
     [[vk::location(8)]] nointerpolation uint instance;
     [[vk::location(9)]] nointerpolation uint materialSlot;
+    [[vk::location(10)]] float3 bitangent;   // core/gbuffer.slang's vertex: w n x t (MikkTSpace)
 };
 
 struct FsOut
@@ -194,20 +195,19 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     if (normalTex != 0xFFFFFFFFu)
     {
         float3 tn = normalFromMap(textures[NonUniformResourceIndex(normalTex)].Sample(i.uv).rg);
-        float3 T, B;
         if (dot(i.tangent.xyz, i.tangent.xyz) > 1e-6)
         {
-            T = normalize(i.tangent.xyz - N * dot(N, i.tangent.xyz));
-            B = normalize(cross(N, T)) * i.tangent.w;
+            const float side = dot(N, i.normal) < 0.0 ? -1.0 : 1.0;   // from behind the mapped normal turns too
+            N = side * mikkTSpaceNormal(tn, i.normal, i.tangent.xyz, i.bitangent);
         }
         else
         {
             const float3 dPdx = ddx(i.worldPos), dPdy = ddy(i.worldPos);
             const float2 dUVdx = ddx(i.uv), dUVdy = ddy(i.uv);
-            T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
-            B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+            const float3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
+            const float3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+            N = normalize(T * tn.x + B * tn.y + N * tn.z);
         }
-        N = normalize(T * tn.x + B * tn.y + N * tn.z);
     }
     float metallic = row1.y, roughness = row1.x, ao = 1.0;
     const uint rmTex = asuint(row2.x);

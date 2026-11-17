@@ -150,6 +150,28 @@ Corners cornersOf(uint slot, uint primitive)
 
 float4 sampleTex(uint index, float2 uv) { return textures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0); }
 
+// MikkTSpace's frame at the hit, as the G-buffer's vertex stage makes it: per vertex the unit world normal (inverse
+// transpose), the unit world tangent (the world matrix) and w n x t, interpolated as they are.
+void mikkFrameAt(Corners c, HitContext hc, float w, float2 bary, out float3 n, out float3 t, out float3 b)
+{
+    const uint v[3] = { c.v0, c.v1, c.v2 };
+    const float k[3] = { w, bary.x, bary.y };
+    n = float3(0.0);
+    t = float3(0.0);
+    b = float3(0.0);
+    [ForceUnroll]
+    for (uint i = 0u; i < 3u; ++i)
+    {
+        const float3 ni = vertexF3(v[i], 6u), ti = vertexF3(v[i], 13u);
+        const float3 nw = dot(ni, ni) > 1e-20 ? normalize(mul(ni, hc.worldToObject)) : float3(0.0);
+        const float3 tw0 = mul(hc.objectToWorld, ti);
+        const float3 tw = dot(tw0, tw0) > 1e-20 ? normalize(tw0) : float3(0.0);
+        n += k[i] * nw;
+        t += k[i] * tw;
+        b += k[i] * (vertexFloat(v[i], 16u) < 0.0 ? -1.0 : 1.0) * cross(nw, tw);
+    }
+}
+
 // The hit a ray meets, decoded into the payload: its place, normals and OpenPBR inputs (from the context a closest-hit
 // shader or a ray query's committed hit gives).
 void fillHitAt(inout PathPayload payload, HitContext hc)
@@ -202,27 +224,18 @@ void fillHitAt(inout PathPayload payload, HitContext hc)
                       float2(vertexFloat(c.v1, 9u), vertexFloat(c.v1, 10u)) * bary.x +
                       float2(vertexFloat(c.v2, 9u), vertexFloat(c.v2, 10u)) * bary.y;
 
-    // A normal map in the vertex tangents' frame, as the G-buffer reads it.
+    // A normal map: MikkTSpace's frame, as the G-buffer builds it (material_layers.slang, mikkTSpaceNormal).
     const uint normalTex = asuint(row1.z);
     if (normalTex < 4096u)
     {
-        const float4 tObj = float4(vertexF3(c.v0, 13u), vertexFloat(c.v0, 16u)) * w +
-                            float4(vertexF3(c.v1, 13u), vertexFloat(c.v1, 16u)) * bary.x +
-                            float4(vertexF3(c.v2, 13u), vertexFloat(c.v2, 16u)) * bary.y;
-        float3 tw = mul(hc.objectToWorld, tObj.xyz);
-        float3 T, B;
-        if (dot(tw, tw) > 1e-12)
+        float3 vn, vt, vb;
+        mikkFrameAt(c, hc, w, bary, vn, vt, vb);
+        if (dot(vt, vt) > 1e-12)
         {
-            T = normalize(tw - n * dot(n, tw));
-            B = normalize(cross(n, T)) * (vertexFloat(c.v0, 16u) < 0.0 ? -1.0 : 1.0);
+            const float3 tn = normalFromMap(sampleTex(normalTex, uv).rg);
+            const float side = dot(n, vn) < 0.0 ? -1.0 : 1.0;   // n was turned toward the ray: the map turns with it
+            n = side * mikkTSpaceNormal(tn, vn, vt, vb);
         }
-        else
-        {
-            basisOf(n, T, B);
-        }
-        const float3 tn = normalFromMap(sampleTex(normalTex, uv).rg);
-        const float3 mapped = T * tn.x + B * tn.y + n * tn.z;
-        if (dot(mapped, mapped) > 1e-8) n = normalize(mapped);
         if (dot(n, geo) < 1e-3) n = normalize(n + geo * (1e-3 - dot(n, geo)));
     }
     payload.normal = n;

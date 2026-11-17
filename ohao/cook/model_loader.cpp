@@ -548,9 +548,12 @@ std::shared_ptr<Model> ModelLoader::emitModel(const aiScene* scene, const std::s
                 : v.texCoord;  // fallback to UV0 if no UV1
             if (mesh->HasTangentsAndBitangents()) {
                 const glm::vec3 t = linear * toGlm(mesh->mTangents[vi]);
+                const glm::vec3 b = linear * toGlm(mesh->mBitangents[vi]);
                 const float tLen = glm::length(t);
-                // A mirror flips the bitangent's handedness along with the winding.
-                v.tangent = glm::vec4(tLen > 1e-20f ? t / tLen : glm::vec3(1, 0, 0), mirrored ? -1.0f : 1.0f);
+                // The handedness MikkTSpace's bitangent (w n x t) needs: the side of n x t the importer's bitangent is
+                // on, taken after the node's transform, so a mirror is in it.
+                v.tangent = glm::vec4(tLen > 1e-20f ? t / tLen : glm::vec3(1, 0, 0),
+                                      glm::dot(glm::cross(v.normal, t), b) < 0.0f ? -1.0f : 1.0f);
             }
             v.color = glm::vec3(model->materialColors[matIdx]);
 

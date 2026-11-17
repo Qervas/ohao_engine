@@ -49,6 +49,21 @@ vN)` from the interpolated vectors, vB interpolated from the vertices. Measured 
 move (`render_golden.py --json`), looked at, then updated. The tracer's lift (a normal below the geometric plane) is
 kept or dropped by what the cell's polynomial can carry: decided here, with numbers.
 
+*As built (2026-11-17).* `mikkTSpaceNormal` (material/material_layers.slang): per vertex the unit world normal, the unit
+world tangent (through the world matrix, not the normal matrix: a tangent lies in the surface) and `w n x t`, interpolated
+as they are, the result normalised; seen from behind the whole normal turns. The G-buffer's vertex stage writes the
+bitangent as an interpolant; the tracer's hit (`mikkFrameAt`) builds the same three from the vertices. RT GI and RT
+direct light read no map (the geometric normal; the G-buffer). The solver's `ManifoldMappedTri` carries the per-vertex
+bitangents (it took vertex 0's sign); T1's rejected cell map (`CellSlopeMap`) is deleted.
+- **Found: the tangent's handedness was never cooked.** The cooker set w from the node's mirror alone, dropping the
+  importer's bitangent, so every UV-mirrored half was lit with its bitangent upside down. w is now the side of `n x t`
+  the importer's bitangent lies on, after the node's transform (`kCookerVersion` 4).
+- **The helmet's golden** (the only normal-mapped one) moved: 18.9% of the pixels, max 61, RMSE 1.57, the left half
+  of the helmet (its UVs mirror the right). A/B: the formula with the old handedness moves 4.1% of the pixels, max 29,
+  RMSE 0.16, symmetric; the rest is the handedness. Looked at, updated. The other four goldens exact.
+- **The lift** stays in the tracer for now: the pass counts the roots whose normal it would lift (task 6), and the
+  choice is made on that count.
+
 ### Task 4: the map read in fp32 (ruling M10)
 
 Owned normal-mapped materials read their map as four `Load`s blended in fp32 in the tracer's hit and the pass (the

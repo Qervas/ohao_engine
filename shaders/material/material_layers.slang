@@ -20,6 +20,16 @@ import material.openpbr;
 
 // A tangent-space normal from a normal map's sample: x and y from R and G, z rebuilt. A cooked normal map is BC5,
 // which holds two channels (asset/cooked.hpp, TextureKind::Normal).
+// MikkTSpace's mapped normal, the convention glTF's normal maps are baked against: the vertex normal, tangent and
+// bitangent (per vertex: w n x t, w the tangent's handedness), each a unit world vector at its vertex, interpolated as
+// they are; only the result is normalised. The G-buffer, the transparent pass and the path tracer's hit build it alike,
+// and the caustic pass solves the same frame (rt/manifold_poly.slang, polyFrameAt).
+public float3 mikkTSpaceNormal(float3 tn, float3 n, float3 t, float3 b)
+{
+    const float3 m = tn.x * t + tn.y * b + tn.z * n;
+    return dot(m, m) > 1e-12 ? normalize(m) : normalize(n);
+}
+
 public float3 normalFromMap(float2 rg)
 {
     const float2 xy = rg * 2.0 - 1.0;

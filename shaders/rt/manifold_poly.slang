@@ -1,11 +1,10 @@
 // Step 2c's cell solver (docs/specs/2026-11-04-caustics-step2-design.md, "Step 2c", T2; rulings M11b, M13; the plan
 // docs/plans/2026-11-08-caustics-step2c.md, tasks 1 and 2): on one cell of a normal map (the square between four texel
 // centres, (s, t) in [0, 1]^2) of one triangle, the reflection constraint as two polynomials in tensor Bernstein form,
-// and every root of them by subdivision and Krawczyk's test. A module (no entry point): tools/caustics/manifold_kernel
-// .slang imports it (the CPU twin).
+// and every root of them by subdivision and Krawczyk's test. A module (no entry point).
 //
 // The polynomials. MikkTSpace's mapped normal (ruling M13) from the interpolated vectors as they are, vB the
-// interpolation of each vertex's sign N x T, and the map's four texels blended bilinearly:
+// interpolation of each vertex's w N x T, and the map's four texels blended bilinearly:
 //   m = tn.x vT + tn.y vB + tn.z vN          bidegree (2, 2)
 //   h = m - sigma.x vT - sigma.y vB           the drawn slope's microfacet normal (the vertex tangent frame), (2, 2)
 //   d = y - p                                 y the surface point, p the receiver (X), (1, 1)
@@ -238,17 +237,24 @@ float3 polyCorner(float3 c[4], float2 st)
     return lerp(lerp(c[0], c[1], st.x), lerp(c[2], c[3], st.x), st.y);
 }
 
-// MikkTSpace's frame at the triangle's (u, v): the interpolated normal, tangent and bitangent as they are.
+// A normal-mapped triangle: MikkTSpace's frame as the renderers build it (material/material_layers.slang,
+// mikkTSpaceNormal): per vertex the unit world normal, the unit world tangent and w n x t, interpolated as they are.
+// tri.n0, a1, a2 hold the normals (the vertices' unit normals, not 2a's unnormalised ones).
+struct ManifoldMappedTri
+{
+    ManifoldTri tri;
+    float3 t0, ta1, ta2;   // the tangents: t0, t1 - t0, t2 - t0
+    float3 b0, ba1, ba2;   // the bitangents w n x t: b0, b1 - b0, b2 - b0
+    float2 uv0, uvA, uvB;  // texture coordinates: uv0 + uvA u + uvB v
+};
+
+// MikkTSpace's frame at the triangle's (u, v).
 void polyFrameAt(ManifoldMappedTri m, float2 uv, out float3 n, out float3 t, out float3 b)
 {
     const ManifoldTri tri = m.tri;
     n = tri.n0 + tri.a1 * uv.x + tri.a2 * uv.y;
     t = m.t0 + m.ta1 * uv.x + m.ta2 * uv.y;
-    const float sg = m.sign < 0.0 ? -1.0 : 1.0;
-    const float3 b0 = sg * cross(tri.n0, m.t0);
-    const float3 b1 = sg * cross(tri.n0 + tri.a1, m.t0 + m.ta1);
-    const float3 b2 = sg * cross(tri.n0 + tri.a2, m.t0 + m.ta2);
-    b = b0 + (b1 - b0) * uv.x + (b2 - b0) * uv.y;
+    b = m.b0 + m.ba1 * uv.x + m.ba2 * uv.y;
 }
 
 // r = d (h . h) - 2 (d . h) h at (s, t), from the corner values, in fp32: the checks at a root.

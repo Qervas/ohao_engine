@@ -17,6 +17,7 @@ public struct GVertex
     [[vk::location(7)]] public float4 prevPos : PREVPOS;
     [[vk::location(8)]] public nointerpolation uint instance : INSTANCE;
     [[vk::location(9)]] public nointerpolation uint materialSlot : MATERIALSLOT;
+    [[vk::location(10)]] public float3 bitangent : BITANGENT;   // w n x t at the vertex (MikkTSpace)
 };
 
 // An instance's matrices, the same for all of a draw's vertices (a mesh workgroup makes them once).
@@ -40,8 +41,9 @@ public InstanceXform instanceXform(float4x4 world, float4x4 prevWorld)
 }
 
 // A vertex (object space: p, n, t; prevLocal its last-frame position, a skinned copy's
-// boneWeights.xyz, else p) to the G-buffer's interpolants: the world position, the normal and
-// tangent through the inverse transpose, this and last frame's clip positions.
+// boneWeights.xyz, else p) to the G-buffer's interpolants: the world position, the unit normal
+// (through the inverse transpose), the unit tangent (through the world matrix: it lies in the
+// surface) and MikkTSpace's bitangent, this and last frame's clip positions.
 public GVertex transformVertex(InstanceXform x, float4x4 viewProj, float4x4 prevViewProj, float3 p, float3 color,
                                float3 n, float4 t, float2 uv0, float2 uv1, float3 prevLocal, uint instance,
                                uint materialSlot)
@@ -50,7 +52,10 @@ public GVertex transformVertex(InstanceXform x, float4x4 viewProj, float4x4 prev
     const float4 worldPos = mul(x.world, float4(p, 1.0));
     v.worldPos = worldPos.xyz;
     v.normal = normalize(mul(x.normalMatrix, n));
-    v.tangent = float4(normalize(mul(x.normalMatrix, t.xyz)), t.w);
+    const float3 tw = mul(float3x3(x.world[0].xyz, x.world[1].xyz, x.world[2].xyz), t.xyz);
+    const float3 tu = dot(tw, tw) > 1e-20 ? normalize(tw) : float3(0.0);
+    v.tangent = float4(tu, t.w);
+    v.bitangent = (t.w < 0.0 ? -1.0 : 1.0) * cross(v.normal, tu);
     v.color = color;
     v.texCoord = uv0;
     v.texCoord1 = uv1;
