@@ -105,6 +105,28 @@ first, so the machinery is written once and 2c's cells are one more kind of item
 - **Proof for 2a's move:** the same scene and seed give the same candidates, roots and connections (counted exactly:
   the same tests on the same numbers) and the same image within the fixed point's rounding.
 
+*Stage 1 as built (2026-11-17,* `ohao/render/rt/manifold_rounds.*`*, `f9ddc268`):* Setup, three walk rounds (groups,
+clusters, sub-clusters), Solve, Connect, each a raygen dispatched indirectly from the queues' counts
+(`vkCmdTraceRaysIndirectKHR`), then Resolve (compute). Items are (record, kind << 30 | index), kind 1 left for cells; a
+root carries its map so Connect does not run it again. The frame runs in bands of whole rows (at most 131,072 pixels
+a band), so the queues' memory (about 150 MB) does not grow with the resolution; capacities a pixel from the fullest
+band measured (records 2, groups 16, clusters 16, sub-clusters 48, candidates 24, roots 2), 1.7x to 2.5x the 1080p
+showcase's peaks; an overflow is counted and logged (a denser scene than measured would lose that light: open). The
+sum is fixed point by integer atomics (rounded by a hash of the item): two captures identical. Step 2b's glass stays
+in Setup, into the same sum.
+- **Proof:** at 1920x1080 against step 2a's own `manifoldConnect` compiled beside it, requests, roots, connections,
+  cluster and sub-cluster tests identical; candidates 12,039,527 -> 12,039,521, triangle tests 322,526,700 ->
+  322,526,684 (tests at their thresholds: about 1,400 a capture sit within 1e-6); the image max abs 1.8e-3, mean abs
+  2.2e-6. The caustics scene: every counter identical. Glass 640/13/13/0 as before. Synchronization validation silent.
+- **Cost of `pt.manifold`** (the showcase): 640x360 about 92 -> 8.0 ms; 1920x1080 644 -> 72-76 ms (setup 17, walk 39,
+  solve 8, connect 6). Its cold compile 4.3 -> 1.8 s.
+- **Found: 2a loses roots at fp32's noise floor.** Newton accepts a root at |sigma - target| <= tol, and tol is 1e-6,
+  sigma's own rounding. Against the same Newton in double on every candidate (160x90): the double finds 1,989 roots,
+  the raygen build 1,984, a compute build of the same SPIR-V 1,948; neither accepts one the double rejects. The
+  stages differ because the driver lowers `dot(v, v)` in a different order (an fma chain from x or from y; a few ulp
+  through `manifoldMap`'s lengths), which is why the rounds are raygens. To be fixed by proof, not a wider tolerance:
+  a root accepted by Krawczyk's existence test (2a's `manifoldCertify`), so the count does not depend on rounding.
+
 
 
 A pyramid of normal cones per normal map, built at upload; a triangle's cone composed with the pyramid's over its uv
