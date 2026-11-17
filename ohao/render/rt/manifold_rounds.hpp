@@ -6,7 +6,7 @@
 // bindings:
 //   58 records   6 float4 a request and light (manifoldSetup writes them)
 //   59 items     uint2 an item, a region a queue: groups, clusters, sub-clusters, candidate triangles; step 2c's pyramid
-//                nodes and cells (uint4 items, two slots each)
+//                nodes and cells (uint4 items, two slots each); then the solve's states (kStateSlots slots each)
 //   60 roots     4 uint4 a root (manifoldSolveRound writes them, manifoldConnect reads them)
 //   61 counts    the queues' trace arguments and counts, the capacities and regions, the frame's counters (the
 //                words: rt/path_tracer.slang, "the manifold pass as rounds")
@@ -16,7 +16,8 @@
 // pass 0 runs the setup and every round on the batch's rows; an item whose outputs do not fit their queue is carried
 // into its own queue's next pass, where every round runs again. A pass's rounds: the records, groups, clusters,
 // sub-clusters, kPyramidRounds of the pyramid queue (a segment each: a mapped triangle's footprint a level a round),
-// the cells, the solve, the connect. Into the one fixed-point sum; the resolve runs once
+// the solve on the cells' queue and on the candidates' (an item past its budget of tests carried with its state into
+// the cells' queue), the connect. Into the one fixed-point sum; the resolve runs once
 // after the last batch. The queues' capacities are the batch's pixels times the peaks a pixel measured, with headroom
 // (the records' exact: kManifoldDepths a pixel and light), so carries are rare; an item still carried after the last
 // pass is counted lost (the stats' word 12).
@@ -48,6 +49,10 @@ public:
     static constexpr uint32_t kBatchPixels = 131072u;
     static constexpr uint32_t kMaxBatches = 256u;
     static constexpr uint32_t kPasses = 12u;
+    // The solve's states (rt/path_tracer.slang's kManifoldStateSlots uint2 slots each: a stack of at most 32 boxes, the
+    // roots found): a quarter of a batch's pixels; with none free an item starts over (counted).
+    static constexpr uint32_t kStateSlots = 96u;
+    static constexpr uint32_t kStatePixels = 4u;
 
     bool create(VkDevice device, GpuAllocator& allocator);
     void destroy();
@@ -111,6 +116,7 @@ private:
     bool m_queues{false};
     bool m_clearSum{true};
     uint32_t m_recordCap{0};
+    uint32_t m_stateCap{0};
     bool m_cellStats{false};
     bool m_clearRecordStats{true};
     uint32_t m_dumpPixel{~0u};

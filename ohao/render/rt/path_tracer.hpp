@@ -404,10 +404,11 @@ private:
     };
     GuidedProgram m_guided[2];
     // Caustics step 2's program (ensureManifoldPipeline): manifoldSetup, then a raygen a round (the walk's four
-    // levels, step 2c's pyramid and cells, the solve, the connect: m_manifoldRoundRegions in that order), and
+    // levels, step 2c's pyramid, the solve (the cells' queue and the candidates'), the connect: m_manifoldRoundRegions in
+    // that order), and
     // manifoldResolve on the tracer's layout as compute.
     VkPipeline m_manifoldPipeline = VK_NULL_HANDLE;
-    std::array<VkStridedDeviceAddressRegionKHR, 8> m_manifoldRoundRegions{};
+    std::array<VkStridedDeviceAddressRegionKHR, 7> m_manifoldRoundRegions{};
     VkPipeline m_manifoldResolvePipe = VK_NULL_HANDLE;
     // Step 2c's compute kernels: the pyramids' build, the cell statistics' bins, the dump's draw and map.
     VkPipeline m_manifoldPyramidPipe = VK_NULL_HANDLE, m_manifoldCellStatsPipe = VK_NULL_HANDLE;

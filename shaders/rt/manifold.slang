@@ -1,19 +1,19 @@
 // Manifold connections (sub-project 24 step 2, docs/specs/2026-11-04-caustics-step2-design.md, "Step 2a as
-// designed"): the pieces of the estimator that solve for the point y on a smooth triangle where the sun's light
-// reflects toward a rough point p. Pure functions: rt/path_tracer.slang's manifold rounds call them, and
-// tools/caustics/manifold_kernel.slang runs them on the CPU for tests/renderer/manifold_tests.
+// designed"): the pieces of the estimator that find the points y on a smooth triangle where the sun's light reflects
+// toward a rough point p. Pure functions: rt/path_tracer.slang's manifold rounds call them.
 //
-// The map. On a triangle y(u, v) = p0 + u e1 + v e2, its interpolated shading normal N(u, v) = n0 + u a1 + v a2
-// (world normals by the inverse transpose, unnormalised: fillHit's normalize(mul(nObj, w2o)) is the same direction),
-// turned to the side the triangle shows p. With w = normalize(p - y) and L toward the light, the half vector is
-// H = w + L, and sigma(u, v) is its slope in the frame n, t = normalize(c - (c.n) n), b = n x t, with c a unit vector
-// of the triangle's cluster (perpendicular to its cone's axis): sigma = (H.t / H.n, H.b / H.n), so H is along
-// n + sigma.x t + sigma.y b. Any smooth frame is a valid change of variables on one triangle, so the choice is exact;
-// one c for a whole cluster makes a slope point the same way across it, which is what lets manifoldDiscTest prune to
-// the triangles near one point instead of a ring (|sigma| = tan(angle(H, n)) alone allows a ring round a sphere).
+// The frame of reference. On a triangle y(u, v) = p0 + u e1 + v e2 with vertex normals n_k (world normals by the inverse
+// transpose, unnormalised; the shading normal is their interpolation normalised, turned to the side the triangle shows
+// p), each vertex has 2a's frame n_k, t_k = normalize(c - (c.n_k) n_k), b_k = n_k x t_k, c a unit vector of the
+// triangle's cluster (perpendicular to its cone's axis). A slope sigma means the microfacet normal
+// h = n + sigma.x t + sigma.y b, the frame interpolated as it is (rt/manifold_poly.slang, polyTriangleSource), and a root
+// is a y whose half vector H = normalize(p - y) + L lies along h. Any smooth frame is a valid change of variables on one
+// triangle, so the choice is exact; one c for a whole cluster makes a slope point the same way across it, which is what
+// lets manifoldDiscTest prune to the triangles near one point instead of a ring (|sigma| = tan(angle(H, n)) alone allows
+// a ring round a sphere).
 //
-// The estimator draws sigma (manifoldDrawSlope), solves sigma(u, v) = sigma* on every candidate triangle
-// (manifoldSolve), and weighs each root by 1 / (p(sigma) |det d sigma / d(u, v)| / |e1 x e2|) (area per slope).
+// The estimator draws sigma (manifoldDrawSlope), finds every root on every candidate triangle (rt/manifold_poly.slang's
+// subdivision), and weighs each root by the area a unit of slope covers there over p(sigma) (cellPolyAreaPerSlope).
 
 static const float kManifoldPi = 3.14159265358979;
 
@@ -50,115 +50,14 @@ ManifoldTri manifoldTriangleFrom(float4 m0, float4 m1, float4 m2, float4 m3, flo
     return tri;
 }
 
-// sigma at (u, v) and its derivatives (du: d sigma / du, dv: d sigma / dv); y the point, n its oriented shading
-// normal. False where the map is undefined: p on the triangle's plane, a degenerate normal or frame, or H not above
-// the normal (no reflection can have it as half vector).
-bool manifoldMap(ManifoldTri tri, float3 p, float3 L, float2 uv, out float2 sigma, out float2 du, out float2 dv,
-                 out float3 y, out float3 n)
-{
-    sigma = float2(0.0);
-    du = float2(0.0);
-    dv = float2(0.0);
-    y = tri.p0 + tri.e1 * uv.x + tri.e2 * uv.y;
-    n = float3(0.0, 0.0, 1.0);
-    const float3 d = p - y;
-    const float r = length(d);
-    if (!(r > 0.0)) return false;
-    const float3 w = d / r;
-    const float3 H = w + L;
-    const float3 N = tri.n0 + tri.a1 * uv.x + tri.a2 * uv.y;
-    const float lenN = length(N);
-    if (!(lenN > 1e-12)) return false;
-    const float3 Nh = N / lenN;
-    // Turned as fillHit turns it: toward the side of the triangle the ray from p meets (the geometric normal
-    // toward p).
-    const float3 g = cross(tri.e1, tri.e2);
-    const float side = dot(g, d) >= 0.0 ? 1.0 : -1.0;
-    const float s = dot(Nh, g) * side < 0.0 ? -1.0 : 1.0;
-    n = Nh * s;
-    const float3 c = tri.c;
-    const float3 T = c - n * dot(c, n);
-    const float lenT = length(T);
-    if (!(lenT > 1e-6)) return false;
-    const float3 t = T / lenT;
-    const float3 b = cross(n, t);
-    const float A = dot(H, t), B = dot(H, b), C = dot(H, n);
-    if (!(C > 1e-7)) return false;
-    sigma = float2(A / C, B / C);
-    [unroll] for (uint k = 0u; k < 2u; ++k)
-    {
-        const float3 e = k == 0u ? tri.e1 : tri.e2;
-        const float3 a = k == 0u ? tri.a1 : tri.a2;
-        const float3 dw = -(e - w * dot(w, e)) / r;         // d w (y moves by e; d = p - y moves by -e)
-        const float3 dn = s * (a - Nh * dot(Nh, a)) / lenN;
-        const float3 dT = -n * dot(c, dn) - dn * dot(c, n);
-        const float3 dt = (dT - t * dot(t, dT)) / lenT;
-        const float3 db = cross(dn, t) + cross(n, dt);
-        const float dA = dot(dw, t) + dot(H, dt);
-        const float dB = dot(dw, b) + dot(H, db);
-        const float dC = dot(dw, n) + dot(H, dn);
-        const float2 ds = float2(dA * C - A * dC, dB * C - B * dC) / (C * C);
-        if (k == 0u) du = ds;
-        else dv = ds;
-    }
-    return true;
-}
-
-// Newton on sigma(u, v) = target from the triangle's centroid. Converged when |sigma - target| <= tol; uv is then
-// the root (which may lie outside the triangle: the caller keeps it only inside). At most 16 steps; a step that
-// leaves the triangle's neighbourhood (|u|, |v| over 4) gives up.
-bool manifoldSolve(ManifoldTri tri, float3 p, float3 L, float2 target, float tol, out float2 uv)
-{
-    uv = float2(1.0 / 3.0, 1.0 / 3.0);
-    for (uint i = 0u; i < 16u; ++i)
-    {
-        float2 sigma, du, dv;
-        float3 y, n;
-        if (!manifoldMap(tri, p, L, uv, sigma, du, dv, y, n)) return false;
-        const float2 f = sigma - target;
-        if (dot(f, f) <= tol * tol) return true;
-        const float det = du.x * dv.y - dv.x * du.y;
-        if (!(abs(det) > 1e-20)) return false;
-        // J = [du dv] (columns); J^-1 f.
-        const float2 step = float2(dv.y * f.x - dv.x * f.y, -du.y * f.x + du.x * f.y) / det;
-        uv -= step;
-        if (abs(uv.x) > 4.0 || abs(uv.y) > 4.0) return false;
-    }
-    float2 sigma, du, dv;
-    float3 y, n;
-    if (!manifoldMap(tri, p, L, uv, sigma, du, dv, y, n)) return false;
-    const float2 f = sigma - target;
-    return dot(f, f) <= tol * tol;
-}
-
 // ---- the slope's density ------------------------------------------------------------------------
-// GGX's distribution of slopes at alpha (P22(sigma) = 1 / (pi a^2 (1 + |sigma|^2 / a^2)^2)), truncated to the core's disc
-// |sigma|^2 <= R^2 = max(core.x a^2, core.y) (core.x GGX's stretched slope^2, core.y a plain slope^2: the module's
-// inCore with alpha the lobe's largest, so the disc holds every core) and renormalised by its mass there,
-// R^2 / (a^2 + R^2). With two smooth lobes (a base and a coat, alphas.x and .y), half the draws use each.
-
-float manifoldCoreRadius2(float a, float2 core) { return max(core.x * a * a, core.y); }
-
-float manifoldSlopeLobe(float a, float2 core, float2 sigma)
-{
-    if (!(a > 0.0)) return 0.0;
-    const float a2 = a * a;
-    const float R2 = manifoldCoreRadius2(a, core);
-    const float s2 = dot(sigma, sigma);
-    if (s2 > R2) return 0.0;
-    const float k = 1.0 + s2 / a2;
-    return (a2 + R2) / (R2 * kManifoldPi * a2 * k * k);
-}
-
-float manifoldSlopeDensity(float2 alphas, float2 core, float2 sigma)
-{
-    const bool b = alphas.x > 0.0, c = alphas.y > 0.0;
-    if (b && c) return 0.5 * (manifoldSlopeLobe(alphas.x, core, sigma) + manifoldSlopeLobe(alphas.y, core, sigma));
-    return manifoldSlopeLobe(b ? alphas.x : alphas.y, core, sigma);
-}
-
-// GGX's slopes at alpha untruncated (step 2b: the camera side renders none of the sun through a solid, so the pass draws
-// the whole lobe): P22 and a draw from it.
+// GGX's distribution of slopes at alpha, P22(sigma) = 1 / (pi a^2 (1 + |sigma|^2 / a^2)^2), untruncated: a root's light is
+// kept only where its true slope (the half vector's in the shading frame) lies in the core (the connect's
+// evalSmoothCore), and the drawn slope is the frame of reference's, which differs from the true slope inside a triangle
+// (the vertex frame interpolated: by second order in the normals' spread; a normal map's tilt stretches it by up to its
+// inverse cosine), so a draw truncated to the core's disc would miss the part of the core the stretch moves past it.
+// The core holds at least 99% of GGX's slopes (kManifoldCoreSlope2), so the draws past it cost at most 1%. With two
+// smooth lobes (a base and a coat, alphas.x and .y), half the draws use each.
 float manifoldGgxSlopeDensity(float a, float2 sigma)
 {
     const float a2 = a * a;
@@ -174,16 +73,18 @@ float2 manifoldGgxSlope(float a, float2 u)
     return float2(r * cos(phi), r * sin(phi));
 }
 
-float2 manifoldDrawSlope(float2 alphas, float2 core, float3 u)
+float manifoldSlopeDensity(float2 alphas, float2 sigma)
+{
+    const bool b = alphas.x > 0.0, c = alphas.y > 0.0;
+    if (b && c) return 0.5 * (manifoldGgxSlopeDensity(alphas.x, sigma) + manifoldGgxSlopeDensity(alphas.y, sigma));
+    return manifoldGgxSlopeDensity(b ? alphas.x : alphas.y, sigma);
+}
+
+float2 manifoldDrawSlope(float2 alphas, float3 u)
 {
     const bool b = alphas.x > 0.0, c = alphas.y > 0.0;
     const float a = b && c ? (u.x < 0.5 ? alphas.x : alphas.y) : (b ? alphas.x : alphas.y);
-    const float q = manifoldCoreRadius2(a, core) / (a * a);   // the disc's radius^2 in alphas^2
-    const float share = q / (1.0 + q);
-    const float xi = min(u.y * share, share);
-    const float r = a * sqrt(xi / (1.0 - xi));
-    const float phi = 2.0 * kManifoldPi * u.z;
-    return float2(r * cos(phi), r * sin(phi));
+    return manifoldGgxSlope(a, u.yz);
 }
 
 // ---- pruning ------------------------------------------------------------------------------------

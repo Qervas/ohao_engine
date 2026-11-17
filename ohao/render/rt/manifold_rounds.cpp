@@ -70,6 +70,8 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
         for (uint32_t q = Groups; q < kQueues; ++q) m_caps[q] = batchPixels * kPerPixel[q - 1];
         for (uint32_t q = 0; q < kQueues; ++q)
             if (q != Roots) items += (q >= Pyramid ? 4ull : 2ull) * m_caps[q];   // two regions each (uint4: two slots)
+        m_stateCap = batchPixels / kStatePixels;
+        items += uint64_t{m_stateCap} * kStateSlots;
         m_queues = allocate(m_records, VkDeviceSize{m_recordCap} * kRecordBytes) &&
                    allocate(m_items, VkDeviceSize{items} * kItemBytes) &&
                    allocate(m_roots, VkDeviceSize{m_caps[Roots]} * kRootBytes) &&
@@ -111,7 +113,7 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
 void ManifoldRounds::recordReset(const Frame& frame) {
     // The header (rt/path_tracer.slang's kMC*: capacities at 16, regions at 25 (in slots), rows, batches and passes at
     // 33-35, the dumped pixel at 36, the records' statistics at 37 (0: off), the sparse grid at 38, the mapped walk's
-    // orientation at 39, counters from 40); the batches' blocks zero
+    // orientation at 39, counters from 40, the solve's states' capacity and first slot at 60-61); the batches' blocks zero
     // (a reservation sets its arguments' height and depth).
     std::array<uint32_t, kHeaderWords> words{};
     words[16] = m_recordCap;
@@ -130,6 +132,8 @@ void ManifoldRounds::recordReset(const Frame& frame) {
     words[37] = m_cellStats ? kCountWords : 0u;
     words[38] = m_sparse;
     words[39] = m_oriented ? 1u : 0u;
+    words[60] = m_stateCap;
+    words[61] = offset;
     Pass pass(frame, nullptr, Pass::Transfer);
     pass.write(m_counts, BufferUse::CopyDst);
     if (m_clearSum) pass.write(m_sum, BufferUse::CopyDst);

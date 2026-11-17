@@ -217,6 +217,41 @@ only on a separating line. The gather's BVH nodes keep delta (their region's ver
   tests, none pruned (worst dh margin +1.1e-4 rad). Walk off: the caustics scene and the showcase byte-identical.
   Synchronization validation silent, walk on and off. Cold compile 1.9 s.
 
+*Stage 3 as built (2026-11-18): one exact solver.* Solve runs Bernstein subdivision and Krawczyk (T3) on cells and on
+plain triangles; 2a's Newton (`manifoldSolve`, `manifoldMap`, its tolerance) is deleted.
+- **A plain triangle is a cell** on its own (u, v) square with texels (0, 0, 1) and 2a's frame at each vertex
+  (`polyTriangleSource`), interpolated: h is then a blend of three equal-length 2a half vectors, so 2a's cone and disc
+  tests stay conservative (3.04 M samples, worst margin -2.6e-8 rad against the test's own 1e-4 slack). The roots are
+  this frame's, not 2a's: the per-candidate counts move.
+- **Bases:** an undecided box no wider than 1/8 of its base is solved on dyadic sub-squares with their own grids (3
+  levels): a whole triangle has folds where the extraction margin exceeds F (on the CPU, 3 of 2,000 random triangles
+  reached a 100 K-box cap before; none undecided after).
+- **The weight** `|dA/dsigma| = areaST |det dF/dsigma| / |det dF/d(s, t)|` (implicit function theorem, from the
+  derivative grids; `dh/dsigma = -(vT, vB)`): against double finite differences median relative error about 1e-6, p99
+  5e-5, worst 0.14 at folds.
+- **The slope draw is untruncated GGX:** a draw truncated to the core's disc in a frame other than 2a's misses the
+  core's stretched edge (biased); at most 1% more draws.
+- **Bounded:** at most 96 Krawczyk tests an item a dispatch (tests an item: helmet cells median 6, p99 76, max 389;
+  plain median 1, max 208-340), 12 passes cover every maximum; an unfinished item carries a stack (at most 32 entries,
+  14 measured) and its roots, 768 B, through the cells' queue; still open after the last pass is counted. Planted at
+  B = 4: 2,914 carried, PFMs byte-identical, 15 open and counted.
+- **Roots, plain, against a dense double search in the same frame:** the caustics scene 2,027/2,027 (160x90) and
+  34,093/34,093 (640x360); the showcase 8,686/8,686 and 139,330/139,331, none false, none open. Stage 1's "0.25% loss"
+  was against Newton in double, itself short: the dense search finds 2,027 where Newton found 1,984.
+- **Cells against the floor:** 1,164 of 1,164 path roots, none false, none open (dumps from before the draw change).
+- **m9_bumped_mirror as a CPU check** (no scene: primitive meshes carry no uvs or tangents, `Material` no texture
+  slot): a sine height field's map on a flat mirror, every cell by the fp32 CPU copy of the solver, against quadrature
+  in double: 0.9959 +- 0.49% (alpha 0.1), 1.0024 +- 0.31% (alpha 0.01).
+- **Image, walk off, against stage 2b** (320x180, 4 spp): the caustics scene 183 pixels (0.32%) differ, at most 1.7e-3;
+  the showcase 3 pixels, one fixed-point quantum; means within 1e-6. Walk on (sparse 16): 117,728 cell roots, 1,772
+  connections (30 without maps), 7 of 240 pixels change, at most 1.6e-4: no bright dots at these receivers.
+- **Cost** (`pt.manifold`): the caustics scene 1.6 -> 11.5 ms (320x180), about 45 ms (640x360); the showcase 2.8 -> 10.8
+  ms, about 42 ms, 1080p 83 -> 337 ms (solve 253, against Newton's 8). Compile-time grid degrees took a solve from 70 to
+  2.9 ms (160x90). Cold compile 1.9 -> 3.4 s.
+- **Open:** one root of the showcase's 139,331 missed at 640x360 (its nearest found 1.1e-3 away; a fold, unconfirmed);
+  Sponza with the walk on carries for 73 ms and leaves 4 items open (11 at 640x360), cause unconfirmed; the solve costs
+  about 30x Newton.
+
 ### Task 6: the pass on the GPU, bounded
 
 Requests -> candidate cells -> cell solves as work items of bounded cost (a box budget an item), spread across threads

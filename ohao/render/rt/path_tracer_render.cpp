@@ -629,7 +629,8 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_manifoldPipeline);
             using R = render::ManifoldRounds;
             const VkDeviceAddress counts = getBufferDeviceAddress(m_manifoldRounds.counts());
-            // The rounds a pass: the walk's four, the pyramid's (a segment each), the cells, the solve, the connect.
+            // The rounds a pass: the walk's four, the pyramid's (a segment each), the solve on the cells' queue (the
+            // walk's cells and every item a solve carried) and on the candidates', the connect.
             constexpr uint32_t kRounds = 4 + R::kPyramidRounds + 3;
             const auto regionOf = [](uint32_t r) { return r < 4 ? r : r < 4 + R::kPyramidRounds ? 4u : r - R::kPyramidRounds + 1u; };
             // The batch and pass are pushed as pc.jitter.z's bits (batch | pass << 16; path guiding's word, which no
@@ -658,37 +659,39 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                     if (p > 0) vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bp, &bp);
                     for (uint32_t r = 0; r < kRounds; ++r) {
                         const uint32_t region = regionOf(r);
-                        // Without a mapped draw the pyramid's and the cells' rounds have nothing to do.
-                        if ((region == 4 || region == 5) && !m_manifold.mapped()) continue;
+                        // Without a mapped draw the pyramid's rounds have nothing to do.
+                        if (region == 4 && !m_manifold.mapped()) continue;
                         if (p == 0 && r == 0) stage("pt.manifold.walk");
                         if (p == 0 && r == 4) stage("pt.manifold.pyramid");
                         if (p == 0 && region == 5) stage("pt.manifold.cells");
                         if (p == 0 && region == 6) stage("pt.manifold.solve");
                         if (p == 0 && region == 7) stage("pt.manifold.connect");
                         if (p == 1 && r == 0) stage("pt.manifold.carry");
-                        // A pyramid round's segment, pushed with the batch and pass (pc.jitter.z's high byte).
-                        const uint32_t seg = region == 4 ? r - 4 : 0u;
-                        if (region == 4 || r == 4 + R::kPyramidRounds) {
+                        // A pyramid round's segment, pushed with the batch and pass (pc.jitter.z's high byte); the
+                        // solve's queue the same way (1: the cells', 0: the candidates').
+                        const uint32_t seg = region == 4 ? r - 4 : region == 5 ? 1u : 0u;
+                        if (region == 4 || region == 5 || region == 6) {
                             const uint32_t bps = bp | seg << 24;
                             vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bps, &bps);
                         }
                         Pass round(frame, nullptr, Pass::RayTracing);
                         m_manifold.roundPass(round, frameSlot);
-                        if (region < 6) m_manifoldRounds.walkPass(round);
-                        else if (region == 6) m_manifoldRounds.solvePass(round);
+                        if (region < 5) m_manifoldRounds.walkPass(round);
+                        else if (region < 7) m_manifoldRounds.solvePass(round);
                         else {
                             readsScene(round);
                             m_manifoldRounds.connectPass(round);
                         }
-                        if (region == 5 || region == 7) m_caustics.manifoldPass(round);
+                        if (region >= 5) m_caustics.manifoldPass(round);
                         round.begin();
                         const VkDeviceSize args = region == 4 ? R::segmentOffset(b, p, seg)
                                                   : region == 5 ? R::argsOffset(b, p, R::Cells)
                                                   : region == 6 ? R::argsOffset(b, p, R::Candidates)
                                                   : region == 7 ? R::argsOffset(b, p, R::Roots)
                                                                 : R::argsOffset(b, p, static_cast<R::Queue>(r));
-                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[region], &m_manifoldMissRegion,
-                                                  &m_manifoldHitRegion, &m_callRegion, counts + args);
+                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[region < 6 ? region : region - 1],
+                                                  &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
+                                                  counts + args);
                     }
                 }
                 if (cellStats) {
