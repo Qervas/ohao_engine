@@ -176,6 +176,23 @@ unchanged by default. Measuring: `OHAO_MANIFOLD_SPARSE=k`, `OHAO_MANIFOLD_CELL_S
   vector's slack at a cell's size); the floor (cells that hold a root) is not yet measured. Found on the way: a
   point-in-hull test that called four equal normals inside every degenerate triangle (the GPU's and the brute force's;
   16.5 K -> 11.6 K cells), and a write-after-write on the pyramid's directory (synchronization validation).
+- **The floor (2026-11-17, CPU, the 4 dumped requests):** a dense double Newton search (6x6 seeds; 12x12 found the same
+  2,848 roots) over all 45,271 emitted cells: 171-391 cells a request hold a real path root (mean 288; `r.L > 0`,
+  `h.H > 0`), 458-652 a root of either sign (half are flipped, `h.H < 0`, which every test so far accepts); 44,368 cells
+  near the hull but not emitted hold none. The brute force's hull test is not a necessary condition (310 of 2,401 root
+  cells unflagged, near cell edges). Where the walk's cells come from: six uv-degenerate triangles (two equal uvs) emit
+  79% (about 8,900 a request: kept whole over their uv box, about 6,200 cells for one, though their uvs cross about 510)
+  and hold no root; on the rest (2,381 a request) delta dominates (55x dh at the median); the hull of the products
+  `M(y_k) v_j` over the region's vertices and the four texels, conservative, gives 1,195 and keeps every root cell.
+  Per level the walk passes 20-40x the nodes that hold a root cell.
+- **Decided (2026-11-17): the exact route stays, for the path tracer.** The pass runs only in the path tracer, an
+  offline renderer, so the bar is not a real-time frame but convergence against the light pass at equal time (task 7).
+  Estimated, at about 30 boxes a cell, 2,000 flops a box and an assumed 5 Tflop/s: the helmet at 640x360, 26-100 K
+  requests, is 3.5-14 s a frame with today's walk, 0.5-1.8 s with the degenerates and delta fixed, 90-350 ms at the path
+  floor. Next (stage 2b): uv-degenerate triangles walk only the cells their uvs cross, the product hull replaces delta,
+  the sign tests (`h.H > 0`, `r.L > 0`) prune at the cell and where a bound allows at the nodes; measured on the GPU
+  against the floor's root cells (every one emitted). Then stage 3, then task 7's equal-time comparison decides whether
+  mapped draws are owned by default.
 
 ### Task 6: the pass on the GPU, bounded
 
