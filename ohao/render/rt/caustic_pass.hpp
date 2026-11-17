@@ -7,14 +7,16 @@
 // splats that did not fit (clamped; 0 on every test scene).
 //
 // A frame with caustics: setScene (the host's casters, every frame; uploaded only when they change),
-// recordBeginFrame (that upload, a pending clear), the tracer dispatches causticTrace, recordAfterTrace
-// (its splats ordered before raygen reads them), then raygenCaustics.
+// recordBeginFrame (that upload, a pending clear), the tracer dispatches causticTrace (lightPass), then
+// raygenCaustics (cameraPass).
 //
 // Until first used (ensure), the splat buffer is a placeholder of one element; the table and the
 // counter are small and always there.
 
 #include <vulkan/vulkan.h>
 
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/caustic_casters.hpp"
 
 #include <array>
@@ -36,7 +38,7 @@ struct CausticsStats {
 
 class CausticPass {
 public:
-    bool create(VkDevice device, VkPhysicalDevice physicalDevice);
+    bool create(VkDevice device, GpuAllocator& allocator);
     void destroy();
 
     // This frame's casters and directional lights from the scene: smooth-capable draws (a material
@@ -46,12 +48,17 @@ public:
     [[nodiscard]] bool active() const noexcept { return m_casters.totalPower > 0.0f; }
     [[nodiscard]] uint32_t casterCount() const noexcept { return m_casterCount; }
 
-    // The splat buffer for `pixels` pixels (idles the device when it (re)allocates). False: the pass
-    // stays off.
+    // The splat buffer for `pixels` pixels (the one it replaces is retired). False: the pass stays off.
     bool ensure(uint32_t pixels);
 
-    void recordBeginFrame(VkCommandBuffer cmd);
-    void recordAfterTrace(VkCommandBuffer cmd);
+    // The table's upload when the casters changed, and the pending clears.
+    void recordBeginFrame(const Frame& frame);
+    // What the traces declare: the light pass (causticTrace) reads the table, adds to the splats and counts the
+    // clamped ones; the camera pass (raygenCaustics) reads and clears the splats; the manifold pass
+    // (manifoldConnect) reads the table and counts.
+    void lightPass(Pass& pass);
+    void cameraPass(Pass& pass);
+    void manifoldPass(Pass& pass);
 
     // Splats that did not fit their word since the last clear (a reset).
     [[nodiscard]] uint32_t clamped() const;
@@ -72,18 +79,13 @@ public:
     [[nodiscard]] static std::vector<glm::vec4> pack(const CausticCasters& c, glm::vec3 sceneCenter, float sceneRadius);
 
 private:
-    struct Buffer {
-        VkBuffer buffer{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-        VkDeviceSize size{0};
-        void* mapped{nullptr};
-    };
-    bool allocate(Buffer& b, VkDeviceSize size, bool hostVisible);
-    void release(Buffer& b);
+    bool allocate(GpuBuffer& b, VkDeviceSize size, bool hostVisible);
+    // The counters as the GPU last wrote them, into `out` (false without the buffer).
+    bool readStats(void* out, VkDeviceSize offset, VkDeviceSize bytes) const;
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
-    Buffer m_table, m_splat, m_stats;
+    GpuAllocator* m_allocator{nullptr};
+    GpuBuffer m_table, m_splat, m_stats;
     uint32_t m_pixels{0};
     bool m_splatFull{false};
     bool m_clearSplat{true};

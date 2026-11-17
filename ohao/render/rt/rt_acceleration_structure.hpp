@@ -1,26 +1,18 @@
 #pragma once
 
-// RT Acceleration Structure Manager for OHAO Engine
-//
-// Manages Bottom-Level (BLAS) and Top-Level (TLAS) acceleration structures
-// for Vulkan ray tracing. NVIDIA-only (VK_KHR_acceleration_structure).
-//
-// Usage:
-//   RTAccelerationStructure accel;
-//   accel.init(device, physicalDevice, graphicsQueue, commandPool);
-//   uint32_t blasHandle = accel.createBLAS(vertexBuffer, indexBuffer, ...);
-//   accel.addInstance(blasHandle, transform);
-//   accel.buildTLAS(cmd);
-//
-// Each BLAS is a single geometry (mesh). TLAS holds instances referencing BLASes.
+// The acceleration structures of a RenderScene (VK_KHR_acceleration_structure): one BLAS a mesh, built against
+// the mesh arenas, and one TLAS over instances already in device memory. Every build is recorded through a
+// render::Pass (render/graph/pass.hpp): a structure's storage is a GpuBuffer, written by its build and read by
+// the TLAS build, by ray queries and by a ray tracing pipeline (BufferUse::Accel), and its inputs are read as
+// BufferUse::AccelInput. Nothing here submits or waits.
+
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 
 #include <vulkan/vulkan.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <vector>
 #include <cstdint>
-#include <iostream>
 #include <span>
+#include <vector>
 
 namespace ohao {
 
@@ -31,8 +23,7 @@ constexpr BlasHandle INVALID_BLAS = UINT32_MAX;
 // Per-BLAS data
 struct BlasEntry {
     VkAccelerationStructureKHR handle = VK_NULL_HANDLE;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
+    GpuBuffer buffer;               // the structure's storage
     VkDeviceAddress deviceAddress = 0;
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
@@ -41,26 +32,18 @@ struct BlasEntry {
     VkDeviceSize vertexStride = 0;
     uint32_t maxVertex = 0;
     uint32_t primitiveOffset = 0;   // index byte offset
+    VkDeviceSize bytes = 0;         // the structure's storage
     uint32_t firstVertex = 0;
     VkDeviceSize scratchSize = 0;   // max(build, update) scratch
+    bool retired = false;           // no instance names it any more: it waits for the frames in flight (retireBLAS)
 };
 
-// TLAS storage replaced by buildTLASFromDevice. Earlier frames may still trace or
+// TLAS storage or a scratch buffer replaced inside a frame. Earlier frames may still trace or
 // build with it, so the caller destroys it (destroyRetired) once they retired.
 // `as` is VK_NULL_HANDLE for a retired scratch buffer.
 struct RetiredTlas {
     VkAccelerationStructureKHR as = VK_NULL_HANDLE;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-};
-
-// Instance referencing a BLAS with a transform
-struct RTInstance {
-    BlasHandle blasHandle = INVALID_BLAS;
-    glm::mat4 transform = glm::mat4(1.0f);
-    uint32_t customIndex = 0;   // user data (the RenderScene instance slot)
-    uint32_t mask = 0xFF;       // visibility mask for ray flags
-    uint32_t sbtOffset = 0;     // shader binding table offset
+    GpuBuffer buffer;
 };
 
 class RTAccelerationStructure {
@@ -68,45 +51,30 @@ public:
     RTAccelerationStructure() = default;
     ~RTAccelerationStructure();
 
-    // Initialize — must be called before anything else.
-    // Returns false if RT extensions are not available.
-    // asConsumerStages: the pipeline stages that will READ the acceleration
-    // structure, used as the destination mask of the post-build barrier. Only
-    // the caller knows this -- querying device features reports what the GPU
-    // supports, not what was enabled at vkCreateDevice, and naming a stage whose
-    // extension was not enabled is invalid usage. Default suits the engine, which
-    // enables both the RT pipeline and ray query. A ray-query-only context must
-    // pass VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT alone.
-    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              VkQueue graphicsQueue, uint32_t queueFamily, VkCommandPool commandPool,
-              VkPipelineStageFlags asConsumerStages =
-                  VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    // Before anything else; the structures' storage and scratch come from `allocator`. False when the device has
+    // no acceleration structures or no ray tracing pipeline.
+    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator);
 
-    // Check if RT is supported on this device
     [[nodiscard]] bool isSupported() const noexcept { return m_supported; }
-
-    // Get RT pipeline properties (for SBT sizing, etc.)
-    const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& getPipelineProperties() const {
-        return m_rtPipelineProperties;
-    }
 
     // === BLAS management ===
 
-    // Create a BLAS from vertex/index data already in GPU buffers.
-    // vertexBuffer must contain packed vec3 positions (float32).
-    // indexBuffer must contain uint32_t indices.
-    // vertexOffset/indexOffset are BYTE offsets into the combined buffer.
-    // firstVertex is added to every index: 0 for buffers holding global indices,
-    // the mesh's first vertex for arenas holding mesh-local indices.
-    // updatable: ALLOW_UPDATE | PREFER_FAST_BUILD (a skinned instance's, refit every frame its
-    // pose changes: recordBlasUpdate); else PREFER_FAST_TRACE.
-    BlasHandle createBLAS(VkBuffer vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride,
-                          VkBuffer indexBuffer, uint32_t indexCount,
-                          VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                          VkCommandBuffer cmd, uint32_t firstVertex = 0, bool updatable = false);
+    // Records the build of a BLAS over triangles already in `vertices` (packed vec3 positions first in each
+    // `vertexStride`) and `indices` (uint32). vertexByteOffset/indexByteOffset are BYTE offsets into the buffers.
+    // firstVertex is added to every index: 0 for buffers holding global indices, the mesh's first vertex for
+    // arenas holding mesh-local indices.
+    // updatable: ALLOW_UPDATE | PREFER_FAST_BUILD (a skinned instance's, refit every frame its pose changes:
+    // recordBlasUpdates); else PREFER_FAST_TRACE.
+    // `scratch` is the build's own, the caller's to destroy (destroyRetired) once the build has run: a build
+    // recorded for later must not share scratch with the next one.
+    BlasHandle createBLAS(const render::Frame& frame, GpuBuffer& vertices, uint32_t vertexCount,
+                          VkDeviceSize vertexStride, GpuBuffer& indices, uint32_t indexCount,
+                          VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset, uint32_t firstVertex,
+                          bool updatable, RetiredTlas& scratch);
 
-    // Destroy a specific BLAS
+    // The BLAS's mesh was released: no TLAS built from now on names it and no pass declares it, so that it can
+    // be destroyed (destroyBLAS) once the frames in flight have retired.
+    void retireBLAS(BlasHandle handle);
     void destroyBLAS(BlasHandle handle);
 
     // One updatable BLAS to update: a refit (MODE_UPDATE, in place) or, `rebuild`, a full build in
@@ -116,79 +84,53 @@ public:
         bool rebuild = false;
         bool recorded = false;
     };
-    // Records every update in one build call, from the BLASes' geometry in `vertexBuffer` /
-    // `indexBuffer` (the arenas as they are now: they may have grown since): each gets its own
-    // slice of this object's refit scratch, so the GPU builds them side by side, after one barrier
-    // that orders them behind earlier builds and earlier frames' traces. A scratch that must grow is
-    // retired (takeRetired). The caller makes the vertex writes visible to the build before, and
-    // the BLASes visible to their readers (the TLAS build, ray queries) after. Returns how many
+    // Records every update in one build call, from the BLASes' geometry in `vertices` / `indices` (the arenas
+    // as they are now: they may have grown since): each gets its own slice of this object's refit scratch, so
+    // the GPU builds them side by side. A scratch that must grow is retired (takeRetired). Returns how many
     // were recorded (a handle that is not an updatable BLAS is skipped).
-    uint32_t recordBlasUpdates(VkCommandBuffer cmd, std::span<BlasUpdate> updates, VkBuffer vertexBuffer,
-                               VkBuffer indexBuffer);
+    uint32_t recordBlasUpdates(const render::Frame& frame, std::span<BlasUpdate> updates, GpuBuffer& vertices,
+                               GpuBuffer& indices);
 
     // === TLAS management ===
 
-    // Clear all instances (call before re-adding for a new frame)
-    void clearInstances();
-
-    // Add an instance referencing a BLAS
-    void addInstance(BlasHandle blasHandle, const glm::mat4& transform,
-                     uint32_t customIndex = 0, uint32_t mask = 0xFF, uint32_t sbtOffset = 0);
-
-    // Build/rebuild the TLAS from current instances.
-    // Call once per frame after addInstance() calls.
-    void buildTLAS(VkCommandBuffer cmd);
-
-    // Record a TLAS build (rebuild = true, or no TLAS yet, or a different count) or
-    // refit (UPDATE mode) on `cmd` from `count` VkAccelerationStructureInstanceKHR
-    // already in device memory at `instances`. Nothing is submitted. The caller
-    // must have made the instance writes visible to ACCELERATION_STRUCTURE_BUILD
-    // (SHADER_READ). Barriers recorded here: before -- earlier readers (the
-    // asConsumerStages from init) and earlier builds finish with the TLAS and its
-    // scratch; after -- the TLAS is visible to asConsumerStages. Storage too small
-    // for `count` is replaced and the old storage goes to takeRetired(); it is
-    // never destroyed here. Do not mix with buildTLAS() on the same object.
+    // Records a TLAS build (rebuild = true, or no TLAS yet, or a different count) or refit (UPDATE mode) from
+    // `count` VkAccelerationStructureInstanceKHR in `instances`. Storage too small for `count` is replaced and
+    // the old storage goes to takeRetired(); it is never destroyed here.
     // Returns false when nothing was recorded (no RT, empty input, allocation failure).
-    bool buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceAddress instances, uint32_t count, bool rebuild);
-    // TLAS storage replaced since the last call; the caller owns destroying it.
+    bool buildTLASFromDevice(const render::Frame& frame, GpuBuffer& instances, uint32_t count, bool rebuild);
+    // TLAS storage and scratch replaced since the last call; the caller owns destroying it.
     [[nodiscard]] std::vector<RetiredTlas> takeRetired();
-    void destroyRetired(const RetiredTlas& r);
+    void destroyRetired(RetiredTlas& r);
 
-    // Pre-allocate scratch buffer (call before multi-BLAS rebuilds to avoid mid-recording realloc)
-    void ensureScratchBuffer(VkDeviceSize requiredSize);
-
-    // Force full TLAS rebuild (not update) on next buildTLAS call
-    void forceTlasRebuild() { m_forceTlasRebuild = true; }
+    // Declares the TLAS and every BLAS as read by `pass` (ray queries in its shaders, a ray tracing pipeline).
+    void traced(render::Pass& pass);
 
     // === Getters ===
 
     VkAccelerationStructureKHR getTLAS() const { return m_tlas; }
-    uint32_t getBlasCount() const { return static_cast<uint32_t>(m_blasEntries.size()); }
+    // The live BLASes and their storage.
+    struct BlasMemory {
+        uint32_t count{0};
+        VkDeviceSize bytes{0};
+    };
+    BlasMemory blasMemory() const {
+        BlasMemory m;
+        for (const BlasEntry& e : m_blasEntries)
+            if (e.handle != VK_NULL_HANDLE) { ++m.count; m.bytes += e.bytes; }
+        return m;
+    }
     // Device address of a live BLAS; 0 when the handle is unknown or destroyed.
     VkDeviceAddress getBlasAddress(BlasHandle handle) const {
         return handle < m_blasEntries.size() ? m_blasEntries[handle].deviceAddress : 0;
     }
-    uint32_t getInstanceCount() const { return static_cast<uint32_t>(m_instances.size()); }
 
-    // Cleanup everything
+    // Destroys everything; the caller idles the device.
     void destroy();
 
 private:
-    // Vulkan handles (not owned — caller manages lifetime)
     VkDevice m_device = VK_NULL_HANDLE;
-    VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-    VkQueue m_queue = VK_NULL_HANDLE;
-    uint32_t m_queueFamily = 0;
-    VkCommandPool m_commandPool = VK_NULL_HANDLE;
-
+    GpuAllocator* m_allocator = nullptr;
     bool m_supported = false;
-
-    // RT properties
-    VkPhysicalDeviceAccelerationStructureFeaturesKHR m_asFeatures{};
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtPipelineProperties{};
-
-    // Destination stage mask of the post-TLAS-build barrier; see init().
-    VkPipelineStageFlags m_asConsumerStages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
     // Function pointers (loaded dynamically)
     PFN_vkCreateAccelerationStructureKHR vkCreateAccelerationStructureKHR = nullptr;
@@ -201,58 +143,34 @@ private:
     // BLAS storage
     std::vector<BlasEntry> m_blasEntries;
 
-    // Instance list (rebuilt each frame)
-    std::vector<RTInstance> m_instances;
-
-    // TLAS
+    // TLAS: its storage's size and the instance count of its last build (an UPDATE must use the same count).
     VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
-    bool m_forceTlasRebuild{false};
-    VkBuffer m_tlasBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_tlasMemory = VK_NULL_HANDLE;
-    // buildTLASFromDevice state: storage size of m_tlas, instance count of its
-    // last build (an UPDATE must use the same count), and a scratch buffer of its
-    // own -- the BLAS scratch is resized under blocking submits, this one inside
-    // frames, so it is retired rather than destroyed when it grows.
+    GpuBuffer m_tlasBuffer;
     VkDeviceSize m_tlasStorageSize = 0;
     uint32_t m_tlasBuiltCount = 0;
-    VkBuffer m_tlasScratchBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_tlasScratchMemory = VK_NULL_HANDLE;
+    // The TLAS builds' scratch and recordBlasUpdates' (sliced per BLAS at the device's scratch offset
+    // alignment): inside frames, so each is retired, not destroyed, when it grows. Sizes are what a build may
+    // use past the buffer's first aligned address.
+    GpuBuffer m_tlasScratch;
     VkDeviceSize m_tlasScratchSize = 0;
-    std::vector<RetiredTlas> m_retired;
-    // recordBlasUpdates' scratch (inside frames: retired, not destroyed, when it grows), sliced
-    // per BLAS at the device's scratch offset alignment, and the batch's reused arrays.
-    VkBuffer m_refitScratchBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_refitScratchMemory = VK_NULL_HANDLE;
+    GpuBuffer m_refitScratch;
     VkDeviceSize m_refitScratchSize = 0;
     VkDeviceSize m_scratchAlignment = 256;
+    std::vector<RetiredTlas> m_retired;
+    // recordBlasUpdates' reused arrays.
     std::vector<VkDeviceSize> m_batchOffsets;
     std::vector<VkAccelerationStructureGeometryKHR> m_batchGeometries;
     std::vector<VkAccelerationStructureBuildGeometryInfoKHR> m_batchInfos;
     std::vector<VkAccelerationStructureBuildRangeInfoKHR> m_batchRanges;
     std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> m_batchRangePtrs;
 
-    // Instance buffer (GPU-side VkAccelerationStructureInstanceKHR array)
-    VkBuffer m_instanceBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_instanceMemory = VK_NULL_HANDLE;
-    uint32_t m_instanceBufferCapacity = 0;
-
-    // Scratch buffer (reused across builds)
-    VkBuffer m_scratchBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_scratchMemory = VK_NULL_HANDLE;
-    VkDeviceSize m_scratchSize = 0;
-
-    // Helpers
     bool loadFunctionPointers();
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-    bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memProps,
-                      VkBuffer& buffer, VkDeviceMemory& memory);
-    void destroyBuffer(VkBuffer& buffer, VkDeviceMemory& memory);
+    // A device-local buffer with a device address.
+    [[nodiscard]] GpuBuffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage);
+    // A scratch buffer of `size` usable bytes past its first address aligned for a build's scratch.
+    [[nodiscard]] GpuBuffer createScratch(VkDeviceSize size);
+    [[nodiscard]] VkDeviceAddress scratchAddress(const GpuBuffer& scratch);
     VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer);
-    void ensureInstanceBuffer(uint32_t requiredCount);
-
-    // One-shot command helpers
-    VkCommandBuffer beginSingleTimeCommands();
-    void endSingleTimeCommands(VkCommandBuffer cmd);
 };
 
 } // namespace ohao

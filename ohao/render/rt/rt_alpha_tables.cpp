@@ -3,6 +3,7 @@
 #include "render/shader_bindings/rt_gi_trace.hpp"
 
 #include "gpu/shared_layout.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
@@ -22,10 +23,10 @@ static_assert(sizeof(gpu::shared::SmokeSphereGpu) == gpu::shared::kSmokeSphereSt
 
 } // namespace
 
-bool AlphaTables::init(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool AlphaTables::init(VkDevice device, GpuAllocator& allocator) {
     static_assert(shader::rt_gi_trace::kSet1.size() == kBindings);
     m_device = device;
-    m_physical = physicalDevice;
+    m_allocator = &allocator;
     std::array<VkDescriptorSetLayoutBinding, kBindings> b{};
     for (uint32_t i = 0; i < kBindings; ++i)
         b[i] = shader::layoutBinding(shader::rt_gi_trace::kSet1[i], VK_SHADER_STAGE_COMPUTE_BIT);
@@ -43,8 +44,10 @@ bool AlphaTables::init(VkDevice device, VkPhysicalDevice physicalDevice) {
     pi.pPoolSizes = &size;
     if (vkCreateDescriptorPool(device, &pi, nullptr, &m_pool) != VK_SUCCESS) return false;
 
-    for (HostBuffer& buf : m_smoke)
-        if (!createHostBuffer(device, physicalDevice, kSmokeBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buf)) return false;
+    for (GpuBuffer& buf : m_smoke) {
+        buf = createHostBuffer(allocator, kSmokeBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!buf.isValid()) return false;
+    }
 
     std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts{};
     layouts.fill(m_layout);
@@ -58,20 +61,19 @@ bool AlphaTables::init(VkDevice device, VkPhysicalDevice physicalDevice) {
 
 void AlphaTables::destroy() {
     if (m_device == VK_NULL_HANDLE) return;
-    for (HostBuffer& buf : m_smoke) destroyHostBuffer(m_device, buf);
+    for (GpuBuffer& buf : m_smoke) m_allocator->retire(buf);
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
     if (m_layout) vkDestroyDescriptorSetLayout(m_device, m_layout, nullptr);
     m_pool = VK_NULL_HANDLE;
     m_layout = VK_NULL_HANDLE;
     m_sets = {};
     m_device = VK_NULL_HANDLE;
-    m_physical = VK_NULL_HANDLE;
 }
 
 // The header (count, enabled) and the spheres, as the shader reads them (rt/smoke_proxy.slang). More
 // spheres than the buffer holds are not written (the set's caps keep that from happening).
 void AlphaTables::writeSmoke(uint32_t slot, const render::RenderScene& scene, bool smokeInGi) {
-    auto* bytes = static_cast<uint8_t*>(m_smoke[slot].mapped);
+    auto* bytes = static_cast<uint8_t*>(m_smoke[slot].getMappedData());
     if (!bytes) return;
     const auto spheres = scene.vfx().smoke;
     const auto count = static_cast<uint32_t>(std::min<std::size_t>(spheres.size(), gpu::shared::kSmokeSpheresMax));
@@ -82,6 +84,15 @@ void AlphaTables::writeSmoke(uint32_t slot, const render::RenderScene& scene, bo
         const float sphere[5] = {s.centre.x, s.centre.y, s.centre.z, s.radius, s.density};
         std::memcpy(bytes + gpu::shared::kSmokeSpheresOffset + i * gpu::shared::kSmokeSphereStride, sphere, sizeof(sphere));
     }
+    m_allocator->flushBuffer(m_smoke[slot]);
+}
+
+void AlphaTables::declare(render::Pass& pass, uint32_t slot, const render::RenderScene& scene) {
+    const render::RenderScene::Buffers b = scene.buffers();
+    for (GpuBuffer* table : {&b.instances, &b.materialRefs, &b.materials, &b.meshes, &b.triangleSlots, &b.indices, &b.vertices})
+        pass.read(*table, render::BufferUse::Storage);
+    if (slot < m_smoke.size()) pass.read(m_smoke[slot], render::BufferUse::Storage);
+    scene.traced(pass);
 }
 
 bool AlphaTables::update(uint32_t slot, const render::RenderScene& scene, bool smokeInGi) {

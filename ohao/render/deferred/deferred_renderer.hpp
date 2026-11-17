@@ -15,7 +15,6 @@
 #include "render/rt/rt_direct_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
 #include "render/rt/rt_alpha_tables.hpp"
-#include "render/graph/render_graph.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "core/common_types.hpp"
 #include <nlohmann/json.hpp>
@@ -32,6 +31,7 @@
 namespace ohao::render { class RenderScene; class GpuPassTimer; }
 
 namespace ohao {
+class GpuAllocator;
 
 // Full deferred rendering pipeline that orchestrates all passes
 // This is the main entry point for AAA-quality rendering
@@ -40,7 +40,7 @@ public:
     DeferredRenderer() = default;
     ~DeferredRenderer();
 
-    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator);
     // VK_KHR_ray_query is enabled on the device (before initialize): RT direct light and RT GI
     // trace with inline ray queries; without them lighting loops over the lights, CSM for the sun.
     void setRayQuerySupported(bool on) noexcept { m_rayQuery = on; }
@@ -60,6 +60,11 @@ public:
     // seeds and the sky, RT GI's and TAA's history, the previous view-projection), so the
     // frames that follow render as a fresh renderer's would. The device must be idle.
     void resetTemporalState();
+    // render.settings renderScale: the scene is rendered at this fraction of the output's width and height and
+    // TAA upscales it (taa_resolve.slang). 1: plain TAA. The frame's cost follows the pixels rendered.
+    static constexpr float kMinRenderScale = 0.5f;
+    void setRenderScale(float scale);
+    [[nodiscard]] float renderScale() const noexcept { return m_renderScale; }
 
     // RT direct light and RT GI seed every sample from (render seed, frame index since the last
     // resetTemporalState, pixel, sample): frame k after a reset is the same in every run.
@@ -164,7 +169,7 @@ public:
     // The environment: `source` (RGBA32F, one level) for RT GI's misses; the prefiltered levels
     // and irradiance (EnvPrefilter) for lighting's IBL, null without them; `intensity`
     // (Environment.intensity) scales both, as the path tracer's miss does.
-    void setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance, VkSampler iblSampler,
+    void setEnvMap(gpu::Image* source, gpu::Image* prefiltered, gpu::Image* irradiance, VkSampler iblSampler,
                    float intensity);
 
     void setSunDirection(const glm::vec3& dir);
@@ -183,14 +188,12 @@ public:
     [[nodiscard]] bool smokeInGi() const noexcept { return m_smokeInGi; }
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
-    // Get final output for display/readback
-    [[nodiscard]] VkImageView getFinalOutput() const;
-    [[nodiscard]] VkImage getFinalOutputImage() const;
-    // True when the final image is the post stack's RGBA8 output; false when it is the
-    // lighting pass's RGBA16F HDR image (tonemapping off), which a byte copy cannot read back.
-    [[nodiscard]] bool finalOutputIsRGBA8() const;
-    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post.
-    [[nodiscard]] VkImage getLitImage() const;
+    // The frame's final image for display and readback (the post stack's RGBA8 output); null when
+    // the last render() made none.
+    [[nodiscard]] gpu::Image* finalOutput();
+    // The lighting pass's RGBA16F image: the lit scene (the environment, transparents) before post. Null
+    // without a lighting pass.
+    [[nodiscard]] gpu::Image* litImage();
 
     // Get jitter offset for TAA
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
@@ -222,7 +225,7 @@ private:
     bool m_giFull{false};
     uint32_t m_giRays{2};
     bool m_sssWanted{true};
-    VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
+    gpu::Image* m_envMap{nullptr};           // setEnvMap: what RT GI's escaping rays see
     float m_envIntensity{1.0f};              // setEnvMap: Environment.intensity
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<SSSPass> m_sssPass;
@@ -237,8 +240,11 @@ private:
     BindlessTextureManager* m_textureManager{nullptr};
 
     // Dimensions
-    uint32_t m_width{0};
+    uint32_t m_width{0};      // the scene passes' size: the output's times the render scale
     uint32_t m_height{0};
+    uint32_t m_outWidth{0};   // onResize's: TAA's history, the display pass, the gizmo and the HUD
+    uint32_t m_outHeight{0};
+    float m_renderScale{1.0f};
 
     // Camera data
     glm::mat4 m_view{1.0f};
@@ -273,27 +279,13 @@ private:
     std::unique_ptr<DecalPass> m_decals;   // the decals pass, after gbuffer.late (sub-project 12, step 3)
     bool m_decalsDrawn{true};
     bool m_smokeInGi{true};                // setSmokeInGi: the traces' smoke proxies
-    VkImageView m_envPrefiltered{VK_NULL_HANDLE};   // setEnvMap: the transparent pass's IBL
-    VkImageView m_envIrradiance{VK_NULL_HANDLE};
+    gpu::Image* m_envPrefiltered{nullptr};   // setEnvMap: the transparent pass's IBL
+    gpu::Image* m_envIrradiance{nullptr};
     float m_deltaTime{0.016f};
     uint32_t m_renderSeed{0};
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
     uint64_t m_frameNumber{0};
     RenderQuality m_quality{RenderQuality::Realtime};
-
-    // Render graph for centralized barrier tracking
-    RenderGraph m_renderGraph;
-
-    // Imported texture handles (valid after importGraphTextures())
-    TextureHandle m_graphDepthHandle;
-    TextureHandle m_graphNormalHandle;
-    TextureHandle m_graphAlbedoHandle;
-    TextureHandle m_graphShadowHandle;
-    TextureHandle m_graphLightingHandle;
-
-    // (Re-)import all per-pass render targets into the graph.
-    // Called once after initialize() and again after each onResize().
-    void importGraphTextures();
 
     render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's, per frame slot
 };

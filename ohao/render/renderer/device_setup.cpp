@@ -428,7 +428,8 @@ bool VulkanRenderer::createLogicalDevice() {
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.pNext = &features12;
     features13.shaderDemoteToHelperInvocation = VK_TRUE;
-    features13.synchronization2 = VK_TRUE;   // NRD's NRI records vkCmdPipelineBarrier2 (core in 1.3)
+    features13.synchronization2 = VK_TRUE;   // render::Pass's and NRD's NRI's barriers (core in 1.3)
+    features13.dynamicRendering = VK_TRUE;   // render::Pass begins every raster pass (render/graph/pass.hpp)
     // Pipelines outlive the layouts they were created with (GpuCulling keeps one of several identical layouts; others
     // destroy theirs once created): legal with maintenance4, mandatory in 1.3. Without it NVIDIA's Linux driver
     // crashed binding such a pipeline (VUID-vkCmdBindPipeline-pipeline-parameter).
@@ -514,6 +515,7 @@ bool VulkanRenderer::createLogicalDevice() {
     // Enable required device features (were previously in pEnabledFeatures)
     // Enable all features the renderer uses
     deviceFeatures2.features.samplerAnisotropy = VK_TRUE;
+    deviceFeatures2.features.textureCompressionBC = VK_TRUE;   // cooked textures are BC7 and BC5
     deviceFeatures2.features.fillModeNonSolid = VK_TRUE;
     deviceFeatures2.features.geometryShader = VK_TRUE;
     deviceFeatures2.features.tessellationShader = VK_TRUE;
@@ -571,10 +573,8 @@ bool VulkanRenderer::createCommandPool() {
 }
 
 bool VulkanRenderer::initializeFrameResources() {
-    // Per-frame command buffer, fence and readback staging buffer.
-    const size_t stagingBufferSize = static_cast<size_t>(m_width) * m_height * 4;   // RGBA8
-    bool success = m_frameResources.initialize(m_device, m_physicalDevice, m_commandPool,
-                                               stagingBufferSize);
+    // Per-frame command buffer and fence.
+    bool success = m_frameResources.initialize(m_device, m_physicalDevice, m_commandPool);
 
     if (success) {
         OHAO_LOG(Debug, gpu, "multi-frame rendering enabled with {} frames in flight",
@@ -582,6 +582,24 @@ bool VulkanRenderer::initializeFrameResources() {
     }
 
     return success;
+}
+
+bool VulkanRenderer::createStagingBuffers() {
+    // Readback buffers: the CPU reads them, so host-cached memory where the device offers it.
+    // Uncached host-visible memory read 3.7 MB (one 1280x720 frame) in ~20 ms; cached reads at
+    // memory speed. Storage too: capture.preview writes a preview straight into one.
+    const VkDeviceSize size = static_cast<VkDeviceSize>(m_width) * m_height * 4;   // RGBA8
+    for (GpuBuffer& staging : m_staging) {
+        staging = m_allocator.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                           AllocationUsage::GpuToCpu, true);
+        if (!staging.isValid() || !staging.getMappedData()) return false;
+        std::memset(staging.getMappedData(), 0, size);   // black, not garbage, until a frame is copied
+    }
+    return true;
+}
+
+void VulkanRenderer::destroyStagingBuffers() {
+    for (GpuBuffer& staging : m_staging) m_allocator.retire(staging);
 }
 
 } // namespace ohao

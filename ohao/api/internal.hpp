@@ -133,6 +133,11 @@ bool methodLevelReload(Session::Impl& s, const JsonDocument& doc, const JsonNode
                        JsonWriter& out);
 bool methodPhysicsRaycast(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                           JsonWriter& out);
+// Assets (level.cpp).
+bool methodAssetInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                     JsonWriter& out);
+bool methodAssetReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                       JsonWriter& out);
 bool methodPhysicsInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
 bool methodPhysicsContacts(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,

@@ -29,7 +29,18 @@ step 2h, 2026-11-09), unchanged.
     project.
   - A `ModelAsset` without `mesh` merges every mesh in a file, collision hulls included;
     with `mesh` (a glTF mesh name or `#<index>`) it is that one mesh at its own origin,
-    loaded by `ModelLoader::loadMesh` and cached per `(path, mesh)`. A glTF's node tree,
+    loaded through the cooked cache (`cook::cookedModel`, `<root>/.ohao/cooked/`: the file is imported once, for
+    all its meshes, and again only when its bytes change). Every consumer (instantiate, physics, animation, audio)
+    reads the cooked mesh in place from the file's mapping (`AssetResolver::loadMesh`, a `cooked::Mesh`); a
+    material names its textures by their content and use (colour and data BC7, normals BC5 with z rebuilt in the
+    shader; every mip cooked), and a texture is uploaded once whoever uses it
+    (`BindlessTextureManager::contentTexture`). What a mesh held is given back when its last entity goes: its
+    textures (destroyed after the frames in flight), its materials' table rows and its arena ranges, each for the
+    next load to take (`tools/bench/asset_bench.py --loop N` holds it). Only glTF and GLB are read.
+    A mesh or convex collider of a cooked mesh is the mesh's one shape (built once at scale 1, kept in the cooked
+    cache as the backend's bytes, restored after), used by each body at its own scale; a primitive's is built per
+    body as before. After static bodies are added the physics sync rebuilds the broad phase's tree, so a ray
+    before the first step costs what one after it does (`level_bench --only kit2k`). A glTF's node tree,
     `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
   - A `Level` component is a level file in the world: the `level` sync system
     (`ohao_level_world`, `level/level_system.hpp`, before `instantiate`) makes one entity per
@@ -251,9 +262,12 @@ step 2h, 2026-11-09), unchanged.
     position is); anything else interpolates as before. Presentation only: `RenderPose`, never
     `Transform`, `world.hash`, a file or a snapshot; no lead in lockstep (alpha 1, nothing pending),
     for the dead, or for characters moved by their `MoveIntent`.
-  - **Late input sampling:** a realtime frame polls only once at most `LiveConfig::framesAhead`
-    submitted frames are unpresented (`presentToAwait`; it waits on present wait, else the frame's
-    fence, at most 20 ms). Automatic (-1): 1 while a player leads its look, unbounded otherwise.
+  - **Late input sampling:** while a player leads its look, a realtime frame polls only once the GPU has
+    finished the frame before (`LiveHost::pollsLate`, the frame's fence): its input goes into a frame the
+    GPU starts at once. No wait otherwise.
+  - **Frames start on the display's refreshes** (`LiveHost::onRefreshGrid`): at the display's rate (the
+    default cap, fifo included) a frame starts 0.45 ms before a refresh, placed by the present stamps, not
+    on a timer that drifts across them. The measurements: `docs/notes/platform.md`, "A window's latency".
   - **Stalls:** every window on this laptop gets a few frames a minute of 330–500 ms (5–16 a
     minute measured) in which the presentation engine holds the swapchain's images: the frame's
     GPU work is normal and starts late, nothing of the engine's is queued in the gap, and a

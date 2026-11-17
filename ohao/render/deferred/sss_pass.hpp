@@ -1,7 +1,8 @@
 #pragma once
 
 #include "render_pass_base.hpp"
-#include "render/rt/rt_compute.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/frame/frame_resources.hpp"
 
 #include <array>
@@ -22,20 +23,19 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
-    // The lit image must be in SHADER_READ_ONLY_OPTIMAL, its writers synchronized with
-    // compute; it is left there.
-    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
+    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override { record(render::Frame{cmd, nullptr, frameIndex}); }
+    // The two blurs, untimed (the frame times them as "sss").
+    void record(const render::Frame& frame);
     void onResize(uint32_t width, uint32_t height) override;
     [[nodiscard]] const char* getName() const override { return "SSSPass"; }
 
     void setGBufferPass(GBufferPass* gbuffer) { m_gbuffer = gbuffer; }
-    void setLitImage(VkImage image, VkImageView view) {
-        m_litImage = image;
-        m_litView = view;
-    }
+    void setLitImage(gpu::Image* lit) noexcept { m_lit = lit; }
     void setCameraPos(const glm::vec3& p) noexcept { m_cameraPos = p; }
     // The lighting pass's subsurface diffuse light: the only light the pass spreads.
-    void setSubsurfaceDiffuse(VkImageView view) noexcept { m_diffuseView = view; }
+    void setSubsurfaceDiffuse(gpu::Image* diffuse) noexcept { m_diffuse = diffuse; }
+    // RenderScene's material table (each material's subsurface free path and colour).
+    void setMaterials(GpuBuffer* materials) noexcept { m_materials = materials; }
     // The kernel's step in pixels (3 steps each way), at most 10: the vertical blur reaches no
     // further than the tile rows the horizontal one covers.
     void setSSSWidth(float w) { m_sssWidth = glm::clamp(w, 0.0f, 10.0f); }
@@ -43,14 +43,16 @@ public:
     [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // the frame the pass follows
 
 private:
+    bool createScratch();
+
     GBufferPass* m_gbuffer{nullptr};
-    VkImage m_litImage{VK_NULL_HANDLE};
-    VkImageView m_litView{VK_NULL_HANDLE};
-    VkImageView m_diffuseView{VK_NULL_HANDLE};
+    gpu::Image* m_lit{nullptr};
+    gpu::Image* m_diffuse{nullptr};
+    GpuBuffer* m_materials{nullptr};
     glm::vec3 m_cameraPos{0.0f};
     float m_sssWidth{8.0f};
 
-    rtc::Image m_scratch{};   // the horizontal pass's output, full size (only flagged tiles written)
+    gpu::Image m_scratch{};   // the horizontal pass's output, full size (only flagged tiles written)
 
     VkPipeline m_hPipeline{VK_NULL_HANDLE}, m_vPipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_hLayout{VK_NULL_HANDLE}, m_vLayout{VK_NULL_HANDLE};

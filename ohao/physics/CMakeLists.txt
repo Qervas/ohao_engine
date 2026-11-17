@@ -16,7 +16,6 @@ target_compile_definitions(ohao_physics PUBLIC GLM_ENABLE_EXPERIMENTAL)
 target_link_libraries(ohao_physics PUBLIC
     ohao_core
     glm
-    nlohmann_json::nlohmann_json
 )
 
 # Link Jolt Physics backend (modular - builds even if Jolt unavailable)

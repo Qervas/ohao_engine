@@ -16,17 +16,14 @@ namespace ohao {
 
 namespace {
 
-// The copy into a staging buffer, visible to the host once the frame's fence signals.
-void stagingToHost(VkCommandBuffer cmd, VkBuffer staging) {
-    VkBufferMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.buffer = staging;
-    b.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &b, 0,
-                         nullptr);
+// The stage a frame's submit waits for its swapchain image at (the acquire semaphore): the image's first
+// barrier of the frame has it as its source, so the layout change waits for the acquire too.
+constexpr VkPipelineStageFlags kAcquireWaitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+static_assert(VkPipelineStageFlags2{kAcquireWaitStage} == VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+
+// Whether a staging buffer holds an RGBA8 image of `extent`.
+bool holdsRGBA8(const GpuBuffer& staging, VkExtent2D extent) {
+    return staging.isValid() && staging.sizeBytes() >= static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
 }
 
 } // namespace
@@ -54,23 +51,22 @@ void VulkanRenderer::waitForSubmitted(uint64_t n) {
 
 VulkanRenderer::Preview VulkanRenderer::readbackPreview() {
     if (!m_readbackReady || m_previewWidth == 0) return {};
-    const FrameResources& f = m_frameResources.getFrame(m_readbackSlot);
-    if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
+    const void* mapped = m_staging[m_readbackSlot].getMappedData();
+    if (!mapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
     const std::size_t bytes = static_cast<std::size_t>(m_previewWidth) * m_previewHeight * 4;
-    return {{static_cast<const uint8_t*>(f.stagingBufferMapped), bytes}, m_previewWidth, m_previewHeight};
+    return {{static_cast<const uint8_t*>(mapped), bytes}, m_previewWidth, m_previewHeight};
 }
 
-bool VulkanRenderer::recordPreview(VkCommandBuffer cmd, const PreviewRequest& request) {
-    if (!m_previewPass || !m_deferredRenderer || !m_deferredRenderer->finalOutputIsRGBA8()) return false;
-    FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
+bool VulkanRenderer::recordPreview(const render::Frame& frame, const PreviewRequest& request) {
+    gpu::Image* const final = m_deferredRenderer ? m_deferredRenderer->finalOutput() : nullptr;
+    if (!m_previewPass || !final) return false;
+    GpuBuffer& staging = m_staging[m_currentFrame];
     const auto& rect = request.rect;
-    if (frame.stagingBuffer == VK_NULL_HANDLE || rect[2] == 0 || rect[3] == 0 || rect[0] + rect[2] > m_width ||
+    if (!staging.isValid() || rect[2] == 0 || rect[3] == 0 || rect[0] + rect[2] > m_width ||
         rect[1] + rect[3] > m_height)
         return false;
     const auto [w, h] = render::previewExtent(rect[2], rect[3], request.maxSide);
-    m_passTimer.begin(cmd, "capture.preview");
-    m_previewPass->record(cmd, m_currentFrame, m_deferredRenderer->getFinalOutput(), rect, w, h, frame.stagingBuffer);
-    m_passTimer.end(cmd);
+    m_previewPass->record(frame, *final, rect, w, h, staging);
     m_previewWidth = w;
     m_previewHeight = h;
     return true;
@@ -78,15 +74,15 @@ bool VulkanRenderer::recordPreview(VkCommandBuffer cmd, const PreviewRequest& re
 
 std::span<const uint8_t> VulkanRenderer::readback() {
     if (!m_readbackReady || m_previewWidth != 0) return {};
-    const FrameResources& f = m_frameResources.getFrame(m_readbackSlot);
-    if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
+    const void* mapped = m_staging[m_readbackSlot].getMappedData();
+    if (!mapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
     const std::size_t bytes = static_cast<std::size_t>(m_width) * m_height * 4;
     // A path-traced frame under a CPU-side denoiser: its images are final now that its
     // fence signalled, and nothing has been recorded since (the span would be empty).
     if (isRTRenderMode(m_renderMode) && m_denoiseMode == DenoiseMode::OIDN &&
         denoiseRequestedFrame() && m_denoisedPixelBuffer.size() == bytes)
         return {m_denoisedPixelBuffer.data(), bytes};
-    return {static_cast<const uint8_t*>(f.stagingBufferMapped), bytes};
+    return {static_cast<const uint8_t*>(mapped), bytes};
 }
 
 void VulkanRenderer::renderDeferred() {
@@ -127,6 +123,8 @@ void VulkanRenderer::renderDeferred() {
     // every slot's fence.
     const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();
+    if (m_textureManager) m_textureManager->onFrameRetired();
+    m_allocator.collect();
     m_frameResources.resetFrame(m_currentFrame);
 
     // Update camera data
@@ -154,11 +152,11 @@ void VulkanRenderer::renderDeferred() {
     // levels and irradiance.
     if (envMapLoaded()) {
         const bool ibl = m_envPrefilter && m_envPrefilter->ready();
-        m_deferredRenderer->setEnvMap(m_envMapImageView, ibl ? m_envPrefilter->prefilteredView() : VK_NULL_HANDLE,
-                                      ibl ? m_envPrefilter->irradianceView() : VK_NULL_HANDLE,
+        m_deferredRenderer->setEnvMap(&m_envMap, ibl ? &m_envPrefilter->prefiltered() : nullptr,
+                                      ibl ? &m_envPrefilter->irradiance() : nullptr,
                                       ibl ? m_envPrefilter->sampler() : VK_NULL_HANDLE, m_envIntensityScale);
     } else {
-        m_deferredRenderer->setEnvMap(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, m_envIntensityScale);
+        m_deferredRenderer->setEnvMap(nullptr, nullptr, nullptr, VK_NULL_HANDLE, m_envIntensityScale);
     }
 
     // This frame's raster lights: the scene's light table. The deferred renderer writes them
@@ -174,33 +172,35 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
-    // Skinned poses first: the TLAS build in recordUpdates reads the refit BLASes.
-    m_renderScene->recordSkinning(cmd, m_currentFrame, &m_passTimer);
-    m_passTimer.begin(cmd, "scene.upload");
-    // A spot light's mesh shines toward this frame's camera as the light does (its cone).
+    const render::Frame recording{cmd, &m_passTimer, m_currentFrame};
+    // A spot light's mesh shines toward this frame's camera as the light does (its cone). Before anything is
+    // recorded: a light's first emitter mesh is a load, which the queue runs before this frame.
     if (m_camera) m_renderScene->setViewerPosition(m_camera->getPosition());
-    m_renderScene->recordUpdates(cmd, m_currentFrame);
-    m_passTimer.end(cmd);
+    // Skinned poses first: the TLAS build in recordUpdates reads the refit BLASes.
+    m_renderScene->recordSkinning(recording);
+    {
+        render::Timed timed(recording, "scene.upload");
+        m_renderScene->recordUpdates(recording);
+    }
 
     // Execute deferred rendering pipeline (it times its own passes)
     m_deferredRenderer->render(cmd, m_currentFrame);
 
     // A preview request: only the preview reaches the staging buffer (capture.preview).
-    const bool previewed = wantReadback && preview && recordPreview(cmd, *preview);
+    const bool previewed = wantReadback && preview && recordPreview(recording, *preview);
     const bool copyFull = wantReadback && !previewed;
 
     // A window frame presents (and copies too when asked); a headless frame copies only
     // when asked, and otherwise ends with its final image.
     bool copied = previewed;
     if (m_swapchain) {
-        m_passTimer.begin(cmd, "present");
-        copied = blitDeferredOutputToSwapchain(cmd, imageIndex, copyFull ? frame.stagingBuffer : VK_NULL_HANDLE) ||
+        render::Timed timed(recording, "present");
+        copied = blitOutputToSwapchain(recording, imageIndex, m_deferredRenderer->finalOutput(),
+                                       copyFull ? &m_staging[m_currentFrame] : nullptr) ||
                  previewed;
-        m_passTimer.end(cmd);
     } else if (copyFull) {
-        m_passTimer.begin(cmd, "readback");
-        copied = copyDeferredOutputToStaging(cmd);
-        m_passTimer.end(cmd);
+        render::Timed timed(recording, "readback");
+        copied = copyOutputToStaging(recording, m_deferredRenderer->finalOutput());
     }
     if (wantReadback) finishReadbackRequest(copied);
 
@@ -210,7 +210,7 @@ void VulkanRenderer::renderDeferred() {
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
-    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    const VkPipelineStageFlags waitStage = kAcquireWaitStage;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     if (m_swapchain) {
         renderFinished = m_swapchain->renderFinished(imageIndex);
@@ -233,72 +233,53 @@ void VulkanRenderer::renderDeferred() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-bool VulkanRenderer::blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkBuffer staging) {
-    const VkImage src = m_deferredRenderer->getFinalOutputImage();
-    bool copied = false;
-    const VkImage dst = m_swapchain->image(imageIndex);
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+bool VulkanRenderer::blitOutputToSwapchain(const render::Frame& frame, uint32_t imageIndex, gpu::Image* src,
+                                           GpuBuffer* staging) {
+    if (src && !*src) src = nullptr;
+    gpu::Image& dst = m_swapchainImages[imageIndex];
+    // Acquired for this frame: whatever it held is not wanted (so its first use is from UNDEFINED, as after a
+    // rebuild), and it is this frame's from the stage the submit waits for the acquire at.
+    dst.assume(VK_IMAGE_LAYOUT_UNDEFINED, kAcquireWaitStage, 0);
 
-    VkImageMemoryBarrier b[2]{};
-    for (auto& x : b) {
-        x.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        x.srcQueueFamilyIndex = x.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        x.subresourceRange = range;
-    }
-    b[0].image = src;    // same layout assumption copyDeferredOutputToStaging makes
-    b[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    b[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    b[1].image = dst;
-    b[1].srcAccessMask = 0;
-    b[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    b[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    const uint32_t count = src != VK_NULL_HANDLE ? 2u : 1u;
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
-        count, src != VK_NULL_HANDLE ? b : &b[1]);
-
-    if (src != VK_NULL_HANDLE) {
-        const VkExtent2D ext = m_swapchain->extent();
-        VkImageBlit blit{};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1]  = {static_cast<int32_t>(m_width), static_cast<int32_t>(m_height), 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1]  = {static_cast<int32_t>(ext.width), static_cast<int32_t>(ext.height), 1};
-        vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-        // A requested readback: the same image, already a transfer source, into the
-        // frame's staging buffer. Never on a frame nobody asked for.
-        if (staging != VK_NULL_HANDLE && m_deferredRenderer->finalOutputIsRGBA8()) {
-            VkBufferImageCopy region{};
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.imageExtent = {m_width, m_height, 1};
-            vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
-            stagingToHost(cmd, staging);
-            copied = true;
+    // A requested readback: the same image, already a transfer source, into the frame's staging
+    // buffer. Never on a frame nobody asked for.
+    const bool copy = src && staging && holdsRGBA8(*staging, src->extent());
+    {
+        render::Pass pass(frame, nullptr, render::Pass::Transfer);
+        if (src) pass.copySrc(*src);
+        pass.copyDst(dst);
+        if (copy) pass.write(*staging, render::BufferUse::CopyDst);
+        pass.begin();
+        if (src) {
+            const VkExtent2D from = src->extent();
+            const VkExtent2D to = m_swapchain->extent();
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.srcOffsets[1]  = {static_cast<int32_t>(from.width), static_cast<int32_t>(from.height), 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.dstOffsets[1]  = {static_cast<int32_t>(to.width), static_cast<int32_t>(to.height), 1};
+            vkCmdBlitImage(frame.cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            if (copy) {
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {from.width, from.height, 1};
+                vkCmdCopyImageToBuffer(frame.cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging->buffer, 1,
+                                       &region);
+            }
+        } else {
+            // No output this frame: present black rather than garbage.
+            const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
+            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(frame.cmd, dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
         }
-    } else {
-        // No deferred output this frame: present black rather than garbage.
-        const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
-        vkCmdClearColorImage(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
     }
 
-    b[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    b[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    b[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b[1].dstAccessMask = 0;
-    b[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-        0, 0, nullptr, 0, nullptr, count, src != VK_NULL_HANDLE ? b : &b[1]);
-    return copied;
+    render::Pass out(frame, nullptr, render::Pass::Transfer);
+    if (copy) out.read(*staging, render::BufferUse::HostRead);   // visible to the host once the frame's fence signals
+    out.present(dst);
+    out.begin();
+    return copy;
 }
 
 void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
@@ -334,6 +315,8 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
 
     const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();   // retire-queue tick, after the slot's fence wait
+    if (m_textureManager) m_textureManager->onFrameRetired();
+    m_allocator.collect();
     m_frameResources.resetFrame(m_currentFrame);
 
     glm::mat4 view = m_camera->getViewMatrix();
@@ -349,12 +332,15 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
-    m_renderScene->recordSkinning(cmd, m_currentFrame, &m_passTimer);
-    m_passTimer.begin(cmd, "scene.upload");
-    // A spot light's mesh shines toward this frame's camera as the light does (its cone).
+    const render::Frame recording{cmd, &m_passTimer, m_currentFrame};
+    // A spot light's mesh shines toward this frame's camera as the light does (its cone). Before anything is
+    // recorded: a light's first emitter mesh is a load, which the queue runs before this frame.
     if (m_camera) m_renderScene->setViewerPosition(m_camera->getPosition());
-    m_renderScene->recordUpdates(cmd, m_currentFrame);
-    m_passTimer.end(cmd);
+    m_renderScene->recordSkinning(recording);
+    {
+        render::Timed timed(recording, "scene.upload");
+        m_renderScene->recordUpdates(recording);
+    }
     // The traced scene changed (TLAS built or refit, instance data or lights
     // uploaded): treat it like a view change. Accumulating profiles restart; the
     // realtime profile flags the frame and keeps its denoiser history. A still
@@ -374,29 +360,23 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Lit by the scene's lights: the RenderScene light table (setSceneBuffers above).
-    // The tracer times its own stages (pt.cache.update ... pt.denoise); the last is ended here.
-    rtRenderer->setPassTimer(&m_passTimer);
+    // The tracer times its own stages (emissive.lights, pt.cache.update ... pt.denoise).
     if (const auto* pp = m_deferredRenderer ? m_deferredRenderer->getPostProcessing() : nullptr)
         rtRenderer->setDisplay(render::displayExposure(pp->ev100()), pp->displayCurve());
-    rtRenderer->render(cmd, m_currentFrame, ptView, ptProj);
-    m_passTimer.end(cmd);
+    rtRenderer->render(recording, ptView, ptProj);
 
-    // The path tracer's output (RGBA8, tonemapped, left in TRANSFER_SRC_OPTIMAL by render()):
-    // a window blits it into the swapchain image, with the requested readback copy inside
-    // the same pass; a headless frame copies it only when asked.
-    const VkImage ptOutput = rtRenderer->getOutputImage();
-    const VkBuffer staging =
-        wantReadback && ptOutput != VK_NULL_HANDLE ? frame.stagingBuffer : VkBuffer{VK_NULL_HANDLE};
+    // The path tracer's output (RGBA8, through the display transform): a window blits it into the
+    // swapchain image, with the requested readback copy inside the same pass; a headless frame
+    // copies it only when asked.
+    gpu::Image& ptOutput = rtRenderer->image(PathTracer::Target::Output);
+    GpuBuffer* const staging = wantReadback ? &m_staging[m_currentFrame] : nullptr;
     if (m_swapchain) {
-        m_passTimer.begin(cmd, "pt.present");
-        const bool copied = blitRTOutputToSwapchain(cmd, imageIndex, ptOutput, staging);
-        m_passTimer.end(cmd);
+        render::Timed timed(recording, "pt.present");
+        const bool copied = blitOutputToSwapchain(recording, imageIndex, &ptOutput, staging);
         if (wantReadback) finishReadbackRequest(copied);
-    } else if (staging != VK_NULL_HANDLE) {
-        m_passTimer.begin(cmd, "pt.readback");
-        copyRTOutputToStaging(cmd, ptOutput, staging);
-        m_passTimer.end(cmd);
-        finishReadbackRequest(true);
+    } else if (staging) {
+        render::Timed timed(recording, "pt.readback");
+        if (copyOutputToStaging(recording, &ptOutput)) finishReadbackRequest(true);
     }
 
     vkEndCommandBuffer(cmd);
@@ -405,7 +385,7 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
-    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    const VkPipelineStageFlags waitStage = kAcquireWaitStage;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     if (m_swapchain) {   // the same per-slot semaphores as the deferred path
         renderFinished = m_swapchain->renderFinished(imageIndex);
@@ -428,123 +408,25 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void VulkanRenderer::copyRTOutputToStaging(VkCommandBuffer cmd, VkImage src, VkBuffer staging) {
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {m_width, m_height, 1};
-    vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
-    stagingToHost(cmd, staging);
-}
+bool VulkanRenderer::copyOutputToStaging(const render::Frame& frame, gpu::Image* src) {
+    if (src && !*src) src = nullptr;
+    GpuBuffer& staging = m_staging[m_currentFrame];
+    if (!src || !holdsRGBA8(staging, src->extent())) return false;
 
-bool VulkanRenderer::blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging) {
-    const VkImage dst = m_swapchain->image(imageIndex);
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.subresourceRange = range;
-    b.image = dst;
-    b.srcAccessMask = 0;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    // The source already waited for the tracer's writes (its own barrier to TRANSFER_SRC).
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
-                         1, &b);
-    bool copied = false;
-    if (src != VK_NULL_HANDLE) {
-        const VkExtent2D ext = m_swapchain->extent();
-        VkImageBlit blit{};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = {static_cast<int32_t>(m_width), static_cast<int32_t>(m_height), 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {static_cast<int32_t>(ext.width), static_cast<int32_t>(ext.height), 1};
-        vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                       &blit, VK_FILTER_LINEAR);
-        // A requested readback: the same source, already a transfer source.
-        if (staging != VK_NULL_HANDLE) {
-            copyRTOutputToStaging(cmd, src, staging);
-            copied = true;
-        }
-    } else {
-        const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
-        vkCmdClearColorImage(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    {
+        render::Pass pass(frame, nullptr, render::Pass::Transfer);
+        pass.copySrc(*src).write(staging, render::BufferUse::CopyDst);
+        pass.begin();
+        const VkExtent2D from = src->extent();
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {from.width, from.height, 1};
+        vkCmdCopyImageToBuffer(frame.cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.buffer, 1, &region);
     }
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = 0;
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &b);
-    return copied;
-}
-
-bool VulkanRenderer::copyDeferredOutputToStaging(VkCommandBuffer cmd) {
-    if (!m_deferredRenderer) return false;
-
-    VkImage finalImage = m_deferredRenderer->getFinalOutputImage();
-    if (finalImage == VK_NULL_HANDLE) return false;
-    // The staging buffer holds width*height*4 bytes. An RGBA16F final image (post stack
-    // off) is twice that: a straight copy would write past the buffer. Refuse instead.
-    if (!m_deferredRenderer->finalOutputIsRGBA8()) {
-        static bool warned = false;
-        if (!warned) {
-            OHAO_LOG(Warn, gpu, "deferred readback skipped: tonemapping is off, the final image is HDR");
-            warned = true;
-        }
-        return false;
-    }
-
-    FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
-    if (frame.stagingBuffer == VK_NULL_HANDLE) return false;
-
-    // Transition final output: SHADER_READ_ONLY_OPTIMAL -> TRANSFER_SRC_OPTIMAL
-    VkImageMemoryBarrier toTransferSrc{};
-    toTransferSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toTransferSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    toTransferSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    toTransferSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toTransferSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toTransferSrc.image = finalImage;
-    toTransferSrc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    toTransferSrc.subresourceRange.baseMipLevel = 0;
-    toTransferSrc.subresourceRange.levelCount = 1;
-    toTransferSrc.subresourceRange.baseArrayLayer = 0;
-    toTransferSrc.subresourceRange.layerCount = 1;
-
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toTransferSrc);
-
-    // Copy image to staging buffer
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.mipLevel = 0;
-    region.imageSubresource.baseArrayLayer = 0;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = {0, 0, 0};
-    region.imageExtent = {m_width, m_height, 1};
-
-    vkCmdCopyImageToBuffer(cmd, finalImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           frame.stagingBuffer, 1, &region);
-    stagingToHost(cmd, frame.stagingBuffer);
-
-    // Back to where the frame left it, as the window's blit does: a frame ends in the same
-    // state whether or not it was read.
-    VkImageMemoryBarrier back = toTransferSrc;
-    back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    back.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    back.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &back);
+    // Visible to the host once the frame's fence signals.
+    render::Pass toHost(frame, nullptr, render::Pass::Transfer);
+    toHost.read(staging, render::BufferUse::HostRead);
+    toHost.begin();
     return true;
 }
 
@@ -563,7 +445,9 @@ void VulkanRenderer::resize(uint32_t width, uint32_t height) {
 
         // Resize multi-frame staging buffers (critical for correct pixel readback!)
         if (m_frameResources.isInitialized()) {
-            m_frameResources.resizeStagingBuffers(static_cast<size_t>(width) * height * 4);
+            destroyStagingBuffers();
+            if (!createStagingBuffers())
+                OHAO_LOG(Error, gpu, "the readback staging buffers could not be resized to {}x{}", width, height);
             // Reset frame index to avoid reading from old-size staging buffers
             m_currentFrame = 0;
         }
@@ -584,15 +468,14 @@ bool VulkanRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& o
 
 bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
                                         std::vector<float>& normal, uint32_t& w, uint32_t& h) {
-    const auto* rtRenderer = getRTRenderer(m_renderMode);
+    auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer) return false;
     w = m_width; h = m_height;
 
     vkDeviceWaitIdle(m_device);
-    constexpr VkPipelineStageFlags kRT = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-    bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);
-    ok &= readImageRGBA(rtRenderer->getAlbedoAOV(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, albedo);
-    ok &= readImageRGBA(rtRenderer->getNormalAOV(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, normal);
+    bool ok = readImageRGBA(rtRenderer->accum(), beauty);
+    ok &= readImageRGBA(rtRenderer->image(PathTracer::Target::Albedo), albedo);
+    ok &= readImageRGBA(rtRenderer->image(PathTracer::Target::Normal), normal);
     return ok;
 }
 
@@ -600,42 +483,24 @@ std::vector<float> VulkanRenderer::readbackLinear() {
     std::vector<float> out;
     vkDeviceWaitIdle(m_device);
     if (isRTRenderMode(m_renderMode)) {
-        const auto* rt = getRTRenderer(m_renderMode);
-        if (!rt || !readImageRGBA(rt->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL,
-                                  VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, out))
-            out.clear();
-    } else if (m_deferredRenderer) {
-        // The lit image is left for its readers (SSR, post) in SHADER_READ_ONLY_OPTIMAL.
-        if (!readImageRGBA(m_deferredRenderer->getLitImage(), true, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, out))
-            out.clear();
+        auto* rt = getRTRenderer(m_renderMode);
+        if (!rt || !readImageRGBA(rt->accum(), out)) out.clear();
+    } else if (m_deferredRenderer && m_deferredRenderer->renderScale() == 1.0f) {   // the lit image is the frame's size
+        gpu::Image* const lit = m_deferredRenderer->litImage();
+        if (!lit || !readImageRGBA(*lit, out)) out.clear();
     }
     return out;
 }
 
-bool VulkanRenderer::readImageRGBA(VkImage image, bool half, VkImageLayout layout, VkPipelineStageFlags stage,
-                                   std::vector<float>& out) {
-    if (image == VK_NULL_HANDLE || m_width == 0 || m_height == 0) return false;
-    const std::size_t texels = static_cast<std::size_t>(m_width) * m_height;
-    const VkDeviceSize size = texels * 4 * (half ? sizeof(uint16_t) : sizeof(float));
-
-    VkBuffer staging = VK_NULL_HANDLE;
-    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size = size;
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateBuffer(m_device, &bci, nullptr, &staging) != VK_SUCCESS) return false;
-    VkMemoryRequirements mr;
-    vkGetBufferMemoryRequirements(m_device, staging, &mr);
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    ai.allocationSize = mr.size;
-    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
-        vkDestroyBuffer(m_device, staging, nullptr);
+bool VulkanRenderer::readImage(gpu::Image& image, uint32_t texelBytes, void* out) {
+    const VkExtent2D extent = image.extent();
+    if (!image || m_width == 0 || m_height == 0 || extent.width != m_width || extent.height != m_height) return false;
+    const VkDeviceSize size = static_cast<VkDeviceSize>(m_width) * m_height * texelBytes;
+    GpuBuffer staging = m_allocator.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, AllocationUsage::GpuToCpu, true);
+    if (!staging.isValid() || !staging.getMappedData()) {
+        m_allocator.destroyBuffer(staging);
         return false;
     }
-    vkBindBufferMemory(m_device, staging, stagingMem, 0);
 
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkCommandBufferAllocateInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -646,26 +511,16 @@ bool VulkanRenderer::readImageRGBA(VkImage image, bool half, VkImageLayout layou
     VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
-
-    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    barrier.oldLayout = layout;
-    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, stage | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                         0, nullptr, 0, nullptr, 1, &barrier);
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {m_width, m_height, 1};
-    vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier.newLayout = layout;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    {
+        // The image stays a transfer source: its next pass moves it from there.
+        render::Pass pass(render::Frame{cmd, nullptr, 0}, nullptr, render::Pass::Transfer);
+        pass.copySrc(image).write(staging, render::BufferUse::CopyDst);
+        pass.begin();
+        VkBufferImageCopy region{};
+        region.imageSubresource = {image.aspect(), 0, 0, 1};
+        region.imageExtent = {m_width, m_height, 1};
+        vkCmdCopyImageToBuffer(cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.buffer, 1, &region);
+    }
     vkEndCommandBuffer(cmd);
 
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -673,21 +528,21 @@ bool VulkanRenderer::readImageRGBA(VkImage image, bool half, VkImageLayout layou
     si.pCommandBuffers = &cmd;
     gpu::submitAndWait(m_device, m_graphicsQueue, si, "image readback");
 
-    void* mapped = nullptr;
-    vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);
-    out.resize(texels * 4);
-    if (half) {
-        const auto* h = static_cast<const uint16_t*>(mapped);
-        for (std::size_t i = 0; i < texels * 4; ++i) out[i] = glm::unpackHalf1x16(h[i]);
-    } else {
-        std::memcpy(out.data(), mapped, size);
-    }
-    vkUnmapMemory(m_device, stagingMem);
-    vkDestroyBuffer(m_device, staging, nullptr);
-    vkFreeMemory(m_device, stagingMem, nullptr);
+    m_allocator.invalidateBuffer(staging);
+    std::memcpy(out, staging.getMappedData(), static_cast<std::size_t>(size));
+    m_allocator.destroyBuffer(staging);
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
     return true;
 }
 
+bool VulkanRenderer::readImageRGBA(gpu::Image& image, std::vector<float>& out) {
+    const std::size_t values = static_cast<std::size_t>(m_width) * m_height * 4;
+    out.resize(values);
+    if (image.desc.format != VK_FORMAT_R16G16B16A16_SFLOAT) return readImage(image, 4 * sizeof(float), out.data());
+    std::vector<uint16_t> halves(values);
+    if (!readImage(image, 4 * sizeof(uint16_t), halves.data())) return false;
+    for (std::size_t i = 0; i < values; ++i) out[i] = glm::unpackHalf1x16(halves[i]);
+    return true;
+}
 
 } // namespace ohao

@@ -68,12 +68,13 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
         return false;
     }
     m_renderer->setRenderMode(RenderMode::Deferred);
-    m_maxFps = cfg.maxFps < 0 ? (m_window.refreshRate() > 0 ? m_window.refreshRate() : 60) : cfg.maxFps;
-    if (m_renderer->presentMode() == PresentMode::Fifo) m_maxFps = 0;
+    const int refresh = m_window.refreshRate() > 0 ? m_window.refreshRate() : 60;
+    m_maxFps = cfg.maxFps < 0 ? refresh : cfg.maxFps;
     m_framePeriod = m_maxFps > 0 ? std::chrono::nanoseconds(1'000'000'000LL / m_maxFps) : std::chrono::nanoseconds(0);
-    OHAO_LOG(Info, runtime, "live host: frame rate {}", m_maxFps > 0 ? std::format("capped at {} fps", m_maxFps)
-                                                      : std::string(m_renderer->presentMode() == PresentMode::Fifo
-                                                                        ? "paced by the display (fifo)" : "uncapped"));
+    m_refreshLocked = m_maxFps == refresh && m_renderer->presentWaitEnabled();
+    OHAO_LOG(Info, runtime, "live host: frame rate {}",
+             m_maxFps == 0 ? std::string("uncapped")
+                           : std::format("capped at {} fps{}", m_maxFps, m_refreshLocked ? ", on the display's refreshes" : ""));
     if (auto* deferred = m_renderer->getDeferredRenderer())
         if (auto* pp = deferred->getPostProcessing()) {
             m_defaultEv100 = pp->ev100();
@@ -144,14 +145,13 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
         // The frame-rate cap: sleep before the poll, so the poll is as fresh as uncapped; the frame starts later.
+        // At the display's rate the frames start on its refreshes (onRefreshGrid).
         if (m_framePeriod.count() > 0 && m_time.running() && m_lastFrameStart != FrameTime{})
-            sleepUntil(m_lastFrameStart + m_framePeriod);
+            sleepUntil(onRefreshGrid(m_lastFrameStart + m_framePeriod));
         const FrameTime frameStart = Clock::now();
-        // Late input sampling (spec "Present mode and late input sampling"): the input is polled
-        // only once the frames queued ahead are few enough, so it goes into the very next frame.
-        if (m_time.running())
-            if (const uint64_t wait = presentToAwait(m_renderer->framesSubmitted(), framesAhead()))
-                m_renderer->waitForPresentOf(wait, kFramesAheadTimeout);
+        // Late input sampling: a play window polls only once the GPU has finished the frame before, so the
+        // input goes into a frame the GPU starts at once, never one queued behind another.
+        if (m_time.running() && pollsLate()) m_renderer->waitForSubmitted(m_renderer->framesSubmitted());
         FrameTime polledAt{};
         {
             std::vector<InputEvent> polled;
@@ -164,7 +164,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             const bool look = std::any_of(polled.begin(), polled.end(), [](const InputEvent& e) {
                 return e.type == InputEvent::Type::MouseDelta && (e.x != 0.0f || e.y != 0.0f);
             });
-            if (look) trackLook(polledAt, false);
+            const auto* physics = ecs::physicsScene(*m_world);
+            if (look && !(physics && physics->ignoresLook())) trackLook(polledAt, false);
             m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them
         }
         if (m_window.consumeResized()) {
@@ -212,7 +213,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             std::vector<FrameTime> due;
             m_session->injectedLookDue(pending, due);
             for (const FrameTime q : due)
-                if (std::none_of(m_looks.begin(), m_looks.end(), [&](const LookInFlight& l) { return l.injected && l.poll == q; }))
+                if (const auto* physics = ecs::physicsScene(*m_world); physics && physics->ignoresLook()) continue;
+                else if (std::none_of(m_looks.begin(), m_looks.end(), [&](const LookInFlight& l) { return l.injected && l.poll == q; }))
                     trackLook(q, true);
         }
         m_world->setPendingLook(pending);
@@ -294,10 +296,9 @@ uint64_t LiveHost::unrequestedReadbacks() const noexcept {
     return copies > m_readbackRequests ? copies - m_readbackRequests : 0;
 }
 
-int LiveHost::framesAhead() const {
-    if (m_cfg.framesAhead >= 0) return m_cfg.framesAhead;
+bool LiveHost::pollsLate() const {
     const auto* physics = ecs::physicsScene(*m_world);
-    return physics && physics->leadsLook() ? 1 : -1;   // a play window keeps one frame ahead
+    return physics && physics->leadsLook();
 }
 
 void LiveHost::trackLook(FrameTime poll, bool injected) {
@@ -313,7 +314,25 @@ void LiveHost::lookConsumed(LookInFlight& l, FrameTime at) {
 }
 
 void LiveHost::collectPresents() {
-    for (const PresentStamp& s : m_renderer->takePresentStamps()) (void)m_frameLog.present(s.frame, s.at, s.waited);
+    for (const PresentStamp& s : m_renderer->takePresentStamps()) {
+        (void)m_frameLog.present(s.frame, s.at, s.waited);
+        if (!s.waited || !m_refreshLocked) continue;
+        if (m_refreshAt == FrameTime{}) {
+            m_refreshAt = s.at;
+            continue;
+        }
+        // The grid moves to this refresh, and takes a tenth of what the stamp says it is off by.
+        const double periods = std::chrono::duration<double>(s.at - m_refreshAt) / std::chrono::duration<double>(m_framePeriod);
+        const double whole = std::round(periods);
+        m_refreshAt += std::chrono::duration_cast<Nanos>((whole + 0.1 * (periods - whole)) * m_framePeriod);
+    }
+}
+
+FrameTime LiveHost::onRefreshGrid(FrameTime t) const {
+    if (m_refreshAt == FrameTime{}) return t;
+    const FrameTime grid = m_refreshAt - kRefreshLead;
+    const double periods = std::chrono::duration<double>(t - grid) / std::chrono::duration<double>(m_framePeriod);
+    return grid + std::chrono::duration_cast<Nanos>(std::round(periods) * m_framePeriod);
 }
 
 void LiveHost::drawLatencyReadout(render::HudList& hud) const {

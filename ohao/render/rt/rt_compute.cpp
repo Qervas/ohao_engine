@@ -28,75 +28,6 @@ std::vector<char> readFile(const std::string& path) {
 
 } // namespace
 
-uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((typeFilter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties)
-            return i;
-    }
-    return UINT32_MAX;
-}
-
-bool createImage(VkDevice device, VkPhysicalDevice physicalDevice, Image& img, VkFormat format,
-                 VkImageUsageFlags usage, uint32_t width, uint32_t height) {
-    img.width = std::max(width, 1u);
-    img.height = std::max(height, 1u);
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = format;
-    imageInfo.extent = {img.width, img.height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = usage;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vkCreateImage(device, &imageInfo, nullptr, &img.image) != VK_SUCCESS) return false;
-
-    VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(device, img.image, &memReqs);
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
-    if (vkAllocateMemory(device, &allocInfo, nullptr, &img.memory) != VK_SUCCESS) return false;
-    vkBindImageMemory(device, img.image, img.memory, 0);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = img.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    img.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    return vkCreateImageView(device, &viewInfo, nullptr, &img.view) == VK_SUCCESS;
-}
-
-void destroyImage(VkDevice device, Image& img) {
-    if (img.view) vkDestroyImageView(device, img.view, nullptr);
-    if (img.image) vkDestroyImage(device, img.image, nullptr);
-    if (img.memory) vkFreeMemory(device, img.memory, nullptr);
-    img = Image{};
-}
-
-void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelineStageFlags src,
-                VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess, bool discard) {
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.srcAccessMask = srcAccess;
-    b.dstAccessMask = dstAccess;
-    b.oldLayout = discard ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout;
-    b.newLayout = layout;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = img.image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, src, dst, 0, 0, nullptr, 0, nullptr, 1, &b);
-    img.layout = layout;
-}
-
 bool createComputePipeline(VkDevice device, const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
                            uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline) {
     return createComputePipeline(device, spirv, entry, std::span<const VkDescriptorSetLayout>(&setLayout, 1), pushBytes,
@@ -206,35 +137,14 @@ VkShaderModule loadShaderModule(VkDevice device, const char* spirv) {
     return module;
 }
 
-bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,
-                      HostBuffer& out) {
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = size;
-    bi.usage = usage;
-    if (vkCreateBuffer(device, &bi, nullptr, &out.buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(device, out.buffer, &req);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = req.size;
-    // Device-local memory the host can write (resizable BAR) when there is some, else
-    // system memory, which every read crosses the bus for.
-    constexpr VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    ai.memoryTypeIndex = findMemoryType(physicalDevice, req.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (ai.memoryTypeIndex == UINT32_MAX) ai.memoryTypeIndex = findMemoryType(physicalDevice, req.memoryTypeBits, host);
-    if (ai.memoryTypeIndex == UINT32_MAX) return false;
-    if (vkAllocateMemory(device, &ai, nullptr, &out.memory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(device, out.buffer, out.memory, 0);
-    if (vkMapMemory(device, out.memory, 0, VK_WHOLE_SIZE, 0, &out.mapped) != VK_SUCCESS) return false;
-    std::memset(out.mapped, 0, static_cast<std::size_t>(size));
-    return true;
-}
-
-void destroyHostBuffer(VkDevice device, HostBuffer& buf) {
-    if (buf.buffer) vkDestroyBuffer(device, buf.buffer, nullptr);
-    if (buf.memory) vkFreeMemory(device, buf.memory, nullptr);   // unmaps
-    buf = HostBuffer{};
+GpuBuffer createHostBuffer(GpuAllocator& allocator, VkDeviceSize size, VkBufferUsageFlags usage) {
+    GpuBuffer buffer = allocator.createBuffer(size, usage, AllocationUsage::CpuToGpu, true);
+    if (!buffer.isValid() || !buffer.getMappedData()) {
+        allocator.destroyBuffer(buffer);
+        return GpuBuffer{};
+    }
+    std::memset(buffer.getMappedData(), 0, static_cast<std::size_t>(size));
+    return buffer;
 }
 
 } // namespace ohao::rtc

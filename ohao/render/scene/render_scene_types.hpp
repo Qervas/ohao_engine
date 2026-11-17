@@ -2,7 +2,8 @@
 #include "core/render_handles.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
-#include "asset/model.hpp"   // Vertex
+#include "asset/meshlets.hpp"
+#include "asset/vertex.hpp"   // Vertex
 #include "gpu/layout_meta.hpp"
 #include "gpu/shared_layout.hpp"
 
@@ -49,6 +50,11 @@ struct MeshData {
     std::vector<SubmeshDesc> submeshes;          // empty: one submesh, slot 0
     std::vector<uint32_t> triangleMaterialSlot;  // empty: all 0
     std::string debugName;
+    // The submeshes' meshlets already built (a cooked mesh's): per submesh its first meshlet and count in
+    // `meshlets`, whose offsets are into the two lists. submeshMeshlets empty: the registry builds them.
+    std::vector<std::array<uint32_t, 2>> submeshMeshlets;
+    std::span<const Meshlet> meshlets;
+    std::span<const uint32_t> meshletVertices, meshletTriangles;
 };
 
 // glTF's alphaMode (gpu::shared::kAlphaOpaque / kAlphaMask / kAlphaBlend). Mask: alpha-tested
@@ -221,6 +227,9 @@ struct MeshInfo {
     bool skinned{false};
     uint32_t baseVertexOffset{0};   // the base mesh's first vertex (the bind pose the pass reads)
     uint32_t firstMeshlet{0}, meshletCount{0};   // its own meshlet copies, all submeshes
+    // What the mesh owns in the meshlet arenas, {first, count} each (a skinned copy owns its meshlets only): given
+    // back with its vertices and indices when the released mesh is reclaimed (MeshRegistry::reclaim).
+    std::array<uint32_t, 2> meshletRange{}, meshletVertexRange{}, meshletTriangleRange{};
 };
 
 // A skinned mesh's BLAS is refit while its pose changes and rebuilt after this many refits (the
@@ -252,6 +261,13 @@ namespace detail {
 // tables append their dirty bytes and record one copy per contiguous run into
 // their device-local buffers. Every GPU struct the tables upload is a multiple of
 // 16 bytes, so runs stay 16-byte aligned without padding.
+// A device table replaced by a bigger one: `bytes` of the old one go to the new before anything else touches it.
+struct TableGrowth {
+    GpuBuffer from;
+    GpuBuffer* to;
+    VkDeviceSize bytes;
+};
+
 struct StagingBatch {
     VkCommandBuffer cmd{VK_NULL_HANDLE};
     VkBuffer buffer{VK_NULL_HANDLE};

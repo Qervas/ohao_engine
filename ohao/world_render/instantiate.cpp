@@ -1,12 +1,12 @@
 #include "world_render/instantiate.hpp"
 
-#include "ecs/primitive_model.hpp"
+#include "ecs/primitive_mesh.hpp"
 
 #include "core/log.hpp"
 
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/model_upload.hpp"
 #include "render/scene/render_scene.hpp"
-#include "asset/model.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -36,7 +36,7 @@ static_assert(sizeof(SpherePrim) == 12 && sizeof(CubePrim) == 4 && sizeof(Platfo
               sizeof(BoxPrim) == 36);
 
 // One string per distinct MeshSource value: the alternative, then its bytes (or path).
-std::string meshKey(const MeshSource& ms) {
+std::string meshKey(const MeshSource& ms, const AssetResolver& assets) {
     std::string key(1, static_cast<char>(ms.source.index()));
     std::visit(Overloaded{
                    [&](const ModelAsset& m) {
@@ -45,6 +45,9 @@ std::string meshKey(const MeshSource& ms) {
                        key += m.asset.guid;
                        key.push_back('\n');   // one GPU mesh per (file, mesh): every user of a glTF mesh shares it
                        key += m.mesh;
+                       // A file forgotten since (asset.reload, a replaced scene) is another mesh.
+                       key.push_back('\n');
+                       key += std::to_string(assets.generation(m.asset));
                    },
                    [&](const auto& prim) { key.append(reinterpret_cast<const char*>(&prim), sizeof(prim)); },
                },
@@ -101,35 +104,11 @@ render::MaterialDesc describe(const Material& o) {
     return d;
 }
 
-class RenderSceneBackend final : public InstantiateBackend {
-public:
-    RenderSceneBackend(render::RenderScene& scene, BindlessTextureManager* textures)
-        : m_scene(scene), m_textures(textures) {}
-
-    render::MeshHandle uploadMesh(const Model& model, std::string_view name) override {
-        return render::uploadModelMesh(m_scene, model, name);
-    }
-    void releaseMesh(render::MeshHandle mesh) override { m_scene.releaseMesh(mesh); }
-    std::vector<render::MaterialHandle> modelMaterials(const Model& model) override {
-        std::vector<render::MaterialHandle> out;
-        for (const render::MaterialDesc& d : render::modelMaterials(m_textures, model, nullptr))
-            out.push_back(m_scene.registerMaterial(d));
-        return out;
-    }
-    render::MaterialHandle material(const render::MaterialDesc& desc) override {
-        return m_scene.registerMaterial(desc);
-    }
-
-private:
-    render::RenderScene& m_scene;
-    BindlessTextureManager* m_textures;
-};
-
 // State shared by the system and the registry signals (see render_extract.cpp).
 class InstantiateState {
 public:
-    InstantiateState(World& world, std::shared_ptr<InstantiateBackend> backend, AssetResolver& assets)
-        : m_world(world), m_reg(world.registry()), m_backend(std::move(backend)), m_assets(assets) {
+    InstantiateState(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets)
+        : m_world(world), m_reg(world.registry()), m_scene(scene), m_textures(textures), m_assets(assets) {
         m_reg.on_construct<MeshSource>().connect<&InstantiateState::markDirty>(this);
         m_reg.on_update<MeshSource>().connect<&InstantiateState::markDirty>(this);
         m_reg.on_destroy<MeshSource>().connect<&InstantiateState::onSourceDestroy>(this);
@@ -148,8 +127,9 @@ public:
         m_reg.on_construct<Material>().disconnect(this);
         m_reg.on_update<Material>().disconnect(this);
         m_reg.on_destroy<Material>().disconnect(this);
-        // The World is going away: release every mesh it still holds.
-        for (auto& [key, entry] : m_meshes) m_backend->releaseMesh(entry.mesh);
+        // The World is going away: give back every mesh, material and texture it still holds.
+        for (auto& [key, entry] : m_meshes) release(entry);
+        for (auto& [key, shared] : m_materials) m_scene.releaseMaterial(shared.handle);
     }
 
     void run() {
@@ -157,6 +137,7 @@ public:
         // what instantiate made from an entity that lives on.
         for (const entt::entity e : m_sourceGone) {
             dropUser(e);
+            dropMaterial(e);
             if (m_reg.valid(e) && !m_reg.all_of<MeshSource>(e)) clearDerived(e);
         }
         m_sourceGone.clear();
@@ -175,34 +156,49 @@ public:
         for (const auto& [seq, e] : m_dirty)
             if (const auto* ms = m_reg.try_get<MeshSource>(e)) instantiate(e, *ms);
         m_reg.clear<InstantiateDirty>();
+        // The textures the new materials name, in one batch.
+        if (m_textures) m_textures->flushUploads();
     }
 
 private:
     struct MeshEntry {
         render::MeshHandle mesh;
         std::vector<render::MaterialHandle> modelMaterials;   // non-empty: the model has materials
+        std::vector<uint32_t> textures;                       // one hold per texture those materials use
         uint32_t users{0};
     };
 
+    // What a mesh entry holds in the renderer, given back.
+    void release(const MeshEntry& entry) {
+        m_scene.releaseMesh(entry.mesh);
+        for (const render::MaterialHandle h : entry.modelMaterials) m_scene.releaseMaterial(h);
+        if (m_textures)
+            for (const uint32_t t : entry.textures) m_textures->releaseContent(BindlessTextureHandle{t});
+    }
+
     void instantiate(entt::entity e, const MeshSource& ms) {
-        std::string key = meshKey(ms);
+        std::string key = meshKey(ms, m_assets);
         auto it = m_meshes.find(key);
         if (it == m_meshes.end()) {
-            std::shared_ptr<const Model> model;
+            std::shared_ptr<const cooked::Mesh> mesh;
             if (const auto* asset = std::get_if<ModelAsset>(&ms.source)) {
-                auto loaded = m_assets.loadModel(asset->asset, asset->mesh);
+                auto loaded = m_assets.loadMesh(asset->asset, asset->mesh);
                 if (!loaded) return fail(e, loaded.error().code, loaded.error().message);
-                model = std::move(loaded.value());
+                mesh = std::move(loaded.value());
             } else {
-                model = primitiveModel(ms);
+                mesh = primitiveMesh(ms);
             }
-            if (model->vertices.empty() || model->indices.size() < 3)
+            if (mesh->vertices.empty() || mesh->indices.size() < 3)
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' has no triangles");
             MeshEntry entry;
-            entry.mesh = m_backend->uploadMesh(*model, debugName(ms));
+            entry.mesh = render::uploadMesh(m_scene, *mesh, debugName(ms));
             if (!entry.mesh.valid())
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' could not be uploaded to the render scene");
-            if (!model->materialColors.empty()) entry.modelMaterials = m_backend->modelMaterials(*model);
+            // The mesh's own materials, their textures by content from the cooked cache.
+            render::MeshMaterials own = render::meshMaterials(
+                m_textures, *mesh, [this](const ContentHash& name) { return m_assets.texture(name); });
+            for (const render::MaterialDesc& d : own.descs) entry.modelMaterials.push_back(m_scene.registerMaterial(d));
+            entry.textures = std::move(own.held);
             it = m_meshes.emplace(std::move(key), std::move(entry)).first;
         }
         MeshEntry& entry = it->second;
@@ -214,17 +210,26 @@ private:
             m_userOf[e] = it->first;
         }
 
-        const auto* overrideMat = m_reg.try_get<Material>(e);
-        const render::MaterialDesc desc = overrideMat ? describe(*overrideMat) : render::MaterialDesc{};
-        std::vector<render::MaterialHandle> materials =
-            entry.modelMaterials.empty() ? std::vector<render::MaterialHandle>{material(desc)} : entry.modelMaterials;
+        // A mesh without materials of its own takes the entity's (or the default's values): one table row per
+        // distinct value, held by the entities that use it.
+        std::vector<render::MaterialHandle> materials = entry.modelMaterials;
+        if (materials.empty()) {
+            const auto* overrideMat = m_reg.try_get<Material>(e);
+            const MaterialKey shared = keyOf(overrideMat ? describe(*overrideMat) : render::MaterialDesc{});
+            materials.push_back(hold(shared, overrideMat ? describe(*overrideMat) : render::MaterialDesc{}));
+            dropMaterial(e);   // after the hold: the same value keeps its row
+            m_materialOf.emplace(e, shared);
+        } else {
+            dropMaterial(e);
+        }
         const auto* previous = m_reg.try_get<MeshRenderer>(e);
         const bool visible = previous ? previous->visible : true;
         m_reg.emplace_or_replace<MeshRenderer>(e, MeshRenderer{entry.mesh, std::move(materials), visible});
         m_reg.remove<InstantiateError>(e);
     }
 
-    render::MaterialHandle material(const render::MaterialDesc& d) {
+    using MaterialKey = std::array<uint32_t, 53>;   // keyOf's values, one each
+    static MaterialKey keyOf(const render::MaterialDesc& d) {
         // Every value a scene material sets, bit for bit: two materials differing in any of them
         // are two table entries.
         const float values[] = {d.baseColor.r, d.baseColor.g, d.baseColor.b, d.roughness, d.metallic,
@@ -244,10 +249,24 @@ private:
         static_assert(std::size(values) == std::tuple_size_v<MaterialKey>, "a key holds every value");
         MaterialKey key{};
         for (std::size_t i = 0; i < key.size(); ++i) key[i] = std::bit_cast<uint32_t>(values[i]);
-        if (const auto it = m_materials.find(key); it != m_materials.end()) return it->second;
-        const render::MaterialHandle h = m_backend->material(d);
-        m_materials.emplace(key, h);
-        return h;
+        return key;
+    }
+
+    render::MaterialHandle hold(const MaterialKey& key, const render::MaterialDesc& d) {
+        auto it = m_materials.find(key);
+        if (it == m_materials.end()) it = m_materials.emplace(key, SharedMaterial{m_scene.registerMaterial(d), 0}).first;
+        ++it->second.users;
+        return it->second.handle;
+    }
+
+    void dropMaterial(entt::entity e) {
+        const auto of = m_materialOf.find(e);
+        if (of == m_materialOf.end()) return;
+        const auto it = m_materials.find(of->second);
+        m_materialOf.erase(of);
+        if (it == m_materials.end() || --it->second.users > 0) return;
+        m_scene.releaseMaterial(it->second.handle);
+        m_materials.erase(it);
     }
 
     void fail(entt::entity e, const std::string& code, const std::string& message) {
@@ -261,6 +280,7 @@ private:
 
     // What instantiate put on the entity.
     void clearDerived(entt::entity e) {
+        dropMaterial(e);
         m_reg.remove<MeshRenderer>(e);
         m_reg.remove<InstantiateError>(e);
     }
@@ -271,7 +291,7 @@ private:
         const auto it = m_meshes.find(user->second);
         m_userOf.erase(user);
         if (it == m_meshes.end() || --it->second.users > 0) return;
-        m_backend->releaseMesh(it->second.mesh);
+        release(it->second);
         m_meshes.erase(it);
     }
 
@@ -282,12 +302,17 @@ private:
 
     World& m_world;
     entt::registry& m_reg;
-    std::shared_ptr<InstantiateBackend> m_backend;
+    render::RenderScene& m_scene;
+    BindlessTextureManager* m_textures;
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
-    using MaterialKey = std::array<uint32_t, 53>;   // material()'s values, one each
-    std::map<MaterialKey, render::MaterialHandle> m_materials;
+    struct SharedMaterial {
+        render::MaterialHandle handle;
+        uint32_t users;
+    };
+    std::map<MaterialKey, SharedMaterial> m_materials;
+    ankerl::unordered_dense::map<entt::entity, MaterialKey> m_materialOf;
     std::vector<entt::entity> m_sourceGone, m_overrideGone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;
     std::unordered_set<std::string> m_logged;
@@ -295,21 +320,17 @@ private:
 
 } // namespace
 
-void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backend, AssetResolver& assets) {
+void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
+                        AssetResolver& assets) {
     auto& reg = world.registry();
     if (reg.ctx().contains<InstantiateInstalled>()) {
         OHAO_LOG(Warn, ecs, "installInstantiate called twice on one World; ignored");
         return;
     }
     reg.ctx().emplace<InstantiateInstalled>();
-    auto state = std::make_shared<InstantiateState>(world, std::move(backend), assets);
+    auto state = std::make_shared<InstantiateState>(world, scene, textures, assets);
     // A level's MeshSources, once it expanded them.
     world.addSync("instantiate", [state](World&) { state->run(); }, {.after = {"level"}});
-}
-
-void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
-                        AssetResolver& assets) {
-    installInstantiate(world, std::make_shared<RenderSceneBackend>(scene, textures), assets);
 }
 
 std::vector<entt::entity> instantiateErrors(const World& world) {

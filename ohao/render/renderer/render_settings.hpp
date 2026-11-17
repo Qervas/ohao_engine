@@ -51,6 +51,8 @@ struct RenderSettings {
     bool autoExposure{false};          // a window meters its frames; captures always use ev100
     float exposureCompensation{0.0f};  // EV added to what auto exposure meters
     VfxSettings vfx;
+    // The fraction of the output's width and height the deferred frame is rendered at; TAA upscales it. 1: none.
+    float renderScale{1.0f};
 };
 
 } // namespace ohao::render

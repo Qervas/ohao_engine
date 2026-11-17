@@ -48,6 +48,8 @@
 // Character
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/StateRecorderImpl.h>
+#include <Jolt/Core/StreamWrapper.h>
+#include <sstream>
 
 #include "core/log.hpp"
 #include <glm/gtx/norm.hpp>   // length2 (GLM_ENABLE_EXPERIMENTAL is the target's)
@@ -1753,6 +1755,13 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
             result = settings.Create();
             break;
         }
+        case ShapeInfo::Type::SHARED: {
+            const auto* made = static_cast<const JoltShared*>(info.shared.get());
+            if (!made || !made->shape) break;   // the fallback box below
+            // At scale 1 the shape itself, so a body made from a shared shape is the body made from its own.
+            if (info.sharedScale == glm::vec3(1.0f)) return made->shape;
+            return new JPH::ScaledShape(made->shape, toJolt(info.sharedScale));
+        }
         case ShapeInfo::Type::CONVEX_HULL: {
             if (info.meshVertices && info.meshVertexCount > 0) {
                 JPH::Array<JPH::Vec3> points;
@@ -1782,6 +1791,45 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
     }
 
     return result.Get();
+}
+
+// ============================================================================
+// Shared shapes
+// ============================================================================
+
+std::shared_ptr<const SharedShape> JoltPhysicsBackend::makeShared(const ShapeInfo& info) {
+    if (info.type != ShapeInfo::Type::MESH && info.type != ShapeInfo::Type::CONVEX_HULL) return nullptr;
+    auto made = std::make_shared<JoltShared>();
+    made->shape = createJoltShape(info);
+    return made->shape ? made : nullptr;
+}
+
+std::vector<uint8_t> JoltPhysicsBackend::saveShared(const SharedShape& shape) const {
+    std::stringstream data(std::ios::out | std::ios::binary);
+    JPH::StreamOutWrapper out(data);
+    static_cast<const JoltShared&>(shape).shape->SaveBinaryState(out);
+    const std::string bytes = std::move(data).str();
+    return {bytes.begin(), bytes.end()};
+}
+
+std::shared_ptr<const SharedShape> JoltPhysicsBackend::loadShared(std::span<const uint8_t> bytes) {
+    std::stringstream data(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+                           std::ios::in | std::ios::binary);
+    JPH::StreamInWrapper in(data);
+    const JPH::Shape::ShapeResult result = JPH::Shape::sRestoreFromBinaryState(in);
+    if (result.HasError() || in.IsFailed()) return nullptr;
+    auto made = std::make_shared<JoltShared>();
+    made->shape = result.Get();
+    return made;
+}
+
+// Jolt's version: its shapes' saved bytes are its own to change between versions.
+uint32_t JoltPhysicsBackend::sharedFormat() const {
+    return (uint32_t{JPH_VERSION_MAJOR} << 16) | (uint32_t{JPH_VERSION_MINOR} << 8) | uint32_t{JPH_VERSION_PATCH};
+}
+
+void JoltPhysicsBackend::optimizeBroadPhase() {
+    if (m_physicsSystem) m_physicsSystem->OptimizeBroadPhase();
 }
 
 // ============================================================================

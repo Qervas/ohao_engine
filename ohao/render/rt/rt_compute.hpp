@@ -1,42 +1,15 @@
 #pragma once
 
-// What the RT compute techniques (RT shadows, RT GI) share: device-local images that carry
-// their layout, barriers on them, compute pipelines from SPIR-V, the descriptor boilerplate,
-// and the small host-written buffers a frame slot owns.
+// What the compute passes share: compute pipelines from SPIR-V, their statistics, shader modules, and the
+// small buffers the host writes every frame.
+
+#include "gpu/vulkan/gpu_allocator.hpp"
 
 #include <vulkan/vulkan.h>
 #include <span>
 #include <cstdint>
 
 namespace ohao::rtc {
-
-struct Image {
-    VkImage image{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    VkImageView view{VK_NULL_HANDLE};
-    VkImageLayout layout{VK_IMAGE_LAYOUT_UNDEFINED};
-    uint32_t width{0};
-    uint32_t height{0};
-};
-
-// A buffer the host writes every frame and every pixel reads: device-local memory the host
-// can map (resizable BAR) when there is some, else host memory, mapped for its lifetime.
-struct HostBuffer {
-    VkBuffer buffer{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    void* mapped{nullptr};
-};
-
-uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-// A 2D device-local image of `format` (at least 1x1) and its view, in UNDEFINED layout.
-bool createImage(VkDevice device, VkPhysicalDevice physicalDevice, Image& img, VkFormat format,
-                 VkImageUsageFlags usage, uint32_t width, uint32_t height);
-void destroyImage(VkDevice device, Image& img);
-
-// A barrier on `img` to `layout`; an UNDEFINED old layout when `discard` (or the image is new).
-void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelineStageFlags src,
-                VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess, bool discard);
 
 // Pipeline statistics (OHAO_PIPELINE_STATS=1 on a device with VK_KHR_pipeline_executable_properties,
 // which the device then enables): every compute pipeline made below logs the driver's statistics
@@ -60,9 +33,8 @@ bool createComputePipeline(VkDevice device, const char* spirv, const char* entry
 // A shader module of bin/shaders/<spirv> (null, logged, when missing) for a graphics pipeline.
 VkShaderModule loadShaderModule(VkDevice device, const char* spirv);
 
-bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,
-                      HostBuffer& out);
-void destroyHostBuffer(VkDevice device, HostBuffer& buf);
-
+// A buffer the host writes every frame and every pixel reads: device-local memory the host can map (resizable
+// BAR) when there is some, else host memory; mapped for its lifetime and zeroed. Invalid when it fails.
+[[nodiscard]] GpuBuffer createHostBuffer(GpuAllocator& allocator, VkDeviceSize size, VkBufferUsageFlags usage);
 
 } // namespace ohao::rtc

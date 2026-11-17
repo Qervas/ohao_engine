@@ -238,7 +238,7 @@
        {"name": "weather", "type": "float4", "doc": "x wetness, y snow cover, z frost cover: the lighting pass's, so the target is the material it shades"},
        {"name": "trace", "type": "uint4", "doc": "x, y the resampling images' size (the frame's >> z), z the shift: 0 full resolution, 1 half (a pixel of each 2x2 block resamples and traces; di.shade shades every pixel from its 4 nearest)"}
      ]},
-    {"name": "MeshletGpu", "doc": "one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh",
+    {"name": "MeshletGpu", "doc": "one meshlet of the meshlet arena (asset/meshlets.hpp): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh",
      "fields": [
        {"name": "range", "type": "uint4", "doc": "x its first entry in the meshlet-vertex arena, y its first in the meshlet-triangle arena, z its vertex count, w its triangle count"},
        {"name": "sphere", "type": "float4", "doc": "xyz the bounding sphere's centre (mesh space), w its radius"},

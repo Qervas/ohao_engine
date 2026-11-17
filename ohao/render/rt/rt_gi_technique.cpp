@@ -1,6 +1,9 @@
 #include "rt_gi_technique.hpp"
 #include "render/shader_bindings/rt_gi_trace.hpp"
 #include "render/shader_bindings/rt_gi_denoise.hpp"
+#include "render/rt/rt_alpha_tables.hpp"
+#include "render/rt/rt_compute.hpp"
+#include "render/scene/render_scene.hpp"
 #include <span>
 #include "render/scene/render_scene_types.hpp"
 #include "core/log.hpp"
@@ -35,8 +38,6 @@ constexpr VkFormat kRadianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kGuideFormat = VK_FORMAT_R32_UINT;
 constexpr VkFormat kRefFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-constexpr VkPipelineStageFlags kCompute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-constexpr VkPipelineStageFlags kFragment = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 constexpr VkImageLayout kGeneral = VK_IMAGE_LAYOUT_GENERAL;
 constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -82,15 +83,6 @@ shared::GILight toGpu(const render::LightDesc& d) {
     return g;
 }
 
-// A full memory dependency between compute dispatches (and from earlier frames' readers).
-void barrier(VkCommandBuffer cmd, VkPipelineStageFlags src) {
-    VkMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, src, kCompute, 0, 1, &b, 0, nullptr, 0, nullptr);
-}
-
 // Vose's alias table over the lights' power, in GILight.cone.zw (slot i keeps itself with
 // probability z, else takes light w), and each light's probability in radiance.w. Deterministic:
 // the small and large lists are filled and taken in index order.
@@ -133,31 +125,35 @@ RTGITechnique::~RTGITechnique() {
     destroy();
 }
 
-bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t width, uint32_t height) {
+bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator, uint32_t width,
+                         uint32_t height) {
     m_device = device;
     m_physicalDevice = physicalDevice;
+    m_allocator = &allocator;
     m_width = width;
     m_height = height;
 
-    const bool dummies = rtc::createImage(device, physicalDevice, m_guideDummy, kGuideFormat, VK_IMAGE_USAGE_STORAGE_BIT, 1, 1) &&
-                         rtc::createImage(device, physicalDevice, m_refDummy, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, 1, 1) &&
-                         rtc::createImage(device, physicalDevice, m_envDummy, kRadianceFormat, VK_IMAGE_USAGE_SAMPLED_BIT, 1, 1);
+    m_guideDummy = allocator.createImage({"rt.gi.dummy.guide", kGuideFormat, 1, 1, VK_IMAGE_USAGE_STORAGE_BIT});
+    m_refDummy = allocator.createImage({"rt.gi.dummy.mean", kRefFormat, 1, 1, VK_IMAGE_USAGE_STORAGE_BIT});
+    m_envDummy = allocator.createImage({"rt.gi.dummy.env", kRadianceFormat, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT});
+    const bool dummies = m_guideDummy && m_refDummy && m_envDummy;
     if (!dummies || !createScreenImages()) {
         OHAO_LOG(Error, render, "RTGI: failed to create its images");
         return false;
     }
-    if (!m_openpbrTables.create(device, physicalDevice)) {
+    if (!m_openpbrTables.create(allocator)) {
         OHAO_LOG(Error, render, "RTGI: failed to upload OpenPBR's energy tables");
         return false;
     }
-    if (!m_cache.create(device, physicalDevice, kCacheCapacity, kCacheMaxSamples)) {
+    if (!m_cache.create(device, *m_allocator, kCacheCapacity, kCacheMaxSamples)) {
         OHAO_LOG(Error, render, "RTGI: failed to create its radiance cache");
         return false;
     }
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         m_lightCapacity[i] = shared::kGIWeighedLights;
-        if (!rtc::createHostBuffer(device, physicalDevice, sizeof(shared::GILight) * m_lightCapacity[i],
-                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_lights[i])) {
+        m_lights[i] = rtc::createHostBuffer(allocator, sizeof(shared::GILight) * m_lightCapacity[i],
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!m_lights[i].isValid()) {
             OHAO_LOG(Error, render, "RTGI: failed to create its light buffers");
             return false;
         }
@@ -189,17 +185,24 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint3
 bool RTGITechnique::createScreenImages() {
     m_halfWidth = m_shift ? (m_width + 1) / 2 : m_width;
     m_halfHeight = m_shift ? (m_height + 1) / 2 : m_height;
-    const auto half = [&](Image& img, VkFormat format) {
-        return rtc::createImage(m_device, m_physicalDevice, img, format, kUsage, m_halfWidth, m_halfHeight);
+    const auto half = [&](Image& img, const char* name, VkFormat format) {
+        img = m_allocator->createImage({name, format, m_halfWidth, m_halfHeight, kUsage});
+        return static_cast<bool>(img);
     };
-    bool ok = half(m_noisy, kRadianceFormat) && half(m_atrous, kRadianceFormat) && half(m_specNoisy, kRadianceFormat) &&
-              half(m_specAtrous, kRadianceFormat);
+    static constexpr const char* kPair[2][5] = {
+        {"rt.gi.guide0", "rt.gi.fast0", "rt.gi.slow0", "rt.gi.spec.fast0", "rt.gi.spec.slow0"},
+        {"rt.gi.guide1", "rt.gi.fast1", "rt.gi.slow1", "rt.gi.spec.fast1", "rt.gi.spec.slow1"}};
+    bool ok = half(m_noisy, "rt.gi.noisy", kRadianceFormat) && half(m_atrous, "rt.gi.atrous", kRadianceFormat) &&
+              half(m_specNoisy, "rt.gi.spec.noisy", kRadianceFormat) && half(m_specAtrous, "rt.gi.spec.atrous", kRadianceFormat);
     for (uint32_t i = 0; i < 2 && ok; ++i)
-        ok = half(m_guide[i], kGuideFormat) && half(m_fast[i], kRadianceFormat) && half(m_slow[i], kRadianceFormat) &&
-             half(m_specFast[i], kRadianceFormat) && half(m_specSlow[i], kRadianceFormat);
-    ok = ok && rtc::createImage(m_device, m_physicalDevice, m_output, kRadianceFormat, kUsage, m_width, m_height) &&
-         rtc::createImage(m_device, m_physicalDevice, m_specOutput, kRadianceFormat, kUsage, m_width, m_height);
-    m_halfReady = false;
+        ok = half(m_guide[i], kPair[i][0], kGuideFormat) && half(m_fast[i], kPair[i][1], kRadianceFormat) &&
+             half(m_slow[i], kPair[i][2], kRadianceFormat) && half(m_specFast[i], kPair[i][3], kRadianceFormat) &&
+             half(m_specSlow[i], kPair[i][4], kRadianceFormat);
+    if (ok) {
+        m_output = m_allocator->createImage({"rt.gi.output", kRadianceFormat, m_width, m_height, kUsage});
+        m_specOutput = m_allocator->createImage({"rt.gi.spec.output", kRadianceFormat, m_width, m_height, kUsage});
+        ok = m_output && m_specOutput;
+    }
     m_historyValid = false;
     return ok;
 }
@@ -207,17 +210,19 @@ bool RTGITechnique::createScreenImages() {
 void RTGITechnique::destroyScreenImages() {
     for (Image* img : {&m_noisy, &m_atrous, &m_output, &m_refMean, &m_specNoisy, &m_specAtrous, &m_specOutput,
                        &m_specRefMean})
-        rtc::destroyImage(m_device, *img);
+        m_allocator->retire(*img);
     for (uint32_t i = 0; i < 2; ++i)
         for (Image* img : {&m_guide[i], &m_fast[i], &m_slow[i], &m_specFast[i], &m_specSlow[i]})
-            rtc::destroyImage(m_device, *img);
+            m_allocator->retire(*img);
 }
 
 bool RTGITechnique::ensureReferenceImage() {
-    return (m_refMean.image ||
-            rtc::createImage(m_device, m_physicalDevice, m_refMean, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, m_width, m_height)) &&
-           (m_specRefMean.image || rtc::createImage(m_device, m_physicalDevice, m_specRefMean, kRefFormat,
-                                                    VK_IMAGE_USAGE_STORAGE_BIT, m_width, m_height));
+    if (!m_refMean)
+        m_refMean = m_allocator->createImage({"rt.gi.mean", kRefFormat, m_width, m_height, VK_IMAGE_USAGE_STORAGE_BIT});
+    if (!m_specRefMean)
+        m_specRefMean =
+            m_allocator->createImage({"rt.gi.spec.mean", kRefFormat, m_width, m_height, VK_IMAGE_USAGE_STORAGE_BIT});
+    return m_refMean && m_specRefMean;
 }
 
 bool RTGITechnique::createDescriptorResources() {
@@ -285,30 +290,25 @@ bool RTGITechnique::createPipelines() {
                                       sizeof(shared::GIDenoisePush), m_upsampleLayout, m_upsamplePipeline);
 }
 
-void RTGITechnique::prepareHalfImages(VkCommandBuffer cmd) {
-    if (m_halfReady) return;
-    for (Image* img : {&m_noisy, &m_atrous, &m_guide[0], &m_guide[1], &m_fast[0], &m_fast[1], &m_slow[0], &m_slow[1],
-                       &m_specNoisy, &m_specAtrous, &m_specFast[0], &m_specFast[1], &m_specSlow[0], &m_specSlow[1]})
-        rtc::transition(cmd, *img, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute,
-                        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, true);
-    m_halfReady = true;
-    m_historyValid = false;   // nothing written yet
-}
-
-void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
+void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
+    const VkCommandBuffer cmd = frame.cmd;
     m_rendered = false;
-    if (!m_tracePipeline || input.tlas == VK_NULL_HANDLE || input.instances == VK_NULL_HANDLE) return;
-    if (input.alphaTables == VK_NULL_HANDLE || input.textures == VK_NULL_HANDLE) return;
+    if (!m_tracePipeline || !input.scene || input.scene->tlas() == VK_NULL_HANDLE ||
+        input.scene->instanceBuffer() == VK_NULL_HANDLE)
+        return;
+    if (!input.alphaTables || input.alphaTables->set(input.frameSlot) == VK_NULL_HANDLE || input.textures == VK_NULL_HANDLE)
+        return;
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
+    if (!input.positionBuffer || !input.normalBuffer || !input.albedoBuffer || !input.layersBuffer) return;
     const bool reference = input.quality == RenderQuality::Reference;
-    if (!reference && input.velocityBuffer == VK_NULL_HANDLE) return;
+    if (!reference && !input.velocityBuffer) return;
     if (reference && !ensureReferenceImage()) return;
     m_quality = input.quality;
     m_slot = input.frameSlot;
-    m_velocityView = input.velocityBuffer;
-    m_positionView = input.positionBuffer;
-    m_normalView = input.normalBuffer;
-    m_albedoView = input.albedoBuffer;
+    m_velocity = input.velocityBuffer;
+    m_position = input.positionBuffer;
+    m_normal = input.normalBuffer;
+    m_albedo = input.albedoBuffer;
     m_cameraPos = input.cameraPos;
     if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
 
@@ -331,60 +331,64 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         // This slot's previous frame has finished: its buffer can go.
         uint32_t capacity = m_lightCapacity[m_slot];
         while (capacity < lightCount) capacity *= 2;
-        rtc::destroyHostBuffer(m_device, m_lights[m_slot]);
-        if (!rtc::createHostBuffer(m_device, m_physicalDevice, sizeof(shared::GILight) * capacity,
-                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_lights[m_slot])) {
+        m_allocator->destroyBuffer(m_lights[m_slot]);
+        m_lights[m_slot] =
+            rtc::createHostBuffer(*m_allocator, sizeof(shared::GILight) * capacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!m_lights[m_slot].isValid()) {
             OHAO_LOG(Error, render, "RTGI: failed to grow its light buffer to {} lights", capacity);
             m_lightCapacity[m_slot] = 0;
             return;
         }
         m_lightCapacity[m_slot] = capacity;
     }
-    if (lightCount > 0)
-        std::memcpy(m_lights[m_slot].mapped, bounce.data(), sizeof(shared::GILight) * lightCount);
+    if (lightCount > 0) {
+        std::memcpy(m_lights[m_slot].getMappedData(), bounce.data(), sizeof(shared::GILight) * lightCount);
+        m_allocator->flushBuffer(m_lights[m_slot], 0, sizeof(shared::GILight) * lightCount);
+    }
 
-    // Earlier frames' readers of these images (the denoiser, lighting) finish first.
-    barrier(cmd, kCompute | kFragment);
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    pass.sampled(*input.positionBuffer).sampled(*input.normalBuffer).sampled(*input.albedoBuffer).sampled(*input.layersBuffer);
+    input.alphaTables->declare(pass, m_slot, *input.scene);
+    pass.read(m_lights[m_slot], render::BufferUse::Storage);
+    pass.read(m_openpbrTables.tracked(), render::BufferUse::Storage);
+    pass.sampled(input.envMap ? *input.envMap : m_envDummy);
     if (reference) {
         m_historyValid = false;
         m_traceExtent = {m_width, m_height};
         m_rays = shared::kGIReferenceRays;
-        for (Image* img : {&m_output, &m_specOutput})
-            rtc::transition(cmd, *img, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,
-                            VK_ACCESS_SHADER_WRITE_BIT, true);
+        pass.storageWrite(m_output).storageWrite(m_specOutput);
         // The running mean reads last frame's while the reference frames run unbroken; a new
         // image holds none of them. A run that starts again starts the cache again too: the same
         // reference frames after any history.
-        if (m_refMean.layout == VK_IMAGE_LAYOUT_UNDEFINED) m_refFrames = 0;
+        if (m_refMean.state(0, 0).layout == VK_IMAGE_LAYOUT_UNDEFINED) m_refFrames = 0;
         if (m_refFrames == 0) m_cache.clear();
-        for (Image* img : {&m_refMean, &m_specRefMean})
-            rtc::transition(cmd, *img, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                            kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, m_refFrames == 0);
+        for (Image* img : {&m_refMean, &m_specRefMean}) {
+            if (m_refFrames == 0) pass.storageWrite(*img);
+            else pass.storageReadWrite(*img);
+        }
+        pass.storageRead(m_guideDummy);   // bound where the realtime trace writes its guide: never accessed
     } else {
         m_refFrames = 0;   // a realtime frame breaks the reference run
         m_cur ^= 1u;
-        prepareHalfImages(cmd);
         m_traceExtent = {m_halfWidth, m_halfHeight};
         m_rays = m_realtimeRays;
+        pass.storageWrite(m_noisy, render::Old::Keep).storageWrite(m_specNoisy, render::Old::Keep);
+        pass.storageWrite(m_guide[m_cur], render::Old::Keep);
+        pass.storageRead(m_refDummy);     // bound where the reference trace keeps its means: never accessed
     }
-    for (Image* d : {&m_guideDummy, &m_refDummy})
-        if (d->layout != kGeneral)
-            rtc::transition(cmd, *d, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute, 0, true);
-    if (m_envDummy.layout != kReadOnly)
-        rtc::transition(cmd, m_envDummy, kReadOnly, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute, 0, true);
 
     const VkDescriptorSet set = m_traceSets[m_slot];
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asWrite.accelerationStructureCount = 1;
-    const VkAccelerationStructureKHR tlas = input.tlas;
+    const VkAccelerationStructureKHR tlas = input.scene->tlas();
     asWrite.pAccelerationStructures = &tlas;
-    const VkDescriptorImageInfo gbuf[3] = {{VK_NULL_HANDLE, input.positionBuffer, kReadOnly},
-                                           {VK_NULL_HANDLE, input.normalBuffer, kReadOnly},
-                                           {VK_NULL_HANDLE, input.albedoBuffer, kReadOnly}};
-    const VkDescriptorBufferInfo instancesInfo{input.instances, 0, VK_WHOLE_SIZE};
+    const VkDescriptorImageInfo gbuf[3] = {{VK_NULL_HANDLE, input.positionBuffer->view, kReadOnly},
+                                           {VK_NULL_HANDLE, input.normalBuffer->view, kReadOnly},
+                                           {VK_NULL_HANDLE, input.albedoBuffer->view, kReadOnly}};
+    const VkDescriptorBufferInfo instancesInfo{input.scene->instanceBuffer(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo lightsInfo{m_lights[m_slot].buffer, 0, VK_WHOLE_SIZE};
-    const VkDescriptorImageInfo envInfo{VK_NULL_HANDLE, input.envMap ? input.envMap : m_envDummy.view, kReadOnly};
+    const VkDescriptorImageInfo envInfo{VK_NULL_HANDLE, input.envMap ? input.envMap->view : m_envDummy.view, kReadOnly};
     const VkDescriptorImageInfo samplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     const VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, reference ? m_output.view : m_noisy.view, kGeneral};
     const VkDescriptorImageInfo guideInfo{VK_NULL_HANDLE, reference ? m_guideDummy.view : m_guide[m_cur].view, kGeneral};
@@ -395,7 +399,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     const VkDescriptorBufferInfo cacheInfo[3] = {{m_cache.keys(), 0, VK_WHOLE_SIZE},
                                                  {m_cache.accum(), 0, VK_WHOLE_SIZE},
                                                  {m_cache.resolved(), 0, VK_WHOLE_SIZE}};
-    const VkDescriptorImageInfo layersInfo{VK_NULL_HANDLE, input.layersBuffer, kReadOnly};
+    const VkDescriptorImageInfo layersInfo{VK_NULL_HANDLE, input.layersBuffer->view, kReadOnly};
     VkWriteDescriptorSet writes[18] = {
         shader::write(shader::rt_gi_trace::scene, set),
         shader::write(shader::rt_gi_trace::gPosition, set), shader::write(shader::rt_gi_trace::gNormal, set),
@@ -426,11 +430,13 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     writes[17].pImageInfo = &layersInfo;
     vkUpdateDescriptorSets(m_device, 18, writes, 0, nullptr);
 
-    // The cache: last frame's work ordered before this frame's, emptied if a reset asked.
-    m_cache.recordBeginFrame(cmd);
+    // The cache: emptied if a reset asked, then read and fed by the trace.
+    m_cache.recordBeginFrame(frame);
+    m_cache.fedBy(pass);
 
+    pass.begin();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
-    const VkDescriptorSet traceSets[] = {set, input.alphaTables, input.textures};
+    const VkDescriptorSet traceSets[] = {set, input.alphaTables->set(m_slot), input.textures};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_traceLayout, 0, 3, traceSets, 0, nullptr);
     shared::GITracePush pc{};
     pc.extent = u4(m_traceExtent.width, m_traceExtent.height, m_width, m_height);
@@ -440,36 +446,28 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     pc.cameraPos = f4(input.cameraPos, input.envIntensity);
     vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);
-    m_cache.recordResolve(cmd);   // this frame's samples blended in for the next frame's rays
+    pass.end();
+    m_cache.recordResolve(frame);   // this frame's samples blended in for the next frame's rays
     m_rendered = true;
     if (reference) ++m_refFrames;
-
-    if (reference) {
-        for (Image* img : {&m_output, &m_specOutput})
-            rtc::transition(cmd, *img, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment,
-                            VK_ACCESS_SHADER_READ_BIT, false);
-    } else {
-        barrier(cmd, kCompute);   // the denoiser reads the trace
-    }
 }
 
-void RTGITechnique::denoise(VkCommandBuffer cmd) {
+void RTGITechnique::denoise(const render::Frame& frame) {
     if (!denoises()) return;
-    denoiseChain(cmd, 0);
-    denoiseChain(cmd, 1);
+    denoiseChain(frame, 0);
+    denoiseChain(frame, 1);
     m_historyValid = true;
 }
 
-void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
+void RTGITechnique::denoiseChain(const render::Frame& frame, uint32_t chain) {
+    const VkCommandBuffer cmd = frame.cmd;
     const bool spec = chain == 1u;
     Image& noisy = spec ? m_specNoisy : m_noisy;
     Image& atrous = spec ? m_specAtrous : m_atrous;
     Image& output = spec ? m_specOutput : m_output;
-    const auto& fast = spec ? m_specFast : m_fast;
-    const auto& slow = spec ? m_specSlow : m_slow;
+    auto& fast = spec ? m_specFast : m_fast;
+    auto& slow = spec ? m_specSlow : m_slow;
     const uint32_t prev = m_cur ^ 1u;
-    constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     shared::GIDenoisePush pc{};
     pc.extent = u4(m_halfWidth, m_halfHeight, m_width, m_height);
     pc.params = u4(m_historyValid ? 1u : 0u, 1u, m_shift, spec ? 1u : 0u);
@@ -498,10 +496,15 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
 
     // Temporal: two outputs, so its set is written by hand.
     {
+        render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.sampledGeneral(noisy).sampledGeneral(m_guide[m_cur]).sampledGeneral(m_guide[prev]).sampled(*m_velocity);
+        pass.sampledGeneral(fast[prev]).sampledGeneral(slow[prev]);
+        pass.storageWrite(fast[m_cur], render::Old::Keep).storageWrite(slow[m_cur], render::Old::Keep);
+        pass.begin();
         const VkDescriptorSet set = m_temporalSets[m_slot][chain];
         const VkDescriptorImageInfo infos[8] = {
             {VK_NULL_HANDLE, noisy.view, kGeneral},         {VK_NULL_HANDLE, m_guide[m_cur].view, kGeneral},
-            {VK_NULL_HANDLE, m_guide[prev].view, kGeneral}, {VK_NULL_HANDLE, m_velocityView, kReadOnly},
+            {VK_NULL_HANDLE, m_guide[prev].view, kGeneral}, {VK_NULL_HANDLE, m_velocity->view, kReadOnly},
             {VK_NULL_HANDLE, fast[prev].view, kGeneral},    {VK_NULL_HANDLE, slow[prev].view, kGeneral},
             {VK_NULL_HANDLE, fast[m_cur].view, kGeneral},   {VK_NULL_HANDLE, slow[m_cur].view, kGeneral},
         };
@@ -517,7 +520,6 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
         const uint32_t tile = shared::kGITile;
         vkCmdDispatch(cmd, (m_halfWidth + tile - 1) / tile, (m_halfHeight + tile - 1) / tile, 1);
     }
-    barrier(cmd, kCompute);
 
     // The a-trous iterations over the long accumulation, steps 1, 2, 4, 8 (the reflection's 1
     // and 2: its spread is the surface's roughness), between the a-trous image and the trace's
@@ -525,24 +527,26 @@ void RTGITechnique::denoiseChain(VkCommandBuffer cmd, uint32_t chain) {
     const uint32_t gx = (m_halfWidth + 7) / 8, gy = (m_halfHeight + 7) / 8;
     const uint32_t steps = spec ? 2u : kAtrousSteps;
     for (uint32_t i = 0; i < steps; ++i) {
-        const VkImageView in = i == 0 ? slow[m_cur].view : (i % 2 == 1 ? atrous.view : noisy.view);
-        const VkImageView out = i % 2 == 0 ? atrous.view : noisy.view;
+        Image& in = i == 0 ? slow[m_cur] : (i % 2 == 1 ? atrous : noisy);
+        Image& out = i % 2 == 0 ? atrous : noisy;
         pc.params[1] = 1u << i;
+        render::Pass pass(frame, nullptr, render::Pass::Compute);
+        pass.sampledGeneral(in).sampledGeneral(m_guide[m_cur]).storageWrite(out, render::Old::Keep);
+        pass.begin();
         run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][chain][i], kAtrous,
-            {{in, kGeneral}, {m_guide[m_cur].view, kGeneral}, {out, kGeneral}}, gx, gy);
-        barrier(cmd, kCompute);
+            {{in.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {out.view, kGeneral}}, gx, gy);
     }
     static_assert(kAtrousSteps % 2 == 0, "the last a-trous step writes the trace's radiance image");
 
     // The joint-bilateral upsample into the output lighting reads.
-    rtc::transition(cmd, output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,
-                    true);
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    pass.sampledGeneral(noisy).sampledGeneral(m_guide[m_cur]);
+    pass.sampled(*m_position).sampled(*m_normal).sampled(*m_albedo).storageWrite(output);
+    pass.begin();
     run(m_upsamplePipeline, m_upsampleLayout, m_upsampleSets[m_slot][chain], kUpsample,
-        {{noisy.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_positionView, kReadOnly},
-         {m_normalView, kReadOnly}, {m_albedoView, kReadOnly}, {output.view, kGeneral}},
+        {{noisy.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_position->view, kReadOnly},
+         {m_normal->view, kReadOnly}, {m_albedo->view, kReadOnly}, {output.view, kGeneral}},
         (m_width + 7) / 8, (m_height + 7) / 8);
-    rtc::transition(cmd, output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment, VK_ACCESS_SHADER_READ_BIT,
-                    false);
 }
 
 void RTGITechnique::resize(uint32_t width, uint32_t height) {
@@ -559,13 +563,12 @@ void RTGITechnique::setRealtime(bool fullResolution, uint32_t rays) {
     if (shift == m_shift) return;
     m_shift = shift;
     if (m_device == VK_NULL_HANDLE) return;
-    vkDeviceWaitIdle(m_device);   // frames in flight read the realtime images
     destroyScreenImages();
     createScreenImages();
 }
 
-GIOutput RTGITechnique::getOutput() const {
-    return {m_output.image, m_output.view, m_specOutput.view};
+GIOutput RTGITechnique::getOutput() {
+    return {&m_output, &m_specOutput};
 }
 
 void RTGITechnique::destroy() {
@@ -581,8 +584,8 @@ void RTGITechnique::destroy() {
         if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     if (m_envSampler) { vkDestroySampler(m_device, m_envSampler, nullptr); m_envSampler = VK_NULL_HANDLE; }
     destroyScreenImages();
-    for (Image* d : {&m_guideDummy, &m_refDummy, &m_envDummy}) rtc::destroyImage(m_device, *d);
-    for (rtc::HostBuffer& b : m_lights) rtc::destroyHostBuffer(m_device, b);
+    for (Image* d : {&m_guideDummy, &m_refDummy, &m_envDummy}) m_allocator->retire(*d);
+    for (GpuBuffer& b : m_lights) m_allocator->retire(b);
     m_openpbrTables.destroy();
     m_traceSets = {};
     m_temporalSets = {};

@@ -52,7 +52,7 @@
 #include "ecs/vfx.hpp"
 #include "slice/module.hpp"
 #include "level/level_system.hpp"
-#include "render/scene/meshlet_builder.hpp"
+#include "asset/meshlets.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -227,9 +227,9 @@ std::vector<double> timeMeshletBuild() {
         }
     std::vector<double> ms;
     for (int i = 0; i < kMeshletBuilds; ++i) {
-        render::MeshletSet set;
+        MeshletSet set;
         const auto t0 = std::chrono::steady_clock::now();
-        render::buildMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
+        buildMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
         ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
     return ms;

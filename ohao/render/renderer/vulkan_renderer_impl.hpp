@@ -9,10 +9,3 @@
 #include <stdexcept>
 #include <cstring>
 #include <array>
-
-namespace ohao {
-
-// Helper function to find suitable memory type
-uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-} // namespace ohao

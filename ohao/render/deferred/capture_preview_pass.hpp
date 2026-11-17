@@ -4,7 +4,9 @@
 // at most maxSide on its long side (render::previewExtent), written packed straight into the
 // frame's host-cached staging buffer; the frame copies nothing else, so the CPU reads only
 // the preview. Recorded only for a frame that asked for it (VulkanRenderer::requestPreviewReadback).
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "render/graph/pass.hpp"
 
 #include <vulkan/vulkan.h>
 #include <array>
@@ -22,13 +24,12 @@ public:
     [[nodiscard]] bool initialize(VkDevice device);
     void cleanup();
 
-    // Records the box filter of `rect` ([x, y, w, h], inside the image) of `finalView` (an
-    // RGBA8 image in SHADER_READ_ONLY_OPTIMAL, its last writer a color attachment or a compute
-    // shader) down to dstWidth x dstHeight into `out` (a storage buffer of at least
-    // dstWidth * dstHeight * 4 bytes, rows top down), using frame slot `slot`'s descriptor set.
-    // The writes are made visible to the host; the image keeps its layout.
-    void record(VkCommandBuffer cmd, uint32_t slot, VkImageView finalView, const std::array<uint32_t, 4>& rect,
-                uint32_t dstWidth, uint32_t dstHeight, VkBuffer out);
+    // Records the box filter of `rect` ([x, y, w, h], inside the image) of `final` (an RGBA8
+    // image) down to dstWidth x dstHeight into `out` (a storage buffer of at least
+    // dstWidth * dstHeight * 4 bytes, rows top down), using the frame slot's descriptor set,
+    // timed as capture.preview. The writes are made visible to the host.
+    void record(const render::Frame& frame, gpu::Image& final, const std::array<uint32_t, 4>& rect, uint32_t dstWidth,
+                uint32_t dstHeight, GpuBuffer& out);
 
 private:
     VkDevice m_device{VK_NULL_HANDLE};

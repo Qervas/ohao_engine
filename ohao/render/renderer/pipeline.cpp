@@ -1,5 +1,5 @@
 #include "vulkan_renderer_impl.hpp"
-#include "asset/model.hpp"
+#include "asset/vertex.hpp"
 #include "core/log.hpp"
 
 namespace ohao {

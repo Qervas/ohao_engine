@@ -25,15 +25,6 @@ struct LookSample {
     bool consumed{true};
 };
 
-// Late input sampling (spec "Present mode and late input sampling"): the frame whose present a host
-// waits for before it polls the next frame's input, so at most `framesAhead` submitted frames are not
-// yet presented when it polls; 0: none to wait for (too few frames yet, or a negative framesAhead:
-// unbounded).
-[[nodiscard]] constexpr uint64_t presentToAwait(uint64_t submitted, int framesAhead) noexcept {
-    if (framesAhead < 0 || submitted <= static_cast<uint64_t>(framesAhead)) return 0;
-    return submitted - static_cast<uint64_t>(framesAhead);
-}
-
 struct FrameStamps {
     uint64_t frame{0};   // the renderer's submitted-frame number
     FrameTime start{};   // the loop iteration began

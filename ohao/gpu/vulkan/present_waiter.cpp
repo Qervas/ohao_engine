@@ -70,7 +70,6 @@ void PresentWaiter::stop() {
         m_stop = true;
     }
     m_wake.notify_all();
-    m_resolved.notify_all();
     if (m_thread.joinable()) m_thread.join();
     std::lock_guard lock(m_mutex);
     m_pending.clear();
@@ -83,7 +82,6 @@ void PresentWaiter::presented(uint64_t frame, uint64_t presentId) {
     if (!m_wait || presentId == 0) {
         m_done.push_back({frame, callReturned, false});
         m_resolvedUpTo = std::max(m_resolvedUpTo, frame);
-        m_resolved.notify_all();
         return;
     }
     m_pending.push_back({frame, presentId, m_swapchain->generation(), callReturned});
@@ -101,13 +99,6 @@ void PresentWaiter::resolve(const Pending& p, Clock::time_point at, bool waited)
     m_done.push_back({p.frame, at, waited});
     m_resolvedUpTo = std::max(m_resolvedUpTo, p.frame);
     if (waited) m_confirmedUpTo = std::max(m_confirmedUpTo, p.frame);
-    m_resolved.notify_all();
-}
-
-bool PresentWaiter::waitResolved(uint64_t frame, std::chrono::microseconds timeout) {
-    std::unique_lock lock(m_mutex);
-    m_resolved.wait_for(lock, timeout, [&] { return m_stop || m_resolvedUpTo >= frame; });
-    return m_confirmedUpTo >= frame;
 }
 
 void PresentWaiter::run() {

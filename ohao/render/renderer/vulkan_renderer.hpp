@@ -29,6 +29,8 @@
 #include "render/frame/frame_resources.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
@@ -118,13 +120,6 @@ public:
     }
     [[nodiscard]] bool presentWaitEnabled() const noexcept { return m_presentWaitEnabled; }
     [[nodiscard]] std::vector<PresentStamp> takePresentStamps() { return m_presentWaiter.take(); }
-    // Late input sampling: returns once frame `frame` (a framesSubmitted() number) has been
-    // presented, as the presentation engine confirms it (at most `timeout`), or without present
-    // wait once its GPU work is done.
-    void waitForPresentOf(uint64_t frame, std::chrono::microseconds timeout) {
-        if (m_presentWaitEnabled) (void)m_presentWaiter.waitResolved(frame, timeout);
-        else waitForSubmitted(frame);
-    }
     // When the newest frame's command buffers were submitted (framesSubmitted()'s frame).
     [[nodiscard]] std::chrono::steady_clock::time_point lastSubmitTime() const noexcept { return m_lastSubmitAt; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.
@@ -300,6 +295,7 @@ public:
     // between initialize() and shutdown(); after shutdown() the object stays alive
     // but inert (every edit is ignored) until the renderer is destroyed.
     [[nodiscard]] render::RenderScene& renderScene() { return *m_renderScene; }
+    [[nodiscard]] const GpuAllocator& allocator() const { return m_allocator; }
 
     // Denoiser control
     void        setDenoiseMode(DenoiseMode mode);
@@ -325,64 +321,6 @@ public:
     }
     [[nodiscard]] std::optional<bool> causticsOverride() const { return m_causticsOverride; }
 
-    // Returns the motion vector AOV image view from the active RT profile,
-    // or VK_NULL_HANDLE if no RT profile is active.
-    [[nodiscard]] VkImageView getMotionVectorAOV() const;
-
-    // Returns the motion vector AOV VkImage (needed for vkCmdCopyImageToBuffer).
-    [[nodiscard]] VkImage getMotionVectorImage() const;
-
-    // Returns the depth / roughness AOV image views and images from the active
-    // RT profile, or VK_NULL_HANDLE if no RT profile is active.
-    [[nodiscard]] VkImageView getDepthAOV()         const;
-    [[nodiscard]] VkImage     getDepthAOVImage()    const;
-    [[nodiscard]] VkImageView getRoughnessAOV()     const;
-    [[nodiscard]] VkImage     getRoughnessAOVImage() const;
-    [[nodiscard]] VkImageView getDiffuseRadianceAOV()      const;
-    [[nodiscard]] VkImage     getDiffuseRadianceAOVImage() const;
-    [[nodiscard]] VkImageView getSpecularRadianceAOV()      const;
-    [[nodiscard]] VkImage     getSpecularRadianceAOVImage() const;
-    [[nodiscard]] VkImageView getDiffAlbedoAOV()      const;
-    [[nodiscard]] VkImage     getDiffAlbedoAOVImage() const;
-    [[nodiscard]] VkImageView getSpecColorAOV()       const;
-    [[nodiscard]] VkImage     getSpecColorAOVImage()  const;
-    [[nodiscard]] VkImageView getNormalRoughnessAOV()      const;
-    [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const;
-    // Sub-plan 4.C: NRD denoised outputs (RGBA32F)
-    [[nodiscard]] VkImage     getOutDiffRadianceAOVImage() const;
-    [[nodiscard]] VkImage     getOutSpecRadianceAOVImage() const;
-    // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
-    [[nodiscard]] VkImage     getNrdComposedAOVImage() const;
-
-    // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
-    // One 2-half pair per pixel; total = 2 * width * height values.
-    // Returns false if no RT profile is active or readback fails.
-    [[nodiscard]] bool readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height);
-
-    // Debug: readback the depth AOV as raw float buffer (1 float per pixel).
-    [[nodiscard]] bool readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height);
-
-    // Debug: readback R16F roughness AOV as native float (decoded from half in-helper).
-    [[nodiscard]] bool readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA32F diffuse radiance AOV (4 floats per pixel, native).
-    [[nodiscard]] bool readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA32F specular radiance AOV (4 floats per pixel, native).
-    [[nodiscard]] bool readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
-
-    // Sub-plan 4.C: NRD denoised output readback (RGBA32F)
-    [[nodiscard]] bool readbackDenoisedDiffuse(std::vector<float>& data, uint32_t& width, uint32_t& height);
-    [[nodiscard]] bool readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height);
-    // Sub-plan 4.D: NRD composed HDR output readback (RGBA32F)
-    [[nodiscard]] bool readbackNrdComposed(std::vector<float>& data, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA8 diffuse albedo AOV (4 bytes per pixel).
-    [[nodiscard]] bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
-
-    // Debug: readback RGBA8 specular color AOV (4 bytes per pixel).
-    [[nodiscard]] bool readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
-
     [[nodiscard]] uint32_t getWidth() const noexcept { return m_width; }
     [[nodiscard]] uint32_t getHeight() const noexcept { return m_height; }
     [[nodiscard]] VkExtent2D getExtent() const noexcept {
@@ -393,10 +331,11 @@ public:
     // Read GPU terrain heightmap back to CPU (blocking — one-time call at setup).
     // Returns false if no procedural terrain exists. outRes = square resolution.
     [[nodiscard]] bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
-    // Copies a whole RGBA32F (half: RGBA16F) image, left in `layout` by shaders of `stage`, to the
-    // CPU as RGBA32F, and puts it back in that layout. Submits and waits; for readbacks only.
-    [[nodiscard]] bool readImageRGBA(VkImage image, bool half, VkImageLayout layout, VkPipelineStageFlags stage,
-                                     std::vector<float>& out);
+    // Copies a whole image of the frame's size (`texelBytes` a texel) into `out`, on a command buffer of its
+    // own, and leaves it a transfer source. Submits and waits; for readbacks only.
+    [[nodiscard]] bool readImage(gpu::Image& image, uint32_t texelBytes, void* out);
+    // The same for an RGBA32F or RGBA16F image, as RGBA32F.
+    [[nodiscard]] bool readImageRGBA(gpu::Image& image, std::vector<float>& out);
 
 private:
     // Vulkan setup (no window required)
@@ -407,6 +346,9 @@ private:
 
     // Phase 1: Rendering pipeline setup
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
+    // The readback staging buffers, one a frame slot, at the frame's size (width x height x 4 bytes).
+    [[nodiscard]] bool createStagingBuffers();
+    void destroyStagingBuffers();
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
     // This frame's raster lights for the deferred renderer: the scene's light table (none
     // without lights, as in the path tracer).
@@ -441,6 +383,8 @@ private:
 
     // Multi-frame rendering (ring buffer)
     FrameResourceManager m_frameResources;
+    // What a requested frame is copied into (or capture.preview writes), host-cached and mapped; one a slot.
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_staging{};
     // Per-pass GPU timestamps, one query pool per frame slot (render/frame/gpu_pass_timer.hpp).
     render::GpuPassTimer m_passTimer;
     uint32_t m_currentFrame{0};
@@ -459,14 +403,12 @@ private:
     void bindRTTextures(IRTRendererProfile& renderer);
     // The bindless table as views and samplers (index = bindless index) in m_rtTextureViews/Samplers.
     void collectRTTextures();
-    void destroyEnvSamplingBuffer();
     [[nodiscard]] bool envMapLoaded() const noexcept {
-        return m_envMapImageView != VK_NULL_HANDLE && m_envMapTexIdx != 0xFFFFFFFFu;
+        return m_envMap && m_envMapTexIdx != 0xFFFFFFFFu;
     }
     std::vector<VkImageView> m_rtTextureViews;
     std::vector<VkSampler> m_rtTextureSamplers;
-    VkBuffer m_envCdfBuffer{VK_NULL_HANDLE};   // the path tracer's 2D CDF (render/rt/env_cdf.hpp)
-    VkDeviceMemory m_envCdfMemory{VK_NULL_HANDLE};
+    GpuBuffer m_envCdf;   // the path tracer's 2D CDF (render/rt/env_cdf.hpp); one float without an environment
     std::string m_envMapPath;
     std::string m_envMapLoadedKey;      // the environment uploaded (environmentKey()); empty: none
     std::string m_envMapAttemptedKey;   // the key render() last handed to uploadEnvironmentMap
@@ -476,9 +418,7 @@ private:
     // The environment lights without its sun while the scene has a directional light, which
     // stands for it (render/rt/env_sun.hpp): what render() asked for, and what is uploaded.
     bool m_envMapSunless{false};
-    VkImage m_envMapImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
-    VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered
+    gpu::Image m_envMap;                            // "env.map": RGBA32F, equirectangular; its view is in the bindless table
     VkSampler m_envSampler{VK_NULL_HANDLE};         // the old RT texture sampler (bilinear, base level)
     // The deferred frame's IBL: the environment GGX-prefiltered by roughness and its
     // irradiance, rebuilt with each env upload (render/deferred/env_prefilter.hpp).
@@ -499,15 +439,16 @@ private:
     // Presentation (windowed mode only).
     [[nodiscard]] bool createPresentation();
     [[nodiscard]] bool recreatePresentation();
-    // Returns whether `staging` received the frame (a requested readback).
-    bool blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkBuffer staging);
-    // The path tracer's RGBA8 output (in TRANSFER_SRC_OPTIMAL) into the swapchain image, and
-    // into `staging` too when one is given; returns whether it was. A headless frame's copy.
-    bool blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging);
-    void copyRTOutputToStaging(VkCommandBuffer cmd, VkImage src, VkBuffer staging);
+    // A frame's final image (the deferred frame's, the path tracer's output; null: black) into the swapchain
+    // image, left ready to present, and into `staging` too when one is given (a requested readback); returns
+    // whether it was.
+    bool blitOutputToSwapchain(const render::Frame& frame, uint32_t imageIndex, gpu::Image* src, GpuBuffer* staging);
     std::optional<PresentTarget> m_presentTarget;
     VkSurfaceKHR m_surface{VK_NULL_HANDLE};
     std::unique_ptr<Swapchain> m_swapchain;
+    // The swapchain's images, tracked like any other; wrapped again whenever the swapchain is (re)built.
+    std::vector<gpu::Image> m_swapchainImages;
+    void wrapSwapchainImages();
     // VK_KHR_present_id + VK_KHR_present_wait were enabled (a window on a device with both).
     bool m_presentWaitEnabled{false};
     bool m_bufferMarkerEnabled{false};   // pass breadcrumbs (VK_AMD_buffer_marker)
@@ -532,7 +473,7 @@ private:
     uint32_t m_previewHeight{0};
     std::unique_ptr<CapturePreviewPass> m_previewPass;   // null when its pipeline failed: previews on the CPU
     // Records capture.preview for the frame on m_currentFrame; false when the frame has no RGBA8 image.
-    bool recordPreview(VkCommandBuffer cmd, const PreviewRequest& request);
+    bool recordPreview(const render::Frame& frame, const PreviewRequest& request);
     // Marks the frame being recorded on m_currentFrame as the requested one when it wrote
     // its staging buffer (`copied`), and clears the request.
     void finishReadbackRequest(bool copied) noexcept;
@@ -576,9 +517,6 @@ private:
     // draws through it, else through its compute + vertex-pulling fallback.
     bool m_meshShaderEnabled{false};
 
-    // Shader base path
-    std::string m_shaderBasePath;
-
     // Initialized flag
     bool m_initialized{false};
 
@@ -589,6 +527,8 @@ private:
 
     // Bindless texture manager
     std::unique_ptr<BindlessTextureManager> m_textureManager;
+    // Every pass's images and buffers (step 4a): named, and destroyed after the frames in flight.
+    GpuAllocator m_allocator;
 
     // Persistent GPU render world; recordUpdates runs at the start of every frame body.
     std::unique_ptr<render::RenderScene> m_renderScene;
@@ -600,9 +540,12 @@ private:
     [[nodiscard]] bool initializeDeferredRenderer();
     void applyRTRenderSettings();
     void renderDeferred();
-    // A requested headless frame: its final RGBA8 image into the slot's staging buffer.
-    // Returns whether the staging buffer received it.
-    bool copyDeferredOutputToStaging(VkCommandBuffer cmd);
+    // A requested headless frame: its final RGBA8 image (the deferred frame's, the path tracer's output) into
+    // the slot's staging buffer. Returns whether the staging buffer received it.
+    bool copyOutputToStaging(const render::Frame& frame, gpu::Image* src);
+    // The active path tracer's image `target`, or null (no path tracer is active, or it has none).
+    [[nodiscard]] gpu::Image* tracerImage(PathTracer::Target target);
+    // That image's texels as stored, for the readbacks of its RGBA32F and RGBA8 guides.
 
     RTRenderSettings m_rtSettings{kOfflineRTSettings};
 };

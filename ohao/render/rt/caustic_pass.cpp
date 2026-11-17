@@ -2,7 +2,6 @@
 
 #include "core/log.hpp"
 #include "gpu/shared_layout.hpp"
-#include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
 
 #include <algorithm>
@@ -13,69 +12,30 @@ namespace ohao::render {
 
 namespace {
 
-constexpr VkPipelineStageFlags kTrace = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-constexpr VkPipelineStageFlags kTransfer = VK_PIPELINE_STAGE_TRANSFER_BIT;
-
-void barrier(VkCommandBuffer cmd, VkPipelineStageFlags src, VkAccessFlags srcAccess, VkPipelineStageFlags dst,
-             VkAccessFlags dstAccess) {
-    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    b.srcAccessMask = srcAccess;
-    b.dstAccessMask = dstAccess;
-    vkCmdPipelineBarrier(cmd, src, dst, 0, 1, &b, 0, nullptr, 0, nullptr);
-}
-
-constexpr VkAccessFlags kRW = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
 float u2f(uint32_t u) { return std::bit_cast<float>(u); }
 
 } // namespace
 
-bool CausticPass::allocate(Buffer& b, VkDeviceSize size, bool hostVisible) {
-    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    info.size = size;
-    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateBuffer(m_device, &info, nullptr, &b.buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(m_device, b.buffer, &req);
-    VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    alloc.allocationSize = req.size;
-    // The counter is read on the host (host-cached, AGENTS: uncached host reads are slow); the rest
-    // is read at random by the trace: device-local.
-    const VkMemoryPropertyFlags props =
-        hostVisible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT
-                    : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    alloc.memoryTypeIndex = rtc::findMemoryType(m_physicalDevice, req.memoryTypeBits, props);
-    if (alloc.memoryTypeIndex == UINT32_MAX && hostVisible)
-        alloc.memoryTypeIndex = rtc::findMemoryType(m_physicalDevice, req.memoryTypeBits,
-                                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (alloc.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(m_device, &alloc, nullptr, &b.memory) != VK_SUCCESS) {
-        vkDestroyBuffer(m_device, b.buffer, nullptr);
-        b = Buffer{};
-        return false;
-    }
-    b.size = size;
-    if (vkBindBufferMemory(m_device, b.buffer, b.memory, 0) != VK_SUCCESS) return false;
-    if (hostVisible && vkMapMemory(m_device, b.memory, 0, size, 0, &b.mapped) != VK_SUCCESS) return false;
-    return true;
+bool CausticPass::allocate(GpuBuffer& b, VkDeviceSize size, bool hostVisible) {
+    m_allocator->retire(b);
+    // The counter is read on the host (host-cached: uncached host reads are slow); the rest is read at random
+    // by the trace: device-local.
+    b = m_allocator->createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  hostVisible ? AllocationUsage::GpuToCpu : AllocationUsage::GpuOnly, hostVisible);
+    return b.isValid() && (!hostVisible || b.getMappedData() != nullptr);
 }
 
-void CausticPass::release(Buffer& b) {
-    if (b.mapped) vkUnmapMemory(m_device, b.memory);
-    if (b.buffer) vkDestroyBuffer(m_device, b.buffer, nullptr);
-    if (b.memory) vkFreeMemory(m_device, b.memory, nullptr);
-    b = Buffer{};
-}
-
-bool CausticPass::create(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool CausticPass::create(VkDevice device, GpuAllocator& allocator) {
     m_device = device;
-    m_physicalDevice = physicalDevice;
+    m_allocator = &allocator;
     if (!allocate(m_table, kRows * sizeof(glm::vec4), false) || !allocate(m_splat, 16, false) ||
         !allocate(m_stats, kStatsBytes, true)) {
         OHAO_LOG(Error, render, "CausticPass: its buffers could not be created");
         destroy();
         return false;
     }
-    std::memset(m_stats.mapped, 0, kStatsBytes);
+    std::memset(m_stats.getMappedData(), 0, kStatsBytes);
+    m_allocator->flushBuffer(m_stats);
     m_clearSplat = true;
     m_clearCounts = true;
     return true;
@@ -88,9 +48,7 @@ void CausticPass::destroy() {
         OHAO_LOG(Info, render, "caustics' manifold pass: {} requests, {} triangles solved, {} roots, {} connections; "
                  "{} cluster, {} sub-cluster and {} triangle tests; through solids {} walks, {} paths, {} connections, {} at the trials' ceiling",
                  m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10]);
-    release(m_table);
-    release(m_splat);
-    release(m_stats);
+    for (GpuBuffer* b : {&m_table, &m_splat, &m_stats}) m_allocator->retire(*b);
     m_splatFull = false;
     m_pixels = 0;
     m_uploaded.clear();
@@ -161,9 +119,6 @@ void CausticPass::setScene(const RenderScene& scene, float cut) {
 bool CausticPass::ensure(uint32_t pixels) {
     if (m_device == VK_NULL_HANDLE) return false;
     if (m_splatFull && m_pixels >= pixels) return true;
-    // The placeholder or a smaller buffer may be in flight: nothing is replaced under the GPU.
-    vkDeviceWaitIdle(m_device);
-    release(m_splat);
     if (!allocate(m_splat, VkDeviceSize(pixels) * 3u * 4u, false)) {
         OHAO_LOG(Error, render, "CausticPass: a splat buffer for {} pixels could not be allocated; caustics stay off", pixels);
         allocate(m_splat, 16, false);
@@ -177,41 +132,58 @@ bool CausticPass::ensure(uint32_t pixels) {
     return true;
 }
 
-void CausticPass::recordBeginFrame(VkCommandBuffer cmd) {
-    // The last frame's trace may still read the table and write the buffers (raygenCaustics' clears):
-    // ordered before this frame's copies and made visible to this frame's atomics.
-    barrier(cmd, kTrace, kRW, kTransfer | kTrace, VK_ACCESS_TRANSFER_WRITE_BIT | kRW);
-    if (m_packed != m_uploaded) {
+void CausticPass::recordBeginFrame(const Frame& frame) {
+    const bool upload = m_packed != m_uploaded;
+    if (!upload && !m_clearSplat && !m_clearCounts) return;
+    Pass pass(frame, nullptr, Pass::Transfer);
+    if (upload) pass.write(m_table, BufferUse::CopyDst);
+    if (m_clearSplat) pass.write(m_splat, BufferUse::CopyDst);
+    if (m_clearCounts) pass.write(m_stats, BufferUse::CopyDst);
+    pass.begin();
+    if (upload) {
         const VkDeviceSize bytes = m_packed.size() * sizeof(glm::vec4);   // at most 64 KiB (kRows)
-        vkCmdUpdateBuffer(cmd, m_table.buffer, 0, bytes, m_packed.data());
+        vkCmdUpdateBuffer(frame.cmd, m_table.buffer, 0, bytes, m_packed.data());
         m_uploaded = m_packed;
     }
     if (m_clearSplat) {
-        vkCmdFillBuffer(cmd, m_splat.buffer, 0, VK_WHOLE_SIZE, 0u);
+        vkCmdFillBuffer(frame.cmd, m_splat.buffer, 0, VK_WHOLE_SIZE, 0u);
         m_clearSplat = false;
     }
     if (m_clearCounts) {
-        vkCmdFillBuffer(cmd, m_stats.buffer, 0, VK_WHOLE_SIZE, 0u);
+        vkCmdFillBuffer(frame.cmd, m_stats.buffer, 0, VK_WHOLE_SIZE, 0u);
         m_clearCounts = false;
     }
-    barrier(cmd, kTransfer, VK_ACCESS_TRANSFER_WRITE_BIT, kTrace, kRW);
 }
 
-void CausticPass::recordAfterTrace(VkCommandBuffer cmd) {
-    // causticTrace's splats before raygenCaustics reads (and clears) them.
-    barrier(cmd, kTrace, VK_ACCESS_SHADER_WRITE_BIT, kTrace, kRW);
+void CausticPass::lightPass(Pass& pass) {
+    pass.read(m_table, BufferUse::Storage).write(m_splat, BufferUse::Storage).write(m_stats, BufferUse::Storage);
+}
+
+void CausticPass::cameraPass(Pass& pass) {
+    pass.write(m_splat, BufferUse::Storage);
+}
+
+void CausticPass::manifoldPass(Pass& pass) {
+    pass.read(m_table, BufferUse::Storage).write(m_stats, BufferUse::Storage);
+}
+
+bool CausticPass::readStats(void* out, VkDeviceSize offset, VkDeviceSize bytes) const {
+    if (!m_stats.getMappedData()) return false;
+    GpuBuffer stats = m_stats;   // the handles: the host's view of the memory is brought up to date
+    m_allocator->invalidateBuffer(stats);
+    std::memcpy(out, static_cast<const uint8_t*>(m_stats.getMappedData()) + offset, bytes);
+    return true;
 }
 
 std::array<uint32_t, 11> CausticPass::manifoldCounts() const {
     std::array<uint32_t, 11> v{};
-    if (m_stats.mapped) std::memcpy(v.data(), static_cast<const uint8_t*>(m_stats.mapped) + 4, sizeof v);
+    readStats(v.data(), 4, sizeof v);
     return v;
 }
 
 uint32_t CausticPass::clamped() const {
-    if (!m_stats.mapped) return 0;
     uint32_t v = 0;
-    std::memcpy(&v, m_stats.mapped, sizeof v);
+    readStats(&v, 0, sizeof v);
     return v;
 }
 

@@ -17,8 +17,9 @@
 // Ranges and first are host-written per frame slot; lights and power are rewritten each frame, after
 // the previous frame's trace by queue order.
 
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
-#include "render/rt/rt_compute.hpp"
+#include "render/graph/pass.hpp"
 #include "render/scene/render_scene.hpp"
 
 #include <array>
@@ -31,10 +32,8 @@ namespace ohao::render {
 class EmissiveLights {
 public:
     // `texturesLayout`: the bindless texture table's set layout (the collect pass's set 1, for the
-    // emissive textures). `rayTracingPipeline`: the device has ray tracing pipelines, whose stage the
-    // barriers then name beside compute's.
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkDescriptorSetLayout texturesLayout,
-                    bool rayTracingPipeline);
+    // emissive textures).
+    bool initialize(VkDevice device, GpuAllocator& allocator, VkDescriptorSetLayout texturesLayout);
     void destroy();
 
     // This frame's emissive instances (and the scene's slot count, for `first`). Grows the device
@@ -45,19 +44,16 @@ public:
     // prepare() with the scene's own emissive instances, slot count and analytic power.
     void prepare(uint32_t frameSlot, const RenderScene& scene);
 
-    struct SceneBuffers {
-        VkBuffer vertices, indices, meshes, triangleSlots, materials, instances, materialRefs;
-    };
-    [[nodiscard]] static SceneBuffers buffersOf(const RenderScene& scene);
-    // The collect and reduce passes (nothing without a light); `textures` the bindless table's set.
-    // Their results are visible to compute and (with ray tracing pipelines) ray tracing shaders.
-    void record(VkCommandBuffer cmd, uint32_t frameSlot, const SceneBuffers& scene, VkDescriptorSet textures);
+    // The collect and reduce passes (nothing without a light), untimed; `textures` the bindless table's set.
+    void record(const Frame& frame, const RenderScene& scene, VkDescriptorSet textures);
 
     [[nodiscard]] uint32_t count() const noexcept { return m_count; }
-    [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lights; }
-    [[nodiscard]] VkImageView powerView() const noexcept { return m_powerView; }
-    [[nodiscard]] VkBuffer rangeBuffer(uint32_t frameSlot) const noexcept { return m_ranges[frameSlot].buffer; }
-    [[nodiscard]] VkBuffer firstBuffer(uint32_t frameSlot) const noexcept { return m_first[frameSlot].buffer; }
+    // What a pass that draws a light declares: the lights and the slot's ranges and first lights as storage
+    // buffers, the power image sampled in GENERAL (Pass::sampledGeneral).
+    [[nodiscard]] GpuBuffer& lights() noexcept { return m_lights; }
+    [[nodiscard]] gpu::Image& power() noexcept { return m_power; }
+    [[nodiscard]] GpuBuffer& ranges(uint32_t frameSlot) noexcept { return m_ranges[frameSlot]; }
+    [[nodiscard]] GpuBuffer& first(uint32_t frameSlot) noexcept { return m_first[frameSlot]; }
 
 private:
     bool createLights(uint32_t capacity);
@@ -65,23 +61,17 @@ private:
     void destroyPower();
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPipelineStageFlags m_readers{VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT};   // the stages that read the results
-    VkPhysicalDevice m_physical{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
 
-    VkBuffer m_lights{VK_NULL_HANDLE};
-    VkDeviceMemory m_lightsMemory{VK_NULL_HANDLE};
+    GpuBuffer m_lights;
     uint32_t m_lightCapacity{0};
 
-    VkImage m_power{VK_NULL_HANDLE};
-    VkDeviceMemory m_powerMemory{VK_NULL_HANDLE};
-    VkImageView m_powerView{VK_NULL_HANDLE};          // every level, sampled by the path tracer
-    std::vector<VkImageView> m_levelViews;             // one a level, storage
+    gpu::Image m_power;   // R32F, every level: sampled whole, written a level at a time
     uint32_t m_side{0}, m_levels{0};
-    bool m_powerFresh{true};                           // UNDEFINED until its first transition
 
-    std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_ranges{};
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_ranges{};
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_rangeCapacity{};
-    std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_first{};
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_first{};
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_firstCapacity{};
     std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_firstVersion{};   // the version and slot end each slot holds
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_firstSlotEnd{};

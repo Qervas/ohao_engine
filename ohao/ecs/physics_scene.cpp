@@ -236,7 +236,7 @@ auto PhysicsScene::Impl::ownCollider(entt::entity e) const -> bool {
 }
 
 // The mesh a collider is fitted to: a CollisionMesh, else the entity's MeshSource.
-auto PhysicsScene::Impl::meshOf(entt::entity e) -> std::shared_ptr<const Model> {
+auto PhysicsScene::Impl::meshOf(entt::entity e) -> std::shared_ptr<const cooked::Mesh> {
     const MeshSource* source = nullptr;
     MeshSource fromCollision;
     if (const auto* cm = reg.try_get<CollisionMesh>(e)) {
@@ -247,18 +247,54 @@ auto PhysicsScene::Impl::meshOf(entt::entity e) -> std::shared_ptr<const Model> 
     }
     if (!source) return nullptr;
     if (const auto* asset = std::get_if<ModelAsset>(&source->source)) {
-        auto loaded = assets.loadModel(asset->asset, asset->mesh);
+        auto loaded = assets.loadMesh(asset->asset, asset->mesh);
         if (!loaded) {
             warn(e, "W_COLLIDER_NO_MESH", "its mesh did not load (" + loaded.error().message + "); no collider");
             return nullptr;
         }
         return std::move(loaded.value());
     }
-    return primitiveModel(*source);
+    return primitiveMesh(*source);
 }
 
 // One collider as a backend shape in the body's frame (scale baked), or nullopt.
-auto PhysicsScene::Impl::shapeOf(entt::entity e, const Collider& c, glm::vec3 scale, Motion motion, std::vector<std::shared_ptr<FittedCollider>>& keep, BodyRecord::Kind& kind) -> std::optional<pb::ShapeInfo> {
+auto PhysicsScene::Impl::sharedShape(const cooked::Mesh& mesh, ColliderShape shape) -> std::shared_ptr<const pb::SharedShape> {
+    if (!mesh.id || mesh.vertices.empty()) return nullptr;
+    auto& slot = sharedShapes[{mesh.id, shape}];
+    if (auto made = slot.lock()) return made;
+    pb::IPhysicsBackend& be = ensureBackend();
+    // The cooked shape's name: the mesh, which shape of it, and whose bytes they are.
+    ContentHasher name;
+    name.value(mesh.id.hi);
+    name.value(mesh.id.lo);
+    name.value(static_cast<uint32_t>(shape));
+    name.value(be.sharedFormat());
+    const std::filesystem::path file = assets.shapeFile(name.finish());
+    std::shared_ptr<const pb::SharedShape> made;
+    if (!file.empty())
+        if (const auto cooked = cooked::Mapping::open(file)) made = be.loadShared(cooked.value()->bytes());
+    if (!made) {
+        std::vector<glm::vec3> positions;
+        positions.reserve(mesh.vertices.size());
+        for (const Vertex& v : mesh.vertices) positions.push_back(v.position);
+        pb::ShapeInfo info;
+        if (shape == ColliderShape::Mesh) {
+            info.setMesh(positions, mesh.indices);
+        } else {
+            info.type = pb::ShapeInfo::Type::CONVEX_HULL;
+            info.meshVertices = positions.data();
+            info.meshVertexCount = static_cast<uint32_t>(positions.size());
+        }
+        made = be.makeShared(info);
+        if (made && !file.empty())
+            if (const auto written = cooked::writeFile(file, be.saveShared(*made)); !written)
+                OHAO_LOG(Warn, physics, "a collision shape was not kept: {}", written.error());
+    }
+    slot = made;
+    return made;
+}
+
+auto PhysicsScene::Impl::shapeOf(entt::entity e, const Collider& c, glm::vec3 scale, Motion motion, std::vector<std::shared_ptr<FittedCollider>>& keep, BodyRecord::Kind& kind, std::vector<std::shared_ptr<const pb::SharedShape>>& held) -> std::optional<pb::ShapeInfo> {
     ColliderShape shape = c.shape;
     if (shape == ColliderShape::Mesh && motion == Motion::Dynamic) {
         warn(e, "W_LEVEL_DYNAMIC_MESH", "a dynamic body cannot have a triangle-mesh collider; it is built as the mesh's convex hull");
@@ -280,10 +316,22 @@ auto PhysicsScene::Impl::shapeOf(entt::entity e, const Collider& c, glm::vec3 sc
             warn(e, "W_COLLIDER_NO_MESH", "its collider has no size and the entity no mesh to fit it to; no collider");
             return std::nullopt;
         }
+        // A mesh or a hull of a cooked mesh: the mesh's one shape, at this body's scale.
+        if (shape == ColliderShape::Mesh || shape == ColliderShape::Convex) {
+            if (auto shared = sharedShape(*model, shape)) {
+                pb::ShapeInfo s;
+                s.type = pb::ShapeInfo::Type::SHARED;
+                s.shared = shared;
+                s.sharedScale = scale;
+                kind = shape == ColliderShape::Mesh ? BodyRecord::Kind::Mesh : BodyRecord::Kind::Convex;
+                held.push_back(std::move(shared));
+                return s;
+            }
+        }
         MeshData data;
         data.positions.reserve(model->vertices.size());
         for (const auto& v : model->vertices) data.positions.push_back(v.position);
-        if (shape == ColliderShape::Mesh) data.indices = model->indices;
+        if (shape == ColliderShape::Mesh) data.indices.assign(model->indices.begin(), model->indices.end());
         *fitted = fitCollider(data, shape, scale);
     }
     if (fitted->roundedScale)
@@ -389,7 +437,7 @@ void PhysicsScene::Impl::build(entt::entity e, const std::vector<entt::entity>& 
     record.wpos = body.position;
     record.wrot = body.rotation;
     if (ownCollider(e))
-        if (auto s = shapeOf(e, reg.get<Collider>(e), body.scale, rb.motion, keep, record.kind))
+        if (auto s = shapeOf(e, reg.get<Collider>(e), body.scale, rb.motion, keep, record.kind, record.shared))
             children.push_back({std::move(*s), glm::vec3(0.0f), glm::quat(1, 0, 0, 0)});
     const glm::quat inverse = glm::inverse(body.rotation);
     for (const entt::entity p : parts) {
@@ -398,7 +446,7 @@ void PhysicsScene::Impl::build(entt::entity e, const std::vector<entt::entity>& 
         if (!c || c->shape == ColliderShape::None || !pw) continue;
         const Placement part = decompose(pw->world);
         BodyRecord::Kind ignored{};
-        if (auto s = shapeOf(p, *c, part.scale, rb.motion, keep, ignored))
+        if (auto s = shapeOf(p, *c, part.scale, rb.motion, keep, ignored, record.shared))
             children.push_back({std::move(*s), inverse * (part.position - body.position), inverse * part.rotation});
         partOf[p] = e;
     }
@@ -424,6 +472,7 @@ void PhysicsScene::Impl::build(entt::entity e, const std::vector<entt::entity>& 
     pb::IPhysicsBackend& be = ensureBackend();
     record.handle = be.createBody(info);
     ++builds;
+    if (rb.motion == Motion::Static) ++staticsBuilt;
     if (record.handle != pb::INVALID_BODY) {
         entityOf[record.handle] = e;
         bodies[e] = record;
@@ -483,6 +532,12 @@ void PhysicsScene::Impl::syncBodies() {
         const auto parts = partsOf.find(e);
         const auto& list = parts == partsOf.end() ? kNone : parts->second;
         if (ownCollider(e) || !list.empty()) build(e, list);
+    }
+    // Static bodies added one at a time leave the broad phase's tree as they came: rebuilt here, so that a query
+    // before the next step is as fast as one after it.
+    if (staticsBuilt > 0 && backend) {
+        backend->optimizeBroadPhase();
+        staticsBuilt = 0;
     }
 
     syncJoints();
@@ -820,6 +875,7 @@ void PhysicsScene::setInputControl(InputControl fn) { m->inputControl = std::mov
 bool PhysicsScene::hasInputControl() const noexcept { return static_cast<bool>(m->inputControl); }
 void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
 bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }
+bool PhysicsScene::ignoresLook() const noexcept { return m->ignoresLook; }
 void PhysicsScene::setEvents(EventLog& log) {
     namespace pe = physics_events;
     m->out.contactBegin = log.writer<ContactEvent>(pe::kContactBegin, "physics");

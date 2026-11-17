@@ -1,5 +1,6 @@
 #include "vulkan_renderer_impl.hpp"
 #include "gpu/vulkan/gpu_fault.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/env_cdf.hpp"
 #include "render/rt/env_sun.hpp"
 #include "render/scene/render_scene.hpp"
@@ -59,7 +60,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
     if (m_envSampler == VK_NULL_HANDLE) m_envSampler = createEnvSampler(m_device);
 
     // Once per environment (reloading on every scene upload leaked multi-GB HDR images); none
-    // unloads what was there (the queue is idle: render() waited).
+    // unloads what was there.
     const std::string key = environmentKey();
     if (key.empty() && !m_envMapLoadedKey.empty()) destroyEnvMapImage();
     if (!key.empty() && key != m_envMapLoadedKey && m_textureManager) {
@@ -100,96 +101,37 @@ void VulkanRenderer::uploadEnvironmentMap() {
                     OHAO_LOG(Info, gpu, "env map: {} has no sun to take out (peak {:.1f}, median sky {:.3f})",
                              m_envMapPath, sun.peak, sun.median);
             }
-            // Replacing an earlier env map: frames in flight may still sample it.
-            if (m_envMapImage != VK_NULL_HANDLE) {
-                gpu::checkResult(vkQueueWaitIdle(m_graphicsQueue), "environment replace");
-                destroyEnvMapImage();
-            }
+            // Replacing an earlier environment: its image and its CDF are retired, for the frames in flight that
+            // still read them.
+            destroyEnvMapImage();
+            m_allocator.retire(m_envCdf);
 
-            VkImageCreateInfo imgInfo{};
-            imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            imgInfo.imageType = VK_IMAGE_TYPE_2D;
-            imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
-            imgInfo.extent = {static_cast<uint32_t>(ew), static_cast<uint32_t>(eh), 1};
-            imgInfo.mipLevels = 1;
-            imgInfo.arrayLayers = 1;
-            imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-            imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-            imgInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            // The path tracer's 2D CDF (render/rt/env_cdf.hpp), uploaded with the pixels through
+            // one staging buffer into device-local memory: its draws are random reads, which host
+            // memory (over PCIe) made most of a realtime frame.
+            EnvCdf envCdf;
+            envCdf.build(hdrPixels, ew, eh);
+            const VkDeviceSize pixelSize = VkDeviceSize(ew) * eh * 4 * sizeof(float);
+            const VkDeviceSize cdfSize = VkDeviceSize(envCdf.data().size()) * sizeof(float);
 
-            VkImage envImage = VK_NULL_HANDLE;
-            VkDeviceMemory envMem = VK_NULL_HANDLE;
-            bool ok = vkCreateImage(m_device, &imgInfo, nullptr, &envImage) == VK_SUCCESS &&
-                      envImage != VK_NULL_HANDLE;
-            if (!ok) OHAO_LOG(Error, gpu, "RT: env map: vkCreateImage failed for {}", m_envMapPath);
-            if (ok) {
-                VkMemoryRequirements emr{};
-                vkGetImageMemoryRequirements(m_device, envImage, &emr);
-                VkMemoryAllocateInfo eai{};
-                eai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-                eai.allocationSize = emr.size;
-                eai.memoryTypeIndex = findMemoryType(m_physicalDevice, emr.memoryTypeBits,
-                                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-                ok = vkAllocateMemory(m_device, &eai, nullptr, &envMem) == VK_SUCCESS && envMem != VK_NULL_HANDLE;
-                if (!ok) {
-                    OHAO_LOG(Error, gpu, "RT: env map: OOM allocating {} bytes for {}",
-                             static_cast<uint64_t>(emr.size), m_envMapPath);
-                    vkDestroyImage(m_device, envImage, nullptr);
-                }
-            }
-            if (ok) {
-                vkBindImageMemory(m_device, envImage, envMem, 0);
-                m_envMapImage = envImage;    // owned; freed by destroyEnvMapImage()
-                m_envMapMemory = envMem;
-
-                // The path tracer's 2D CDF (render/rt/env_cdf.hpp), uploaded with the pixels through
-                // one staging buffer into device-local memory: its draws are random reads, which host
-                // memory (over PCIe) made most of a realtime frame.
-                EnvCdf envCdf;
-                envCdf.build(hdrPixels, ew, eh);
-                destroyEnvSamplingBuffer();   // the queue is idle: no env map yet, or waited above
-
-                // Upload via staging buffer
-                const VkDeviceSize pixelSize = VkDeviceSize(ew) * eh * 4 * sizeof(float);
-                const VkDeviceSize cdfSize = VkDeviceSize(envCdf.data().size()) * sizeof(float);
-                {
-                    VkBufferCreateInfo bci{};
-                    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                    bci.size = cdfSize;
-                    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-                    vkCreateBuffer(m_device, &bci, nullptr, &m_envCdfBuffer);
-                    VkMemoryRequirements mr;
-                    vkGetBufferMemoryRequirements(m_device, m_envCdfBuffer, &mr);
-                    VkMemoryAllocateInfo ai{};
-                    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-                    ai.allocationSize = mr.size;
-                    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-                                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-                    vkAllocateMemory(m_device, &ai, nullptr, &m_envCdfMemory);
-                    vkBindBufferMemory(m_device, m_envCdfBuffer, m_envCdfMemory, 0);
-                }
-                VkBuffer stagingBuf = VK_NULL_HANDLE;
-                VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-                VkBufferCreateInfo stagingBci{};
-                stagingBci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                stagingBci.size = pixelSize + cdfSize;
-                stagingBci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-                vkCreateBuffer(m_device, &stagingBci, nullptr, &stagingBuf);
-                VkMemoryRequirements smr;
-                vkGetBufferMemoryRequirements(m_device, stagingBuf, &smr);
-                VkMemoryAllocateInfo sai{};
-                sai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-                sai.allocationSize = smr.size;
-                sai.memoryTypeIndex = findMemoryType(m_physicalDevice, smr.memoryTypeBits,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-                vkAllocateMemory(m_device, &sai, nullptr, &stagingMem);
-                vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
-                void* sm = nullptr;
-                vkMapMemory(m_device, stagingMem, 0, pixelSize + cdfSize, 0, &sm);
+            m_envMap = m_allocator.createImage(
+                {"env.map", VK_FORMAT_R32G32B32A32_SFLOAT, static_cast<uint32_t>(ew), static_cast<uint32_t>(eh),
+                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT});
+            m_envCdf = m_allocator.createBuffer(
+                cdfSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, AllocationUsage::GpuOnly);
+            GpuBuffer staging = m_allocator.createBuffer(pixelSize + cdfSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                         AllocationUsage::CpuToGpu, true);
+            if (!m_envMap || !m_envCdf.isValid() || !staging.getMappedData()) {
+                OHAO_LOG(Error, gpu, "RT: env map: no memory for {} ({}x{})", m_envMapPath, ew, eh);
+                m_allocator.retire(m_envMap);
+                m_allocator.destroyBuffer(m_envCdf);
+                m_envCdf = GpuBuffer{};
+                m_allocator.destroyBuffer(staging);
+            } else {
+                auto* const sm = static_cast<char*>(staging.getMappedData());
                 std::memcpy(sm, hdrPixels, static_cast<size_t>(pixelSize));
-                std::memcpy(static_cast<char*>(sm) + pixelSize, envCdf.data().data(), static_cast<size_t>(cdfSize));
-                vkUnmapMemory(m_device, stagingMem);
+                std::memcpy(sm + pixelSize, envCdf.data().data(), static_cast<size_t>(cdfSize));
+                m_allocator.flushBuffer(staging);
 
                 VkCommandBuffer uploadCmd = VK_NULL_HANDLE;
                 VkCommandBufferAllocateInfo cmdInfo{};
@@ -202,70 +144,30 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
                 beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                 vkBeginCommandBuffer(uploadCmd, &beginInfo);
+                const render::Frame frame{uploadCmd, nullptr, 0};
+                {
+                    render::Pass pass(frame, nullptr, render::Pass::Transfer);
+                    pass.read(staging, render::BufferUse::CopySrc).copyDst(m_envMap);
+                    pass.write(m_envCdf, render::BufferUse::CopyDst);
+                    pass.begin();
+                    VkBufferImageCopy region{};
+                    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.imageExtent = {static_cast<uint32_t>(ew), static_cast<uint32_t>(eh), 1};
+                    vkCmdCopyBufferToImage(uploadCmd, staging.buffer, m_envMap.image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                    const VkBufferCopy cdfCopy{pixelSize, 0, cdfSize};
+                    vkCmdCopyBuffer(uploadCmd, staging.buffer, m_envCdf.buffer, 1, &cdfCopy);
+                }
 
-                VkImageMemoryBarrier toDst{};
-                toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toDst.image = envImage;
-                toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
-
-                VkBufferImageCopy region{};
-                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.imageExtent = {static_cast<uint32_t>(ew), static_cast<uint32_t>(eh), 1};
-                vkCmdCopyBufferToImage(uploadCmd, stagingBuf, envImage,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-                const VkBufferCopy cdfCopy{pixelSize, 0, cdfSize};
-                vkCmdCopyBuffer(uploadCmd, stagingBuf, m_envCdfBuffer, 1, &cdfCopy);
-                VkBufferMemoryBarrier cdfReady{};
-                cdfReady.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-                cdfReady.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                cdfReady.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                cdfReady.srcQueueFamilyIndex = cdfReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                cdfReady.buffer = m_envCdfBuffer;
-                cdfReady.size = VK_WHOLE_SIZE;
-                vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                                     0, nullptr, 1, &cdfReady, 0, nullptr);
-
-                // Sampled by the path tracer (RT stages) and the deferred passes.
-                VkImageMemoryBarrier toShader{};
-                toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                toShader.srcQueueFamilyIndex = toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toShader.image = envImage;
-                toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &toShader);
-
-                VkImageViewCreateInfo viewInfo{};
-                viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                viewInfo.image = envImage;
-                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
-                viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkImageView envView = VK_NULL_HANDLE;
-                vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
-                m_envMapImageView = envView;
-
-                // The deferred frame's IBL from the same image, in the same submission (the
-                // queue was idled above, so an earlier prefilter's images are free to replace).
+                // The deferred frame's IBL from the same image, in the same submission.
                 if (!m_envPrefilter) {
                     m_envPrefilter = std::make_unique<render::EnvPrefilter>();
-                    if (!m_envPrefilter->initialize(m_device, m_physicalDevice)) {
+                    if (!m_envPrefilter->initialize(m_device, m_allocator)) {
                         OHAO_LOG(Error, gpu, "env map: the IBL prefilter could not start; deferred IBL is off");
                         m_envPrefilter.reset();
                     }
                 }
-                if (m_envPrefilter && !m_envPrefilter->build(uploadCmd, envView, static_cast<uint32_t>(ew),
-                                                              static_cast<uint32_t>(eh)))
+                if (m_envPrefilter && !m_envPrefilter->build(frame, m_envMap))
                     OHAO_LOG(Error, gpu, "env map: prefiltering {} failed; deferred IBL is off", m_envMapPath);
 
                 vkEndCommandBuffer(uploadCmd);
@@ -274,15 +176,14 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 submitInfo.commandBufferCount = 1;
                 submitInfo.pCommandBuffers = &uploadCmd;
                 gpu::submitAndWait(m_device, m_graphicsQueue, submitInfo, "environment upload");
-                vkDestroyBuffer(m_device, stagingBuf, nullptr);
-                vkFreeMemory(m_device, stagingMem, nullptr);
+                m_allocator.destroyBuffer(staging);
                 vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
 
                 OHAO_LOG(Debug, gpu, "RT: env CDF: {}x{}", ew, eh);
 
-                // Into the one bindless table. The manager now owns the view.
+                // Into the one bindless table; the view stays the image's.
                 const BindlessTextureHandle h =
-                    m_textureManager->registerExternalTexture(envView, "ohao_env_map", BindlessTextureType::Custom);
+                    m_textureManager->registerExternalTexture(m_envMap.view, "ohao_env_map", BindlessTextureType::Custom);
                 m_envMapTexIdx = h.valid() ? h.index : 0xFFFFFFFFu;
                 m_envMapWidth = static_cast<uint32_t>(ew);
                 m_envMapHeight = static_cast<uint32_t>(eh);
@@ -296,21 +197,8 @@ void VulkanRenderer::uploadEnvironmentMap() {
 
     // Binding 17 stays valid without an env map (envWidth 0 tells the shader to skip it): one
     // float, never read.
-    if (!m_envCdfBuffer) {
-        VkBufferCreateInfo bci{};
-        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = sizeof(float);
-        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        vkCreateBuffer(m_device, &bci, nullptr, &m_envCdfBuffer);
-        VkMemoryRequirements mr;
-        vkGetBufferMemoryRequirements(m_device, m_envCdfBuffer, &mr);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = mr.size;
-        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        vkAllocateMemory(m_device, &ai, nullptr, &m_envCdfMemory);
-        vkBindBufferMemory(m_device, m_envCdfBuffer, m_envCdfMemory, 0);
-    }
+    if (!m_envCdf.isValid())
+        m_envCdf = m_allocator.createBuffer(sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
 
     if (m_renderScene) {
         m_renderScene->setEnvMapTextureIndex(envMapLoaded() ? m_envMapTexIdx : render::kNoTexture);
@@ -342,21 +230,12 @@ void VulkanRenderer::collectRTTextures() {
     }
 }
 
-void VulkanRenderer::destroyEnvSamplingBuffer() {
-    if (m_envCdfBuffer) { vkDestroyBuffer(m_device, m_envCdfBuffer, nullptr); m_envCdfBuffer = VK_NULL_HANDLE; }
-    if (m_envCdfMemory) { vkFreeMemory(m_device, m_envCdfMemory, nullptr); m_envCdfMemory = VK_NULL_HANDLE; }
-}
-
 void VulkanRenderer::destroyEnvMapImage() {
-    // The bindless table owns the view once registered: unloading it destroys the view.
-    if (m_envMapTexIdx != 0xFFFFFFFFu && m_textureManager && m_textureManager->isInitialized()) {
+    // Out of the bindless table, then retired: a frame in flight may still sample it.
+    if (m_envMapTexIdx != 0xFFFFFFFFu && m_textureManager && m_textureManager->isInitialized())
         m_textureManager->unloadTexture(BindlessTextureHandle{m_envMapTexIdx});
-        m_envMapImageView = VK_NULL_HANDLE;
-    }
     m_envMapTexIdx = 0xFFFFFFFFu;
-    if (m_envMapImageView) { vkDestroyImageView(m_device, m_envMapImageView, nullptr); m_envMapImageView = VK_NULL_HANDLE; }
-    if (m_envMapImage) { vkDestroyImage(m_device, m_envMapImage, nullptr); m_envMapImage = VK_NULL_HANDLE; }
-    if (m_envMapMemory) { vkFreeMemory(m_device, m_envMapMemory, nullptr); m_envMapMemory = VK_NULL_HANDLE; }
+    m_allocator.retire(m_envMap);
     m_envMapWidth = 0;
     m_envMapHeight = 0;
     m_envMapLoadedKey.clear();

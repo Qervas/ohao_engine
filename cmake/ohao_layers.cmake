@@ -8,6 +8,7 @@ set(OHAO_LAYERS
     ohao_core=0
     ohao_gpu_vulkan=1 ohao_reflect=1 ohao_level=1 ohao_anim=1 ohao_audio_bank=1 ohao_vfx=1 ohao_physics=1
     ohao_asset=2 ohao_audio=2
+    ohao_cook=3
     ohao_renderer=4
     ohao_ecs=4
     ohao_level_world=5 ohao_world_render=5

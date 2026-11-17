@@ -63,45 +63,35 @@ void CapturePreviewPass::cleanup() {
     m_device = VK_NULL_HANDLE;
 }
 
-void CapturePreviewPass::record(VkCommandBuffer cmd, uint32_t slot, VkImageView finalView,
-                                const std::array<uint32_t, 4>& rect, uint32_t dstWidth, uint32_t dstHeight,
-                                VkBuffer out) {
-    const VkDescriptorSet set = m_sets[slot];
-    VkDescriptorImageInfo image{VK_NULL_HANDLE, finalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo buffer{out, 0, static_cast<VkDeviceSize>(dstWidth) * dstHeight * 4};
+void CapturePreviewPass::record(const render::Frame& frame, gpu::Image& final, const std::array<uint32_t, 4>& rect,
+                                uint32_t dstWidth, uint32_t dstHeight, GpuBuffer& out) {
+    const VkDescriptorSet set = m_sets[frame.slot];
+    VkDescriptorImageInfo image{VK_NULL_HANDLE, final.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo buffer{out.buffer, 0, static_cast<VkDeviceSize>(dstWidth) * dstHeight * 4};
     VkWriteDescriptorSet writes[2] = {shader::write(shader::compute_capture_preview::finalImage, set),
                                       shader::write(shader::compute_capture_preview::preview, set)};
     writes[0].pImageInfo = &image;
     writes[1].pBufferInfo = &buffer;
     vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
 
-    // The final image's writers (tonemap's or lighting's render pass, the gizmo) before the
-    // filter reads it.
-    VkMemoryBarrier toRead{};
-    toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toRead, 0, nullptr, 0, nullptr);
-
-    shared::PreviewPush pc{};
-    pc.src = {rect[0], rect[1], rect[2], rect[3]};
-    pc.dst = {dstWidth, dstHeight, 0u, 0u};
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (dstWidth + 63) / 64, dstHeight, 1);   // rows of 64 (the shader's workgroup)
+    {
+        render::Pass pass(frame, "capture.preview", render::Pass::Compute);
+        pass.sampled(final).write(out, render::BufferUse::Storage);
+        pass.begin();
+        const VkCommandBuffer cmd = frame.cmd;
+        shared::PreviewPush pc{};
+        pc.src = {rect[0], rect[1], rect[2], rect[3]};
+        pc.dst = {dstWidth, dstHeight, 0u, 0u};
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, (dstWidth + 63) / 64, dstHeight, 1);   // rows of 64 (the shader's workgroup)
+    }
 
     // Visible to the host once the frame's fence signals.
-    VkBufferMemoryBarrier toHost{};
-    toHost.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    toHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    toHost.srcQueueFamilyIndex = toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toHost.buffer = out;
-    toHost.size = buffer.range;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1,
-                         &toHost, 0, nullptr);
+    render::Pass toHost(frame, nullptr, render::Pass::Compute);
+    toHost.read(out, render::BufferUse::HostRead);
+    toHost.begin();
 }
 
 } // namespace ohao

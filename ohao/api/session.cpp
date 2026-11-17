@@ -171,6 +171,7 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
         for (auto [e, id] : reg.view<const ecs::EntityId>().each())
             if (!reg.all_of<ecs::Parent>(e)) roots.push_back(e);
         for (const entt::entity e : roots) s.world.destroy(e);   // each subtree
+        if (s.assets) s.assets->forgetAll();   // the old scene's cooked files unmap; the new one reads its sources
         s.time->setFrame(0);
         dropInjected(s);
     }
@@ -734,6 +735,28 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
         out.key("blasRebuilds"); out.uint64(k->blasRebuilds);
         out.endObject();
     }
+    out.key("memory");
+    out.beginObject();
+    out.key("textures"); out.uint64(st->memory.textures);
+    out.key("textureBytes"); out.uint64(st->memory.textureBytes);
+    out.key("meshBytes"); out.uint64(st->memory.meshBytes);
+    out.key("meshCapacityBytes"); out.uint64(st->memory.meshCapacityBytes);
+    out.key("meshes"); out.uint64(st->memory.meshes);
+    out.key("materials"); out.uint64(st->memory.materials);
+    out.key("blas"); out.uint64(st->memory.blas);
+    out.key("blasBytes"); out.uint64(st->memory.blasBytes);
+    out.key("targetBytes"); out.uint64(st->memory.targetBytes);
+    out.key("deviceBytes"); out.uint64(st->memory.deviceBytes);
+    out.key("targets");
+    out.beginArray();
+    for (const auto& [name, bytes] : st->memory.targets) {
+        out.beginArray();
+        out.string(name);
+        out.uint64(bytes);
+        out.endArray();
+    }
+    out.endArray();
+    out.endObject();
     if (const auto& l = st->latency) {
         out.key("latency");
         out.beginObject();
@@ -890,7 +913,7 @@ const std::vector<Method>& methodTable() {
         {{"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
            "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
            "saved; captures default to them. E_STATE on a host that renders nothing."}, renderSettings},
-        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
+        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, memory: {textures, textureBytes, meshes, meshBytes, meshCapacityBytes, blas, blasBytes, materials, targetBytes, deviceBytes, targets: [[name, bytes], ...]}, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
            "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
            "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."}, renderStats},
         {{"events.read", p.find<EventsReadParams>(), "{events: [{seq, step, event, ...fields}], next, dropped?}",
@@ -906,6 +929,15 @@ const std::vector<Method>& methodTable() {
            "E_NOT_FOUND for no level or a non-level entity."}, methodLevelInfo},
         {{"level.reload", p.find<LevelReloadParams>(), "as level.info",
            "Re-reads the level's file and rebuilds its entities and bodies in place; an unchanged file keeps world.hash."}, methodLevelReload, true},
+        {{"asset.info", p.find<AssetInfoParams>(),
+           "{models: [{path, entities, meshes, cookedBytes}], more?, cache}",
+           "The model files loaded now: the entities whose mesh or collision mesh each one is, its meshes and its "
+           "cooked file's bytes (the first 32 by path), and the cooked cache's folder. What they hold on the GPU is "
+           "render.stats' memory."}, methodAssetInfo},
+        {{"asset.reload", p.find<AssetReloadParams>(), "{entities}",
+           "Forgets a model file (or every one) and rebuilds the meshes and colliders of the entities that use it: a "
+           "file edited since is cooked again, an unchanged one costs its naming. A Level's file is level.reload's."},
+         methodAssetReload, true},
         {{"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
            "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."}, methodPhysicsRaycast},
         {{"physics.info", p.find<PhysicsInfoParams>(),

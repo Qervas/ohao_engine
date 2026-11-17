@@ -11,8 +11,9 @@
 // one device-local buffer (kClusterCount counts, then kClusterMaxLights indices a froxel). Each
 // slot has a host-visible stats word triple: the lights dropped by full froxels, the froxels
 // that dropped any, the largest froxel count; latestOverflow() is the newest finished frame's.
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
-#include "render/rt/rt_compute.hpp"
+#include "render/graph/pass.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "gpu/shared_layout.hpp"
 
@@ -34,7 +35,7 @@ public:
     LightClusters(const LightClusters&) = delete;
     LightClusters& operator=(const LightClusters&) = delete;
 
-    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    [[nodiscard]] bool initialize(VkDevice device, GpuAllocator& allocator);
     void cleanup();
 
     // This frame's lights into the slot's buffer, after the slot's fence: skipped when the slot
@@ -42,21 +43,21 @@ public:
     void setLights(uint32_t slot, std::span<const LightData> lights, uint64_t version);
     // The froxel lists for the camera the lighting pass shades with: `view`, the projection the
     // G-buffer was rasterized with (jitter included), the frame's size and the far plane; the
-    // renderer's frame number labels the overflow. Outside any render pass.
-    void build(VkCommandBuffer cmd, uint32_t slot, const glm::mat4& view, const glm::mat4& proj, uint32_t width,
-               uint32_t height, float farPlane, uint64_t frameNumber);
+    // renderer's frame number labels the overflow. Timed as lights.cluster.
+    void build(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj, uint32_t width, uint32_t height,
+               float farPlane, uint64_t frameNumber);
 
-    [[nodiscard]] VkBuffer lightBuffer(uint32_t slot) const noexcept {
-        return slot < MAX_FRAMES_IN_FLIGHT ? m_slots[slot].lights.buffer : VK_NULL_HANDLE;
-    }
+    // The slot's light table (an empty buffer before its first setLights).
+    [[nodiscard]] GpuBuffer& lightBuffer(uint32_t slot) noexcept { return m_slots[slot % MAX_FRAMES_IN_FLIGHT].lights; }
     [[nodiscard]] const gpu::shared::LightGpu* lights(uint32_t slot) const noexcept {
-        return slot < MAX_FRAMES_IN_FLIGHT ? static_cast<const gpu::shared::LightGpu*>(m_slots[slot].lights.mapped)
-                                           : nullptr;
+        return slot < MAX_FRAMES_IN_FLIGHT
+                   ? static_cast<const gpu::shared::LightGpu*>(m_slots[slot].lights.getMappedData())
+                   : nullptr;
     }
     [[nodiscard]] uint32_t lightCount(uint32_t slot) const noexcept {
         return slot < MAX_FRAMES_IN_FLIGHT ? m_slots[slot].count : 0u;
     }
-    [[nodiscard]] VkBuffer clusterBuffer() const noexcept { return m_clusters.buffer; }
+    [[nodiscard]] GpuBuffer& clusterBuffer() noexcept { return m_clusters; }
     // The lighting pass's slice mapping (ClusterPush.screen.zw) for the last build.
     [[nodiscard]] float sliceScale() const noexcept { return m_sliceScale; }
     [[nodiscard]] float sliceBias() const noexcept { return m_sliceBias; }
@@ -82,32 +83,29 @@ public:
 
 private:
     struct Slot {
-        rtc::HostBuffer lights{};
+        GpuBuffer lights{};
         uint32_t capacity{0};   // LightGpu records
         uint32_t count{0};
         uint64_t version{0};
-        rtc::HostBuffer stats{};
+        GpuBuffer stats{};
         bool pending{false};
         uint64_t frame{0};
     };
     void collectSlot(uint32_t slot);
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sets{};
     VkPipelineLayout m_layout{VK_NULL_HANDLE};
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     std::array<Slot, MAX_FRAMES_IN_FLIGHT> m_slots{};
-    struct DeviceBuffer {
-        VkBuffer buffer{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-    } m_clusters;
+    GpuBuffer m_clusters;
     float m_sliceScale{0.0f}, m_sliceBias{0.0f};
     std::optional<Overflow> m_latest;
     bool m_captureRequested{false};
-    rtc::HostBuffer m_captureBuffer{};
+    GpuBuffer m_captureBuffer{};
     bool m_captured{false};
 };
 

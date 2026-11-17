@@ -21,11 +21,9 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 /**
  * Per-frame GPU resources for multi-frame rendering.
  *
- * Each frame in flight has its own set of:
+ * Each frame in flight has its own:
  * - Command buffer (to record commands while previous frame is executing)
  * - Fence (to track when this frame's GPU work completes)
- * - Uniform buffers (to avoid overwriting data while GPU is reading)
- * - Descriptor set (bound to this frame's uniform buffers)
  *
  * This eliminates CPU-GPU synchronization stalls by allowing the CPU
  * to prepare frame N+1 while the GPU is still rendering frame N.
@@ -36,11 +34,6 @@ struct FrameResources {
 
     // Synchronization: fence signals when GPU finishes this frame
     VkFence renderFence{VK_NULL_HANDLE};
-
-    // Staging buffer for pixel readback (optional, only if async readback is needed)
-    VkBuffer stagingBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory stagingBufferMemory{VK_NULL_HANDLE};
-    void* stagingBufferMapped{nullptr};
 
     // Track if this frame's resources are valid
     bool valid{false};
@@ -91,8 +84,7 @@ public:
     bool initialize(
         VkDevice device,
         VkPhysicalDevice physicalDevice,
-        VkCommandPool commandPool,
-        size_t stagingBufferSize
+        VkCommandPool commandPool
     );
 
     /**
@@ -143,30 +135,9 @@ public:
      */
     bool isInitialized() const { return m_initialized; }
 
-    /**
-     * Resize staging buffers for new framebuffer dimensions.
-     * Must wait for all frames to complete before calling.
-     *
-     * @param newSize New staging buffer size in bytes
-     * @return true if successful
-     */
-    bool resizeStagingBuffers(size_t newSize);
-
 private:
     bool createCommandBuffers(VkCommandPool commandPool);
     bool createSyncObjects();
-    bool createStagingBuffers(size_t size);
-
-    // The first type with all of `properties`, else (when given) all of `fallback`.
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, VkMemoryPropertyFlags fallback = 0);
-    bool createBuffer(
-        VkDeviceSize size,
-        VkBufferUsageFlags usage,
-        VkMemoryPropertyFlags properties,
-        VkBuffer& buffer,
-        VkDeviceMemory& bufferMemory,
-        VkMemoryPropertyFlags fallback = 0
-    );
 
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};

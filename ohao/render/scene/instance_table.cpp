@@ -158,29 +158,21 @@ VkDeviceSize InstanceTable::pendingBytes() const noexcept {
     return m_dirty.size() * sizeof(InstanceGpu) + m_dirtyRefs.size() * kRefBytesPerSlot;
 }
 
-std::size_t InstanceTable::recordUploads(detail::StagingBatch& batch, std::vector<GpuBuffer>& retired) {
-    if (needsGpuGrowth()) {
-        GpuBuffer instances, refs;
-        if (!createGpuBuffers(m_capacity, instances, refs)) return 0;   // keep dirty, retry next frame
-        const VkBufferCopy iCopy{0, 0, VkDeviceSize{m_gpuCapacity} * sizeof(InstanceGpu)};
-        const VkBufferCopy rCopy{0, 0, VkDeviceSize{m_gpuCapacity} * kRefBytesPerSlot};
-        vkCmdCopyBuffer(batch.cmd, m_instanceBuffer.buffer, instances.buffer, 1, &iCopy);
-        vkCmdCopyBuffer(batch.cmd, m_refBuffer.buffer, refs.buffer, 1, &rCopy);
-        // The dirty writes below may land inside the copied range: order them after it.
-        VkMemoryBarrier b{};
-        b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(batch.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 1, &b, 0, nullptr, 0, nullptr);
-        retired.push_back(m_instanceBuffer);
-        retired.push_back(m_refBuffer);
-        m_instanceBuffer = instances;
-        m_refBuffer = refs;
-        m_gpuCapacity = m_capacity;
-        ++m_gpuGrowths;
-    }
+bool InstanceTable::growGpu(std::vector<detail::TableGrowth>& growths, std::vector<GpuBuffer>& retired) {
+    GpuBuffer instances, refs;
+    if (!createGpuBuffers(m_capacity, instances, refs)) return false;
+    growths.push_back({m_instanceBuffer, &m_instanceBuffer, VkDeviceSize{m_gpuCapacity} * sizeof(InstanceGpu)});
+    growths.push_back({m_refBuffer, &m_refBuffer, VkDeviceSize{m_gpuCapacity} * kRefBytesPerSlot});
+    retired.push_back(m_instanceBuffer);
+    retired.push_back(m_refBuffer);
+    m_instanceBuffer = instances;
+    m_refBuffer = refs;
+    m_gpuCapacity = m_capacity;
+    ++m_gpuGrowths;
+    return true;
+}
 
+std::size_t InstanceTable::recordUploads(detail::StagingBatch& batch) {
     std::size_t instanceBytes = 0;
     forEachRun(m_dirty, [&](uint32_t first, uint32_t n) {
         const VkDeviceSize bytes = VkDeviceSize{n} * sizeof(InstanceGpu);

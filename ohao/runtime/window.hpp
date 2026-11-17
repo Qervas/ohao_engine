@@ -11,6 +11,8 @@ struct GLFWwindow;
 namespace ohao::runtime {
 
 struct WindowConfig {
+    // The drawable area in pixels, which is what the renderer draws: on a scaled display (KDE at 150%)
+    // the window is made that much smaller in the desktop's units, never drawn with more pixels.
     uint32_t    width{1920};
     uint32_t    height{1080};
     std::string title{"OHAO"};
@@ -43,7 +45,7 @@ public:
     void setCursorCaptured(bool captured);
     [[nodiscard]] bool cursorCaptured() const noexcept { return m_cursorCaptured; }
     [[nodiscard]] bool focused() const;
-    void setSize(uint32_t w, uint32_t h);
+    void setSize(uint32_t w, uint32_t h);   // in pixels, as WindowConfig's
     [[nodiscard]] ohao::PresentTarget presentTarget(ohao::PresentMode mode) const;
     // The refresh rate of the display the window is on (the primary display while windowed), Hz;
     // 0 when unknown.
@@ -55,9 +57,12 @@ private:
     static void onCursor(GLFWwindow*, double x, double y);
     static void onFocus(GLFWwindow*, int focused);
     static void onFramebufferSize(GLFWwindow*, int w, int h);
+    static void onContentScale(GLFWwindow*, float sx, float sy);
+    void fitPixels();   // the window's size in the desktop's units for m_pixels at the display's scale
 
     GLFWwindow* m_window{nullptr};
     std::vector<InputEvent> m_pending;
+    VkExtent2D m_pixels{0, 0};   // the size asked for (the config's, then setSize's)
     bool m_resized{false};
     bool m_cursorCaptured{false};
     double m_lastX{0.0}, m_lastY{0.0};   // the cursor at its last event (or capture change)

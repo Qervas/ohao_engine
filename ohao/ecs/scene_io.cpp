@@ -252,11 +252,11 @@ bool sortByOffset(std::vector<Diagnostic>& v) {
 
 // checkAssets: an asset reference whose file the resolver does not have is
 // E_ASSET_NOT_FOUND, at its path member, reached from the component block `c` by `keys`.
-void reportMissingAsset(const AssetRef& ref, std::string_view what, std::initializer_list<const char*> keys,
+void reportMissingAsset(const AssetRef& ref, std::string_view what, const std::vector<std::string_view>& keys,
                         const JsonDocument& doc, const JsonNode& c, DecodeContext& ctx) {
     const JsonNode* at = &c;
     int depth = 0;
-    for (const char* key : keys) {
+    for (const std::string_view key : keys) {
         const JsonNode* next = at->type == JsonType::Object ? doc.member(*at, key) : nullptr;
         if (!next) break;
         ctx.push(key);
@@ -268,23 +268,42 @@ void reportMissingAsset(const AssetRef& ref, std::string_view what, std::initial
     while (depth-- > 0) ctx.pop();
 }
 
-void checkAsset(const MeshSource& ms, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
-                DecodeContext& ctx) {
-    const auto* model = std::get_if<ModelAsset>(&ms.source);
-    if (model && !assets.exists(model->asset))
-        reportMissingAsset(model->asset, "model", {"source", "ModelAsset", "asset", "path"}, doc, c, ctx);
-}
-
-void checkAsset(const Environment& env, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
-                DecodeContext& ctx) {
-    if (env.hdri && !assets.exists(*env.hdri))
-        reportMissingAsset(*env.hdri, "environment image", {"hdri", "path"}, doc, c, ctx);
-}
-
-void checkAsset(const Level& level, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
-                DecodeContext& ctx) {
-    if (!assets.exists(level.asset)) reportMissingAsset(level.asset, "level", {"asset", "path"}, doc, c, ctx);
-}
+// Every file a component names (each AssetRef a component type holds), with what it is and where its path sits
+// in the component's JSON: what scene.validate's checkAssets and `ohao doctor` hold to exist.
+struct AssetUse {
+    const AssetRef* ref;
+    std::string_view what;
+    std::vector<std::string_view> path;
+};
+struct AssetTypes {
+    const TypeInfo *meshSource, *environment, *level, *collisionMesh, *skinnedMesh, *animator, *audioMix, *vfxSet;
+    explicit AssetTypes(const TypeRegistry& r)
+        : meshSource(r.find<MeshSource>()), environment(r.find<Environment>()), level(r.find<Level>()),
+          collisionMesh(r.find<CollisionMesh>()), skinnedMesh(r.find<SkinnedMesh>()), animator(r.find<Animator>()),
+          audioMix(r.find<AudioMix>()), vfxSet(r.find<VfxSet>()) {}
+    void uses(const TypeInfo* t, const void* v, std::vector<AssetUse>& out) const {
+        out.clear();
+        if (t == meshSource) {
+            if (const auto* m = std::get_if<ModelAsset>(&static_cast<const MeshSource*>(v)->source))
+                out.push_back({&m->asset, "model", {"source", "ModelAsset", "asset", "path"}});
+        } else if (t == environment) {
+            if (const auto& env = *static_cast<const Environment*>(v); env.hdri)
+                out.push_back({&*env.hdri, "environment image", {"hdri", "path"}});
+        } else if (t == level) {
+            out.push_back({&static_cast<const Level*>(v)->asset, "level", {"asset", "path"}});
+        } else if (t == collisionMesh) {
+            out.push_back({&static_cast<const CollisionMesh*>(v)->source.asset, "collision model", {"source", "asset", "path"}});
+        } else if (t == skinnedMesh) {
+            out.push_back({&static_cast<const SkinnedMesh*>(v)->file, "skin", {"file", "path"}});
+        } else if (t == animator) {
+            out.push_back({&static_cast<const Animator*>(v)->graph, "animation graph", {"graph", "path"}});
+        } else if (t == audioMix) {
+            out.push_back({&static_cast<const AudioMix*>(v)->asset, "audio bank", {"asset", "path"}});
+        } else if (t == vfxSet) {
+            out.push_back({&static_cast<const VfxSet*>(v)->asset, "effect set", {"asset", "path"}});
+        }
+    }
+};
 
 std::string hexId(uint64_t id) {
     JsonWriter w;
@@ -292,7 +311,7 @@ std::string hexId(uint64_t id) {
     return w.str().substr(1, 16);
 }
 
-// W_UNSAVEABLE_MESH: a mesh made in code (spawnModel) has no MeshSource, so the file
+// W_UNSAVEABLE_MESH: a MeshRenderer put on an entity in code has no MeshSource, so the file
 // cannot rebuild it. `order` is the saved entities in file order.
 void unsaveableMeshes(const World& world, const std::vector<std::pair<uint64_t, entt::entity>>& order,
                       SaveReport& report) {
@@ -317,9 +336,8 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                     DecodeContext& ctx, Decoded& out) {
     ankerl::unordered_dense::map<const TypeInfo*, std::size_t> upgradeCounts;
     const TypeInfo* parentType = r.find<Parent>();
-    const TypeInfo* meshSourceType = r.find<MeshSource>();
-    const TypeInfo* environmentType = r.find<Environment>();
-    const TypeInfo* levelType = r.find<Level>();
+    const AssetTypes assetTypes(r);
+    std::vector<AssetUse> assetUses;
     std::vector<std::string_view> knownNames;
     ankerl::unordered_dense::map<std::string_view, const TypeInfo*> byName;
     for (const TypeInfo* t : r.types()) {
@@ -409,10 +427,9 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                     }
                     ctx.component = nullptr;
                     if (out.assets) {
-                        if (t == meshSourceType) checkAsset(*static_cast<const MeshSource*>(v), doc, c, *out.assets, ctx);
-                        else if (t == environmentType)
-                            checkAsset(*static_cast<const Environment*>(v), doc, c, *out.assets, ctx);
-                        else if (t == levelType) checkAsset(*static_cast<const Level*>(v), doc, c, *out.assets, ctx);
+                        assetTypes.uses(t, v, assetUses);
+                        for (const AssetUse& use : assetUses)
+                            if (!out.assets->exists(*use.ref)) reportMissingAsset(*use.ref, use.what, use.path, doc, c, ctx);
                     }
                 }
             } else if (t) {
@@ -543,9 +560,8 @@ bool decodeFast(std::string_view text, const TypeRegistry& r, Decoded& out) {
         if (t->role == reflect::TypeRole::Component && t->serialized && componentOps(*t)) known.push_back({t->name, t});
     if (known.size() > 64) return false;
     const TypeInfo* parentType = r.find<Parent>();
-    const TypeInfo* meshSourceType = r.find<MeshSource>();
-    const TypeInfo* environmentType = r.find<Environment>();
-    const TypeInfo* levelType = r.find<Level>();
+    const AssetTypes assetTypes(r);
+    std::vector<AssetUse> assetUses;
 
     ankerl::unordered_dense::map<uint64_t, uint32_t> fileIndex;   // id -> index in out.entities
     std::vector<uint32_t> singletons(known.size(), 0);
@@ -618,15 +634,9 @@ bool decodeFast(std::string_view text, const TypeRegistry& r, Decoded& out) {
                     if (!reflect::readStructFast(v, t, c)) return false;
                     c.component = nullptr;
                     if (out.assets) {
-                        if (&t == meshSourceType) {
-                            const auto* m = std::get_if<ModelAsset>(&static_cast<const MeshSource*>(v)->source);
-                            if (m && !out.assets->exists(m->asset)) return false;
-                        } else if (&t == environmentType) {
-                            const auto& env = *static_cast<const Environment*>(v);
-                            if (env.hdri && !out.assets->exists(*env.hdri)) return false;
-                        } else if (&t == levelType) {
-                            if (!out.assets->exists(static_cast<const Level*>(v)->asset)) return false;
-                        }
+                        assetTypes.uses(&t, v, assetUses);
+                        for (const AssetUse& use : assetUses)
+                            if (!out.assets->exists(*use.ref)) return false;
                     }
                 }
                 if (in.failed()) return false;

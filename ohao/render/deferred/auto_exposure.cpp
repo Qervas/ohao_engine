@@ -1,5 +1,6 @@
 #include "render/deferred/auto_exposure.hpp"
 #include "render/shader_bindings/postprocess_exposure.hpp"
+#include "render/rt/rt_compute.hpp"
 
 #include "core/log.hpp"
 
@@ -17,38 +18,20 @@ struct ExposureParams {
     uint32_t reset, pad;
 };
 OHAO_CHECK_PUSH(ExposureParams, postprocess_exposure)   // postprocess/exposure.slang's
-
-bool createDeviceBuffer(VkDevice device, VkPhysicalDevice physical, VkDeviceSize size, VkBuffer& buffer,
-                        VkDeviceMemory& memory) {
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size = size;
-    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    if (vkCreateBuffer(device, &bci, nullptr, &buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements mr;
-    vkGetBufferMemoryRequirements(device, buffer, &mr);
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    ai.allocationSize = mr.size;
-    ai.memoryTypeIndex = rtc::findMemoryType(physical, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (ai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(device, &ai, nullptr, &memory) != VK_SUCCESS) return false;
-    return vkBindBufferMemory(device, buffer, memory, 0) == VK_SUCCESS;
-}
-
-VkMemoryBarrier memoryBarrier(VkAccessFlags src, VkAccessFlags dst) {
-    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    b.srcAccessMask = src;
-    b.dstAccessMask = dst;
-    return b;
-}
 }  // namespace
 
-bool AutoExposure::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool AutoExposure::initialize(VkDevice device, GpuAllocator& allocator) {
     m_device = device;
-    if (!createDeviceBuffer(device, physicalDevice, 2 * kBins * sizeof(int32_t), m_bins, m_binsMemory) ||
-        !createDeviceBuffer(device, physicalDevice, 4 * sizeof(float), m_state, m_stateMemory))
-        return false;
-    for (rtc::HostBuffer& b : m_readback)
-        if (!rtc::createHostBuffer(device, physicalDevice, 4 * sizeof(float), VK_BUFFER_USAGE_TRANSFER_DST_BIT, b))
-            return false;
+    m_allocator = &allocator;
+    constexpr VkBufferUsageFlags kDeviceUsage =
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    m_bins = allocator.createBuffer(2 * kBins * sizeof(int32_t), kDeviceUsage, AllocationUsage::GpuOnly);
+    m_state = allocator.createBuffer(4 * sizeof(float), kDeviceUsage, AllocationUsage::GpuOnly);
+    if (!m_bins.isValid() || !m_state.isValid()) return false;
+    for (GpuBuffer& b : m_readback) {
+        b = allocator.createBuffer(4 * sizeof(float), VK_BUFFER_USAGE_TRANSFER_DST_BIT, AllocationUsage::GpuToCpu, true);
+        if (!b.isValid() || !b.getMappedData()) return false;
+    }
 
     const VkDescriptorSetLayoutBinding bindings[] = {
         shader::layoutBinding(shader::postprocess_exposure::hdr),
@@ -92,20 +75,20 @@ void AutoExposure::cleanup() {
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     if (m_pool) { vkDestroyDescriptorPool(m_device, m_pool, nullptr); m_pool = VK_NULL_HANDLE; }
     if (m_setLayout) { vkDestroyDescriptorSetLayout(m_device, m_setLayout, nullptr); m_setLayout = VK_NULL_HANDLE; }
-    for (rtc::HostBuffer& b : m_readback) rtc::destroyHostBuffer(m_device, b);
-    if (m_bins) { vkDestroyBuffer(m_device, m_bins, nullptr); m_bins = VK_NULL_HANDLE; }
-    if (m_binsMemory) { vkFreeMemory(m_device, m_binsMemory, nullptr); m_binsMemory = VK_NULL_HANDLE; }
-    if (m_state) { vkDestroyBuffer(m_device, m_state, nullptr); m_state = VK_NULL_HANDLE; }
-    if (m_stateMemory) { vkFreeMemory(m_device, m_stateMemory, nullptr); m_stateMemory = VK_NULL_HANDLE; }
+    for (GpuBuffer& b : m_readback) m_allocator->retire(b);
+    m_allocator->retire(m_bins);
+    m_allocator->retire(m_state);
     m_device = VK_NULL_HANDLE;
 }
 
-void AutoExposure::record(VkCommandBuffer cmd, uint32_t slot, VkImageView hdr, VkSampler sampler, uint32_t width,
+void AutoExposure::record(const render::Frame& frame, gpu::Image& hdr, VkSampler sampler, uint32_t width,
                           uint32_t height, float dt, const Settings& settings) {
-    if (!m_histogram || !m_adapt || slot >= MAX_FRAMES_IN_FLIGHT || hdr == VK_NULL_HANDLE) return;
+    const uint32_t slot = frame.slot;
+    if (!m_histogram || !m_adapt || slot >= MAX_FRAMES_IN_FLIGHT || !hdr) return;
+    const VkCommandBuffer cmd = frame.cmd;
     const VkDescriptorSet set = m_sets[slot];
-    const VkDescriptorImageInfo image{sampler, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    const VkDescriptorBufferInfo bins{m_bins, 0, VK_WHOLE_SIZE}, state{m_state, 0, VK_WHOLE_SIZE};
+    const VkDescriptorImageInfo image{sampler, hdr.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorBufferInfo bins{m_bins.buffer, 0, VK_WHOLE_SIZE}, state{m_state.buffer, 0, VK_WHOLE_SIZE};
     VkWriteDescriptorSet w[3] = {shader::write(shader::postprocess_exposure::hdr, set),
                                  shader::write(shader::postprocess_exposure::bins, set),
                                  shader::write(shader::postprocess_exposure::state, set)};
@@ -114,24 +97,12 @@ void AutoExposure::record(VkCommandBuffer cmd, uint32_t slot, VkImageView hdr, V
     w[2].pBufferInfo = &state;
     vkUpdateDescriptorSets(m_device, 3, w, 0, nullptr);
 
-    // The frame's colour writes before the histogram reads them; last frame's display pass read
-    // the state and its adaptation and copy wrote or read it before this one writes it.
-    const VkMemoryBarrier before =
-        memoryBarrier(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
-                          VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-                      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
-    vkCmdPipelineBarrier(cmd,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0,
-                         nullptr, 0, nullptr);
     if (!m_cleared) {
-        vkCmdFillBuffer(cmd, m_bins, 0, VK_WHOLE_SIZE, 0);
-        vkCmdFillBuffer(cmd, m_state, 0, VK_WHOLE_SIZE, 0);
-        const VkMemoryBarrier filled =
-            memoryBarrier(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &filled, 0,
-                             nullptr, 0, nullptr);
+        render::Pass clear(frame, nullptr, render::Pass::Transfer);
+        clear.write(m_bins, render::BufferUse::CopyDst).write(m_state, render::BufferUse::CopyDst);
+        clear.begin();
+        vkCmdFillBuffer(cmd, m_bins.buffer, 0, VK_WHOLE_SIZE, 0);
+        vkCmdFillBuffer(cmd, m_state.buffer, 0, VK_WHOLE_SIZE, 0);
         m_cleared = true;
     }
 
@@ -147,31 +118,36 @@ void AutoExposure::record(VkCommandBuffer cmd, uint32_t slot, VkImageView hdr, V
                             m_reset ? 1u : 0u,
                             0u};
     m_reset = false;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_histogram);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
-
-    const VkMemoryBarrier binned =
-        memoryBarrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &binned,
-                         0, nullptr, 0, nullptr);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_adapt);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_adaptLayout, 0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd, m_adaptLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, 1, 1, 1);
-
-    // The display pass reads the EV100; this slot's copy is what render.stats reports.
-    const VkMemoryBarrier metered =
-        memoryBarrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &metered, 0,
-                         nullptr, 0, nullptr);
-    const VkBufferCopy copy{0, 0, 4 * sizeof(float)};
-    vkCmdCopyBuffer(cmd, m_state, m_readback[slot].buffer, 1, &copy);
-    const VkMemoryBarrier toHost = memoryBarrier(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0,
-                         nullptr);
+    {
+        render::Pass histogram(frame, nullptr, render::Pass::Compute);
+        histogram.sampled(hdr);
+        histogram.readWrite(m_bins, render::BufferUse::Storage);
+        histogram.begin();
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_histogram);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
+    }
+    {
+        render::Pass adapt(frame, nullptr, render::Pass::Compute);
+        adapt.readWrite(m_bins, render::BufferUse::Storage).readWrite(m_state, render::BufferUse::Storage);
+        adapt.begin();
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_adapt);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_adaptLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_adaptLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, 1, 1, 1);
+    }
+    {
+        // This slot's copy is what render.stats reports.
+        render::Pass copy(frame, nullptr, render::Pass::Transfer);
+        copy.read(m_state, render::BufferUse::CopySrc).write(m_readback[slot], render::BufferUse::CopyDst);
+        copy.begin();
+        const VkBufferCopy region{0, 0, 4 * sizeof(float)};
+        vkCmdCopyBuffer(cmd, m_state.buffer, m_readback[slot].buffer, 1, &region);
+    }
+    render::Pass toHost(frame, nullptr, render::Pass::Transfer);
+    toHost.read(m_readback[slot], render::BufferUse::HostRead);
+    toHost.begin();
     m_slotFrame[slot] = ++m_frames;
 }
 

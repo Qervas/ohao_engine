@@ -243,7 +243,7 @@ struct DIPush
     uint4 trace;   // x, y the resampling images' size (the frame's >> z), z the shift: 0 full resolution, 1 half (a pixel of each 2x2 block resamples and traces; di.shade shades every pixel from its 4 nearest)
 };
 
-// one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
+// one meshlet of the meshlet arena (asset/meshlets.hpp): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
 struct MeshletGpu
 {
     uint4 range;   // x its first entry in the meshlet-vertex arena, y its first in the meshlet-triangle arena, z its vertex count, w its triangle count

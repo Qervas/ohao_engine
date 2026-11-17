@@ -4,7 +4,7 @@
 
 namespace ohao {
 
-void PrimitiveMeshGenerator::generateCube(Model& model, float size) {
+void PrimitiveMeshGenerator::generateCube(PrimitiveMesh& model, float size) {
     model.vertices.clear();
     model.indices.clear();
     
@@ -101,7 +101,7 @@ void PrimitiveMeshGenerator::generateCube(Model& model, float size) {
 
 // UV sphere: stacks latitude bands x sectors longitude segments, normal =
 // normalized position. The defaults (32 x 16) are the sphere the examples render.
-void PrimitiveMeshGenerator::generateSphere(Model& model, float radius, int sectors, int stacks) {
+void PrimitiveMeshGenerator::generateSphere(PrimitiveMesh& model, float radius, int sectors, int stacks) {
     model.vertices.clear();
     model.indices.clear();
 
@@ -139,7 +139,7 @@ void PrimitiveMeshGenerator::generateSphere(Model& model, float radius, int sect
     }
 }
 
-void PrimitiveMeshGenerator::generatePlatform(Model& model, float width, float height, float depth) {
+void PrimitiveMeshGenerator::generatePlatform(PrimitiveMesh& model, float width, float height, float depth) {
     model.vertices.clear();
     model.indices.clear();
     
@@ -213,7 +213,7 @@ void PrimitiveMeshGenerator::generatePlatform(Model& model, float width, float h
     }
 }
 
-void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float height, int segments) {
+void PrimitiveMeshGenerator::generateCylinder(PrimitiveMesh& model, float radius, float height, int segments) {
     model.vertices.clear();
     model.indices.clear();
     
@@ -283,7 +283,7 @@ void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float 
 
 // Moved verbatim from the examples' quad builders (cornell_box addQuad, model_viewer
 // addQuad), so scenes built from QuadPrim keep byte-identical vertex streams.
-void PrimitiveMeshGenerator::generateQuad(Model& model, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+void PrimitiveMeshGenerator::generateQuad(PrimitiveMesh& model, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
                                           glm::vec3 normal, glm::vec3 color) {
     model.vertices.clear();
     model.indices.clear();
@@ -303,7 +303,7 @@ void PrimitiveMeshGenerator::generateQuad(Model& model, glm::vec3 a, glm::vec3 b
 }
 
 // Moved verbatim from model_viewer's addBox: 6 faces of 4 vertices, flat normals.
-void PrimitiveMeshGenerator::generateBox(Model& model, glm::vec3 lo, glm::vec3 hi, glm::vec3 color) {
+void PrimitiveMeshGenerator::generateBox(PrimitiveMesh& model, glm::vec3 lo, glm::vec3 hi, glm::vec3 color) {
     model.vertices.clear();
     model.indices.clear();
     auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
@@ -326,7 +326,7 @@ void PrimitiveMeshGenerator::generateBox(Model& model, glm::vec3 lo, glm::vec3 h
     }
 }
 
-void PrimitiveMeshGenerator::generateCone(Model& model, float radius, float height, int segments) {
+void PrimitiveMeshGenerator::generateCone(PrimitiveMesh& model, float radius, float height, int segments) {
     model.vertices.clear();
     model.indices.clear();
     

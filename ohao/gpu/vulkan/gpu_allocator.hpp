@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/concepts.hpp"
+#include "gpu/vulkan/gpu_image.hpp"
 #include "gpu/vulkan/vk_utils.hpp"
 
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
@@ -50,6 +52,7 @@ struct GpuAllocation {
 struct GpuBuffer {
     VkBuffer buffer{VK_NULL_HANDLE};
     GpuAllocation allocation;
+    gpu::State state;   // what last touched it: render::Pass's (render/graph/pass.hpp)
 
     [[nodiscard]] bool isValid() const noexcept {
         return buffer != VK_NULL_HANDLE && allocation.isValid();
@@ -118,11 +121,27 @@ public:
     [[nodiscard]] GpuImage createImage(const VkImageCreateInfo& imageInfo, AllocationUsage memoryUsage);
     void destroyImage(GpuImage& image);
 
+    // A tracked image (gpu_image.hpp) with its whole view, device-local, named. Empty (logged) when it fails.
+    [[nodiscard]] gpu::Image createImage(const gpu::ImageDesc& desc);
+    // Gives a tracked image or a buffer back: destroyed kRetireFrames collect() calls from now, when no frame in
+    // flight can still read it. The argument is left empty.
+    void retire(gpu::Image& image);
+    void retire(GpuBuffer& buffer);
+    static constexpr uint32_t kRetireFrames = 3;   // at least the renderer's frames in flight
+    void collect();        // once per frame, after the frame slot's fence wait
+    void collectAll();     // the device is idle: everything retired goes now
+    // The tracked images alive, largest first: what a frame's targets cost, by name.
+    struct Named { std::string name; VkDeviceSize bytes; VkFormat format; uint32_t width, height, mips, layers; };
+    [[nodiscard]] std::vector<Named> images() const;
+    [[nodiscard]] VkDevice device() const noexcept { return m_device; }
+
     [[nodiscard]] void* mapBuffer(GpuBuffer& buffer);
     void unmapBuffer(GpuBuffer& buffer);
 
     void flushBuffer(GpuBuffer& buffer, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE);
     void invalidateBuffer(GpuBuffer& buffer, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE);
+    // The buffer's memory needs no flush or invalidate: the host sees what the GPU wrote as it is written.
+    [[nodiscard]] bool hostCoherent(const GpuBuffer& buffer) const;
 
     [[nodiscard]] const AllocationStats& getStats() const noexcept { return m_stats; }
     void printStats() const;
@@ -135,6 +154,11 @@ private:
     VmaAllocator m_allocator{VK_NULL_HANDLE};
     VkDevice m_device{VK_NULL_HANDLE};
     AllocationStats m_stats{};
+    struct Retired { uint64_t at; gpu::Image image; GpuBuffer buffer; };
+    std::vector<Retired> m_retired;
+    uint64_t m_frame{0};
+    std::unordered_map<VkImage, Named> m_images;
+    void destroyNow(gpu::Image& image);
 };
 
 } // namespace ohao

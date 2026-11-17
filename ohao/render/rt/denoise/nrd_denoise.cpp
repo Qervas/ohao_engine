@@ -240,12 +240,12 @@ bool NrdDenoiser::denoise(VkCommandBuffer cmd) {
     // (see NRDIntegration.hpp L679-715), then calls plain Denoise() with the
     // wrapped resources. After Denoise, NRI destroys the wrappers for us.
     nrd::ResourceSnapshot snapshot;
-    // All AOVs are in VK_IMAGE_LAYOUT_GENERAL right after the ray trace
-    // (they're written as STORAGE images from the raygen shader). Declare the
-    // initial state as SHADER_RESOURCE_STORAGE; NRD's internal _Dispatch will
+    // The path tracer's NRD pass hands every image over in VK_IMAGE_LAYOUT_GENERAL,
+    // last touched as a storage image by a compute shader: the initial state
+    // declared here, SHADER_RESOURCE_STORAGE. NRD's internal _Dispatch will
     // transition inputs to SHADER_RESOURCE (VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
     // as needed before each pipeline that reads them, and leave outputs in
-    // SHADER_RESOURCE_STORAGE. No manual pre-barrier needed at call site.
+    // SHADER_RESOURCE_STORAGE.
     const nri::AccessLayoutStage kInitialGeneral =
         {nri::AccessBits::SHADER_RESOURCE_STORAGE,
          nri::Layout::SHADER_RESOURCE_STORAGE,
@@ -266,9 +266,8 @@ bool NrdDenoiser::denoise(VkCommandBuffer cmd) {
     setSlot(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST, m_impl->resources.outSpecRadianceHitDist);
 
     // restoreInitialState=true: after Denoise(), NRD reverts IN_* back to
-    // SHADER_RESOURCE_STORAGE (i.e. VK_IMAGE_LAYOUT_GENERAL) so downstream
-    // readbacks (VulkanRenderer::readbackDiffuseRadiance etc.) find them
-    // in their expected initial layout.
+    // SHADER_RESOURCE_STORAGE (i.e. VK_IMAGE_LAYOUT_GENERAL): the state the
+    // path tracer's NRD pass declares each image leaves in (Pass::leaves).
     snapshot.restoreInitialState = true;
 
     // Wrap the raw VkCommandBuffer for NRI.

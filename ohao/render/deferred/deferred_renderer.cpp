@@ -3,9 +3,9 @@
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
 #include "render/rt/emissive_lights.hpp"
-#include "render/frame/gpu_pass_timer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "core/log.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
@@ -16,12 +16,12 @@ DeferredRenderer::~DeferredRenderer() {
     cleanup();
 }
 
-bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator) {
     m_device = device;
     m_physicalDevice = physicalDevice;
 
-    m_width = 1920;
-    m_height = 1080;
+    m_width = m_outWidth = 1920;
+    m_height = m_outHeight = 1080;
 
     OHAO_LOG(Debug, render, "DeferredRenderer: initializing...");
 
@@ -31,6 +31,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         m_gbufferPass->setTextureManager(m_textureManager);
     }
     m_gbufferPass->setMeshShaderSupported(m_meshShader);
+    m_gbufferPass->setAllocator(allocator);
     if (!m_gbufferPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Error, render, "DeferredRenderer: GBufferPass failed");
         return false;
@@ -39,6 +40,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize CSM pass
     m_csmPass = std::make_unique<CSMPass>();
+    m_csmPass->setAllocator(allocator);
     if (!m_csmPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Error, render, "DeferredRenderer: CSMPass failed");
         return false;
@@ -47,8 +49,8 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // GPU culling: the G-buffer's and CSM's indirect draw lists
     m_culling = std::make_unique<GpuCulling>();
-    if (!m_culling->initialize(device, physicalDevice, m_meshShader) ||
-        !m_culling->resize(m_width, m_height, m_gbufferPass->getDepthView())) {
+    if (!m_culling->initialize(device, allocator, m_meshShader) ||
+        !m_culling->resize(m_width, m_height, m_gbufferPass->depth())) {
         OHAO_LOG(Error, render, "DeferredRenderer: GpuCulling failed");
         return false;
     }
@@ -57,13 +59,14 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Clustered lighting: the light table and the froxel lists
     m_lightClusters = std::make_unique<LightClusters>();
-    if (!m_lightClusters->initialize(device, physicalDevice)) {
+    if (!m_lightClusters->initialize(device, allocator)) {
         OHAO_LOG(Error, render, "DeferredRenderer: LightClusters failed");
         return false;
     }
 
     // Initialize deferred lighting pass
     m_lightingPass = std::make_unique<DeferredLightingPass>();
+    m_lightingPass->setAllocator(allocator);
     if (!m_lightingPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Error, render, "DeferredRenderer: LightingPass failed");
         return false;
@@ -74,12 +77,12 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_lightingPass->setGBufferPass(m_gbufferPass.get());
 
     // Connect shadow map and cascade data to lighting
-    m_lightingPass->setShadowMap(m_csmPass->getShadowMapArrayView(),
-                                  m_csmPass->getShadowSampler());
-    m_lightingPass->setCascadeBuffer(m_csmPass->getCascadeBuffer());
+    m_lightingPass->setShadowMap(&m_csmPass->shadowMap(), m_csmPass->getShadowSampler());
+    m_lightingPass->setCascadeBuffer(&m_csmPass->cascadeBuffer());
 
     // Initialize SSS pass (separable subsurface scattering blur)
     m_sssPass = std::make_unique<SSSPass>();
+    m_sssPass->setAllocator(allocator);
     if (m_sssPass->initialize(device, physicalDevice)) {
         m_sssPass->setGBufferPass(m_gbufferPass.get());
         OHAO_LOG(Debug, render, "DeferredRenderer: SSSPass OK");
@@ -90,6 +93,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
+    m_postProcessing->setAllocator(allocator);
     if (!m_postProcessing->initialize(device, physicalDevice)) {
         OHAO_LOG(Error, render, "DeferredRenderer: PostProcessing failed");
         return false;
@@ -98,6 +102,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize gizmo pass (transform handles)
     m_gizmoPass = std::make_unique<GizmoPass>();
+    m_gizmoPass->setAllocator(allocator);
     if (!m_gizmoPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Warn, render, "DeferredRenderer: GizmoPass failed (non-fatal)");
         m_gizmoPass.reset();
@@ -107,29 +112,25 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // The HUD over the final image (sub-project 7): drawn only on frames with a list.
     m_hudPass = std::make_unique<HudPass>();
+    m_hudPass->setAllocator(allocator);
     if (!m_hudPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Warn, render, "DeferredRenderer: HudPass failed (non-fatal: no HUD)");
         m_hudPass.reset();
     }
 
-    // Connect depth/normal/velocity/albedo/position for post-processing
-    m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
-    m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
-    m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
-
-    // Initialize render graph and import all pass outputs
-    importGraphTextures();
+    // TAA reprojects with the G-buffer's depth and velocity.
+    m_postProcessing->setGBufferInputs(&m_gbufferPass->depth(), &m_gbufferPass->velocity());
 
     // The RT traces alpha-test candidates (sub-project 12): RenderScene's tables (set 1) and the
     // bindless textures (set 2). Without them neither technique initializes.
-    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device, physicalDevice);
+    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device, allocator);
     const VkDescriptorSetLayout alphaTables = m_alphaTablesReady ? m_alphaTables.layout() : VK_NULL_HANDLE;
     const VkDescriptorSetLayout textures = m_textureManager ? m_textureManager->getDescriptorSetLayout() : VK_NULL_HANDLE;
 
     // RT direct light (inline ray queries)
     m_rtDirect = std::make_unique<RTDirectTechnique>();
     m_rtDirect->setAlphaLayouts(alphaTables, textures);
-    if (!m_rayQuery || !m_alphaTablesReady || !m_rtDirect->init(device, physicalDevice, m_width, m_height)) {
+    if (!m_rayQuery || !m_alphaTablesReady || !m_rtDirect->init(device, physicalDevice, allocator, m_width, m_height)) {
         OHAO_LOG(Warn, render, "DeferredRenderer: RT direct light not available (lighting loops over the lights, CSM for the sun)");
         m_rtDirect.reset();
     }
@@ -137,7 +138,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize RT GI technique (inline ray queries)
     m_rtGI = std::make_unique<RTGITechnique>();
     m_rtGI->setAlphaLayouts(alphaTables, textures);
-    if (m_rayQuery && m_rtGI->init(device, physicalDevice, m_width, m_height)) {
+    if (m_rayQuery && m_rtGI->init(device, physicalDevice, allocator, m_width, m_height)) {
         m_useRTGI = true;
         OHAO_LOG(Debug, render, "DeferredRenderer: RTGI OK");
     } else {
@@ -149,9 +150,8 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // flipbooks and materials the bindless textures.
     if (m_rayQuery && m_textureManager) {
         m_vfx = std::make_unique<VfxRenderer>();
-        if (!m_vfx->initialize(device, physicalDevice, textures, m_gbufferPass->sceneSetLayout()) ||
-            !m_vfx->resize(m_width, m_height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView(),
-                           m_lightingPass->getOutputImage())) {
+        if (!m_vfx->initialize(device, physicalDevice, allocator, textures, m_gbufferPass->sceneSetLayout()) ||
+            !m_vfx->resize(m_width, m_height, m_lightingPass->lit(), m_gbufferPass->depth())) {
             OHAO_LOG(Warn, render, "DeferredRenderer: VfxRenderer failed (no effects or blended surfaces drawn)");
             m_vfx.reset();
         }
@@ -163,9 +163,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // They sample the bindless textures; without them no decal is drawn.
     if (m_textureManager) {
         m_decals = std::make_unique<DecalPass>();
-        if (!m_decals->initialize(device, physicalDevice, textures) ||
-            !m_decals->resize(m_width, m_height, m_gbufferPass->getAlbedoView(), m_gbufferPass->getNormalView(),
-                              m_gbufferPass->getPositionView(), m_gbufferPass->getDepthView())) {
+        if (!m_decals->initialize(device, allocator, textures) ||
+            !m_decals->resize(m_gbufferPass->albedo(), m_gbufferPass->normal(), m_gbufferPass->position(),
+                              m_gbufferPass->depth())) {
             OHAO_LOG(Warn, render, "DeferredRenderer: DecalPass failed (no decals drawn)");
             m_decals.reset();
         }
@@ -179,8 +179,6 @@ void DeferredRenderer::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
 
     vkDeviceWaitIdle(m_device);
-
-    m_renderGraph.shutdown();
 
     if (m_vfx) {
         m_vfx->cleanup();
@@ -228,10 +226,14 @@ void DeferredRenderer::cleanup() {
 }
 
 void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
+    // What every pass records into; each is timed by its registry name (render/frame/pass_registry.hpp).
+    const render::Frame frame{cmd, m_passTimer, frameIndex};
+
     // TAA's jitter: the Halton sample of this frame's index since the last temporal reset (not
     // the frame-in-flight slot, which cycled 3 of the 16 samples and made a capture depend on
     // the slot it started in).
     glm::vec2 jitter = m_postProcessing ? m_postProcessing->getJitterOffset(m_framesSinceReset) : glm::vec2(0.0f);
+    if (m_postProcessing) m_postProcessing->setFrameJitter(jitter);
     glm::mat4 jitteredProj = m_proj;
     jitteredProj[2][0] += jitter.x;
     jitteredProj[2][1] += jitter.y;
@@ -259,23 +261,21 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_lightingPass) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
-        m_lightingPass->setMaterials(m_renderScene ? m_renderScene->materialBuffer() : VK_NULL_HANDLE);
-        m_lightingPass->setLights(m_lightClusters ? m_lightClusters->lightBuffer(frameIndex) : VK_NULL_HANDLE,
+        m_lightingPass->setMaterials(m_renderScene ? &m_renderScene->buffers().materials : nullptr);
+        m_lightingPass->setLights(m_lightClusters ? &m_lightClusters->lightBuffer(frameIndex) : nullptr,
                                   m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u);
+        // RT direct light and GI reach lighting only from a frame that traced them: their passes
+        // below hand them over after a successful run. Until then lighting loops over the lights
+        // (CSM for the sun) and has no indirect light.
+        m_lightingPass->setDirectLight(nullptr, nullptr);
+        m_lightingPass->setSSGITexture(nullptr, nullptr, VK_NULL_HANDLE);
     }
-
-    // --- Render Graph: barrier-tracked passes (CSM → GBuffer → RT → Lighting) ---
-    // The graph computes inter-pass image layout barriers centrally.
-    // Each pass still manages its own VkRenderPass/VkFramebuffer internally.
-
-    m_renderGraph.reset();
 
     // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
     // buffer. Null without RT or before anything was built.
     const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
     // The RT traces' alpha tables for this slot (its fence was waited on), and the textures.
     const bool alphaSets = m_alphaTablesReady && m_renderScene && m_alphaTables.update(frameIndex, *m_renderScene, m_smokeInGi);
-    const VkDescriptorSet alphaTablesSet = alphaSets ? m_alphaTables.set(frameIndex) : VK_NULL_HANDLE;
     const VkDescriptorSet texturesSet = m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
     // RT direct light replaces the lighting loop's lights and CSM whenever it runs this frame (a
     // TLAS, and lights or emissive triangles to sample); CSM is the fallback's.
@@ -283,51 +283,23 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                           m_gbufferPass && alphaSets && texturesSet != VK_NULL_HANDLE &&
                           (m_renderScene->rtLightCount() > 0 || !m_renderScene->emissiveInstances().empty());
 
-    // 1. Shadow pass (CSM) — writes shadow map, leaves at DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-    if (m_csmPass && !rtDirect) {
-        m_renderGraph.addPass("csm",
-            [&](PassBuilder& builder) {
-                if (m_graphShadowHandle.isValid())
-                    builder.declareDepthWrite(m_graphShadowHandle,
-                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-            },
-            [&](VkCommandBuffer c) { m_csmPass->execute(c, frameIndex); });
-    }
+    // The frame's culling state (the draw table bound, a stale history cleared): CSM culls its
+    // cascades and the G-buffer its two phases with it.
+    if (m_culling && m_renderScene) (void)m_culling->beginFrame(frame, *m_renderScene);
 
-    // 2. G-Buffer pass — GPU-culled, in five parts it times itself (cull.instances,
-    //    gbuffer.early, hiz.build, cull.late, gbuffer.late); its late render pass's finalLayouts
-    //    are: color buffers → SHADER_READ_ONLY_OPTIMAL, depth → DEPTH_STENCIL_READ_ONLY_OPTIMAL
-    if (m_gbufferPass) {
-        m_gbufferPass->setPassTimer(m_passTimer);
-        m_renderGraph.addPass("gbuffer",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.declareColorWrite(m_graphNormalHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphAlbedoHandle.isValid())
-                    builder.declareColorWrite(m_graphAlbedoHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphDepthHandle.isValid())
-                    builder.declareDepthWrite(m_graphDepthHandle,
-                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-            },
-            [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); }, /*selfTimed=*/true);
-    }
+    // 1. csm: the cascades' culls and draws (the fallback's shadow map).
+    if (m_csmPass && !rtDirect) m_csmPass->record(frame);
+
+    // 2. The G-buffer, GPU-culled, in the five parts it times (cull.instances, gbuffer.early,
+    //    hiz.build, cull.late, gbuffer.late).
+    if (m_gbufferPass) m_gbufferPass->record(frame);
 
     // 2.4. decals — the frame's decal boxes projected onto the G-buffer's albedo and normal, over the
     //      surfaces inside them (sub-project 12, step 3). After gbuffer.late: the clusters and the
     //      lighting read the targets it leaves. The records are this frame's (RenderScene::vfx()).
     if (m_decals && m_decalsDrawn && m_renderScene && m_gbufferPass) {
         m_decals->prepare(frameIndex, m_renderScene->vfx());
-        const DecalPass::View decalView{jitteredProj * m_view, m_cameraPos, 0.6f};   // the gun's reach: 0.6 m
-        m_renderGraph.addPass("decals",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.declareColorWrite(m_graphNormalHandle, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphAlbedoHandle.isValid())
-                    builder.declareColorWrite(m_graphAlbedoHandle, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            },
-            [&, decalView](VkCommandBuffer c) { m_decals->record(c, frameIndex, decalView, texturesSet); });
+        m_decals->record(frame, {jitteredProj * m_view, m_cameraPos, 0.6f}, texturesSet);   // the gun's reach: 0.6 m
     }
 
     // 2.5. lights.cluster — every froxel's light list, for the camera lighting shades with (the
@@ -336,20 +308,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     //      frusta slices) lighting sums every light and nothing is built.
     const bool perspective = m_proj[2][3] != 0.0f;
     const bool clustered = m_clusteredLighting && perspective && m_lightClusters &&
-                           m_lightClusters->clusterBuffer() != VK_NULL_HANDLE;
+                           m_lightClusters->clusterBuffer().buffer != VK_NULL_HANDLE;
+    if (clustered) m_lightClusters->build(frame, m_view, jitteredProj, m_width, m_height, m_clusterFar, m_frameNumber);
     if (m_lightingPass) {
-        m_lightingPass->setClusters(clustered ? m_lightClusters->clusterBuffer() : VK_NULL_HANDLE,
+        m_lightingPass->setClusters(clustered ? &m_lightClusters->clusterBuffer() : nullptr,
                                     m_lightClusters ? m_lightClusters->sliceScale() : 0.0f,
                                     m_lightClusters ? m_lightClusters->sliceBias() : 0.0f);
-    }
-    if (clustered) {
-        m_renderGraph.addComputePass("lights.cluster", [&](PassBuilder&) {},
-            [&, jitteredProj](VkCommandBuffer c) {
-                m_lightClusters->build(c, frameIndex, m_view, jitteredProj, m_width, m_height, m_clusterFar, m_frameNumber);
-                if (m_lightingPass)
-                    m_lightingPass->setClusters(m_lightClusters->clusterBuffer(), m_lightClusters->sliceScale(),
-                                                m_lightClusters->sliceBias());
-            });
     }
 
     // This frame's index since the last temporal reset: with the render seed, it seeds
@@ -361,60 +325,55 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // lights they sample out of its loop.
     const auto directToLighting = [&]() {
         if (m_lightingPass && m_rtDirect->rendered())
-            m_lightingPass->setDirectLight(m_rtDirect->diffuse(), m_rtDirect->specular());
+            m_lightingPass->setDirectLight(&m_rtDirect->diffuse(), &m_rtDirect->specular());
     };
     if (rtDirect) {
-        m_renderGraph.addComputePass("emissive.lights", [&](PassBuilder&) {},
-            [&](VkCommandBuffer c) {
-                m_emissiveLights->prepare(frameIndex, *m_renderScene);
-                m_emissiveLights->record(c, frameIndex, render::EmissiveLights::buffersOf(*m_renderScene), texturesSet);
-            });
-        m_renderGraph.addComputePass("di.sample",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid()) builder.readComputeTexture(m_graphNormalHandle);
-                if (m_graphAlbedoHandle.isValid()) builder.readComputeTexture(m_graphAlbedoHandle);
-            },
-            [&](VkCommandBuffer c) {
-                DirectInput di{};
-                di.positionBuffer = m_gbufferPass->getPositionView();
-                di.normalBuffer = m_gbufferPass->getNormalView();
-                di.albedoBuffer = m_gbufferPass->getAlbedoView();
-                di.specularBuffer = m_gbufferPass->getSpecularView();
-                di.openpbrBuffer = m_gbufferPass->getOpenPBRView();
-                di.layersBuffer = m_gbufferPass->getLayersView();
-                di.velocityBuffer = m_gbufferPass->getVelocityView();
-                di.width = m_width;
-                di.height = m_height;
-                di.frameSlot = frameIndex;
-                di.frameIndex = rtFrame;
-                di.renderSeed = m_renderSeed;
-                di.quality = m_quality;
-                di.candidates = m_directCandidates;
-                di.spatial = m_directSpatial;
-                di.halfResolution = !m_directFull;
-                di.cameraPos = m_cameraPos;
-                di.weather = m_lightingPass ? m_lightingPass->weather() : glm::vec3(0.0f);
-                di.tlas = sceneTlas;
-                di.alphaTables = alphaTablesSet;
-                di.textures = texturesSet;
-                di.lightData = m_renderScene->rtLightBuffer();
-                di.materials = m_renderScene->materialBuffer();
-                di.layers = m_renderScene->anyLayeredMaterial();
-                di.emissive = m_emissiveLights;
-                m_rtDirect->sample(c, di);
-            });
-        m_renderGraph.addComputePass("di.trace", [&](PassBuilder&) {}, [&](VkCommandBuffer c) { m_rtDirect->trace(c); });
-        m_renderGraph.addComputePass("di.shade", [&](PassBuilder&) {},
-            [&](VkCommandBuffer c) {
-                m_rtDirect->shade(c);
-                if (!m_rtDirect->denoises()) directToLighting();   // reference: the mean is the output
-            });
+        {
+            render::Timed timed(frame, "emissive.lights");
+            m_emissiveLights->prepare(frameIndex, *m_renderScene);
+            m_emissiveLights->record(frame, *m_renderScene, texturesSet);
+        }
+        {
+            render::Timed timed(frame, "di.sample");
+            DirectInput di{};
+            di.positionBuffer = &m_gbufferPass->position();
+            di.normalBuffer = &m_gbufferPass->normal();
+            di.albedoBuffer = &m_gbufferPass->albedo();
+            di.specularBuffer = &m_gbufferPass->specular();
+            di.openpbrBuffer = &m_gbufferPass->openpbr();
+            di.layersBuffer = &m_gbufferPass->layers();
+            di.velocityBuffer = &m_gbufferPass->velocity();
+            di.width = m_width;
+            di.height = m_height;
+            di.frameSlot = frameIndex;
+            di.frameIndex = rtFrame;
+            di.renderSeed = m_renderSeed;
+            di.quality = m_quality;
+            di.candidates = m_directCandidates;
+            di.spatial = m_directSpatial;
+            di.halfResolution = !m_directFull;
+            di.cameraPos = m_cameraPos;
+            di.weather = m_lightingPass ? m_lightingPass->weather() : glm::vec3(0.0f);
+            di.scene = m_renderScene;
+            di.alphaTables = &m_alphaTables;
+            di.textures = texturesSet;
+            di.layers = m_renderScene->anyLayeredMaterial();
+            di.emissive = m_emissiveLights;
+            m_rtDirect->sample(frame, di);
+        }
+        {
+            render::Timed timed(frame, "di.trace");
+            m_rtDirect->trace(frame);
+        }
+        {
+            render::Timed timed(frame, "di.shade");
+            m_rtDirect->shade(frame);
+            if (!m_rtDirect->denoises()) directToLighting();   // reference: the mean is the output
+        }
         if (m_quality == RenderQuality::Realtime) {
-            m_renderGraph.addComputePass("di.denoise", [&](PassBuilder&) {},
-                [&](VkCommandBuffer c) {
-                    m_rtDirect->denoise(c);
-                    directToLighting();
-                });
+            render::Timed timed(frame, "di.denoise");
+            m_rtDirect->denoise(frame);
+            directToLighting();
         }
     }
 
@@ -422,98 +381,45 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // denoiser. Lighting reads it at binding 11.
     const auto giToLighting = [&]() {
         if (m_lightingPass && m_rtGI->rendered())
-            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, m_rtGI->getOutput().reflectionView,
+            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLight, m_rtGI->getOutput().reflection,
                                            VK_NULL_HANDLE);
     };
     const bool giTraced = m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass;
     if (giTraced) {
-        m_renderGraph.addComputePass("rt.gi",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.readComputeTexture(m_graphNormalHandle);
-                if (m_graphAlbedoHandle.isValid())
-                    builder.readComputeTexture(m_graphAlbedoHandle);
-            },
-            [&](VkCommandBuffer c) {
-                GIInput gi{};
-                gi.positionBuffer = m_gbufferPass->getPositionView();
-                gi.normalBuffer = m_gbufferPass->getNormalView();
-                gi.albedoBuffer = m_gbufferPass->getAlbedoView();
-                gi.layersBuffer = m_gbufferPass->getLayersView();
-                gi.velocityBuffer = m_gbufferPass->getVelocityView();
-                gi.cameraPos = m_cameraPos;
-                gi.width = m_width;
-                gi.height = m_height;
-                gi.frameIndex = rtFrame;
-                gi.renderSeed = m_renderSeed;
-                gi.frameSlot = frameIndex;
-                gi.quality = m_quality;
-                gi.tlas = sceneTlas;
-                gi.alphaTables = alphaTablesSet;
-                gi.textures = texturesSet;
-                gi.instances = m_renderScene->instanceBuffer();
-                gi.lights = m_renderScene->lights();
-                gi.envMap = m_envView;
-                gi.envIntensity = m_envIntensity;
-                gi.emissionIsDirect = rtDirect;
-                m_rtGI->render(c, gi);
-                if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output
-            });
+        {
+            render::Timed timed(frame, "rt.gi");
+            GIInput gi{};
+            gi.positionBuffer = &m_gbufferPass->position();
+            gi.normalBuffer = &m_gbufferPass->normal();
+            gi.albedoBuffer = &m_gbufferPass->albedo();
+            gi.layersBuffer = &m_gbufferPass->layers();
+            gi.velocityBuffer = &m_gbufferPass->velocity();
+            gi.cameraPos = m_cameraPos;
+            gi.width = m_width;
+            gi.height = m_height;
+            gi.frameIndex = rtFrame;
+            gi.renderSeed = m_renderSeed;
+            gi.frameSlot = frameIndex;
+            gi.quality = m_quality;
+            gi.scene = m_renderScene;
+            gi.alphaTables = alphaSets ? &m_alphaTables : nullptr;
+            gi.textures = texturesSet;
+            gi.lights = m_renderScene->lights();
+            gi.envMap = m_envMap;
+            gi.envIntensity = m_envIntensity;
+            gi.emissionIsDirect = rtDirect;
+            m_rtGI->render(frame, gi);
+            if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output
+        }
         if (m_quality == RenderQuality::Realtime) {
-            m_renderGraph.addComputePass("rt.gi.denoise",
-                [&](PassBuilder&) {},
-                [&](VkCommandBuffer c) {
-                    m_rtGI->denoise(c);
-                    giToLighting();
-                });
+            render::Timed timed(frame, "rt.gi.denoise");
+            m_rtGI->denoise(frame);
+            giToLighting();
         }
     }
 
-    // 4. Deferred lighting — reads GBuffer + shadow. Key barrier: shadow map
-    //    DEPTH_STENCIL_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL (was missing before).
-    if (m_lightingPass && m_gbufferPass) {
-        m_renderGraph.addPass("lighting",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.readTexture(m_graphNormalHandle,
-                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-                if (m_graphAlbedoHandle.isValid())
-                    builder.readTexture(m_graphAlbedoHandle,
-                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-                if (m_graphShadowHandle.isValid())
-                    builder.readTexture(m_graphShadowHandle,
-                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-                if (m_graphLightingHandle.isValid())
-                    builder.declareColorWrite(m_graphLightingHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            },
-            [&](VkCommandBuffer c) { m_lightingPass->execute(c, frameIndex); });
-    }
-
-    // RT direct light and GI reach lighting only from a frame that traced them: their passes
-    // above hand them over after a successful run. Until then lighting loops over the lights
-    // (CSM for the sun) and has no indirect light.
-    if (m_lightingPass) {
-        m_lightingPass->setDirectLight(VK_NULL_HANDLE, VK_NULL_HANDLE);
-        m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
-    }
-
-    // The frame's culling state (the draw table bound, a stale history cleared), before the
-    // graph: CSM culls its cascades and the G-buffer its two phases inside it.
-    if (m_culling && m_renderScene) (void)m_culling->beginFrame(cmd, frameIndex, *m_renderScene);
-
-    m_renderGraph.setPassTimer(m_passTimer);   // times each graph pass under its name
-    m_renderGraph.compile();
-    m_renderGraph.execute(cmd);
-
-    // Direct passes: timed by registry name (render/frame/pass_registry.hpp).
-    auto timerBegin = [&](const char* name) {
-        if (m_passTimer) m_passTimer->begin(cmd, name);
-    };
-    auto timerEnd = [&]() {
-        if (m_passTimer) m_passTimer->end(cmd);
-    };
-
+    // 4. Deferred lighting: the G-buffer, the shadow map and the traced light into the lit image.
+    if (m_lightingPass && m_gbufferPass) m_lightingPass->record(frame);
 
     // 4.6. vfx.expand and vfx.sort (sub-project 12): the effect records' particles in closed
     //      form, lit at their centres by this frame's clusters, sun ray and RT GI, then the
@@ -522,121 +428,91 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     VfxRenderer::Lighting vfxLighting{};
     if (vfxOn) {
         m_vfx->prepare(frameIndex, *m_renderScene, {m_view, jitteredProj, m_cameraPos, m_nearPlane});
-        vfxLighting.lights = m_lightClusters ? m_lightClusters->lightBuffer(frameIndex) : VK_NULL_HANDLE;
+        vfxLighting.lights = m_lightClusters ? &m_lightClusters->lightBuffer(frameIndex) : nullptr;
         vfxLighting.lightCount = m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u;
-        vfxLighting.clusters = clustered ? m_lightClusters->clusterBuffer() : VK_NULL_HANDLE;
+        vfxLighting.clusters = clustered ? &m_lightClusters->clusterBuffer() : nullptr;
         vfxLighting.sliceScale = m_lightClusters ? m_lightClusters->sliceScale() : 0.0f;
         vfxLighting.sliceBias = m_lightClusters ? m_lightClusters->sliceBias() : 0.0f;
         vfxLighting.tlas = sceneTlas;
-        vfxLighting.giRadiance = giTraced && m_rtGI->rendered() ? m_rtGI->getOutput().indirectLightView : VK_NULL_HANDLE;
+        vfxLighting.giRadiance = giTraced && m_rtGI->rendered() ? m_rtGI->getOutput().indirectLight : nullptr;
         vfxLighting.envIrradiance = m_envIrradiance;
         vfxLighting.envPrefiltered = m_envPrefiltered;
         vfxLighting.envIntensity = m_envIntensity;
         if (m_vfx->hasParticles()) {
-            timerBegin("vfx.expand");
-            m_vfx->expand(cmd, frameIndex, vfxLighting);
-            timerEnd();
-            timerBegin("vfx.sort");
-            m_vfx->sort(cmd, frameIndex);
-            timerEnd();
+            {
+                render::Timed timed(frame, "vfx.expand");
+                m_vfx->expand(frame, *m_renderScene, vfxLighting);
+            }
+            render::Timed timed(frame, "vfx.sort");
+            m_vfx->sort(frame);
         }
     }
 
-    // Lighting drew the lit image as a color attachment (the environment in sky pixels); SSS
-    // (compute), SSR and post sample it. Its render pass's dependencies reach no compute read.
-    if (m_lightingPass) {
-        VkMemoryBarrier toRead{};
-        toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &toRead,
-                             0, nullptr, 0, nullptr);
-    }
-
     // 4.7. SSS — separable subsurface scattering blur, in place on the lit image, over the tiles the G-buffer pass flagged for subsurface materials
-    const VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
-    if (m_sssPass && m_sssWanted && litOutput) {
-        timerBegin("sss");
-        m_sssPass->setLitImage(m_lightingPass->getOutputImage(), litOutput);
-        m_sssPass->setSubsurfaceDiffuse(m_lightingPass->getSubsurfaceDiffuseView());
+    if (m_sssPass && m_sssWanted && m_renderScene && m_lightingPass && m_lightingPass->lit()) {
+        render::Timed timed(frame, "sss");
+        m_sssPass->setLitImage(&m_lightingPass->lit());
+        m_sssPass->setSubsurfaceDiffuse(&m_lightingPass->subsurfaceDiffuse());
+        m_sssPass->setMaterials(&m_renderScene->buffers().materials);
         m_sssPass->setCameraPos(m_cameraPos);
-        m_sssPass->execute(cmd, frameIndex);
-        timerEnd();
+        m_sssPass->record(frame);
     }
 
     // 4.9. transparent — the blended surfaces and the effects over the lit image, back to front,
     // each with its own blend state, against the G-buffer's depth (sub-project 12); their
     // coverage goes to a mask TAA lowers its history weight under. Before bloom, so it glows.
     if (vfxOn && m_vfx->hasObjects()) {
-        timerBegin("transparent");
-        m_vfx->drawTransparent(cmd, frameIndex, *m_renderScene, vfxLighting, texturesSet,
-                               m_gbufferPass->sceneSet(frameIndex));
-        timerEnd();
+        render::Timed timed(frame, "transparent");
+        m_vfx->drawTransparent(frame, *m_renderScene, vfxLighting, texturesSet, *m_gbufferPass);
     }
-    if (m_postProcessing) m_postProcessing->setTransparencyMask(vfxOn ? m_vfx->transparencyMask() : VK_NULL_HANDLE);
+    if (m_postProcessing) m_postProcessing->setTransparencyMask(vfxOn ? m_vfx->transparencyMask() : nullptr);
 
     // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
     if (m_postProcessing && m_lightingPass) {
         // The lit image, SSS applied in place
-        m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());
+        m_postProcessing->setHDRInput(&m_lightingPass->lit());
         m_postProcessing->setDeltaTime(m_deltaTime);
-        m_postProcessing->setPassTimer(m_passTimer);
-        m_postProcessing->execute(cmd, frameIndex);
+        m_postProcessing->record(frame);
     }
+    gpu::Image* const finalImage = finalOutput();
 
     // 6. Gizmo pass (transform handles for selected objects)
-    if (m_gizmoPass && m_gizmoEnabled) {
-        timerBegin("gizmo");
-        // Determine the final output image — must be from a pass that actually ran
-        VkImage finalImage = VK_NULL_HANDLE;
-        VkImageView finalView = VK_NULL_HANDLE;
-
-        if (m_postProcessing && m_postProcessing->didExecute()) {
-            finalImage = m_postProcessing->getOutputImage();
-            finalView = m_postProcessing->getOutputView();
-        } else if (m_lightingPass) {
-            finalImage = m_lightingPass->getOutputImage();
-            finalView = m_lightingPass->getOutputView();
-        }
-
-        if (finalImage != VK_NULL_HANDLE && finalView != VK_NULL_HANDLE) {
-            m_gizmoPass->setTargetImage(finalImage, finalView);
-            m_gizmoPass->setViewProjection(m_proj * m_view);
-            m_gizmoPass->execute(cmd, frameIndex);
-        }
-        timerEnd();  // gizmo
+    if (m_gizmoPass && m_gizmoEnabled && finalImage) {
+        m_gizmoPass->setViewProjection(m_proj * m_view);
+        m_gizmoPass->record(frame, *finalImage);
     }
 
     // 7. The HUD, over the final RGBA8 image (a frame without a list records nothing).
-    if (m_hudPass && m_hudPass->hasItems() && m_postProcessing && m_postProcessing->didExecute()) {
-        timerBegin("hud");
-        m_hudPass->setTarget(m_postProcessing->getOutputImage(), m_postProcessing->getOutputView(), m_width, m_height);
-        m_hudPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
+    if (m_hudPass && m_hudPass->hasItems() && finalImage) m_hudPass->record(frame, *finalImage);
 
     // Store current view-proj for next frame's motion vectors
     m_prevViewProj = m_proj * m_view;   // unjittered: next frame's velocity carries its own jitter
 }
 
-void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
-    if (width == m_width && height == m_height) return;
+void DeferredRenderer::setRenderScale(float scale) {
+    scale = std::clamp(scale, kMinRenderScale, 1.0f);
+    if (scale == m_renderScale) return;
+    m_renderScale = scale;
+    if (m_outWidth == 0) return;
+    vkDeviceWaitIdle(m_device);   // frames in flight read the targets and descriptor sets a resize replaces
+    onResize(m_outWidth, m_outHeight);
+    resetTemporalState();
+}
 
+void DeferredRenderer::onResize(uint32_t outWidth, uint32_t outHeight) {
+    // The scene is rendered at the output's size times the render scale, and TAA resolves it to the output's.
+    const uint32_t width = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(outWidth) * m_renderScale)));
+    const uint32_t height = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(outHeight) * m_renderScale)));
+    if (width == m_width && height == m_height && outWidth == m_outWidth && outHeight == m_outHeight) return;
+
+    m_outWidth = outWidth;
+    m_outHeight = outHeight;
     m_width = width;
     m_height = height;
 
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
     // The Hi-Z pyramid follows the new depth buffer (the G-buffer resize idled the device).
-    if (m_culling && m_gbufferPass) m_culling->resize(width, height, m_gbufferPass->getDepthView());
-    // The G-buffer's views were just destroyed and recreated. Hand the new ones to
-    // post-processing NOW, before its own onResize rewrites descriptor sets: any
-    // rewrite that still holds an old view writes a destroyed handle.
-    if (m_postProcessing && m_gbufferPass) {
-        m_postProcessing->setGBufferInputs(m_gbufferPass->getDepthView(),
-                                           m_gbufferPass->getNormalView(),
-                                           m_gbufferPass->getVelocityView());
-    }
+    if (m_culling && m_gbufferPass) m_culling->resize(width, height, m_gbufferPass->depth());
     // Every screen-sized target follows the extent. A pass left at its creation size
     // is invisible to validation: the RT shadow raygen stores at gl_LaunchID into the
     // wrong texels (or past the image when the window grows) and lighting samples by UV.
@@ -644,18 +520,18 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_rtGI) m_rtGI->resize(width, height);
     if (m_sssPass) m_sssPass->onResize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
-    if (m_postProcessing) m_postProcessing->onResize(width, height);
-    if (m_gizmoPass) m_gizmoPass->onResize(width, height);
-    if (m_hudPass) m_hudPass->onResize(width, height);
+    if (m_postProcessing) {
+        m_postProcessing->setRenderSize(width, height);
+        m_postProcessing->onResize(outWidth, outHeight);
+    }
 
     // The transparent pass draws into the new lit image against the new depth.
     if (m_vfx && m_lightingPass && m_gbufferPass &&
-        !m_vfx->resize(width, height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView(),
-                           m_lightingPass->getOutputImage()))
+        !m_vfx->resize(width, height, m_lightingPass->lit(), m_gbufferPass->depth()))
         OHAO_LOG(Error, render, "DeferredRenderer: the transparent pass's targets failed at {}x{}", width, height);
     if (m_decals && m_gbufferPass &&
-        !m_decals->resize(width, height, m_gbufferPass->getAlbedoView(), m_gbufferPass->getNormalView(),
-                          m_gbufferPass->getPositionView(), m_gbufferPass->getDepthView()))
+        !m_decals->resize(m_gbufferPass->albedo(), m_gbufferPass->normal(), m_gbufferPass->position(),
+                          m_gbufferPass->depth()))
         OHAO_LOG(Error, render, "DeferredRenderer: the decals' targets failed at {}x{}", width, height);
 
     // Reconnect after resize
@@ -666,9 +542,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         m_lightingPass->clearPerFrameInputs();
         m_lightingPass->setGBufferPass(m_gbufferPass.get());
     }
-
-    // Re-import all textures with new dimensions (passes reallocated their images on resize)
-    importGraphTextures();
 }
 
 void DeferredRenderer::resetTemporalState() {
@@ -687,9 +560,9 @@ void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
     }
 }
 
-void DeferredRenderer::setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance,
+void DeferredRenderer::setEnvMap(gpu::Image* source, gpu::Image* prefiltered, gpu::Image* irradiance,
                                  VkSampler iblSampler, float intensity) {
-    m_envView = source;   // RT GI's misses read the environment itself
+    m_envMap = source;   // RT GI's misses read the environment itself
     m_envIntensity = intensity;
     m_envPrefiltered = prefiltered;   // the transparent pass lights blended surfaces as lighting does
     m_envIrradiance = irradiance;
@@ -721,32 +594,12 @@ void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t ver
     }
 }
 
-VkImageView DeferredRenderer::getFinalOutput() const {
-    if (m_postProcessing && m_postProcessing->didExecute()) {
-        return m_postProcessing->getOutputView();
-    }
-    if (m_lightingPass) {
-        return m_lightingPass->getOutputView();
-    }
-    return VK_NULL_HANDLE;
+gpu::Image* DeferredRenderer::finalOutput() {
+    return m_postProcessing && m_postProcessing->didExecute() ? &m_postProcessing->output() : nullptr;
 }
 
-bool DeferredRenderer::finalOutputIsRGBA8() const {
-    return m_postProcessing && m_postProcessing->didExecute();
-}
-
-VkImage DeferredRenderer::getLitImage() const {
-    return m_lightingPass ? m_lightingPass->getOutputImage() : VK_NULL_HANDLE;
-}
-
-VkImage DeferredRenderer::getFinalOutputImage() const {
-    if (m_postProcessing && m_postProcessing->didExecute()) {
-        return m_postProcessing->getOutputImage();
-    }
-    if (m_lightingPass) {
-        return m_lightingPass->getOutputImage();
-    }
-    return VK_NULL_HANDLE;
+gpu::Image* DeferredRenderer::litImage() {
+    return m_lightingPass ? &m_lightingPass->lit() : nullptr;
 }
 
 glm::vec2 DeferredRenderer::getJitterOffset(uint32_t frameIndex) const {
@@ -803,71 +656,7 @@ void DeferredRenderer::setRTGIRealtime(bool fullResolution, uint32_t rays) {
 }
 
 void DeferredRenderer::configureCSM(uint32_t cascades, uint32_t size) {
-    if (!m_csmPass || !m_csmPass->configure(cascades, size)) return;
-    // A new shadow map: lighting samples it and the graph tracks its layout.
-    if (m_lightingPass) m_lightingPass->setShadowMap(m_csmPass->getShadowMapArrayView(), m_csmPass->getShadowSampler());
-    importGraphTextures();
-}
-
-void DeferredRenderer::importGraphTextures() {
-    // Reinitialize the graph to clear previous imported handles.
-    m_renderGraph.shutdown();
-    m_renderGraph.initialize(m_device);
-
-    // Reset handles
-    m_graphDepthHandle   = TextureHandle::invalid();
-    m_graphNormalHandle  = TextureHandle::invalid();
-    m_graphAlbedoHandle  = TextureHandle::invalid();
-    m_graphShadowHandle  = TextureHandle::invalid();
-    m_graphLightingHandle = TextureHandle::invalid();
-
-    uint32_t w = m_width  > 0 ? m_width  : 1920u;
-    uint32_t h = m_height > 0 ? m_height : 1080u;
-
-    if (m_gbufferPass) {
-        if (m_gbufferPass->getDepthImage() != VK_NULL_HANDLE) {
-            m_graphDepthHandle = m_renderGraph.importTexture(
-                "gbuffer_depth",
-                m_gbufferPass->getDepthImage(), m_gbufferPass->getDepthView(),
-                m_gbufferPass->getDepthFormat(), w, h,
-                VK_IMAGE_LAYOUT_UNDEFINED);
-        }
-        if (m_gbufferPass->getNormalImage() != VK_NULL_HANDLE) {
-            m_graphNormalHandle = m_renderGraph.importTexture(
-                "gbuffer_normal",
-                m_gbufferPass->getNormalImage(), m_gbufferPass->getNormalView(),
-                m_gbufferPass->getNormalFormat(), w, h,
-                VK_IMAGE_LAYOUT_UNDEFINED);
-        }
-        if (m_gbufferPass->getAlbedoImage() != VK_NULL_HANDLE) {
-            m_graphAlbedoHandle = m_renderGraph.importTexture(
-                "gbuffer_albedo",
-                m_gbufferPass->getAlbedoImage(), m_gbufferPass->getAlbedoView(),
-                m_gbufferPass->getAlbedoFormat(), w, h,
-                VK_IMAGE_LAYOUT_UNDEFINED);
-        }
-    }
-
-    if (m_csmPass && m_csmPass->getShadowMapImage() != VK_NULL_HANDLE) {
-        // CSM shadow map is an array image; we import the full-array view.
-        // Width/height reflect the per-layer size (SHADOW_MAP_SIZE x SHADOW_MAP_SIZE).
-        m_graphShadowHandle = m_renderGraph.importTexture(
-            "csm_shadow",
-            m_csmPass->getShadowMapImage(), m_csmPass->getShadowMapArrayView(),
-            VK_FORMAT_D32_SFLOAT,
-            m_csmPass->size(), m_csmPass->size(),
-            VK_IMAGE_LAYOUT_UNDEFINED);
-    }
-
-    if (m_lightingPass && m_lightingPass->getOutputImage() != VK_NULL_HANDLE) {
-        m_graphLightingHandle = m_renderGraph.importTexture(
-            "lighting_output",
-            m_lightingPass->getOutputImage(), m_lightingPass->getOutputView(),
-            VK_FORMAT_R16G16B16A16_SFLOAT, w, h,
-            VK_IMAGE_LAYOUT_UNDEFINED);
-    }
-
-    OHAO_LOG(Debug, render, "DeferredRenderer: RenderGraph re-imported textures ({}x{})", w, h);
+    if (m_csmPass) (void)m_csmPass->configure(cascades, size);   // lighting samples whichever map the pass holds
 }
 
 } // namespace ohao

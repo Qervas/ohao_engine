@@ -8,14 +8,21 @@
 // A frame with guiding on: recordBeginFrame (a pending clear), the path tracer's trace (reads
 // `states()`, writes `proposals()` and `pixel()`), then recordLearn: update, owner and write over
 // the proposals into the second buffer, which is copied over the first, so the next frame reads
-// what this one learned and both buffers are equal again. clear() empties the grid (a reset).
+// what this one learned and both buffers are equal again. clear() empties the grid (a reset). The learn passes
+// bind a set of the frame's slot, written as the frame is recorded, so a buffer that grew is retired and no frame in
+// flight has its set rewritten.
 //
 // Until guiding is first used (ensure), every buffer is a placeholder of one element, so a tracer
 // that never guides binds them and allocates nothing; ensure() allocates the grid (2 x 32 MiB, the
 // claims 8 MiB) and a pixel's buffers (kGuideTrainVertices x 64 bytes and 16 bytes a pixel).
 
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/frame/frame_resources.hpp"
+#include "render/graph/pass.hpp"
+
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 
 #include <glm/glm.hpp>
@@ -24,11 +31,11 @@ namespace ohao::render {
 
 class PathGuiding {
 public:
-    bool create(VkDevice device, VkPhysicalDevice physicalDevice);
+    bool create(VkDevice device, GpuAllocator& allocator);
     void destroy();
 
-    // Allocates the grid and the buffers for `pixels` pixels if they are not there yet (idles the
-    // device when it does). False when an allocation failed (guiding then stays off).
+    // Allocates the grid and the buffers for `pixels` pixels if they are not there yet (the ones they
+    // replace are retired). False when an allocation failed (guiding then stays off).
     bool ensure(uint32_t pixels);
     [[nodiscard]] bool ready(uint32_t pixels) const noexcept { return m_full && m_pixels >= pixels; }
 
@@ -39,10 +46,12 @@ public:
     [[nodiscard]] VkBuffer proposals() const noexcept { return m_proposals.buffer; }
     [[nodiscard]] VkBuffer pixel() const noexcept { return m_pixel.buffer; }
 
-    // Before the trace: a pending clear, and the previous frame's copy ordered before the reads.
-    void recordBeginFrame(VkCommandBuffer cmd);
-    // After the trace: learn from `pixels` pixels' proposals (frame: the tracer's sample index).
-    void recordLearn(VkCommandBuffer cmd, uint32_t pixels, uint32_t frame, const glm::vec3& camera);
+    // What the guided trace declares: the grid read, its proposals and pixel words written.
+    void tracedBy(Pass& pass);
+    // Before the trace: a pending clear.
+    void recordBeginFrame(const Frame& frame);
+    // After the trace: learn from `pixels` pixels' proposals (sample: the tracer's sample index).
+    void recordLearn(const Frame& frame, uint32_t pixels, uint32_t sample, const glm::vec3& camera);
 
     // A guided bounce's share (G4) and the lobes' prior in samples (G5); OHAO_GUIDE_PROB and
     // OHAO_GUIDE_PRIOR override them for tuning.
@@ -52,23 +61,17 @@ public:
     [[nodiscard]] uint32_t depths() const noexcept { return m_depths; }
 
 private:
-    struct Buffer {
-        VkBuffer buffer{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-        VkDeviceSize size{0};
-    };
-    bool allocate(Buffer& b, VkDeviceSize size, VkBufferUsageFlags extraUsage);
-    void release(Buffer& b);
-    void writeSet();
+    bool allocate(GpuBuffer& b, VkDeviceSize size, VkBufferUsageFlags extraUsage);
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
-    Buffer m_states, m_next, m_claims, m_proposals, m_pixel;
+    GpuAllocator* m_allocator{nullptr};
+    GpuBuffer m_states, m_next, m_claims, m_proposals, m_pixel;
+    VkDeviceSize m_stateBytes{0};   // the grid's size: what the copy from the second buffer to the first moves
     bool m_full{false};
     uint32_t m_pixels{0};
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
-    VkDescriptorSet m_set{VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sets{};
     VkPipelineLayout m_layouts[3]{};
     VkPipeline m_pipelines[3]{};   // update, owner, write
     bool m_clearPending{true};

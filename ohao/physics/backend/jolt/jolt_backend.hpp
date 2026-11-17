@@ -44,6 +44,11 @@ public:
     // === Body Management ===
     [[nodiscard]] BodyHandle createBody(const BodyCreationInfo& info) override;
     void destroyBody(BodyHandle handle) override;
+    [[nodiscard]] std::shared_ptr<const SharedShape> makeShared(const ShapeInfo& info) override;
+    [[nodiscard]] std::vector<uint8_t> saveShared(const SharedShape& shape) const override;
+    [[nodiscard]] std::shared_ptr<const SharedShape> loadShared(std::span<const uint8_t> bytes) override;
+    [[nodiscard]] uint32_t sharedFormat() const override;
+    void optimizeBroadPhase() override;
     [[nodiscard]] bool isValidBody(BodyHandle handle) const override;
 
     // === Body Transform ===
@@ -156,6 +161,9 @@ public:
 private:
     // Shape creation
     JPH::ShapeRefC createJoltShape(const ShapeInfo& info) const;
+    struct JoltShared final : SharedShape {
+        JPH::ShapeRefC shape;
+    };
 
     // Conversions
     static JPH::EMotionType toJoltMotionType(MotionType type);

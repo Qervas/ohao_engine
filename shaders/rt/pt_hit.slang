@@ -220,7 +220,7 @@ void fillHitAt(inout PathPayload payload, HitContext hc)
         {
             basisOf(n, T, B);
         }
-        const float3 tn = sampleTex(normalTex, uv).rgb * 2.0 - 1.0;
+        const float3 tn = normalFromMap(sampleTex(normalTex, uv).rg);
         const float3 mapped = T * tn.x + B * tn.y + n * tn.z;
         if (dot(mapped, mapped) > 1e-8) n = normalize(mapped);
         if (dot(n, geo) < 1e-3) n = normalize(n + geo * (1e-3 - dot(n, geo)));

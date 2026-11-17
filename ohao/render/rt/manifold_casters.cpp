@@ -3,6 +3,7 @@
 
 #include "core/log.hpp"
 #include "gpu/shared_layout.hpp"
+#include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
 
 #include <bit>
@@ -18,43 +19,18 @@ constexpr uint32_t kSlots = 128;   // a cluster's triangle slots (rt/manifold_ga
 constexpr uint32_t kTriBytes = 9 * 16;    // a triangle slot: 9 float4
 constexpr uint32_t kNodeBytes = 4 * 16;   // a node (group, cluster, a draw's record): 4 float4
 
-VkMemoryBarrier memoryBarrier(VkAccessFlags src, VkAccessFlags dst) {
-    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    b.srcAccessMask = src;
-    b.dstAccessMask = dst;
-    return b;
-}
-
 } // namespace
 
-bool ManifoldCasters::allocate(Buffer& b, VkDeviceSize size) {
-    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    info.size = size;
-    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateBuffer(m_device, &info, nullptr, &b.buffer) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(m_device, b.buffer, &req);
-    VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    alloc.allocationSize = req.size;
-    alloc.memoryTypeIndex = rtc::findMemoryType(m_physical, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (alloc.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(m_device, &alloc, nullptr, &b.memory) != VK_SUCCESS) {
-        vkDestroyBuffer(m_device, b.buffer, nullptr);
-        b = Buffer{};
-        return false;
-    }
-    b.size = size;
-    return vkBindBufferMemory(m_device, b.buffer, b.memory, 0) == VK_SUCCESS;
+bool ManifoldCasters::allocate(GpuBuffer& b, VkDeviceSize size) {
+    m_allocator->retire(b);
+    b = m_allocator->createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  AllocationUsage::GpuOnly);
+    return b.isValid();
 }
 
-void ManifoldCasters::release(Buffer& b) {
-    if (b.buffer) vkDestroyBuffer(m_device, b.buffer, nullptr);
-    if (b.memory) vkFreeMemory(m_device, b.memory, nullptr);
-    b = Buffer{};
-}
-
-bool ManifoldCasters::create(VkDevice device, VkPhysicalDevice physicalDevice) {
+bool ManifoldCasters::create(VkDevice device, GpuAllocator& allocator) {
     m_device = device;
-    m_physical = physicalDevice;
+    m_allocator = &allocator;
     VkDescriptorSetLayoutBinding bindings[9];
     for (uint32_t i = 0; i < 9; ++i) bindings[i] = shader::layoutBinding(shader::rt_manifold_gather::kSet0[i]);
     static_assert(shader::rt_manifold_gather::kSet0.size() == 9);
@@ -85,19 +61,19 @@ bool ManifoldCasters::create(VkDevice device, VkPhysicalDevice physicalDevice) {
     }
     // The smallest resources, so every binding is valid before anything is gathered.
     for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
-        if (!rtc::createHostBuffer(device, physicalDevice, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_draws[s])) return false;
-        std::memset(m_draws[s].mapped, 0, 64);
+        m_draws[s] = rtc::createHostBuffer(allocator, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!m_draws[s].isValid()) return false;
         m_drawsBytes[s] = 64;
     }
+    m_trisBytes = kTriBytes;
+    m_nodesBytes = kNodeBytes;
     return allocate(m_tris, kTriBytes) && allocate(m_nodes, kNodeBytes) && allocate(m_requests, kRequestBytes);
 }
 
 void ManifoldCasters::destroy() {
     if (m_device == VK_NULL_HANDLE) return;
-    release(m_tris);
-    release(m_nodes);
-    release(m_requests);
-    for (auto& b : m_draws) rtc::destroyHostBuffer(m_device, b);
+    for (GpuBuffer* b : {&m_tris, &m_nodes, &m_requests}) m_allocator->retire(*b);
+    for (GpuBuffer& b : m_draws) m_allocator->retire(b);
     for (VkPipeline* p : {&m_clusterPipe, &m_groupPipe})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_layout, &m_groupLayout})
@@ -171,28 +147,27 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
     words[3] = G;
     std::copy(sel.materialBits.begin(), sel.materialBits.end(), words.begin() + 4 + 12 * D);
 
-    // Device buffers only grow (frames in flight read the old ones: the device idles once).
+    // Device buffers only grow (frames in flight read the old ones, which are retired).
     const VkDeviceSize trisBytes = std::max<VkDeviceSize>(VkDeviceSize{T} * kTriBytes, kTriBytes);
     const VkDeviceSize nodesBytes = std::max<VkDeviceSize>(VkDeviceSize{C * 9 + G + D} * kNodeBytes, kNodeBytes);   // 8 sub-clusters a cluster
-    // A failed growth keeps the pass off from then on (no idle and retry every frame).
+    // A failed growth keeps the pass off from then on (no retry every frame).
     if (m_growthFailed) T = 0;
-    else if (trisBytes > m_tris.size || nodesBytes > m_nodes.size) {
-        vkDeviceWaitIdle(m_device);
-        if (trisBytes > m_tris.size) {
-            release(m_tris);
-            if (!allocate(m_tris, trisBytes * 2)) T = 0;
+    else if (trisBytes > m_trisBytes || nodesBytes > m_nodesBytes) {
+        if (trisBytes > m_trisBytes) {
+            if (allocate(m_tris, trisBytes * 2)) m_trisBytes = trisBytes * 2;
+            else T = 0;
         }
-        if (nodesBytes > m_nodes.size) {
-            release(m_nodes);
-            if (!allocate(m_nodes, nodesBytes * 2)) T = 0;
+        if (nodesBytes > m_nodesBytes) {
+            if (allocate(m_nodes, nodesBytes * 2)) m_nodesBytes = nodesBytes * 2;
+            else T = 0;
         }
         if (T == 0) {
             OHAO_LOG(Error, render, "manifold casters: {} triangles could not be allocated; the pass stays off", words[1]);
             m_growthFailed = true;
-            release(m_tris);   // whichever grew, or never failed, before the smallest pair
-            release(m_nodes);
-            allocate(m_tris, kTriBytes);
+            allocate(m_tris, kTriBytes);   // whichever grew, or never failed, gives way to the smallest pair
             allocate(m_nodes, kNodeBytes);
+            m_trisBytes = kTriBytes;
+            m_nodesBytes = kNodeBytes;
         }
     }
     if (T == 0) {
@@ -201,26 +176,27 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
     }
     VkDeviceSize bytes = words.size() * sizeof(uint32_t);
     if (bytes > m_drawsBytes[frameSlot]) {
-        rtc::destroyHostBuffer(m_device, m_draws[frameSlot]);
+        m_allocator->destroyBuffer(m_draws[frameSlot]);   // this slot's fence was waited: the GPU is done with it
         const VkDeviceSize cap = std::max(bytes, m_drawsBytes[frameSlot] * 2);
-        if (rtc::createHostBuffer(m_device, m_physical, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_draws[frameSlot])) {
+        m_draws[frameSlot] = rtc::createHostBuffer(*m_allocator, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (m_draws[frameSlot].isValid()) {
             m_drawsBytes[frameSlot] = cap;
         } else {
             // The smallest buffer again, holding no draw: every binding stays valid and the pass does nothing.
             OHAO_LOG(Error, render, "manifold casters: a draws buffer of {} bytes could not be created; the pass stays off",
                      cap);
-            rtc::destroyHostBuffer(m_device, m_draws[frameSlot]);
             m_drawsBytes[frameSlot] = 0;
-            if (rtc::createHostBuffer(m_device, m_physical, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_draws[frameSlot]))
-                m_drawsBytes[frameSlot] = 64;
+            m_draws[frameSlot] = rtc::createHostBuffer(*m_allocator, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            if (m_draws[frameSlot].isValid()) m_drawsBytes[frameSlot] = 64;
             words.assign(4, 0u);
             bytes = words.size() * sizeof(uint32_t);
             T = C = G = D = 0;
         }
     }
-    if (m_draws[frameSlot].mapped && bytes <= m_drawsBytes[frameSlot])
-        std::memcpy(m_draws[frameSlot].mapped, words.data(), bytes);
-    else
+    if (m_draws[frameSlot].getMappedData() && bytes <= m_drawsBytes[frameSlot]) {
+        std::memcpy(m_draws[frameSlot].getMappedData(), words.data(), bytes);
+        m_allocator->flushBuffer(m_draws[frameSlot], 0, bytes);
+    } else
         T = C = G = D = 0;
     m_triangles = T;
     m_clusters = C;
@@ -231,8 +207,6 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
 bool ManifoldCasters::ensureRequests(uint32_t pixels) {
     if (m_device == VK_NULL_HANDLE) return false;
     if (m_requestsFull && m_requestPixels >= pixels) return true;
-    vkDeviceWaitIdle(m_device);
-    release(m_requests);
     const VkDeviceSize bytes = VkDeviceSize{pixels} * gpu::shared::kManifoldDepths * kRequestBytes;
     if (!allocate(m_requests, bytes)) {
         OHAO_LOG(Error, render, "manifold casters: requests for {} pixels ({} MB) could not be allocated; the pass stays off",
@@ -248,43 +222,60 @@ bool ManifoldCasters::ensureRequests(uint32_t pixels) {
     return true;
 }
 
-void ManifoldCasters::record(VkCommandBuffer cmd, uint32_t frameSlot, VkBuffer vertices, VkBuffer meshlets,
-                             VkBuffer meshletVertices, VkBuffer meshletTriangles, VkBuffer instances, VkBuffer materials) {
+void ManifoldCasters::record(const Frame& frame, const RenderScene& scene) {
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t frameSlot = frame.slot;
     if (!m_device || frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
-    constexpr VkPipelineStageFlags kTrace = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-    constexpr VkPipelineStageFlags kCompute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-    constexpr VkAccessFlags kRW = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    // Last frame's trace read the triangles and requests; this frame rewrites them.
-    VkMemoryBarrier before = memoryBarrier(kRW, kRW | VK_ACCESS_TRANSFER_WRITE_BIT);
-    vkCmdPipelineBarrier(cmd, kTrace, kCompute | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
     if (m_clearRequests && m_requestsFull) {
         // A request's meta word 0 is "none": a fresh buffer holds none (raygen writes every slot each frame after).
+        Pass pass(frame, nullptr, Pass::Transfer);
+        pass.write(m_requests, BufferUse::CopyDst);
+        pass.begin();
         vkCmdFillBuffer(cmd, m_requests.buffer, 0, VK_WHOLE_SIZE, 0u);
         m_clearRequests = false;
     }
-    if (m_triangles > 0) {
-        const VkDescriptorSet set = m_sets[frameSlot];
-        const VkDescriptorBufferInfo infos[9] = {
-            {vertices, 0, VK_WHOLE_SIZE},         {meshlets, 0, VK_WHOLE_SIZE},  {meshletVertices, 0, VK_WHOLE_SIZE},
-            {meshletTriangles, 0, VK_WHOLE_SIZE}, {instances, 0, VK_WHOLE_SIZE}, {m_draws[frameSlot].buffer, 0, VK_WHOLE_SIZE},
-            {m_tris.buffer, 0, VK_WHOLE_SIZE},    {m_nodes.buffer, 0, VK_WHOLE_SIZE}, {materials, 0, VK_WHOLE_SIZE},
-        };
-        VkWriteDescriptorSet w[9];
-        for (uint32_t i = 0; i < 9; ++i) {
-            w[i] = shader::write(shader::rt_manifold_gather::kSet0[i], set);
-            w[i].pBufferInfo = &infos[i];
-        }
-        vkUpdateDescriptorSets(m_device, 9, w, 0, nullptr);
+    if (m_triangles == 0) return;
+    const RenderScene::Buffers sb = scene.buffers();
+    GpuBuffer* const inputs[9] = {&sb.vertices,  &sb.meshlets,       &sb.meshletVertices, &sb.meshletTriangles, &sb.instances,
+                                  &m_draws[frameSlot], &m_tris, &m_nodes,        &sb.materials};
+    const VkDescriptorSet set = m_sets[frameSlot];
+    VkDescriptorBufferInfo infos[9];
+    VkWriteDescriptorSet w[9];
+    for (uint32_t i = 0; i < 9; ++i) {
+        infos[i] = {inputs[i]->buffer, 0, VK_WHOLE_SIZE};
+        w[i] = shader::write(shader::rt_manifold_gather::kSet0[i], set);
+        w[i].pBufferInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(m_device, 9, w, 0, nullptr);
+    {
+        // Each cluster's triangles in world space, its box and cone.
+        Pass pass(frame, nullptr, Pass::Compute);
+        for (GpuBuffer* b : {&sb.vertices, &sb.meshlets, &sb.meshletVertices, &sb.meshletTriangles, &sb.instances,
+                             &m_draws[frameSlot], &sb.materials})
+            pass.read(*b, BufferUse::Storage);
+        pass.write(m_tris, BufferUse::Storage).write(m_nodes, BufferUse::Storage);
+        pass.begin();
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &set, 0, nullptr);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_clusterPipe);
         vkCmdDispatch(cmd, m_clusters, 1, 1);
-        VkMemoryBarrier step = memoryBarrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-        vkCmdPipelineBarrier(cmd, kCompute, kCompute, 0, 1, &step, 0, nullptr, 0, nullptr);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_groupPipe);
-        vkCmdDispatch(cmd, m_groups, 1, 1);
     }
-    VkMemoryBarrier after = memoryBarrier(VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, kRW);
-    vkCmdPipelineBarrier(cmd, kCompute | VK_PIPELINE_STAGE_TRANSFER_BIT, kTrace, 0, 1, &after, 0, nullptr, 0, nullptr);
+    // The groups over the clusters' nodes, and each draw's record.
+    Pass pass(frame, nullptr, Pass::Compute);
+    for (GpuBuffer* b : {&sb.instances, &m_draws[frameSlot], &sb.materials, &m_tris}) pass.read(*b, BufferUse::Storage);
+    pass.write(m_nodes, BufferUse::Storage);
+    pass.begin();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_groupPipe);
+    vkCmdDispatch(cmd, m_groups, 1, 1);
+}
+
+void ManifoldCasters::cameraPass(Pass& pass, uint32_t frameSlot) {
+    pass.read(m_nodes, BufferUse::Storage).read(m_draws[frameSlot], BufferUse::Storage);
+    pass.write(m_requests, BufferUse::Storage);
+}
+
+void ManifoldCasters::manifoldPass(Pass& pass, uint32_t frameSlot) {
+    pass.read(m_tris, BufferUse::Storage).read(m_nodes, BufferUse::Storage).read(m_draws[frameSlot], BufferUse::Storage);
+    pass.write(m_requests, BufferUse::Storage);
 }
 
 } // namespace ohao::render

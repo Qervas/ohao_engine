@@ -15,13 +15,14 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 |---|---|---|---|
 | `ohao_core` | `core/` | glm | the logger (`OHAO_LOG`, the ring, sinks), the time model (`Timeline`, `FixedStepClock`: lockstep or realtime, paused, the frame number), input (`InputMap`: actions, axes, the virtual device injection uses; the `Key` name table), the render handles a component holds (`render_handles.hpp`), `Result`, concepts, small shared types |
 | `ohao_reflect` | `reflect/` | glm (fast_float privately) | the type registry, schema/catalogue export, the JSON writer, reader and layout, typed decode/encode. Knows nothing of ECS or GPU. |
-| `ohao_asset` | `asset/` | assimp, ufbx, stb_image (`external/stb_image.cpp`, its one implementation) | asset loading into CPU `Model`s, procedural meshes. No Vulkan: a raster pipeline reads `Vertex` through `render/scene/vertex_input.hpp` |
+| `ohao_asset` | `asset/` | `ohao_core`, glm | what the engine loads: the cooked formats (`cooked.hpp`: a model file's meshes and a texture, read in place from a mapping; `cooked::Mesh` is the mesh every consumer reads), `Vertex` (`vertex.hpp`), the content hash, the primitives made in code. It reads no source format. No Vulkan: a raster pipeline reads `Vertex` through `render/scene/vertex_input.hpp` |
+| `ohao_cook` | `cook/` | `ohao_asset` (privately `ohao_level`, Assimp, stb_image, simdjson, `external/bc7enc`) | the cooker (step 5), the only code that reads a model's source (the importer, `model_loader.cpp`: glTF and GLB through Assimp): a source file into cooked assets (`asset/cooked.hpp`: a model file per source, a texture file per image and use: BC7 or BC5 with its mips) in `<root>/.ohao/cooked/`, each named by a hash of the content it was made from (`asset/content_hash.hpp`), cooked when a host asks for one the cache does not hold. `FileAssetResolver` loads meshes only through it (`loadMesh`: a `cooked::Mesh` whose pointer keeps the file mapped; `texture`: a cooked texture by its content's name) |
 | `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_core`, Vulkan, VMA | the Vulkan layer under the renderer: the swapchain and present waiting, bindless textures, the allocator, `vk_utils` |
 | `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_asset`, `ohao_core` (NRD, OIDN, NGX optional) | `VulkanRenderer` (`render/renderer/`: the facade, device and queues, frame dispatch, environment upload), `RenderScene` (the persistent GPU scene), deferred passes, the path tracer, denoisers, the render graph |
-| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_asset`, `ohao_reflect`, `ohao_physics`, EnTT (simdjson privately); never the renderer (one layer: the layer check holds it) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components (`MeshRenderer` holds `core/render_handles.hpp`'s ids), systems (spin, fly controller, transform, physics), the scene codec, snapshots, the world hash and diff, the scene view. The physics system (`physics_scene`, installed by `installPhysics`) builds Jolt bodies from `Collider`/`RigidBody`; `physicsScene(world)` reaches it. |
+| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_asset`, `ohao_cook`, `ohao_reflect`, `ohao_physics`, EnTT (simdjson privately); never the renderer (one layer: the layer check holds it) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components (`MeshRenderer` holds `core/render_handles.hpp`'s ids), systems (spin, fly controller, transform, physics), the scene codec, snapshots, the world hash and diff, the scene view. The physics system (`physics_scene`, installed by `installPhysics`) builds Jolt bodies from `Collider`/`RigidBody`; `physicsScene(world)` reaches it. |
 | `ohao_anim` | `anim/` | `ohao_core`, glm (simdjson privately) | skeletal animation without ECS or Vulkan: glTF skins and clips (`gltf_anim`), binding clips to skeletons by joint name, sampling, `.animgraph.json` graphs (parse, bind, validate with JSON pointers), one layer's step (`stepLayer`) and a pose (`evaluatePose`), the skinning palette |
 | `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
-| `ohao_world_render` | `world_render/` | `ohao_ecs`, `ohao_renderer` | the world into the renderer: instantiate (MeshSources into meshes, `installInstantiate`), the render extract, the effects' draw (`vfx_draw`), in-memory models (`model_spawn`), framing, what a game presents (`present.hpp`: its HUDs, drawn by the hosts, and its presented spheres, by `vfx_draw`). `engine::installRendering` installs it. |
+| `ohao_world_render` | `world_render/` | `ohao_ecs`, `ohao_renderer` | the world into the renderer: instantiate (MeshSources into meshes, `installInstantiate`), the render extract, the effects' draw (`vfx_draw`), what a game presents (`present.hpp`: its HUDs, drawn by the hosts, and its presented spheres, by `vfx_draw`). `engine::installRendering` installs it. |
 | `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
 | `ohao_game_api` | `game/` | `ohao_reflect` | the game API (step 3i): `game::Module` (`registerTypes`, `install`, `methods`) and a game's method row (`game::Method`, `game::Call`, `decodeParams`). A host plays one module or none. |
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect`, `ohao_game_api` | `Session`: the method table (the engine's rows, then the game's) and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
@@ -52,8 +53,7 @@ new build reads the components, channels and hook states in place, so their layo
 (`core/layout_key.hpp`: TypeInfo::layout, SnapshotHook::layout), or the reload is refused and the old build kept. Type identities are names, not addresses (`core/type_key.hpp`, EnTT's `type_hash`), so
 the executable, the module and a later build of it agree on every type.
 
-Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
-`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,
+Programs: the windowed game host (`examples/ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,
 `render_bench`, `level_bench`, `physics_bench` and `feel_bench` (`tools/bench`; they share the bench10k builder,
 `bench_world.hpp`, and the calibration and load record, `bench_env.hpp`).
 
@@ -220,7 +220,7 @@ VulkanRenderer::render()
                                their meshlets (cone, frustum, Hi-Z) and mesh shaders draw
                                the rest (without VK_EXT_mesh_shader: a compute pass and
                                per-meshlet draws, the same image). The meshlets are built
-                               at registerMesh (render/scene/meshlet_builder)
+                               at registerMesh (asset/meshlets.hpp)
   LightClusters                the raster lights (uncapped) into the frame slot's light
                                buffer when they changed; lights.cluster lists, for each of
                                16x9x24 froxels out to the camera's far plane, up to 256
@@ -242,8 +242,9 @@ VulkanRenderer::render()
   (vkWaitForPresentKHR, gpu/vulkan/present_waiter.hpp); a realtime window host stamps each
   frame (poll, view, submit, present) and the look movements it shows into its FrameLog
   (runtime/frame_log.hpp): render.stats' latency and pacing, ohao_game --latency, feel_bench;
-  before polling it waits until at most LiveConfig::framesAhead frames are unpresented
-  (presentToAwait, VulkanRenderer::waitForPresentOf; 1 with a look-led player), and before
+  a frame at the display's rate starts on the display's refreshes (LiveHost::onRefreshGrid);
+  with a look-led player it polls only once the GPU has finished the frame before
+  (VulkanRenderer::waitForSubmitted), and before
   sync it sets World::setPendingLook to the look no step has consumed yet
 ```
 
@@ -424,8 +425,9 @@ Followed once in sub-project 4, step 11, with a throwaway compute pass (the mean
 luminance of each 8x8 tile of the lit HDR image): it built, ran validation-clean through
 a resize and teardown, left every golden exact, and was then removed, since nothing read
 its output. Deferred passes live in `ohao/render/deferred/`; `SSSPass` is the compute
-model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), the post
-stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
+model to copy, `BloomPass` the raster one (fullscreen draws into the levels of one image). Every
+pass records through `render::Pass` (`ohao/render/graph/pass.hpp`, step 4a): it declares what it
+reads and writes, and the barriers, layouts and the rendering's begin and end follow from that.
 
 1. **The shader**, Slang, under `shaders/<area>/<name>.slang` (the glob in
    `shaders/CMakeLists.txt`; every shader is Slang, there is no GLSL). The next build picks
@@ -448,38 +450,50 @@ stack's display pass (`postprocess/tonemap.slang`) the fullscreen raster one.
    fails while they are out of date.
 2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
    (set `m_device`/`m_physicalDevice`, then create everything; return false on any
-   failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base
-   helpers (`createSampler`, `safeDestroy`; `createRenderTarget`, `transitionImage` for
-   raster passes) or, for a Slang compute pass, `rtc::createImage`, `rtc::transition` and
-   `rtc::createComputePipeline(device, spvName, entry, setLayout, pushBytes, …)` (it loads
-   the SPIR-V by its flattened name). Push constants stay within 128 bytes, the size every
-   device guarantees. The destructor calls `cleanup()`.
+   failure), `cleanup`, `execute(cmd, frameIndex)` or a `record(const render::Frame&)`,
+   `onResize`, `getName`. Its owner calls `setAllocator` before `initialize`. Images come from
+   `m_allocator->createImage({"<pass>.<what>", format, width, height, usage, mips})`
+   (`gpu::Image`, `gpu/vulkan/gpu_image.hpp`: named, with its views, `subView(mip, layer)`
+   for one level) and go back with `m_allocator->retire(image)`, destroyed after the frames
+   in flight; buffers likewise (`createBuffer`, `retire`). Raster pipelines come from
+   `render::createGraphicsPipeline` (`render/graph/pipeline.hpp`: formats, not a render
+   pass), compute ones from `rtc::createComputePipeline(device, spvName, entry, setLayout,
+   pushBytes, …)` (it loads the SPIR-V by its flattened name). Push constants stay within 128
+   bytes, the size every device guarantees. The destructor calls `cleanup()`. The build
+   refuses `vkCmdPipelineBarrier`, `vkCreateRenderPass`, `vkCreateFramebuffer`,
+   `vkAllocateMemory` or `vkCreateImage` outside `render/graph` and `gpu/vulkan`
+   (`tools/check.py`, `FRAME_RULE`).
 3. **Descriptors written at record time need one set per frame in flight**: a
    `std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>`, a pool sized ×
    `MAX_FRAMES_IN_FLIGHT`, and `execute` writing only `m_descriptorSets[frameIndex]`
    (`if (frameIndex >= MAX_FRAMES_IN_FLIGHT) return;`). A single set rewritten every frame
    races the frame still reading it (VUID 03047).
-4. **Barriers are the pass's own** unless it joins the render graph: transition its output
-   before writing (`UNDEFINED` → `GENERAL` for a storage image it rewrites whole) and to
-   `SHADER_READ_ONLY_OPTIMAL` after, with the stages of its readers. Inputs keep the
-   layouts their producers leave: the lit HDR image in `SHADER_READ_ONLY_OPTIMAL`, the
-   G-buffer depth in `DEPTH_STENCIL_READ_ONLY_OPTIMAL`. (Passes that run before lighting
-   go through `RenderGraph` instead: `addComputePass`, `readComputeTexture`, imports
-   refreshed in `importGraphTextures`.)
+4. **Declare, then record.** `render::Pass pass(frame, "name", render::Pass::Compute)`, then
+   every image and buffer it touches: `sampled`, `storageRead`, `storageWrite` (whole: its old
+   contents discarded unless `Old::Keep`), `storageReadWrite`, `color(image, Load::Clear)`,
+   `depth`, `depthRead`, `copySrc`/`copyDst`, and `read`/`write(buffer, BufferUse::…)`; then
+   `pass.begin()`, bind and dispatch or draw; `end()` (or the scope's end). Each resource
+   keeps what last touched it across passes and frames, so a pass needs to know nothing about
+   its neighbours, and a history image needs no first-use flag. A descriptor's `imageLayout`
+   is the declaration's (`sampled` → SHADER_READ_ONLY_OPTIMAL, a sampled depth →
+   DEPTH_STENCIL_READ_ONLY_OPTIMAL, storage → GENERAL). Several passes under one timer:
+   `render::Timed`, the passes inside named null. Code with barriers of its own (NRD, DLSS)
+   is one pass that declares what it needs and `leaves(image, layout)` what it leaves.
 5. **Wire it into `DeferredRenderer`** (`deferred_renderer.{hpp,cpp}`): a
    `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
    and `reset()` on failure, as SSS does); record it in `render()` at its place in the
-   frame (after lighting: sky, vfx.expand, vfx.sort, SSS, transparent, post, gizmo) inside
-   `timerBegin("name") … timerEnd()`; resize it in `onResize`, and hand it again any view
-   of another pass that a resize recreates. A pass left at its creation size is invisible
-   to validation and wrong on screen. A graph pass is timed under its `addPass` name.
-   Either way the name goes in the **pass registry** (`ohao/render/frame/pass_registry.hpp`,
+   frame (after lighting: vfx.expand, vfx.sort, SSS, transparent, post, gizmo), handing it the
+   `render::Frame` `render()` made (command buffer, timer, slot); resize it in `onResize`, and
+   hand it again any image of another pass that a resize recreates. A pass left at its creation
+   size is invisible to validation and wrong on screen. It is timed under the name its
+   `render::Pass` carries, which goes in the **pass registry** (`ohao/render/frame/pass_registry.hpp`,
    `kPasses`, at its place in frame order, lowercase and dotted: `rt.gi.denoise`): the
    timer (`GpuPassTimer`, `render/frame/gpu_pass_timer.hpp`) times only registered names,
    logs an unknown one once as an error. The pass's time then shows in `render.stats` and
    `render_bench`; a budget for it goes in `tests/bench/render_budgets.json`, judged by hand.
 6. **Check it:** build (the shader comes with any target that renders); run validation
-   with a resize; run the goldens — a pass that changes pixels changes the deferred goldens
+   with a resize, and once with `OHAO_VALIDATION=sync` (a wrong declaration is a hazard it
+   names); run the goldens — a pass that changes pixels changes the deferred goldens
    on purpose, so look at the diff (`build/golden_diff/`), then `--update`. The deferred
    goldens are exact, so they also hold the frame bit-identical run to run.
    A post effect that agents switch on also needs its name in `PostEffect`

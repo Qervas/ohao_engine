@@ -23,8 +23,8 @@ Microsoft or Crytek.
 
 | Scene | Built how | Goldens (`tests/golden/manifest.json`) |
 |---|---|---|
-| `assets/scenes/khronos_metal_rough_spheres.scene.json` | `model_viewer --save-scene` (framed in the model viewer's room) | `khronos_metal_rough_spheres_deferred` (example and CLI), `..._reference` |
-| `assets/scenes/khronos_flight_helmet.scene.json` | `model_viewer --save-scene` | `khronos_flight_helmet_deferred` (example and CLI), `..._reference` |
+| `assets/scenes/khronos_metal_rough_spheres.scene.json` | the model viewer's room (written by `model_viewer --save-scene`, a program since deleted) | `khronos_metal_rough_spheres_deferred` (example and CLI), `..._reference` |
+| `assets/scenes/khronos_flight_helmet.scene.json` | the same | `khronos_flight_helmet_deferred` (example and CLI), `..._reference` |
 | `assets/scenes/khronos_sponza.scene.json` | by hand: the model at its own scale (about 30 m), a camera in the atrium, a sun and five atrium lights | `khronos_sponza_deferred`, `..._reference` |
 
 ## What they exercise, and what they do not

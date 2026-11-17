@@ -12,10 +12,13 @@
 // Both come from a mip chain of the environment (scratch, kept with the object) sampled at
 // the mip each sample's solid angle covers. The path tracer and RT GI keep reading the
 // source environment: nothing here changes a path-traced image.
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "gpu/vulkan/gpu_image.hpp"
+#include "render/graph/pass.hpp"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
-#include <vector>
 
 namespace ohao::render {
 
@@ -26,40 +29,33 @@ public:
     EnvPrefilter(const EnvPrefilter&) = delete;
     EnvPrefilter& operator=(const EnvPrefilter&) = delete;
 
-    // Pipelines, the descriptor set layout and the sampler. False (logged) without the SPIR-V.
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    // Pipelines, the descriptor set layout and the sampler. False (logged) without the SPIR-V. `allocator`
+    // outlives cleanup().
+    bool initialize(VkDevice device, GpuAllocator& allocator);
     void cleanup();
 
-    // Records the build into `cmd` from `source` (RGBA32F, w x h, SHADER_READ_ONLY_OPTIMAL,
-    // already written by commands before these). Replaces what an earlier build made: the
-    // caller has idled the queue. The images end in SHADER_READ_ONLY_OPTIMAL for fragment
-    // shaders once `cmd` has run.
-    bool build(VkCommandBuffer cmd, VkImageView source, uint32_t width, uint32_t height);
+    // Records the build into `frame` from `source` (RGBA32F, equirectangular). Replaces what an earlier build
+    // made: those images are retired, and the earlier build's commands have run (its sets are reset). A pass
+    // that reads prefiltered() or irradiance() declares it sampled.
+    bool build(const Frame& frame, gpu::Image& source);
 
-    [[nodiscard]] bool ready() const noexcept { return m_prefiltered.full != VK_NULL_HANDLE; }
-    [[nodiscard]] VkImageView prefilteredView() const noexcept { return m_prefiltered.full; }
-    [[nodiscard]] VkImageView irradianceView() const noexcept { return m_irradiance.full; }
-    // Linear, mips linear, u repeats, v clamps: for both views.
+    [[nodiscard]] bool ready() const noexcept { return static_cast<bool>(m_prefiltered); }
+    [[nodiscard]] gpu::Image& prefiltered() noexcept { return m_prefiltered; }
+    [[nodiscard]] gpu::Image& irradiance() noexcept { return m_irradiance; }
+    // Linear, mips linear, u repeats, v clamps: for both images.
     [[nodiscard]] VkSampler sampler() const noexcept { return m_sampler; }
 
 private:
-    struct MipImage {
-        VkImage image{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-        VkImageView full{VK_NULL_HANDLE};     // every level, for sampling
-        std::vector<VkImageView> levels;      // one a level, for writing
-        uint32_t width{0}, height{0}, mips{0};
-    };
-    bool createMipImage(MipImage& img, uint32_t width, uint32_t height, uint32_t mips);
-    void destroyMipImage(MipImage& img);
-    void destroyImages();
+    void retireImages();
 
-    VkDescriptorSet allocateSet(VkImageView in, VkImageLayout inLayout, VkImageView chain, VkImageView out);
-    void dispatch(VkCommandBuffer cmd, VkPipeline pipeline, VkDescriptorSet set, uint32_t w, uint32_t h,
-                  uint32_t samples, float roughness);
+    VkDescriptorSet allocateSet(VkImageView in, VkImageLayout inLayout, VkImageView out);
+    // One compute pass: `in` read as `source` says (the environment, sampled; else a level of the chain, in
+    // GENERAL), every level of the chain sampled when `readsChain`, one level of `out` written.
+    void dispatch(const Frame& frame, VkPipeline pipeline, gpu::Image& in, uint32_t inMip, bool readsChain,
+                  gpu::Image& out, uint32_t outMip, uint32_t samples, float roughness);
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
+    GpuAllocator* m_allocator{nullptr};
     VkDescriptorSetLayout m_setLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
     VkPipelineLayout m_layouts[4]{};
@@ -67,10 +63,9 @@ private:
         m_irradianceSum{VK_NULL_HANDLE};
     VkSampler m_sampler{VK_NULL_HANDLE};
 
-    MipImage m_chain;         // scratch: the environment and its 2x2 means
-    MipImage m_prefiltered;
-    MipImage m_irradiance;
-    uint32_t m_sourceWidth{0}, m_sourceHeight{0};
+    gpu::Image m_chain;         // scratch: the environment and its 2x2 means
+    gpu::Image m_prefiltered;
+    gpu::Image m_irradiance;
 };
 
 } // namespace ohao::render

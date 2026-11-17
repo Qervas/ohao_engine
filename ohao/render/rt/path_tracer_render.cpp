@@ -1,6 +1,5 @@
-// Extracted from path_tracer.cpp — per-frame render() method.
-// Kept as a member of class PathTracer; no behavior change.
-// Push-constant flag constants (kPTFlag*) moved here since this TU is their sole consumer.
+// PathTracer::render: the frame, as a sequence of render::Pass scopes in frame order, and the push constants'
+// flags (kPTFlag*).
 
 #include "path_tracer.hpp"
 #include "render/shader_bindings/rt_path_tracer.hpp"
@@ -11,10 +10,12 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "core/log.hpp"
-#include "render/frame/gpu_pass_timer.hpp"
+#include "render/scene/render_scene.hpp"
 #include <glm/gtc/type_ptr.hpp>
 
 // nrd_denoise.hpp / nrd_compose.hpp are safe to include unconditionally; their
@@ -50,20 +51,31 @@ constexpr uint32_t kPTFlagManifoldRequests = 1u << 20;
 constexpr uint32_t kPTFlagManifoldGlass = 1u << 23;   // step 2b: the sun through owned solids
 }  // namespace
 
-void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
+void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj) {
+    using render::BufferUse;
+    using render::Old;
+    using render::Pass;
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t frameSlot = frame.slot;
     if (!m_rtPipeline || m_tlas == VK_NULL_HANDLE) return;
     if (frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     // This frame slot's fence was waited: its set is no longer read by the GPU.
     const VkDescriptorSet set = m_descriptorSets[frameSlot];
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
-        !m_instances || !m_materialRefs || !m_lightBuffer || !m_emissive) return;   // the renderer's tables
-    const auto timePass = [&](const char* pass) { if (m_passTimer) m_passTimer->begin(cmd, pass); };
+        !m_instances || !m_materialRefs || !m_lightBuffer || !m_emissive || !m_scene) return;   // the renderer's tables
+    // One stage is timed at a time: a stage's timer ends where the next begins, the last with the frame's passes.
+    // The passes inside are not named.
+    std::optional<render::Timed> timed;
+    const auto timePass = [&](const char* pass) {
+        timed.reset();
+        timed.emplace(frame, pass);
+    };
     // Caustics (sub-project 24): offline only (the realtime profile's paths end in the radiance
     // cache), on its own program (raygenCaustics; the default raygen has none of its code), when a
     // directional light and a smooth-capable caster are in the scene. OHAO_CAUSTICS_SPLIT_ONLY=1
     // drops the light pass's terms without running it (check_caustics' c1_split_only).
     const bool causticsWanted = m_renderSettings.caustics && m_renderSettings.profile == RTRenderProfile::Offline;
-    if (causticsWanted && m_scene) m_caustics.setScene(*m_scene, gpu::shared::kCausticRough);
+    if (causticsWanted) m_caustics.setScene(*m_scene, gpu::shared::kCausticRough);
     const bool causticsOn = causticsWanted && m_caustics.active() && m_caustics.ensure(m_width * m_height) &&
                             ensureCausticsPipeline();
     // Path guiding's buffers before this frame's set is written (the first guided frame allocates them), and its
@@ -80,23 +92,18 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // specular inputs, so a denoiser that builds the frame from those (NRD) would never show it, while the camera side
     // dropped step 2a's share: under NRD the pass stays off and the camera side keeps those terms.
     const bool manifoldFrame = !denoiseNeedsDiffSpecSplit(m_renderSettings.denoiseMode);
-    if (causticsOn && !manifoldOff && manifoldFrame && m_scene)
-        m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
-    const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_scene && m_manifold.active() &&
+    if (causticsOn && !manifoldOff && manifoldFrame) m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough);
+    const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_manifold.active() &&
                             m_manifold.ensureRequests(m_width * m_height) && (manifoldSplitOnly || ensureManifoldPipeline());
     const bool manifoldPass = manifoldOn && !manifoldSplitOnly;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
     timePass("emissive.lights");
-    m_emissive->record(cmd, frameSlot,
-                       {m_vertexArena, m_indexArena, m_meshTable, m_triangleSlots, m_materialTable, m_instances,
-                        m_materialRefs},
-                       m_textureSet);
+    m_emissive->record(frame, *m_scene, m_textureSet);
     // Caustics step 2: the owned casters' triangles, clusters and cones, rebuilt every frame the pass runs.
     if (manifoldOn) {
         timePass("pt.manifold.gather");
-        m_manifold.record(cmd, frameSlot, m_vertexArena, m_scene->meshletArena(), m_scene->meshletVertexArena(),
-                          m_scene->meshletTriangleArena(), m_instances, m_materialTable);
+        m_manifold.record(frame, *m_scene);
     }
     // The frame's setup is timed with its first trace.
     timePass(m_renderSettings.radianceCache && m_radianceCache.capacity() > 1u ? "pt.cache.update"
@@ -172,24 +179,23 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // invocation of this dispatch writes.
     const uint32_t accumWrite = m_accumWriteIndex;
     const uint32_t accumPrev = 1u - accumWrite;
-    m_accumBuffer = m_accumImages[accumWrite];
-    m_accumView = m_accumViews[accumWrite];
-    const VkDescriptorImageInfo accumInfo{VK_NULL_HANDLE, m_accumView, VK_IMAGE_LAYOUT_GENERAL};
-    const VkDescriptorImageInfo accumHistoryInfo{VK_NULL_HANDLE, m_accumViews[accumPrev], VK_IMAGE_LAYOUT_GENERAL};
+    m_accumLatest = accumWrite;
+    const VkDescriptorImageInfo accumInfo{VK_NULL_HANDLE, m_accum[accumWrite].view, VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo accumHistoryInfo{VK_NULL_HANDLE, m_accum[accumPrev].view, VK_IMAGE_LAYOUT_GENERAL};
 
     // Binding 2: Output image (storage image, RGBA8)
     VkDescriptorImageInfo outputInfo{};
-    outputInfo.imageView = m_outputView;
+    outputInfo.imageView = image(Target::Output).view;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     // Binding 6: Albedo AOV (storage image, RGBA32F)
     VkDescriptorImageInfo albedoAOVInfo{};
-    albedoAOVInfo.imageView = m_albedoAOVView;
+    albedoAOVInfo.imageView = image(Target::Albedo).view;
     albedoAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     // Binding 7: Normal AOV (storage image, RGBA32F)
     VkDescriptorImageInfo normalAOVInfo{};
-    normalAOVInfo.imageView = m_normalAOVView;
+    normalAOVInfo.imageView = image(Target::Normal).view;
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
 
@@ -218,10 +224,10 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     addImage(P::accumHistory.binding, &accumHistoryInfo);
     addImage(P::albedoAOV.binding, &albedoAOVInfo);
     addImage(P::normalAOV.binding, &normalAOVInfo);
-    const VkDescriptorImageInfo emissionInfo{VK_NULL_HANDLE, m_emissionAOVView, VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo emissionInfo{VK_NULL_HANDLE, image(Target::Emission).view, VK_IMAGE_LAYOUT_GENERAL};
     addImage(P::emissionAOV.binding, &emissionInfo);
     // Binding 43: the emissive lights' power image, every level, sampled (read with Load).
-    const VkDescriptorImageInfo powerInfo{VK_NULL_HANDLE, m_emissive->powerView(), VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo powerInfo{VK_NULL_HANDLE, m_emissive->power().view, VK_IMAGE_LAYOUT_GENERAL};
     {
         VkWriteDescriptorSet& w = writes[writeCount++];
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -238,8 +244,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         {P::vertices.binding, m_vertexArena}, {P::indices.binding, m_indexArena}, {P::meshes.binding, m_meshTable}, {P::triangleSlots.binding, m_triangleSlots},
         {P::materials.binding, m_materialTable}, {P::lightData.binding, m_lightBuffer}, {P::instances.binding, m_instances}, {P::materialRefs.binding, m_materialRefs},
         {P::openpbrTables.binding, m_openpbrTables.buffer()}, {P::cacheKeys.binding, m_radianceCache.keys()}, {P::cacheAccum.binding, m_radianceCache.accum()},
-        {P::cacheResolved.binding, m_radianceCache.resolved()}, {P::emissiveLights.binding, m_emissive->lightBuffer()}, {P::emissiveRanges.binding, m_emissive->rangeBuffer(frameSlot)},
-        {P::emissiveFirst.binding, m_emissive->firstBuffer(frameSlot)}, {P::guideStates.binding, m_guiding.states()}, {P::guideProposals.binding, m_guiding.proposals()},
+        {P::cacheResolved.binding, m_radianceCache.resolved()}, {P::emissiveLights.binding, m_emissive->lights().buffer}, {P::emissiveRanges.binding, m_emissive->ranges(frameSlot).buffer},
+        {P::emissiveFirst.binding, m_emissive->first(frameSlot).buffer}, {P::guideStates.binding, m_guiding.states()}, {P::guideProposals.binding, m_guiding.proposals()},
         {P::guidePixel.binding, m_guiding.pixel()}, {P::causticCasters.binding, m_caustics.table()}, {P::causticSplat.binding, m_caustics.splat()}, {P::causticStats.binding, m_caustics.stats()},
         {P::manifoldTris.binding, m_manifold.tris()}, {P::manifoldNodes.binding, m_manifold.nodes()}, {P::manifoldDraws.binding, m_manifold.draws(frameSlot)}, {P::manifoldRequests.binding, m_manifold.requests()},
     };
@@ -279,8 +285,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 17: the environment's 2D CDF (a one-float buffer without an environment).
     VkDescriptorBufferInfo envCdfInfo{};
-    if (m_envCdfBuffer != VK_NULL_HANDLE) {
-        envCdfInfo.buffer = m_envCdfBuffer;
+    if (m_envCdf && m_envCdf->buffer != VK_NULL_HANDLE) {
+        envCdfInfo.buffer = m_envCdf->buffer;
         envCdfInfo.offset = 0;
         envCdfInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -294,7 +300,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 19: motion vector AOV
     VkDescriptorImageInfo motionVectorInfo{};
-    motionVectorInfo.imageView = m_motionVectorView;
+    motionVectorInfo.imageView = image(Target::Motion).view;
     motionVectorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet = set;
@@ -306,7 +312,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 20: depth AOV — Sub-plan 3.B
     VkDescriptorImageInfo depthInfo{};
-    depthInfo.imageView   = m_depthAOVView;
+    depthInfo.imageView   = image(Target::Depth).view;
     depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -318,7 +324,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 21: roughness AOV — Sub-plan 3.B
     VkDescriptorImageInfo roughInfo{};
-    roughInfo.imageView   = m_roughnessAOVView;
+    roughInfo.imageView   = image(Target::Roughness).view;
     roughInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -330,7 +336,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 22: diffuse radiance — Sub-plan 3.C
     VkDescriptorImageInfo diffRadianceInfo{};
-    diffRadianceInfo.imageView   = m_diffuseRadianceView;
+    diffRadianceInfo.imageView   = image(Target::DiffuseRadiance).view;
     diffRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -342,7 +348,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 23: specular radiance — Sub-plan 3.C
     VkDescriptorImageInfo specRadianceInfo{};
-    specRadianceInfo.imageView   = m_specularRadianceView;
+    specRadianceInfo.imageView   = image(Target::SpecularRadiance).view;
     specRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -354,7 +360,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 24: diffuse albedo — Sub-plan 3.C.6
     VkDescriptorImageInfo diffAlbedoInfo{};
-    diffAlbedoInfo.imageView   = m_diffAlbedoView;
+    diffAlbedoInfo.imageView   = image(Target::DiffuseAlbedo).view;
     diffAlbedoInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -366,7 +372,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 25: specular color — Sub-plan 3.C.6
     VkDescriptorImageInfo specColorInfo{};
-    specColorInfo.imageView   = m_specColorView;
+    specColorInfo.imageView   = image(Target::SpecularColor).view;
     specColorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -378,7 +384,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     // Binding 26: normal+roughness packed — Sub-plan 4.B
     VkDescriptorImageInfo normalRoughnessInfo{};
-    normalRoughnessInfo.imageView   = m_normalRoughnessView;
+    normalRoughnessInfo.imageView   = image(Target::NormalRoughness).view;
     normalRoughnessInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[writeCount].dstSet          = set;
@@ -389,184 +395,6 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     writeCount++;
 
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
-
-    // --- The accumulation pair to GENERAL ---
-    // This frame's image is fully rewritten: its old contents are discarded (UNDEFINED),
-    // after the reads of it as last frame's history. The history image keeps the
-    // previous frame's write, made visible here; never written yet, nothing reads it
-    // (history is read only once a frame has accumulated).
-    {
-        VkImageMemoryBarrier accumBarriers[2]{};
-        for (auto& b : accumBarriers) {
-            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        }
-        accumBarriers[0].srcAccessMask = 0;
-        accumBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        accumBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        accumBarriers[0].image = m_accumImages[accumWrite];
-        const bool historyWritten = m_accumInitialized[accumPrev];
-        accumBarriers[1].srcAccessMask = historyWritten ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-        accumBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        accumBarriers[1].oldLayout = historyWritten ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-        accumBarriers[1].image = m_accumImages[accumPrev];
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 2, accumBarriers);
-    }
-
-    // --- Transition output image to GENERAL for storage write ---
-    {
-        VkImageMemoryBarrier outputBarrier{};
-        outputBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        outputBarrier.srcAccessMask = 0;
-        outputBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        outputBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        outputBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        outputBarrier.image = m_outputImage;
-        outputBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 1, &outputBarrier);
-    }
-
-    // --- Transition AOV images to GENERAL for storage write ---
-    if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[12] = {};
-
-        aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[0].srcAccessMask = 0;
-        aovBarriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[0].image = m_albedoAOV;
-        aovBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        aovBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[1].srcAccessMask = 0;
-        aovBarriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[1].image = m_normalAOV;
-        aovBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.A: motion vector AOV needs same UNDEFINED→GENERAL transition
-        // so raygen can imageStore to it. Safe to transition every frame — the
-        // shader overwrites the entire image each pass.
-        aovBarriers[2].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[2].srcAccessMask = 0;
-        aovBarriers[2].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[2].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[2].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[2].image = m_motionVectorImage;
-        aovBarriers[2].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.B: depth AOV barrier
-        aovBarriers[3].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[3].srcAccessMask = 0;
-        aovBarriers[3].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[3].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[3].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[3].image = m_depthAOVImage;
-        aovBarriers[3].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.B: roughness AOV barrier
-        aovBarriers[4].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[4].srcAccessMask = 0;
-        aovBarriers[4].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[4].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[4].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[4].image = m_roughnessAOVImage;
-        aovBarriers[4].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.C: diffuse radiance AOV barrier
-        aovBarriers[5].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[5].srcAccessMask = 0;
-        aovBarriers[5].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[5].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[5].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[5].image = m_diffuseRadianceImage;
-        aovBarriers[5].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.C: specular radiance AOV barrier
-        aovBarriers[6].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[6].srcAccessMask = 0;
-        aovBarriers[6].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[6].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[6].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[6].image = m_specularRadianceImage;
-        aovBarriers[6].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.C.6: diffuse albedo AOV barrier
-        aovBarriers[7].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[7].srcAccessMask = 0;
-        aovBarriers[7].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[7].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[7].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[7].image = m_diffAlbedoImage;
-        aovBarriers[7].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 3.C.6: specular color AOV barrier
-        aovBarriers[8].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[8].srcAccessMask = 0;
-        aovBarriers[8].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[8].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[8].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[8].image = m_specColorImage;
-        aovBarriers[8].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 4.B: normal+roughness packed AOV barrier
-        aovBarriers[9].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[9].srcAccessMask = 0;
-        aovBarriers[9].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[9].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[9].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[9].image = m_normalRoughnessImage;
-        aovBarriers[9].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 4.C: denoised diffuse output barrier
-        aovBarriers[10].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[10].srcAccessMask = 0;
-        aovBarriers[10].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[10].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[10].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[10].image = m_outDiffRadianceImage;
-        aovBarriers[10].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        // Sub-plan 4.C: denoised specular output barrier
-        aovBarriers[11].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[11].srcAccessMask = 0;
-        aovBarriers[11].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[11].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[11].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[11].image = m_outSpecRadianceImage;
-        aovBarriers[11].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 12, aovBarriers);
-    }
-
-    // --- The emission guide to GENERAL: rewritten whole each frame (or blended into the
-    //     last frames' under offline NRD, whose values the previous frame left). ---
-    {
-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        b.srcAccessMask = m_emissionInitialized ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT : 0;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        b.oldLayout = m_emissionInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = m_emissionAOVImage;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 0, nullptr, 0, nullptr, 1, &b);
-        m_emissionInitialized = true;
-    }
 
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
@@ -631,21 +459,75 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
 
+    // --- What the frame's passes declare ---
+    // What every trace reads: the scene's tables and acceleration structures, the emissive lights and their power
+    // image (every level, sampled in GENERAL), OpenPBR's tables, the environment (in the texture table) and its CDF.
+    const render::RenderScene::Buffers sb = m_scene->buffers();
+    const auto readsScene = [&](Pass& pass) {
+        for (GpuBuffer* b : {&sb.vertices, &sb.indices, &sb.meshes, &sb.triangleSlots, &sb.materials, &sb.rtLights,
+                             &sb.instances, &sb.materialRefs})
+            pass.read(*b, BufferUse::Storage);
+        m_scene->traced(pass);
+        pass.read(m_emissive->lights(), BufferUse::Storage)
+            .read(m_emissive->ranges(frameSlot), BufferUse::Storage)
+            .read(m_emissive->first(frameSlot), BufferUse::Storage);
+        pass.sampledGeneral(m_emissive->power());
+        pass.read(m_openpbrTables.tracked(), BufferUse::Storage);
+        if (m_envCdf) pass.read(*m_envCdf, BufferUse::Storage);
+        if (m_envMap) pass.sampled(*m_envMap);
+    };
+    // The images the frame's trace writes, declared by the first trace of the frame: every program binds the one
+    // set, and each image of it is in its descriptor's layout from that trace on. This frame's accumulation image
+    // is rewritten whole (its old contents are not wanted) from the previous frame's, which is only read; the
+    // guides are rewritten whole, or under offline NRD blended into the frames accumulated, as the emission is.
+    bool targetsDeclared = false;
+    const auto writesTargets = [&](Pass& pass) {
+        if (std::exchange(targetsDeclared, true)) return;
+        pass.storageWrite(m_accum[accumWrite]).storageRead(m_accum[accumPrev]).storageWrite(image(Target::Output));
+        if (m_renderSettings.enableAuxiliaryAOVs) {
+            for (Target t : {Target::Albedo, Target::Normal, Target::Motion, Target::Depth, Target::Roughness})
+                pass.storageWrite(image(t));
+            const bool blended = tracerAccumulatesAOVs(m_renderSettings);
+            for (Target t : {Target::DiffuseRadiance, Target::SpecularRadiance, Target::DiffuseAlbedo,
+                             Target::SpecularColor, Target::NormalRoughness}) {
+                if (blended) pass.storageReadWrite(image(t));
+                else pass.storageWrite(image(t));
+            }
+        }
+        pass.storageReadWrite(image(Target::Emission));
+    };
+    // The frame's trace (raygen, raygenGuided, raygenCaustics or raygenCausticsGuided).
+    const auto tracesFrame = [&](Pass& pass) {
+        readsScene(pass);
+        writesTargets(pass);
+        if (cacheOn) m_radianceCache.lookedUpBy(pass);
+        if (guideOn) m_guiding.tracedBy(pass);
+        if (causticsOn) m_caustics.cameraPass(pass);
+        if (manifoldOn) m_manifold.cameraPass(pass, frameSlot);
+    };
+
     // --- The radiance cache: this frame's update (1 pixel in 5x5) and resolve, before the trace
     //     that ends its paths in it. ---
     if (cacheOn) {
-        m_radianceCache.recordBeginFrame(cmd);
-        vkCmdTraceRaysKHR(cmd, &m_cacheRgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
-                          (m_width + 4u) / 5u, (m_height + 4u) / 5u, 1);
+        m_radianceCache.recordBeginFrame(frame);
+        {
+            Pass update(frame, nullptr, Pass::RayTracing);
+            readsScene(update);
+            writesTargets(update);
+            m_radianceCache.fedBy(update);
+            update.begin();
+            vkCmdTraceRaysKHR(cmd, &m_cacheRgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
+                              (m_width + 4u) / 5u, (m_height + 4u) / 5u, 1);
+        }
         timePass("pt.cache.resolve");
-        m_radianceCache.recordResolve(cmd);
+        m_radianceCache.recordResolve(frame);
         // Push constants are shared by the bind points: the resolve's replaced the trace's.
         vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, 0, sizeof(PTPushConstants), &pc);
     }
 
     // --- Trace rays! ---
     if (cacheOn) timePass("pt.trace");
-    if (guideOn) m_guiding.recordBeginFrame(cmd);
+    if (guideOn) m_guiding.recordBeginFrame(frame);
     if (causticsOn) {
         // Caustics' program, or with guiding its guided twin (the same groups and regions).
         const GuidedProgram& cg = m_guided[1];
@@ -654,7 +536,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         const VkStridedDeviceAddressRegionKHR* cMiss = guideOn ? &cg.miss : &m_causticsMissRegion;
         const VkStridedDeviceAddressRegionKHR* cHit = guideOn ? &cg.hit : &m_causticsHitRegion;
         const VkStridedDeviceAddressRegionKHR* cTrace = guideOn ? &cg.extra : &m_causticTraceRegion;
-        m_caustics.recordBeginFrame(cmd);
+        m_caustics.recordBeginFrame(frame);
         if (!causticsSplitOnly) {
             // kCausticRaysPerPixel light paths a pixel; OHAO_CAUSTIC_RAYS (any positive number) overrides it for
             // tuning (ruling C3). The pass counts its paths from the dispatch's size.
@@ -664,92 +546,83 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 return v > 0.0f ? v : float(gpu::shared::kCausticRaysPerPixel);
             }();
             const uint32_t rows = std::max(1u, uint32_t(std::lround(double(m_height) * raysPerPixel)));
+            Pass light(frame, nullptr, Pass::RayTracing);
+            readsScene(light);
+            writesTargets(light);
+            m_caustics.lightPass(light);
+            light.begin();
             vkCmdTraceRaysKHR(cmd, cTrace, cMiss, cHit, &m_callRegion, m_width, rows, 1);
-            m_caustics.recordAfterTrace(cmd);
         }
         timePass("pt.trace");
-        vkCmdTraceRaysKHR(cmd, cRgen, cMiss, cHit, &m_callRegion, m_width, m_height, 1);
+        {
+            // The light pass's splats are read (and cleared) here.
+            Pass trace(frame, nullptr, Pass::RayTracing);
+            tracesFrame(trace);
+            trace.begin();
+            vkCmdTraceRaysKHR(cmd, cRgen, cMiss, cHit, &m_callRegion, m_width, m_height, 1);
+        }
         if (manifoldPass) {
             // Caustics step 2: the requests raygenCaustics wrote, answered into the running mean it wrote (the same
             // layout, set and push constants: one program to the next).
-            VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                                 0, 1, &b, 0, nullptr, 0, nullptr);
             timePass("pt.manifold");
+            Pass connect(frame, nullptr, Pass::RayTracing);
+            readsScene(connect);
+            connect.storageReadWrite(m_accum[accumWrite]).storageWrite(image(Target::Output), Old::Keep);
+            m_caustics.manifoldPass(connect);
+            m_manifold.manifoldPass(connect, frameSlot);
+            connect.begin();
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_manifoldPipeline);
             vkCmdTraceRaysKHR(cmd, &m_manifoldRgenRegion, &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
                               m_width, m_height, 1);
         }
-    } else if (guideOn) {
-        const GuidedProgram& g = m_guided[0];
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, g.pipeline);
-        vkCmdTraceRaysKHR(cmd, &g.rgen, &g.miss, &g.hit, &m_callRegion, m_width, m_height, 1);
     } else {
-        vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
-                          m_width, m_height, 1);
+        Pass trace(frame, nullptr, Pass::RayTracing);
+        tracesFrame(trace);
+        trace.begin();
+        if (guideOn) {
+            const GuidedProgram& g = m_guided[0];
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, g.pipeline);
+            vkCmdTraceRaysKHR(cmd, &g.rgen, &g.miss, &g.hit, &m_callRegion, m_width, m_height, 1);
+        } else {
+            vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion, m_width, m_height, 1);
+        }
     }
     if (guideOn) {
         // What this frame's paths found becomes the grid the next frame reads.
         timePass("pt.guide.update");
-        m_guiding.recordLearn(cmd, m_width * m_height, m_sampleIndex, glm::vec3(pc.invView[3]));
+        m_guiding.recordLearn(frame, m_width * m_height, m_sampleIndex, glm::vec3(pc.invView[3]));
     }
     timePass("pt.denoise");
-
-    bool dlssRan   = false;  // Phase 5: set when DLSS-RR tonemap wrote m_outputImage via COMPUTE
-    bool nrdRan    = false;  // nrd_compose wrote m_outputImage via COMPUTE
 
 #ifdef OHAO_DLSS_ENABLED
     // --- Phase 5: DLSS Ray Reconstruction denoise + tonemap ---
     // The raygen produced a FRESH 1-spp HDR frame (accum, control.y=0) plus the
-    // packed normal/roughness guide (normalAOV) this frame. Wrap the guide buffers
+    // packed normal/roughness guide (the normal image) this frame. Wrap the guide buffers
     // as NGX resources, run NGX_VULKAN_EVALUATE_DLSSD_EXT, then tonemap the HDR
-    // COLOR_OUT into the RGBA8 beauty (m_outputImage) the standard readback uses.
+    // COLOR_OUT into the RGBA8 output the standard readback uses.
     if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR && m_dlssRR &&
         m_dlssRR->isFeatureCreated()) {
-        // 1) Publish raygen guide/accum writes (RAY_TRACING) to DLSS's compute
-        //    reads. All these images remain in GENERAL (DLSS handles its own
-        //    internal transitions; we only make the writes visible).
-        VkMemoryBarrier rayToDlss{};
-        rayToDlss.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        rayToDlss.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        rayToDlss.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 1, &rayToDlss, 0, nullptr, 0, nullptr);
+        gpu::Image& colorIn = m_accum[accumWrite];
+        gpu::Image& colorOut = image(Target::DlssOutput);
+        gpu::Image& diffAlbedo = image(Target::DiffuseAlbedo);
+        gpu::Image& specAlbedo = image(Target::SpecularColor);
+        gpu::Image& normalRough = image(Target::Normal);
+        gpu::Image& depth = image(Target::Depth);
+        gpu::Image& motion = image(Target::Motion);
 
-        // 2) DLSS COLOR_OUT: UNDEFINED→GENERAL on first dispatch, else keep GENERAL.
-        {
-            VkImageMemoryBarrier b{};
-            b.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcAccessMask    = m_dlssColorOutFirstFrame ? 0 : VK_ACCESS_SHADER_READ_BIT;
-            b.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            b.oldLayout        = m_dlssColorOutFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
-            b.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            b.image            = m_dlssColorOutImage;
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd,
-                m_dlssColorOutFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &b);
-            m_dlssColorOutFirstFrame = false;
-        }
-
-        // 3) Fill eval inputs. glm column-major view/proj passed as-is (DLSS wants
-        //    row-major + left-multiply; the two transposes cancel — see wrapper).
+        // Fill eval inputs. glm column-major view/proj passed as-is (DLSS wants
+        // row-major + left-multiply; the two transposes cancel — see wrapper).
         const glm::mat4 viewM = glm::inverse(pc.invView);
         const glm::mat4 projM = glm::inverse(pc.invProj);
 
         DlssRR::EvalInputs ei{};
-        ei.colorInImage     = m_accumBuffer;       ei.colorInView     = m_accumView;        ei.colorInFormat     = VK_FORMAT_R32G32B32A32_SFLOAT;
-        ei.colorOutImage    = m_dlssColorOutImage; ei.colorOutView    = m_dlssColorOutView; ei.colorOutFormat    = VK_FORMAT_R16G16B16A16_SFLOAT;
-        ei.diffAlbedoImage  = m_diffAlbedoImage;   ei.diffAlbedoView  = m_diffAlbedoView;   ei.diffAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
-        ei.specAlbedoImage  = m_specColorImage;    ei.specAlbedoView  = m_specColorView;    ei.specAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
-        ei.normalRoughImage = m_normalAOV;         ei.normalRoughView = m_normalAOVView;    ei.normalRoughFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
-        ei.depthImage       = m_depthAOVImage;     ei.depthView       = m_depthAOVView;     ei.depthFormat       = VK_FORMAT_R32_SFLOAT;
-        ei.motionImage      = m_motionVectorImage; ei.motionView      = m_motionVectorView; ei.motionFormat      = VK_FORMAT_R16G16_SFLOAT;
+        ei.colorInImage     = colorIn.image;     ei.colorInView     = colorIn.view;     ei.colorInFormat     = colorIn.desc.format;
+        ei.colorOutImage    = colorOut.image;    ei.colorOutView    = colorOut.view;    ei.colorOutFormat    = colorOut.desc.format;
+        ei.diffAlbedoImage  = diffAlbedo.image;  ei.diffAlbedoView  = diffAlbedo.view;  ei.diffAlbedoFormat  = diffAlbedo.desc.format;
+        ei.specAlbedoImage  = specAlbedo.image;  ei.specAlbedoView  = specAlbedo.view;  ei.specAlbedoFormat  = specAlbedo.desc.format;
+        ei.normalRoughImage = normalRough.image; ei.normalRoughView = normalRough.view; ei.normalRoughFormat = normalRough.desc.format;
+        ei.depthImage       = depth.image;       ei.depthView       = depth.view;       ei.depthFormat       = depth.desc.format;
+        ei.motionImage      = motion.image;      ei.motionView      = motion.view;      ei.motionFormat      = motion.desc.format;
         ei.renderW = m_width; ei.renderH = m_height;
         ei.outW = m_outW; ei.outH = m_outH;   // DLSS upscales into the output size
         ei.jitterX = m_jitterCurrent.x; ei.jitterY = m_jitterCurrent.y;
@@ -760,58 +633,32 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         // move — DLSS reprojects through motion via the motion vectors).
         ei.reset = (m_historyFrameCount == 0u);
 
-        if (m_dlssRR->evaluate(cmd, ei)) {
-            // 4) Publish DLSS COLOR_OUT (COMPUTE write) → tonemap read, and make
-            //    m_outputImage writable (WAW vs the raygen's beauty write).
-            VkImageMemoryBarrier post[2] = {};
-            post[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            post[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            post[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-            post[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            post[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            post[0].image            = m_dlssColorOutImage;
-            post[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            post[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            post[1].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            post[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            post[1].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            post[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            post[1].image            = m_outputImage;
-            post[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, post);
-
-            // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (the display transform).
-            m_dlssRR->tonemap(cmd, frameSlot, m_dlssColorOutView, m_outputView, m_outW, m_outH, m_displayExposure,
-                              static_cast<uint32_t>(m_displayCurve));
-            dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
+        bool evaluated = false;
+        {
+            // NGX records barriers of its own: it takes every image in GENERAL, the raygen's writes visible to
+            // its compute shaders' reads and writes, and leaves each in GENERAL.
+            Pass dlss(frame, nullptr, Pass::Compute);
+            for (gpu::Image* img : {&colorIn, &colorOut, &diffAlbedo, &specAlbedo, &normalRough, &depth, &motion})
+                dlss.external(*img).leaves(*img, VK_IMAGE_LAYOUT_GENERAL);
+            dlss.begin();
+            evaluated = m_dlssRR->evaluate(cmd, ei);
+        }
+        if (evaluated) {
+            // DLSS's HDR frame through the display transform into the output (over the raygen's write).
+            Pass display(frame, nullptr, Pass::Compute);
+            display.storageRead(colorOut).storageWrite(image(Target::Output), Old::Keep);
+            display.begin();
+            m_dlssRR->tonemap(cmd, frameSlot, colorOut.view, image(Target::Output).view, m_displayExposure,
+                              static_cast<uint32_t>(m_displayCurve), m_outW, m_outH);
         }
     }
 #endif  // OHAO_DLSS_ENABLED
 
 #ifdef OHAO_NRD_ENABLED
-    // --- Sub-plan 4.C T3b: NRD REBLUR_DIFFUSE_SPECULAR dispatch ---
-    // After trace rays, all NRD input AOVs are in VK_IMAGE_LAYOUT_GENERAL with
-    // SHADER_WRITE access. NRD's internal _Dispatch will insert its own
-    // transitions (GENERAL -> SHADER_READ for inputs, stay GENERAL for outputs)
-    // before the compute dispatch, so we only need a memory barrier to publish
-    // raygen writes before compute reads. We also need `restoreInitialState=true`
-    // in the snapshot so after denoise, inputs come back to GENERAL for
-    // downstream readback.
-    // Only in NRD mode: NRD, then nrd_compose, which writes the frame's output (and its HDR).
+    // --- NRD REBLUR_DIFFUSE_SPECULAR, then nrd_compose, which writes the frame's output (and its HDR) ---
+    // Only in NRD mode.
     if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {
         if (m_nrdCompositor) m_nrdCompositor->setFrameSlot(frameSlot);
-        // Publish raygen stores before NRD's compute pipelines read them.
-        VkMemoryBarrier rayToCompute {};
-        rayToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        rayToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        rayToCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 1, &rayToCompute, 0, nullptr, 0, nullptr);
 
         NrdCameraInputs camera {};
         const glm::mat4 viewM = glm::inverse(pc.invView);
@@ -844,128 +691,56 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         // "same jitter" → zero disocclusion, stays in temporal-only mode.
         m_jitterPrev = m_jitterCurrent;
 
+        const auto resource = [&](Target t) {
+            return NrdDenoiser::NrdInputResource{image(t).image, image(t).desc.format};
+        };
         NrdDenoiser::NrdInputResources res {};
-        res.motionVector           = {m_motionVectorImage,     VK_FORMAT_R16G16_SFLOAT};
-        res.viewZ                  = {m_depthAOVImage,         VK_FORMAT_R32_SFLOAT};
-        res.normalRoughness        = {m_normalRoughnessImage,  VK_FORMAT_A2B10G10R10_UNORM_PACK32};
-        res.diffRadianceHitDist    = {m_diffuseRadianceImage,  VK_FORMAT_R32G32B32A32_SFLOAT};
-        res.specRadianceHitDist    = {m_specularRadianceImage, VK_FORMAT_R32G32B32A32_SFLOAT};
-        res.outDiffRadianceHitDist = {m_outDiffRadianceImage,  VK_FORMAT_R32G32B32A32_SFLOAT};
-        res.outSpecRadianceHitDist = {m_outSpecRadianceImage,  VK_FORMAT_R32G32B32A32_SFLOAT};
+        res.motionVector           = resource(Target::Motion);
+        res.viewZ                  = resource(Target::Depth);
+        res.normalRoughness        = resource(Target::NormalRoughness);
+        res.diffRadianceHitDist    = resource(Target::DiffuseRadiance);
+        res.specRadianceHitDist    = resource(Target::SpecularRadiance);
+        res.outDiffRadianceHitDist = resource(Target::DenoisedDiffuse);
+        res.outSpecRadianceHitDist = resource(Target::DenoisedSpecular);
         m_nrdDenoiser->setInputResources(res);
 
-        m_nrdDenoiser->denoise(cmd);
+        {
+            // NRI records barriers of its own. NrdDenoiser::denoise tells it each image comes in GENERAL, last
+            // touched as a storage image by a compute shader, and to give it back that way (restoreInitialState):
+            // its inputs with the raygen's writes, its outputs with nothing wanted.
+            Pass nrd(frame, nullptr, Pass::Compute);
+            for (Target t : {Target::Motion, Target::Depth, Target::NormalRoughness, Target::DiffuseRadiance,
+                             Target::SpecularRadiance})
+                nrd.storageReadWrite(image(t)).leaves(image(t), VK_IMAGE_LAYOUT_GENERAL);
+            for (Target t : {Target::DenoisedDiffuse, Target::DenoisedSpecular})
+                nrd.storageWrite(image(t)).leaves(image(t), VK_IMAGE_LAYOUT_GENERAL);
+            nrd.begin();
+            m_nrdDenoiser->denoise(cmd);
+        }
 
         if (m_nrdCompositor) {
-            // Transition inputs for compose: bindings 24, 25, 27, 28.
-            // Writer stages differ per slot: 24/25 were written by raygen
-            // (RAY_TRACING_SHADER); 27/28 were written by NRD's internal
-            // compute dispatches. The upstream NRD-input barrier already
-            // chained RAY_TRACING → COMPUTE for the raygen-produced slots
-            // (visibility is in COMPUTE stage by the time we get here), so
-            // this barrier serves:
-            //   - 27/28: a COMPUTE→COMPUTE WAR/RAW acquire
-            //   - 24/25: a no-op acquire (memory already visible)
-            // NRD's restoreInitialState=true left 22/23/26/27/28 in GENERAL.
-            VkImageMemoryBarrier cbIn[5] = {};
-            VkImage cbInImages[5] = {
-                m_diffAlbedoImage,       // binding 24
-                m_specColorImage,        // binding 25
-                m_outDiffRadianceImage,  // binding 27
-                m_outSpecRadianceImage,  // binding 28
-                m_emissionAOVImage,      // binding 13
-            };
-            for (int i = 0; i < 5; ++i) {
-                cbIn[i].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                cbIn[i].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-                cbIn[i].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-                cbIn[i].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                cbIn[i].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-                cbIn[i].image            = cbInImages[i];
-                cbIn[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            }
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 5, cbIn);
-
-            // Transition binding 29: UNDEFINED→GENERAL on first dispatch, GENERAL→GENERAL after.
-            // Using m_nrdComposeFirstFrame (per-instance member, NOT a function-local static) so
-            // offline + realtime PT profiles each get their own first-frame counter.
-            VkImageMemoryBarrier cbOut{};
-            cbOut.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            cbOut.srcAccessMask    = m_nrdComposeFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
-            cbOut.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            cbOut.oldLayout        = m_nrdComposeFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
-            cbOut.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            cbOut.image            = m_nrdComposedImage;
-            cbOut.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd,
-                m_nrdComposeFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &cbOut);
-            m_nrdComposeFirstFrame = false;
-
-            // Dispatch
+            // NRD's denoised diffuse remodulated by its albedo, its specular and the camera ray's emission: the
+            // HDR frame, and through the display transform the output (over the raygen's write).
+            Pass compose(frame, nullptr, Pass::Compute);
+            for (Target t : {Target::DiffuseAlbedo, Target::SpecularColor, Target::DenoisedDiffuse,
+                             Target::DenoisedSpecular, Target::Emission})
+                compose.storageRead(image(t));
+            compose.storageWrite(image(Target::NrdComposed), Old::Keep).storageWrite(image(Target::Output), Old::Keep);
+            compose.begin();
             NrdComposeInputs ci {};
-            ci.diffRadiance = m_outDiffRadianceView;
-            ci.specRadiance = m_outSpecRadianceView;
-            ci.diffAlbedo   = m_diffAlbedoView;
-            ci.specColor    = m_specColorView;
-            ci.emission     = m_emissionAOVView;
-            ci.composedOut  = m_nrdComposedView;
-            ci.outputLdr    = m_outputView;   // the frame: a window presents it, a capture reads it
+            ci.diffRadiance = image(Target::DenoisedDiffuse).view;
+            ci.specRadiance = image(Target::DenoisedSpecular).view;
+            ci.diffAlbedo   = image(Target::DiffuseAlbedo).view;
+            ci.specColor    = image(Target::SpecularColor).view;
+            ci.emission     = image(Target::Emission).view;
+            ci.composedOut  = image(Target::NrdComposed).view;
+            ci.outputLdr    = image(Target::Output).view;   // the frame: a window presents it, a capture reads it
             ci.exposure     = m_displayExposure;
             ci.curve        = static_cast<uint32_t>(m_displayCurve);
             m_nrdCompositor->dispatch(cmd, ci);
-            nrdRan = true;
         }
-
     }
 #endif  // OHAO_NRD_ENABLED
-
-    // --- Transition output image to TRANSFER_SRC_OPTIMAL for readback/blit ---
-    {
-        // Under NRD or DLSS RR the output's last write is a COMPUTE stage's.
-        const VkPipelineStageFlags outSrcStage =
-            (dlssRan || nrdRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                                                 : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-        VkImageMemoryBarrier toTransfer{};
-        toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        toTransfer.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toTransfer.image = m_outputImage;
-        toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd,
-            outSrcStage, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &toTransfer);
-    }
-
-    // --- Transition AOV images to TRANSFER_SRC_OPTIMAL for denoiser readback ---
-    if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[2] = {};
-
-        aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        aovBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        aovBarriers[0].image = m_albedoAOV;
-        aovBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        aovBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        aovBarriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        aovBarriers[1].image = m_normalAOV;
-        aovBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, 0, nullptr, 0, nullptr, 2, aovBarriers);
-    }
 
     // Advance sample sequence and track accumulation history separately.
     m_sampleIndex++;
@@ -973,8 +748,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     m_accumFrames++;
     m_viewChangedThisFrame = false;
     m_hasPreviousView = true;
-    m_accumInitialized[accumWrite] = true;   // m_accumBuffer stays the image just written
-    m_accumWriteIndex = accumPrev;
+    m_accumWriteIndex = accumPrev;   // accum() stays the image just written
 }
 
 } // namespace ohao

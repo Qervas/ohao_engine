@@ -16,9 +16,10 @@
 
 #include <vulkan/vulkan.h>
 
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "render/graph/pass.hpp"
 #include "render/rt/caustic_casters.hpp"
-#include "render/rt/rt_compute.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,23 +33,26 @@ class RenderScene;
 
 class ManifoldCasters {
 public:
-    bool create(VkDevice device, VkPhysicalDevice physicalDevice);
+    bool create(VkDevice device, GpuAllocator& allocator);
     void destroy();
 
     // This frame's owned draws from the scene, into this frame slot's draws buffer (grows the device buffers if
-    // needed: the device idles once).
+    // needed: the ones they replace are retired).
     void prepare(uint32_t frameSlot, const RenderScene& scene, float cut);
     [[nodiscard]] bool active() const noexcept { return m_triangles > 0; }
     [[nodiscard]] uint32_t triangles() const noexcept { return m_triangles; }
     [[nodiscard]] uint32_t drawCount() const noexcept { return m_drawCount; }
 
-    // The requests for `pixels` pixels (idles the device when it (re)allocates). False: the pass stays off.
+    // The requests for `pixels` pixels (the ones they replace are retired). False: the pass stays off.
     bool ensureRequests(uint32_t pixels);
 
-    // The gather (its results visible to ray tracing shaders), and the requests cleared on the first frame after
-    // they were (re)allocated.
-    void record(VkCommandBuffer cmd, uint32_t frameSlot, VkBuffer vertices, VkBuffer meshlets, VkBuffer meshletVertices,
-                VkBuffer meshletTriangles, VkBuffer instances, VkBuffer materials);
+    // The gather from the scene's arenas, and the requests cleared on the first frame after they were
+    // (re)allocated.
+    void record(const Frame& frame, const RenderScene& scene);
+    // What the traces declare: the camera pass (raygenCaustics) reads the casters and writes its requests; the
+    // manifold pass (manifoldConnect) reads the casters and their triangles, and answers and clears the requests.
+    void cameraPass(Pass& pass, uint32_t frameSlot);
+    void manifoldPass(Pass& pass, uint32_t frameSlot);
 
     [[nodiscard]] VkBuffer tris() const noexcept { return m_tris.buffer; }
     [[nodiscard]] VkBuffer nodes() const noexcept { return m_nodes.buffer; }
@@ -56,18 +60,13 @@ public:
     [[nodiscard]] VkBuffer requests() const noexcept { return m_requests.buffer; }
 
 private:
-    struct Buffer {
-        VkBuffer buffer{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-        VkDeviceSize size{0};
-    };
-    bool allocate(Buffer& b, VkDeviceSize size);
-    void release(Buffer& b);
+    bool allocate(GpuBuffer& b, VkDeviceSize size);
 
     VkDevice m_device{VK_NULL_HANDLE};
-    VkPhysicalDevice m_physical{VK_NULL_HANDLE};
-    Buffer m_tris, m_nodes, m_requests;
-    std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_draws{};
+    GpuAllocator* m_allocator{nullptr};
+    GpuBuffer m_tris, m_nodes, m_requests;
+    VkDeviceSize m_trisBytes{0}, m_nodesBytes{0};   // what the two were asked to hold
+    std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> m_draws{};
     std::array<VkDeviceSize, MAX_FRAMES_IN_FLIGHT> m_drawsBytes{};
     uint32_t m_triangles{0}, m_clusters{0}, m_groups{0}, m_drawCount{0};
     uint32_t m_requestPixels{0};

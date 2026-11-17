@@ -7,8 +7,11 @@
 
 #include "vfx/tracer_math.hpp"
 
+#include "render/deferred/gbuffer_pass.hpp"
+#include "render/graph/pipeline.hpp"
+#include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
-#include "asset/model.hpp"
+#include "asset/vertex.hpp"
 #include "vfx/particle_math.hpp"
 #include "core/log.hpp"
 
@@ -72,39 +75,37 @@ shared::VfxEmitterGpu packEmitter(const vfx::EmitterDesc& em, uint32_t texture, 
     return g;
 }
 
-VkPipelineColorBlendAttachmentState blendState(uint32_t mode) {
-    VkPipelineColorBlendAttachmentState s{};
-    s.blendEnable = VK_TRUE;
-    s.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
-    s.colorBlendOp = VK_BLEND_OP_ADD;
-    s.alphaBlendOp = VK_BLEND_OP_ADD;
-    s.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;   // the lit image's alpha is kept
-    s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+render::Blend blendState(uint32_t mode) {
+    render::Blend s{};
+    s.enable = true;
+    s.writeMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
+    s.srcAlpha = VK_BLEND_FACTOR_ZERO;   // the lit image's alpha is kept
+    s.dstAlpha = VK_BLEND_FACTOR_ONE;
     switch (mode) {
     case shared::kVfxBlendAlpha:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        s.srcColor = VK_BLEND_FACTOR_SRC_ALPHA;
+        s.dstColor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         break;
     case shared::kVfxBlendPremultiplied:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        s.srcColor = VK_BLEND_FACTOR_ONE;
+        s.dstColor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         break;
     default:   // additive: light added by coverage
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        s.srcColor = VK_BLEND_FACTOR_SRC_ALPHA;
+        s.dstColor = VK_BLEND_FACTOR_ONE;
         break;
     }
     return s;
 }
 
-VkPipelineColorBlendAttachmentState maskState() {
-    VkPipelineColorBlendAttachmentState s{};
-    s.blendEnable = VK_TRUE;
-    s.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
-    s.colorBlendOp = VK_BLEND_OP_MAX;
-    s.alphaBlendOp = VK_BLEND_OP_MAX;
-    s.srcColorBlendFactor = s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    s.srcAlphaBlendFactor = s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+render::Blend maskState() {
+    render::Blend s{};
+    s.enable = true;
+    s.writeMask = VK_COLOR_COMPONENT_R_BIT;
+    s.colorOp = VK_BLEND_OP_MAX;
+    s.alphaOp = VK_BLEND_OP_MAX;
+    s.srcColor = s.dstColor = VK_BLEND_FACTOR_ONE;
+    s.srcAlpha = s.dstAlpha = VK_BLEND_FACTOR_ONE;
     return s;
 }
 
@@ -130,11 +131,11 @@ VkDescriptorSetLayout makeLayout(VkDevice device, std::span<const VkDescriptorSe
 
 VfxRenderer::~VfxRenderer() { cleanup(); }
 
-bool VfxRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkDescriptorSetLayout textures,
-                             VkDescriptorSetLayout gbufferScene) {
+bool VfxRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, GpuAllocator& allocator,
+                             VkDescriptorSetLayout textures, VkDescriptorSetLayout gbufferScene) {
     m_device = device;
-    m_physical = physicalDevice;
-    if (!m_openpbrTables.create(device, physicalDevice)) return false;
+    m_allocator = &allocator;
+    if (!m_openpbrTables.create(allocator)) return false;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -145,12 +146,12 @@ bool VfxRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, V
     si.maxLod = VK_LOD_CLAMP_NONE;
     if (vkCreateSampler(device, &si, nullptr, &m_sampler) != VK_SUCCESS) return false;
 
-    if (!rtc::createImage(device, physicalDevice, m_dummy, kHdrFormat,
-                          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, 1, 1) ||
-        !rtc::createHostBuffer(device, physicalDevice, 256, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_dummyBuffer))
-        return false;
+    m_dummy = allocator.createImage(
+        {"vfx.dummy", kHdrFormat, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT});
+    m_dummyBuffer = rtc::createHostBuffer(allocator, 256, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (!m_dummy || !m_dummyBuffer.isValid()) return false;
 
-    if (!createLayouts(textures, gbufferScene) || !createRenderPass() || !createPipelines()) {
+    if (!createLayouts(textures, gbufferScene) || !createPipelines()) {
         OHAO_LOG(Warn, render, "VfxRenderer: pipelines failed (no effects or transparent surfaces drawn)");
         cleanup();
         return false;
@@ -177,8 +178,6 @@ void VfxRenderer::cleanup() {
         if (*l) vkDestroyPipelineLayout(m_device, *l, nullptr);
         *l = VK_NULL_HANDLE;
     }
-    if (m_renderPass) vkDestroyRenderPass(m_device, m_renderPass, nullptr);
-    m_renderPass = VK_NULL_HANDLE;
     if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);   // frees the sets
     m_pool = VK_NULL_HANDLE;
     for (VkDescriptorSetLayout* l : {&m_expandLayout, &m_sortLayout, &m_drawLayout, &m_forwardLayout}) {
@@ -186,17 +185,15 @@ void VfxRenderer::cleanup() {
         *l = VK_NULL_HANDLE;
     }
     for (auto& s : m_slots) {
-        rtc::destroyHostBuffer(m_device, s.emitters);
-        rtc::destroyHostBuffer(m_device, s.batches);
-        rtc::destroyHostBuffer(m_device, s.tracerVerts);
+        for (GpuBuffer* b : {&s.emitters, &s.batches, &s.tracerVerts}) m_allocator->retire(*b);
         s = Slot{};
     }
-    rtc::destroyHostBuffer(m_device, m_particles);
-    rtc::destroyHostBuffer(m_device, m_order);
+    m_allocator->retire(m_particles);
+    m_allocator->retire(m_order);
     m_particleCapacity = 0;
-    rtc::destroyHostBuffer(m_device, m_dummyBuffer);
+    m_allocator->retire(m_dummyBuffer);
     m_openpbrTables.destroy();
-    rtc::destroyImage(m_device, m_dummy);
+    m_allocator->retire(m_dummy);
     if (m_sampler) vkDestroySampler(m_device, m_sampler, nullptr);
     m_sampler = VK_NULL_HANDLE;
     m_objects.clear();
@@ -206,10 +203,8 @@ void VfxRenderer::cleanup() {
 }
 
 void VfxRenderer::destroySizeResources() {
-    if (m_framebuffer) vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
-    m_framebuffer = VK_NULL_HANDLE;
-    rtc::destroyImage(m_device, m_mask);
-    rtc::destroyImage(m_device, m_refraction);
+    m_allocator->retire(m_mask);
+    m_allocator->retire(m_refraction);
 }
 
 bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetLayout gbufferScene) {
@@ -277,69 +272,6 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
     return vkCreatePipelineLayout(m_device, &li, nullptr, &m_meshPipelineLayout) == VK_SUCCESS;
 }
 
-bool VfxRenderer::createRenderPass() {
-    // 0: the lit image, loaded and kept (SSR and SSS leave it SHADER_READ_ONLY, bloom reads it so);
-    // 1: the coverage mask, cleared; 2: the G-buffer's depth, tested and sampled, never written.
-    std::array<VkAttachmentDescription, 3> a{};
-    a[0].format = kHdrFormat;
-    a[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    a[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    a[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    a[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    a[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    a[0].initialLayout = kReadOnly;
-    a[0].finalLayout = kReadOnly;
-    a[1] = a[0];
-    a[1].format = kMaskFormat;
-    a[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    a[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    a[2] = a[0];
-    a[2].format = kDepthFormat;
-    a[2].initialLayout = kDepthReadOnly;
-    a[2].finalLayout = kDepthReadOnly;   // stored: TAA and the next readers keep the depth
-
-    const std::array<VkAttachmentReference, 2> colors{{{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-                                                       {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}};
-    const VkAttachmentReference depth{2, kDepthReadOnly};
-    VkSubpassDescription sub{};
-    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount = static_cast<uint32_t>(colors.size());
-    sub.pColorAttachments = colors.data();
-    sub.pDepthStencilAttachment = &depth;
-
-    // In: the lit image's writers (lighting and sky as attachments, SSS and SSR in compute), the
-    // particles vfx.expand and vfx.sort wrote, and last frame's TAA read of the mask. Out: bloom,
-    // TAA and the tonemapper read both images.
-    std::array<VkSubpassDependency, 2> deps{};
-    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    deps[0].dstSubpass = 0;
-    deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-    deps[1].srcSubpass = 0;
-    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    VkRenderPassCreateInfo ri{};
-    ri.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    ri.attachmentCount = static_cast<uint32_t>(a.size());
-    ri.pAttachments = a.data();
-    ri.subpassCount = 1;
-    ri.pSubpasses = &sub;
-    ri.dependencyCount = static_cast<uint32_t>(deps.size());
-    ri.pDependencies = deps.data();
-    return vkCreateRenderPass(m_device, &ri, nullptr, &m_renderPass) == VK_SUCCESS;
-}
-
 bool VfxRenderer::createPipelines() {
     if (!rtc::createComputePipeline(m_device, "vfx_expand.slang.spv", "expandParticles", m_expandLayout,
                                     sizeof(shared::VfxExpandPush), m_expandPipelineLayout, m_expandPipeline) ||
@@ -347,100 +279,47 @@ bool VfxRenderer::createPipelines() {
                                     m_sortPipelineLayout, m_sortPipeline))
         return false;
 
-    const VkShaderModule particleVert = rtc::loadShaderModule(m_device, "vfx_particle.slang.vertexMain.spv");
-    const VkShaderModule particleFrag = rtc::loadShaderModule(m_device, "vfx_particle.slang.fragmentMain.spv");
-    const VkShaderModule meshVert = rtc::loadShaderModule(m_device, "core_gbuffer.slang.vertexMain.spv");
-    const VkShaderModule meshFrag = rtc::loadShaderModule(m_device, "vfx_transparent_mesh.slang.spv");
-    const VkShaderModule tracerVert = rtc::loadShaderModule(m_device, "vfx_tracer.slang.vertexMain.spv");
-    const VkShaderModule tracerFrag = rtc::loadShaderModule(m_device, "vfx_tracer.slang.fragmentMain.spv");
-    bool ok = particleVert && particleFrag && meshVert && meshFrag && tracerVert && tracerFrag;
-
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    for (auto& s : stages) s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkPipelineVertexInputStateCreateInfo noVertices{};
-    noVertices.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    VkPipelineInputAssemblyStateCreateInfo ia{};
-    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkPipelineViewportStateCreateInfo vp{};
-    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    vp.viewportCount = vp.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo rs{};
-    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-    VkPipelineMultisampleStateCreateInfo ms{};
-    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineDepthStencilStateCreateInfo ds{};
-    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    ds.depthTestEnable = VK_TRUE;
-    ds.depthWriteEnable = VK_FALSE;
-    ds.depthCompareOp = VK_COMPARE_OP_LESS;
-    std::array<VkPipelineColorBlendAttachmentState, 2> blends{};
-    VkPipelineColorBlendStateCreateInfo cb{};
-    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    cb.attachmentCount = static_cast<uint32_t>(blends.size());
-    cb.pAttachments = blends.data();
-    const std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dy{};
-    dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dy.dynamicStateCount = static_cast<uint32_t>(dyn.size());
-    dy.pDynamicStates = dyn.data();
-
-    VkGraphicsPipelineCreateInfo pi{};
-    pi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pi.stageCount = 2;
-    pi.pStages = stages;
-    pi.pInputAssemblyState = &ia;
-    pi.pViewportState = &vp;
-    pi.pRasterizationState = &rs;
-    pi.pMultisampleState = &ms;
-    pi.pDepthStencilState = &ds;
-    pi.pColorBlendState = &cb;
-    pi.pDynamicState = &dy;
-    pi.renderPass = m_renderPass;
+    // Every pipeline of the transparent pass: the lit image and the coverage mask (MAX), the G-buffer's depth
+    // tested and never written.
+    const std::array<VkFormat, 2> formats{kHdrFormat, kMaskFormat};
+    std::array<render::Blend, 2> blends{blendState(shared::kVfxBlendAlpha), maskState()};
+    render::GraphicsPipelineDesc desc{};
+    desc.vertexEntry = "vertexMain";
+    desc.fragmentEntry = "fragmentMain";
+    desc.colorFormats = formats;
+    desc.blends = blends;
+    desc.depthFormat = kDepthFormat;
+    desc.depthTest = true;
+    desc.depthWrite = false;
+    desc.depthCompare = VK_COMPARE_OP_LESS;
+    bool ok = true;
 
     // Particles: one pipeline a blend mode, both faces (a quad faces the camera).
-    if (ok) {
-        stages[0].module = particleVert;
-        stages[1].module = particleFrag;
-        stages[0].pName = "vertexMain";
-        stages[1].pName = "fragmentMain";
-        pi.pVertexInputState = &noVertices;
-        pi.layout = m_drawPipelineLayout;
-        blends[1] = maskState();
-        for (uint32_t mode = 0; mode < 3 && ok; ++mode) {
-            blends[0] = blendState(mode);
-            ok = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &m_particlePipelines[mode]) == VK_SUCCESS;
-        }
+    desc.name = "vfx.particle";
+    desc.vertex = "vfx_particle.slang.vertexMain.spv";
+    desc.fragment = "vfx_particle.slang.fragmentMain.spv";
+    desc.layout = m_drawPipelineLayout;
+    for (uint32_t mode = 0; mode < 3 && ok; ++mode) {
+        blends[0] = blendState(mode);
+        m_particlePipelines[mode] = render::createGraphicsPipeline(m_device, desc);
+        ok = m_particlePipelines[mode] != VK_NULL_HANDLE;
     }
     // Blended meshes: core/gbuffer.slang's vertex input, straight alpha by coverage; [0] one-sided
     // (back faces culled, as the G-buffer culls them), [1] double-sided.
+    const auto bindingDescs = render::vertexBindings();
+    const auto attributeDescs = render::vertexAttributes();
     if (ok) {
-        const auto bindingDescs = render::vertexBindings();
-        const auto attributeDescs = render::vertexAttributes();
-        VkPipelineVertexInputStateCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vi.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());
-        vi.pVertexBindingDescriptions = bindingDescs.data();
-        vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescs.size());
-        vi.pVertexAttributeDescriptions = attributeDescs.data();
-        stages[0].module = meshVert;
-        stages[0].pName = "vertexMain";
-        stages[1].module = meshFrag;
-        stages[1].pName = "fragmentMain";
-        pi.pVertexInputState = &vi;
-        pi.layout = m_meshPipelineLayout;
+        desc.name = "vfx.mesh";
+        desc.vertex = "core_gbuffer.slang.vertexMain.spv";
+        desc.fragment = "vfx_transparent_mesh.slang.spv";
+        desc.layout = m_meshPipelineLayout;
+        desc.vertexBindings = bindingDescs;
+        desc.vertexAttributes = attributeDescs;
         blends[0] = blendState(shared::kVfxBlendAlpha);
         for (uint32_t k = 0; k < 2 && ok; ++k) {
-            rs.cullMode = k == 0 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
-            ok = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &m_meshPipelines[k]) == VK_SUCCESS;
+            desc.cull = k == 0 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+            m_meshPipelines[k] = render::createGraphicsPipeline(m_device, desc);
+            ok = m_meshPipelines[k] != VK_NULL_HANDLE;
         }
     }
     // Tracers: six host-built vertices a tracer (position, across and along, colour), additive light,
@@ -458,58 +337,40 @@ bool VfxRenderer::createPipelines() {
         std::array<VkVertexInputAttributeDescription, 3> attributes{};
         for (uint32_t k = 0; k < attributes.size(); ++k)
             attributes[k] = {k, 0, VK_FORMAT_R32G32B32A32_SFLOAT, static_cast<uint32_t>(k * sizeof(glm::vec4))};
-        VkPipelineVertexInputStateCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vi.vertexBindingDescriptionCount = 1;
-        vi.pVertexBindingDescriptions = &binding;
-        vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
-        vi.pVertexAttributeDescriptions = attributes.data();
-        stages[0].module = tracerVert;
-        stages[0].pName = "vertexMain";
-        stages[1].module = tracerFrag;
-        stages[1].pName = "fragmentMain";
-        pi.pVertexInputState = &vi;
-        pi.layout = m_tracerPipelineLayout;
+        desc.name = "vfx.tracer";
+        desc.vertex = "vfx_tracer.slang.vertexMain.spv";
+        desc.fragment = "vfx_tracer.slang.fragmentMain.spv";
+        desc.layout = m_tracerPipelineLayout;
+        desc.vertexBindings = {&binding, 1};
+        desc.vertexAttributes = attributes;
+        desc.cull = VK_CULL_MODE_NONE;
         blends[0] = blendState(shared::kVfxBlendAdditive);
-        blends[1] = maskState();
-        rs.cullMode = VK_CULL_MODE_NONE;
-        ok = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &m_tracerPipeline) == VK_SUCCESS;
+        m_tracerPipeline = render::createGraphicsPipeline(m_device, desc);
+        ok = m_tracerPipeline != VK_NULL_HANDLE;
     }
-    for (VkShaderModule m : {particleVert, particleFrag, meshVert, meshFrag, tracerVert, tracerFrag})
-        if (m) vkDestroyShaderModule(m_device, m, nullptr);
     return ok;
 }
 
-bool VfxRenderer::resize(uint32_t width, uint32_t height, VkImageView hdr, VkImageView depth, VkImage hdrImage) {
-    if (m_renderPass == VK_NULL_HANDLE) return false;
+bool VfxRenderer::resize(uint32_t width, uint32_t height, gpu::Image& hdr, gpu::Image& depth) {
+    if (!ready()) return false;
     destroySizeResources();
     m_width = std::max(width, 1u);
     m_height = std::max(height, 1u);
-    m_hdrView = hdr;
-    m_depthView = depth;
-    m_hdrImage = hdrImage;
-    if (!rtc::createImage(m_device, m_physical, m_mask, kMaskFormat,
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height) ||
-        !rtc::createImage(m_device, m_physical, m_refraction, kHdrFormat,
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height))
-        return false;
-    const std::array<VkImageView, 3> views{hdr, m_mask.view, depth};
-    VkFramebufferCreateInfo fi{};
-    fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fi.renderPass = m_renderPass;
-    fi.attachmentCount = static_cast<uint32_t>(views.size());
-    fi.pAttachments = views.data();
-    fi.width = m_width;
-    fi.height = m_height;
-    fi.layers = 1;
-    return vkCreateFramebuffer(m_device, &fi, nullptr, &m_framebuffer) == VK_SUCCESS;
+    m_hdr = &hdr;
+    m_depth = &depth;
+    m_mask = m_allocator->createImage({"vfx.mask", kMaskFormat, m_width, m_height,
+                                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+    m_refraction = m_allocator->createImage({"vfx.refraction", kHdrFormat, m_width, m_height,
+                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+    return m_mask && m_refraction;
 }
 
-bool VfxRenderer::ensureHostBuffer(rtc::HostBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes, VkBufferUsageFlags usage) {
+bool VfxRenderer::ensureHostBuffer(GpuBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes, VkBufferUsageFlags usage) {
     if (buf.buffer != VK_NULL_HANDLE && cap >= bytes) return true;
-    rtc::destroyHostBuffer(m_device, buf);
+    m_allocator->destroyBuffer(buf);   // a slot's buffer: its fence was waited
     cap = std::max<VkDeviceSize>(bytes, 4096);
-    return rtc::createHostBuffer(m_device, m_physical, cap, usage, buf);
+    buf = rtc::createHostBuffer(*m_allocator, cap, usage);
+    return buf.isValid();
 }
 
 void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const View& view) {
@@ -521,7 +382,7 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
     m_emitterBase.clear();
     m_tracerVerts.clear();
     m_stats = {};
-    if (m_renderPass == VK_NULL_HANDLE || m_framebuffer == VK_NULL_HANDLE || slot >= m_slots.size()) return;
+    if (!ready() || !m_mask || slot >= m_slots.size()) return;
 
     // The effect records: one batch an emitter of a record, in record order, its particles a
     // range of slots. A batch whose particles are all unborn or dead is skipped; past the set's
@@ -546,15 +407,15 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
         }
         const uint32_t cap = std::max(set.caps.particles, 1u);
         if (cap > m_particleCapacity) {
-            vkDeviceWaitIdle(m_device);   // the shared slots are re-made (a set's cap grew: rare)
-            rtc::destroyHostBuffer(m_device, m_particles);
-            rtc::destroyHostBuffer(m_device, m_order);
+            // The shared slots are re-made (a set's cap grew: rare); the frames in flight keep the old ones.
+            m_allocator->retire(m_particles);
+            m_allocator->retire(m_order);
             m_particleCapacity = 0;
-            if (rtc::createHostBuffer(m_device, m_physical, VkDeviceSize(cap) * sizeof(shared::VfxParticleGpu),
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_particles) &&
-                rtc::createHostBuffer(m_device, m_physical, VkDeviceSize(cap) * sizeof(uint32_t),
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_order))
-                m_particleCapacity = cap;
+            m_particles = rtc::createHostBuffer(*m_allocator, VkDeviceSize(cap) * sizeof(shared::VfxParticleGpu),
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            m_order = rtc::createHostBuffer(*m_allocator, VkDeviceSize(cap) * sizeof(uint32_t),
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            if (m_particles.isValid() && m_order.isValid()) m_particleCapacity = cap;
         }
         uint32_t total = 0;
         for (const render::VfxFrameEffect& rec : frame.effects) {
@@ -654,8 +515,9 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
             m_batches.clear();
             return;
         }
-        std::memcpy(s.emitters.mapped, m_emitterTable.data(), static_cast<size_t>(emitterBytes));
-        auto* out = static_cast<shared::VfxBatchGpu*>(s.batches.mapped);
+        std::memcpy(s.emitters.getMappedData(), m_emitterTable.data(), static_cast<size_t>(emitterBytes));
+        m_allocator->flushBuffer(s.emitters, 0, emitterBytes);
+        auto* out = static_cast<shared::VfxBatchGpu*>(s.batches.getMappedData());
         for (size_t i = 0; i < m_batches.size(); ++i) {
             const Batch& b = m_batches[i];
             shared::VfxBatchGpu g{};
@@ -664,12 +526,14 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
             g.timing = {b.age, 0.0f, 0.0f, 0.0f};
             out[i] = g;
         }
+        m_allocator->flushBuffer(s.batches, 0, batchBytes);
     }
     // The tracers' vertices, in this slot's buffer; without one, no tracer is drawn.
     if (!m_tracerVerts.empty()) {
         const VkDeviceSize bytes = m_tracerVerts.size() * sizeof(shared::TracerVertexGpu);
         if (ensureHostBuffer(s.tracerVerts, s.tracerBytes, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
-            std::memcpy(s.tracerVerts.mapped, m_tracerVerts.data(), static_cast<size_t>(bytes));
+            std::memcpy(s.tracerVerts.getMappedData(), m_tracerVerts.data(), static_cast<size_t>(bytes));
+            m_allocator->flushBuffer(s.tracerVerts, 0, bytes);
         } else {
             m_tracerVerts.clear();
             m_stats.tracers = 0;
@@ -688,12 +552,12 @@ void VfxRenderer::writeExpandSet(uint32_t slot, const Lighting& lighting) {
         {s.batches.buffer, 0, VK_WHOLE_SIZE},
         {m_particles.buffer, 0, VK_WHOLE_SIZE},
         {m_order.buffer, 0, VK_WHOLE_SIZE},
-        {lighting.lights ? lighting.lights : dummy, 0, VK_WHOLE_SIZE},
-        {lighting.clusters ? lighting.clusters : dummy, 0, VK_WHOLE_SIZE},
+        {lighting.lights ? lighting.lights->buffer : dummy, 0, VK_WHOLE_SIZE},
+        {lighting.clusters ? lighting.clusters->buffer : dummy, 0, VK_WHOLE_SIZE},
     }};
     const std::array<VkDescriptorImageInfo, 2> images{{
-        {VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance : m_dummy.view, kReadOnly},
-        {VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance : m_dummy.view, kReadOnly},
+        {VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance->view : m_dummy.view, kReadOnly},
+        {VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance->view : m_dummy.view, kReadOnly},
     }};
     const VkDescriptorImageInfo sampler{m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     VkWriteDescriptorSetAccelerationStructureKHR as{};
@@ -724,7 +588,8 @@ void VfxRenderer::writeExpandSet(uint32_t slot, const Lighting& lighting) {
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
 
-void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting, const render::RenderScene& scene) {
+void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting, const render::RenderScene& scene,
+                                  bool refracted) {
     Slot& s = m_slots[slot];
     const VkBuffer dummy = m_dummyBuffer.buffer;
     const std::array<VkDescriptorBufferInfo, 3> geometry{{
@@ -733,18 +598,18 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting, const
         {scene.vertexArena() ? scene.vertexArena() : dummy, 0, VK_WHOLE_SIZE},
     }};
     const std::array<VkDescriptorBufferInfo, 2> buffers{{
-        {lighting.lights ? lighting.lights : dummy, 0, VK_WHOLE_SIZE},
-        {lighting.clusters ? lighting.clusters : dummy, 0, VK_WHOLE_SIZE},
+        {lighting.lights ? lighting.lights->buffer : dummy, 0, VK_WHOLE_SIZE},
+        {lighting.clusters ? lighting.clusters->buffer : dummy, 0, VK_WHOLE_SIZE},
     }};
     const VkDescriptorBufferInfo tables{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorImageInfo irradiance{VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance : m_dummy.view,
-                                           kReadOnly};
-    const VkDescriptorImageInfo prefiltered{VK_NULL_HANDLE,
-                                            lighting.envPrefiltered ? lighting.envPrefiltered : m_dummy.view, kReadOnly};
+    const VkDescriptorImageInfo irradiance{
+        VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance->view : m_dummy.view, kReadOnly};
+    const VkDescriptorImageInfo prefiltered{
+        VK_NULL_HANDLE, lighting.envPrefiltered ? lighting.envPrefiltered->view : m_dummy.view, kReadOnly};
     const VkDescriptorImageInfo sampler{m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-    const VkDescriptorImageInfo gi{VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance : m_dummy.view, kReadOnly};
-    const VkDescriptorImageInfo refraction{VK_NULL_HANDLE,
-                                           m_refraction.layout == kReadOnly ? m_refraction.view : m_dummy.view, kReadOnly};
+    const VkDescriptorImageInfo gi{VK_NULL_HANDLE, lighting.giRadiance ? lighting.giRadiance->view : m_dummy.view,
+                                   kReadOnly};
+    const VkDescriptorImageInfo refraction{VK_NULL_HANDLE, refracted ? m_refraction.view : m_dummy.view, kReadOnly};
     VkWriteDescriptorSetAccelerationStructureKHR as{};
     as.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     as.accelerationStructureCount = 1;
@@ -779,35 +644,38 @@ uint32_t lightingFlags(const VfxRenderer::Lighting& l) {
            (l.tlas ? 8u : 0u);
 }
 
-void zeroDummy(VkCommandBuffer cmd, rtc::Image& dummy) {
-    if (dummy.layout == kReadOnly) return;
-    rtc::transition(cmd, dummy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, true);
-    const VkClearColorValue zero{};
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cmd, dummy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-    rtc::transition(cmd, dummy, kReadOnly, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    false);
-}
-
 } // namespace
 
-void VfxRenderer::expand(VkCommandBuffer cmd, uint32_t slot, const Lighting& lighting) {
+void VfxRenderer::zeroDummy(const render::Frame& frame) {
+    if (m_dummy.state(0, 0).layout != VK_IMAGE_LAYOUT_UNDEFINED) return;
+    render::Pass pass(frame, nullptr, render::Pass::Transfer);
+    pass.copyDst(m_dummy);
+    pass.begin();
+    const VkClearColorValue zero{};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(frame.cmd, m_dummy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+}
+
+void VfxRenderer::expand(const render::Frame& frame, const render::RenderScene& scene, const Lighting& lighting) {
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t slot = frame.slot;
     if (m_stats.particles == 0 || slot >= m_slots.size()) return;
-    zeroDummy(cmd, m_dummy);
+    zeroDummy(frame);
     writeExpandSet(slot, lighting);
 
-    // In: the light clusters and RT GI (compute writes), and the previous frame's draws of the
-    // shared particle slots (vertex and fragment reads, which this dispatch overwrites).
-    VkMemoryBarrier in{};
-    in.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    in.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    in.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &in, 0, nullptr, 0, nullptr);
+    // The emitters and batches in, each particle slot and its place in the order out, lit by the clusters'
+    // lights, the sun's ray and RT GI.
+    Slot& s = m_slots[slot];
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    pass.read(s.emitters, render::BufferUse::Storage).read(s.batches, render::BufferUse::Storage);
+    pass.write(m_particles, render::BufferUse::Storage).write(m_order, render::BufferUse::Storage);
+    pass.read(lighting.lights ? *lighting.lights : m_dummyBuffer, render::BufferUse::Storage);
+    pass.read(lighting.clusters ? *lighting.clusters : m_dummyBuffer, render::BufferUse::Storage);
+    if (lighting.tlas != VK_NULL_HANDLE) scene.traced(pass);
+    if (lighting.envIrradiance) pass.sampled(*lighting.envIrradiance);
+    pass.sampled(m_dummy);
+    if (lighting.giRadiance) pass.sampled(*lighting.giRadiance);
+    pass.begin();
 
     const glm::mat4 viewProj = m_view.proj * m_view.view;
     const uint32_t flags = lightingFlags(lighting);
@@ -824,18 +692,11 @@ void VfxRenderer::expand(VkCommandBuffer cmd, uint32_t slot, const Lighting& lig
     vkCmdPushConstants(cmd, m_expandPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_stats.particles + shared::kVfxGroupSize - 1) / shared::kVfxGroupSize, 1, 1);
 
-    // Out: vfx.sort and the draws read the particles and the order.
-    VkMemoryBarrier out{};
-    out.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    out.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    out.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         0, 1, &out, 0, nullptr, 0, nullptr);
 }
 
-void VfxRenderer::sort(VkCommandBuffer cmd, uint32_t slot) {
+void VfxRenderer::sort(const render::Frame& frame) {
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t slot = frame.slot;
     if (m_stats.sortedBatches == 0 || slot >= m_slots.size()) return;
     Slot& s = m_slots[slot];
     const std::array<VkDescriptorBufferInfo, 2> buffers{{{m_particles.buffer, 0, VK_WHOLE_SIZE},
@@ -846,6 +707,9 @@ void VfxRenderer::sort(VkCommandBuffer cmd, uint32_t slot) {
     w[1].pBufferInfo = &buffers[1];
     vkUpdateDescriptorSets(m_device, 2, w.data(), 0, nullptr);
 
+    render::Pass pass(frame, nullptr, render::Pass::Compute);
+    pass.read(m_particles, render::BufferUse::Storage).readWrite(m_order, render::BufferUse::Storage);
+    pass.begin();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortPipelineLayout, 0, 1, &s.sortSet, 0, nullptr);
     // Each sorted batch is its own range of the order: one workgroup each, no overlap.
@@ -856,63 +720,37 @@ void VfxRenderer::sort(VkCommandBuffer cmd, uint32_t slot) {
         vkCmdPushConstants(cmd, m_sortPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cmd, 1, 1, 1);
     }
-    VkMemoryBarrier out{};
-    out.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    out.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    out.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &out, 0,
-                         nullptr, 0, nullptr);
 }
 
-// The lit frame as it is before the transparent pass, into m_refraction: what glass refracts. The
-// lit image waits between its writers (lighting, SSS) and this pass in the read-only layout.
-void VfxRenderer::copyRefraction(VkCommandBuffer cmd) {
-    if (m_hdrImage == VK_NULL_HANDLE || m_refraction.image == VK_NULL_HANDLE) return;
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VkImageMemoryBarrier toSrc{};
-    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    toSrc.oldLayout = kReadOnly;
-    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toSrc.srcQueueFamilyIndex = toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toSrc.image = m_hdrImage;
-    toSrc.subresourceRange = range;
-    vkCmdPipelineBarrier(cmd,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
-    rtc::transition(cmd, m_refraction, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, true);
+bool VfxRenderer::copyRefraction(const render::Frame& frame) {
+    if (!m_hdr || !*m_hdr || !m_refraction) return false;
+    render::Pass pass(frame, nullptr, render::Pass::Transfer);
+    pass.copySrc(*m_hdr).copyDst(m_refraction);
+    pass.begin();
     VkImageCopy region{};
     region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.dstSubresource = region.srcSubresource;
     region.extent = {m_width, m_height, 1};
-    vkCmdCopyImage(cmd, m_hdrImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_refraction.image,
+    vkCmdCopyImage(frame.cmd, m_hdr->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_refraction.image,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    VkImageMemoryBarrier back = toSrc;
-    back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    back.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    back.newLayout = kReadOnly;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
-                         nullptr, 0, nullptr, 1, &back);
-    rtc::transition(cmd, m_refraction, kReadOnly, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, false);
+    return true;
 }
 
-void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const render::RenderScene& scene,
-                                  const Lighting& lighting, VkDescriptorSet textures, VkDescriptorSet gbufferScene) {
-    if (m_objects.empty() || slot >= m_slots.size() || m_framebuffer == VK_NULL_HANDLE) return;
+void VfxRenderer::drawTransparent(const render::Frame& frame, const render::RenderScene& scene, const Lighting& lighting,
+                                  VkDescriptorSet textures, GBufferPass& gbuffer) {
+    const VkCommandBuffer cmd = frame.cmd;
+    const uint32_t slot = frame.slot;
+    if (m_objects.empty() || slot >= m_slots.size() || !m_mask || !m_hdr || !*m_hdr || !m_depth || !*m_depth) return;
     Slot& s = m_slots[slot];
-    zeroDummy(cmd, m_dummy);
+    zeroDummy(frame);
+    const VkDescriptorSet gbufferScene = gbuffer.sceneSet(slot);
     const bool meshes = !m_meshDraws.empty() && gbufferScene != VK_NULL_HANDLE && scene.vertexArena() != VK_NULL_HANDLE &&
                         scene.indexArena() != VK_NULL_HANDLE;
     if (m_stats.particles > 0) {
         const std::array<VkDescriptorBufferInfo, 3> buffers{{{m_particles.buffer, 0, VK_WHOLE_SIZE},
                                                              {m_order.buffer, 0, VK_WHOLE_SIZE},
                                                              {s.emitters.buffer, 0, VK_WHOLE_SIZE}}};
-        const VkDescriptorImageInfo depth{VK_NULL_HANDLE, m_depthView, kDepthReadOnly};
+        const VkDescriptorImageInfo depth{VK_NULL_HANDLE, m_depth->view, kDepthReadOnly};
         std::array<VkWriteDescriptorSet, 4> w{};
         namespace P = shader::vfx_particle;
         const shader::Binding bufferBindings[3] = {P::particles, P::order, P::emitters};
@@ -924,24 +762,38 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
         w[3].pImageInfo = &depth;
         vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
     }
+    bool refracted = false;
     if (meshes) {
-        copyRefraction(cmd);
-        writeForwardSet(slot, lighting, scene);
+        refracted = copyRefraction(frame);
+        writeForwardSet(slot, lighting, scene, refracted);
     }
 
-    std::array<VkClearValue, 3> clears{};
-    VkRenderPassBeginInfo rb{};
-    rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rb.renderPass = m_renderPass;
-    rb.framebuffer = m_framebuffer;
-    rb.renderArea.extent = {m_width, m_height};
-    rb.clearValueCount = static_cast<uint32_t>(clears.size());
-    rb.pClearValues = clears.data();
-    vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
-    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height), 0.0f, 1.0f};
-    const VkRect2D scissor{{0, 0}, {m_width, m_height}};
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    // The lit image kept and drawn over, the coverage mask cleared, the G-buffer's depth tested, sampled (the
+    // particles' soft edge) and never written.
+    render::Pass pass(frame, nullptr, render::Pass::Raster);
+    if (m_stats.particles > 0) {
+        pass.read(m_particles, render::BufferUse::Storage).read(m_order, render::BufferUse::Storage);
+        pass.read(s.emitters, render::BufferUse::Storage);
+    }
+    if (meshes) {
+        gbuffer.declareScene(pass, slot);
+        const render::RenderScene::Buffers b = scene.buffers();
+        // The forward set's own view of the geometry (a refracted ray's hit).
+        pass.read(b.meshes, render::BufferUse::Storage).read(b.indices, render::BufferUse::Storage);
+        pass.read(b.vertices, render::BufferUse::Storage);
+        pass.read(lighting.lights ? *lighting.lights : m_dummyBuffer, render::BufferUse::Storage);
+        pass.read(lighting.clusters ? *lighting.clusters : m_dummyBuffer, render::BufferUse::Storage);
+        if (lighting.tlas != VK_NULL_HANDLE) scene.traced(pass);
+        pass.read(m_openpbrTables.tracked(), render::BufferUse::Storage);
+        if (lighting.envIrradiance) pass.sampled(*lighting.envIrradiance);
+        if (lighting.envPrefiltered) pass.sampled(*lighting.envPrefiltered);
+        pass.sampled(m_dummy);
+        if (lighting.giRadiance) pass.sampled(*lighting.giRadiance);
+        if (refracted) pass.sampled(m_refraction);
+    }
+    if (!m_tracerVerts.empty()) pass.read(s.tracerVerts, render::BufferUse::Vertex);
+    pass.color(*m_hdr, render::Load::Keep).color(m_mask, render::Load::Clear).depthRead(*m_depth);
+    pass.begin();
 
     const glm::mat4 viewProj = m_view.proj * m_view.view;
     const glm::mat4 invView = glm::inverse(m_view.view);
@@ -1018,14 +870,14 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
             vkCmdDraw(cmd, 6, 1, 6u * o.index, 0);
         }
     }
-    vkCmdEndRenderPass(cmd);
 }
 
 std::vector<shared::VfxParticleGpu> VfxRenderer::readParticles() {
     std::vector<shared::VfxParticleGpu> out;
-    if (m_device == VK_NULL_HANDLE || m_particles.mapped == nullptr) return out;
+    if (m_device == VK_NULL_HANDLE || m_particles.getMappedData() == nullptr) return out;
     vkDeviceWaitIdle(m_device);
-    const auto* p = static_cast<const shared::VfxParticleGpu*>(m_particles.mapped);
+    m_allocator->invalidateBuffer(m_particles);
+    const auto* p = static_cast<const shared::VfxParticleGpu*>(m_particles.getMappedData());
     out.assign(p, p + m_stats.particles);
     return out;
 }

@@ -6,10 +6,10 @@
 #include "ecs/physics_scene.hpp"
 
 #include "core/log.hpp"
-#include "ecs/primitive_model.hpp"
+#include "ecs/primitive_mesh.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
-#include "asset/model.hpp"
+#include "asset/cooked.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <set>
 #include <utility>
 
@@ -117,6 +118,8 @@ struct PhysicsScene::Impl {
         Motion motion{Motion::Static};
         enum class Kind : uint8_t { Box, Sphere, Capsule, Convex, Mesh, Compound } kind{Kind::Box};
         glm::vec3 scale{1.0f};   // the world scale the shapes were baked with
+        // The shared shapes its colliders use (sharedShape): held here, so one lives while a body uses it.
+        std::vector<std::shared_ptr<const pb::SharedShape>> shared;
         bool hasParts{false};
         bool trigger{false};     // a sensor
         // Dynamic bodies: the world pose last written to the entity (or the body was placed at),
@@ -306,11 +309,18 @@ struct PhysicsScene::Impl {
     [[nodiscard]] bool ownCollider(entt::entity e) const;
 
     // The mesh a collider is fitted to: a CollisionMesh, else the entity's MeshSource.
-    [[nodiscard]] std::shared_ptr<const Model> meshOf(entt::entity e);
+    [[nodiscard]] std::shared_ptr<const cooked::Mesh> meshOf(entt::entity e);
 
     // One collider as a backend shape in the body's frame (scale baked), or nullopt.
     std::optional<pb::ShapeInfo> shapeOf(entt::entity e, const Collider& c, glm::vec3 scale, Motion motion,
-                                         std::vector<std::shared_ptr<FittedCollider>>& keep, BodyRecord::Kind& kind);
+                                         std::vector<std::shared_ptr<FittedCollider>>& keep, BodyRecord::Kind& kind,
+                                         std::vector<std::shared_ptr<const pb::SharedShape>>& held);
+    // A cooked mesh's collision mesh or convex hull at scale 1, made once for every body that uses it at any
+    // scale: from this scene's own table, else from the cooked cache, else built now and written there. Null: the
+    // mesh has no identity (made in code) or the backend cannot make it; the caller builds the body's own.
+    [[nodiscard]] std::shared_ptr<const pb::SharedShape> sharedShape(const cooked::Mesh& mesh, ColliderShape shape);
+    std::map<std::pair<ContentHash, ColliderShape>, std::weak_ptr<const pb::SharedShape>> sharedShapes;
+    uint32_t staticsBuilt{0};   // since the broad phase was last optimised
 
     // A removed body's pairs end now (Jolt's later OnContactRemoved for it no longer maps).
     void endPairsOf(pb::BodyHandle h);
@@ -451,6 +461,7 @@ struct PhysicsScene::Impl {
     // steps (realtime) its turn is drawn at the newest step's, never slerped: only the position is
     // interpolated. In lockstep (alpha 1) with nothing pending, nothing is drawn but the step's poses.
     // Presentation only: RenderPose, never Transform.
+    bool ignoresLook{false};   // stream 0 has input-driven players and none is in control (a dead player)
     bool leadsLook{false};   // an input-driven, living player exists (the last interpolate saw one)
 
     void lookLead(bool between, float alpha, glm::vec2 pending, const ankerl::unordered_dense::set<entt::entity>& was);

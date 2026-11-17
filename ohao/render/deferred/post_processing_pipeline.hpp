@@ -7,10 +7,10 @@
 #include "auto_exposure.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "render/display/display.hpp"
+#include "gpu/vulkan/gpu_image.hpp"
+#include "render/graph/pass.hpp"
 #include <array>
 #include <memory>
-
-namespace ohao::render { class GpuPassTimer; }
 
 namespace ohao {
 
@@ -22,31 +22,24 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
-    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
-    void onResize(uint32_t width, uint32_t height) override;
+    void execute(VkCommandBuffer cmd, uint32_t frameIndex) override { record(render::Frame{cmd, nullptr, frameIndex}); }
+    // Bloom, TAA, auto exposure and the display pass, timed as post.bloom, post.taa, exposure and post.tonemap.
+    void record(const render::Frame& frame);
+    void onResize(uint32_t width, uint32_t height) override;   // the output's size
+    // The lit image's size when the frame is rendered smaller than the output (render.settings renderScale):
+    // bloom runs at it and TAA upscales from it. Called before onResize; equal sizes are plain TAA.
+    void setRenderSize(uint32_t width, uint32_t height);
+    // The jitter the frame about to be resolved was rendered with (getJitterOffset's).
+    void setFrameJitter(glm::vec2 ndc);
     [[nodiscard]] const char* getName() const override { return "PostProcessingPipeline"; }
 
     // Input configuration
-    void setHDRInput(VkImageView hdrInput);
-    void setHDRInputWithImage(VkImageView hdrInput, VkImage hdrImage);
-    void setDepthBuffer(VkImageView depth);
-    void setNormalBuffer(VkImageView normal);
-    void setVelocityBuffer(VkImageView velocity);
-    // All G-buffer-derived inputs in one step. Call it as soon as the G-buffer is
-    // recreated and before onResize(): every pass that rewrites a descriptor set
-    // must already hold the new views when it does.
-    void setGBufferInputs(VkImageView depth, VkImageView normal, VkImageView velocity);
+    // The lit image the stack starts from.
+    void setHDRInput(gpu::Image* hdrInput) { m_hdrInput = hdrInput; }
+    // The G-buffer's depth and velocity, which TAA reprojects with. Call it as soon as the G-buffer is recreated.
+    void setGBufferInputs(gpu::Image* depth, gpu::Image* velocity);
     // The transparent pass's coverage mask, which TAA's history weighs less under (null: none).
-    void setTransparencyMask(VkImageView mask);
-
-    // The G-buffer views TAA currently references (null where the pass is absent).
-    struct BoundGBufferInputs {
-        VkImageView taaDepth{VK_NULL_HANDLE}, taaVelocity{VK_NULL_HANDLE};
-    };
-    [[nodiscard]] BoundGBufferInputs boundGBufferInputs() const;
-    // Times bloom, TAA and tonemapping as post.bloom, post.taa, post.tonemap (null: untimed).
-    void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
-
+    void setTransparencyMask(gpu::Image* mask);
     // Bloom's share of the frame's energy (frontier F2 T4): the display shows (1 - s) frame + s bloom.
     static constexpr float kBloomStrength = 0.04f;
 
@@ -55,7 +48,6 @@ public:
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
     [[nodiscard]] bool getBloomEnabled() const { return m_bloomEnabled; }
     [[nodiscard]] bool getTAAEnabled() const { return m_taaEnabled; }
-    void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }
     // Forget TAA's history, as on a fresh pipeline (DeferredRenderer::resetTemporalState).
     void resetHistory() noexcept;
 
@@ -88,9 +80,8 @@ public:
 
     void setDeltaTime(float dt)          { m_totalTime += dt; }
 
-    // Get final output
-    [[nodiscard]] VkImageView getOutputView() const { return m_finalOutputView; }
-    [[nodiscard]] VkImage getOutputImage() const { return m_finalOutput; }
+    // The final image (RGBA8, display encoded); it holds this frame once didExecute().
+    [[nodiscard]] gpu::Image& output() { return m_output; }
     [[nodiscard]] bool didExecute() const { return m_didExecute; }
 
 private:
@@ -106,7 +97,6 @@ private:
     std::unique_ptr<AutoExposure> m_autoExposure;
 
     // Tonemapping (final pass)
-    VkRenderPass m_tonemapRenderPass{VK_NULL_HANDLE};
     VkPipeline m_tonemapPipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_tonemapLayout{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_tonemapDescLayout{VK_NULL_HANDLE};
@@ -114,27 +104,24 @@ private:
     // One set per frame in flight: the input alternates with TAA's ping-pong every
     // frame, and a single set would be rewritten while the last frame still reads it.
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_tonemapDescSets{};
-    VkFramebuffer m_tonemapFramebuffer{VK_NULL_HANDLE};
     VkSampler m_sampler{VK_NULL_HANDLE};
 
     // Final output (LDR)
-    VkImage m_finalOutput{VK_NULL_HANDLE};
-    VkDeviceMemory m_finalMemory{VK_NULL_HANDLE};
-    VkImageView m_finalOutputView{VK_NULL_HANDLE};
+    gpu::Image m_output;   // post.output
 
     // Input views
-    VkImageView m_hdrInputView{VK_NULL_HANDLE};
+    gpu::Image* m_hdrInput{nullptr};
 
     // Dimensions
+    uint32_t m_renderWidth{0};   // setRenderSize; 0: the output's
+    uint32_t m_renderHeight{0};
     uint32_t m_width{0};
     uint32_t m_height{0};
 
     // Feature toggles (disabled by default for stability)
     bool m_bloomEnabled{false};
     bool m_taaEnabled{false};
-    bool m_tonemappingEnabled{true};
     bool m_didExecute{false};
-    render::GpuPassTimer* m_passTimer{nullptr};
 
     float m_totalTime{0.0f};
 

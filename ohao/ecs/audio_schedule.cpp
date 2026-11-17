@@ -10,7 +10,7 @@
 #include "ecs/player.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
-#include "asset/model.hpp"
+#include "asset/cooked.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -389,7 +389,7 @@ struct AudioSchedule::Impl {
         if (f.key != key || key.empty()) {
             f = Fitted{key, false, {}};
             if (asset) {
-                auto model = assets.loadModel(asset->asset, asset->mesh);
+                auto model = assets.loadMesh(asset->asset, asset->mesh);
                 if (model && model.value() && !model.value()->vertices.empty()) {
                     glm::vec3 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
                     for (const auto& v : model.value()->vertices) lo = glm::min(lo, v.position), hi = glm::max(hi, v.position);

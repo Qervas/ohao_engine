@@ -1,9 +1,15 @@
 #include "post_processing_pipeline.hpp"
 #include "render/shader_bindings/postprocess_tonemap.hpp"
-#include "render/frame/gpu_pass_timer.hpp"
+#include "render/graph/pipeline.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
+#include "core/log.hpp"
 #include <array>
 
 namespace ohao {
+
+namespace {
+constexpr VkFormat kOutputFormat = VK_FORMAT_R8G8B8A8_UNORM;
+} // namespace
 
 PostProcessingPipeline::~PostProcessingPipeline() {
     cleanup();
@@ -18,18 +24,20 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
 
     // Initialize sub-passes
     m_bloomPass = std::make_unique<BloomPass>();
+    m_bloomPass->setAllocator(*m_allocator);
     if (!m_bloomPass->initialize(device, physicalDevice)) {
         return false;
     }
 
     m_taaPass = std::make_unique<TAAPass>();
+    m_taaPass->setAllocator(*m_allocator);
     if (!m_taaPass->initialize(device, physicalDevice)) {
         return false;
     }
 
     // The display pass binds the metered EV100 whether or not a window meters.
     m_autoExposure = std::make_unique<AutoExposure>();
-    if (!m_autoExposure->initialize(device, physicalDevice)) return false;
+    if (!m_autoExposure->initialize(device, *m_allocator)) return false;
 
     // Create tonemapping pass
     if (!createFinalOutput()) return false;
@@ -56,93 +64,65 @@ void PostProcessingPipeline::cleanup() {
     safeDestroy(m_tonemapLayout);
     safeDestroy(m_tonemapDescPool);
     safeDestroy(m_tonemapDescLayout);
-    safeDestroy(m_tonemapFramebuffer);
-    safeDestroy(m_tonemapRenderPass);
     safeDestroy(m_sampler);
 
     destroyFinalOutput();
 }
 
-void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+void PostProcessingPipeline::record(const render::Frame& frame) {
     m_didExecute = false;
 
-    if (m_hdrInputView == VK_NULL_HANDLE) return;
+    if (!m_hdrInput || !*m_hdrInput) return;
 
-    VkImageView currentInput = m_hdrInputView;
+    gpu::Image* current = m_hdrInput;   // the frame so far: the lit image, then TAA's resolve
 
     // ── 1. Bloom ──────────────────────────────────────────────────────
     float bloomStrength = 0.0f;   // bloom's share of the frame (kBloomStrength when it ran)
     if (m_bloomEnabled && m_bloomPass) {
-        if (m_passTimer) m_passTimer->begin(cmd, "post.bloom");
-        m_bloomPass->setInputImage(currentInput);
-        m_bloomPass->execute(cmd, frameIndex);
+        render::Timed timed(frame, "post.bloom");
+        m_bloomPass->setInputImage(current);
+        m_bloomPass->record(frame);
         if (m_bloomPass->didExecute()) bloomStrength = kBloomStrength;
-        if (m_passTimer) m_passTimer->end(cmd);
     }
 
     // ── 2. TAA (temporal anti-aliasing) ───────────────────────────────
     if (m_taaEnabled && m_taaPass) {
-        if (m_passTimer) m_passTimer->begin(cmd, "post.taa");
-        m_taaPass->setCurrentFrame(currentInput);
-        m_taaPass->execute(cmd, frameIndex);
-        VkImageView taaOutput = m_taaPass->getOutputView();
-        if (taaOutput != VK_NULL_HANDLE) currentInput = taaOutput;
-        if (m_passTimer) m_passTimer->end(cmd);
+        m_taaPass->setCurrentFrame(current);
+        m_taaPass->record(frame);
+        if (gpu::Image& resolved = m_taaPass->output(); resolved) current = &resolved;
     }
 
     // ── 3. Auto exposure (a window's): the frame it shows, metered ─────
-    const bool metered = m_autoExposureEnabled && m_autoExposure && frameIndex < MAX_FRAMES_IN_FLIGHT;
+    const bool metered = m_autoExposureEnabled && m_autoExposure && frame.slot < MAX_FRAMES_IN_FLIGHT;
     if (metered) {
-        if (m_passTimer) m_passTimer->begin(cmd, "exposure");
-        m_autoExposure->record(cmd, frameIndex, currentInput, m_sampler, m_width, m_height, m_frameDt,
-                               m_autoExposureSettings);
-        if (m_passTimer) m_passTimer->end(cmd);
+        render::Timed timed(frame, "exposure");
+        m_autoExposure->record(frame, *current, m_sampler, m_width, m_height, m_frameDt, m_autoExposureSettings);
     }
 
     // ── 4. Tonemapping: HDR → LDR ─────────────────────────────────────
-    if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
-        m_tonemapFramebuffer != VK_NULL_HANDLE && frameIndex < MAX_FRAMES_IN_FLIGHT &&
-        m_tonemapDescSets[frameIndex] != VK_NULL_HANDLE) {
-        if (m_passTimer) m_passTimer->begin(cmd, "post.tonemap");
-
+    if (m_tonemapPipeline != VK_NULL_HANDLE && m_output && frame.slot < MAX_FRAMES_IN_FLIGHT &&
+        m_tonemapDescSets[frame.slot] != VK_NULL_HANDLE) {
         // Bloom output only when bloom ran this frame; otherwise the image was never
         // written. Strength is 0 then, so any read-only image fills the binding.
-        VkImageView bloomView = (bloomStrength > 0.0f) ? m_bloomPass->getBloomOutput() : VK_NULL_HANDLE;
-        writeTonemapSet(frameIndex, currentInput, bloomView != VK_NULL_HANDLE ? bloomView : m_hdrInputView);
+        const bool bloomed = bloomStrength > 0.0f;
+        writeTonemapSet(frame.slot, current->view, bloomed ? m_bloomPass->chain().subView(0, 0) : m_hdrInput->view);
 
-
-        VkClearValue clearValue{};
-        clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = m_tonemapRenderPass;
-        renderPassInfo.framebuffer = m_tonemapFramebuffer;
-        renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = {m_width, m_height};
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearValue;
-
-        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        VkViewport viewport{};
-        viewport.width = static_cast<float>(m_width);
-        viewport.height = static_cast<float>(m_height);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.extent = {m_width, m_height};
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        render::Pass pass(frame, "post.tonemap", render::Pass::Raster);
+        pass.sampled(*current);
+        if (bloomed) pass.sampled(m_bloomPass->chain(), {0, 0});
+        else pass.sampled(*m_hdrInput);
+        pass.read(m_autoExposure->stateBuffer(), render::BufferUse::Storage);
+        pass.color(m_output, render::Load::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}});
+        pass.begin();
+        const VkCommandBuffer cmd = frame.cmd;
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_tonemapLayout, 0, 1, &m_tonemapDescSets[frameIndex], 0, nullptr);
+                                m_tonemapLayout, 0, 1, &m_tonemapDescSets[frame.slot], 0, nullptr);
 
         TonemapParams params{};
         params.exposure      = render::displayExposure(m_ev100);
-        params.bloomWeight   = bloomStrength > 0.0f ? bloomStrength / m_bloomPass->levelWeightSum() : 0.0f;
+        params.bloomWeight   = bloomed ? bloomStrength / m_bloomPass->levelWeightSum() : 0.0f;
         params.frameWeight   = 1.0f - bloomStrength;
         params.curve         = static_cast<uint32_t>(m_displayCurve);
         params.autoExposure  = metered ? 1u : 0u;
@@ -151,11 +131,24 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                            0, sizeof(params), &params);
 
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRenderPass(cmd);
-        if (m_passTimer) m_passTimer->end(cmd);
 
         m_didExecute = true;
     }
+}
+
+void PostProcessingPipeline::setRenderSize(uint32_t width, uint32_t height) {
+    if (width == m_renderWidth && height == m_renderHeight) return;
+    m_renderWidth = width;
+    m_renderHeight = height;
+    if (m_bloomPass) m_bloomPass->onResize(width, height);
+    if (m_taaPass) {
+        m_taaPass->setInputSize(width, height);
+        m_taaPass->resetHistory();
+    }
+}
+
+void PostProcessingPipeline::setFrameJitter(glm::vec2 ndc) {
+    if (m_taaPass) m_taaPass->setFrameJitter(ndc);
 }
 
 void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
@@ -164,52 +157,21 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     m_width = width;
     m_height = height;
 
-    vkDeviceWaitIdle(m_device);
-
     // Resize sub-passes
-    if (m_bloomPass) m_bloomPass->onResize(width, height);
+    if (m_bloomPass) m_bloomPass->onResize(m_renderWidth ? m_renderWidth : width, m_renderHeight ? m_renderHeight : height);
     if (m_taaPass) m_taaPass->onResize(width, height);
 
-    // Recreate final output
-    safeDestroy(m_tonemapFramebuffer);
     destroyFinalOutput();
-    createFinalOutput();
-
-    // Recreate framebuffer
-    VkFramebufferCreateInfo framebufferInfo{};
-    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferInfo.renderPass = m_tonemapRenderPass;
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = &m_finalOutputView;
-    framebufferInfo.width = m_width;
-    framebufferInfo.height = m_height;
-    framebufferInfo.layers = 1;
-
-    vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_tonemapFramebuffer);
+    if (!createFinalOutput())
+        OHAO_LOG(Error, render, "PostProcessingPipeline: the final image failed at {}x{}", width, height);
 }
 
-void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
-    if (m_taaPass) m_taaPass->setDepthBuffer(depth);
-}
-
-void PostProcessingPipeline::setNormalBuffer(VkImageView) {}
-
-void PostProcessingPipeline::setGBufferInputs(VkImageView depth, VkImageView, VkImageView velocity) {
+void PostProcessingPipeline::setGBufferInputs(gpu::Image* depth, gpu::Image* velocity) {
     if (m_taaPass) m_taaPass->setGBufferInputs(depth, velocity);
 }
 
-void PostProcessingPipeline::setTransparencyMask(VkImageView mask) {
+void PostProcessingPipeline::setTransparencyMask(gpu::Image* mask) {
     if (m_taaPass) m_taaPass->setTransparencyMask(mask);
-}
-
-PostProcessingPipeline::BoundGBufferInputs PostProcessingPipeline::boundGBufferInputs() const {
-    BoundGBufferInputs b;
-    if (m_taaPass)  { b.taaDepth  = m_taaPass->depthInput();  b.taaVelocity = m_taaPass->velocityInput(); }
-    return b;
-}
-
-void PostProcessingPipeline::setVelocityBuffer(VkImageView velocity) {
-    if (m_taaPass) m_taaPass->setVelocityBuffer(velocity);
 }
 
 void PostProcessingPipeline::setTAABlendFactor(float factor) {
@@ -228,14 +190,6 @@ glm::vec2 PostProcessingPipeline::getJitterOffset(uint32_t frameIndex) const {
     return glm::vec2(0.0f);
 }
 
-void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {
-    m_hdrInputView = hdrInput;
-}
-
-void PostProcessingPipeline::setHDRInputWithImage(VkImageView hdrInput, VkImage /*hdrImage*/) {
-    m_hdrInputView  = hdrInput;
-}
-
 void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, VkImageView bloom) {
     const VkDescriptorSet set = m_tonemapDescSets[slot];
     if (set == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
@@ -245,7 +199,7 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
     namespace T = shader::postprocess_tonemap;
     const VkDescriptorImageInfo images[2] = {{m_sampler, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                              {m_sampler, bloom, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    const VkDescriptorBufferInfo exposureInfo{m_autoExposure->stateBuffer(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo exposureInfo{m_autoExposure->stateBuffer().buffer, 0, VK_WHOLE_SIZE};
     std::array<VkWriteDescriptorSet, 3> writes{shader::write(T::hdrInput, set), shader::write(T::bloomInput, set),
                                                shader::write(T::exposureState, set)};
     writes[0].pImageInfo = &images[0];
@@ -256,57 +210,15 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
 }
 
 bool PostProcessingPipeline::createFinalOutput() {
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM; // LDR output: the display pass encodes sRGB itself
-    imageInfo.extent = {m_width, m_height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_finalOutput) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(m_device, m_finalOutput, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_finalMemory) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkBindImageMemory(m_device, m_finalOutput, m_finalMemory, 0);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_finalOutput;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    return vkCreateImageView(m_device, &viewInfo, nullptr, &m_finalOutputView) == VK_SUCCESS;
+    // LDR: the display pass encodes sRGB itself.
+    m_output = m_allocator->createImage({"post.output", kOutputFormat, m_width, m_height,
+                                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT});
+    return static_cast<bool>(m_output);
 }
 
 void PostProcessingPipeline::destroyFinalOutput() {
-    safeDestroy(m_finalOutputView);
-    safeDestroy(m_finalOutput);
-    safeFree(m_finalMemory);
+    if (m_allocator) m_allocator->retire(m_output);
 }
 
 bool PostProcessingPipeline::createTonemappingPass() {
@@ -320,57 +232,6 @@ bool PostProcessingPipeline::createTonemappingPass() {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 
     if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_sampler) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Render pass
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    // Samples the lit (or TAA-resolved) frame and bloom's mip 0, both just written; the
-    // gizmo pass and the readback use its output.
-    const auto dependencies = sampledColorPassDependencies();
-
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
-    renderPassInfo.pDependencies = dependencies.data();
-
-    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_tonemapRenderPass) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Framebuffer
-    VkFramebufferCreateInfo framebufferInfo{};
-    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferInfo.renderPass = m_tonemapRenderPass;
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = &m_finalOutputView;
-    framebufferInfo.width = m_width;
-    framebufferInfo.height = m_height;
-    framebufferInfo.layers = 1;
-
-    if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_tonemapFramebuffer) != VK_SUCCESS) {
         return false;
     }
 
@@ -413,59 +274,6 @@ bool PostProcessingPipeline::createTonemappingPass() {
         return false;
     }
 
-    // Load shaders
-    VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.slang.spv");
-    VkShaderModule fragShader = loadShaderModule("postprocess_tonemap.slang.spv");
-
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vertShader;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fragShader;
-    stages[1].pName = "main";
-
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
-
-    std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = 2;
-    dynamicState.pDynamicStates = dynamicStates.data();
-
     VkPushConstantRange pushConstant{};
     pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstant.offset = 0;
@@ -478,38 +286,16 @@ bool PostProcessingPipeline::createTonemappingPass() {
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_tonemapLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(m_device, vertShader, nullptr);
-        vkDestroyShaderModule(m_device, fragShader, nullptr);
-        return false;
-    }
+    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_tonemapLayout) != VK_SUCCESS) return false;
 
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = stages.data();
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = m_tonemapLayout;
-    pipelineInfo.renderPass = m_tonemapRenderPass;
-
-    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                                nullptr, &m_tonemapPipeline);
-
-    vkDestroyShaderModule(m_device, vertShader, nullptr);
-    vkDestroyShaderModule(m_device, fragShader, nullptr);
-
-    return result == VK_SUCCESS;
+    render::GraphicsPipelineDesc desc{};
+    desc.name = "post.tonemap";
+    desc.vertex = "postprocess_fullscreen.slang.spv";
+    desc.fragment = "postprocess_tonemap.slang.spv";
+    desc.layout = m_tonemapLayout;
+    desc.colorFormats = {&kOutputFormat, 1};
+    m_tonemapPipeline = render::createGraphicsPipeline(m_device, desc);
+    return m_tonemapPipeline != VK_NULL_HANDLE;
 }
-
-
-// ===================================================================
-// Dynamic tonemapping input rebind
-// ===================================================================
 
 } // namespace ohao

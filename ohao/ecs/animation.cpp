@@ -4,7 +4,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
-#include "asset/model.hpp"
+#include "asset/cooked.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -198,10 +198,10 @@ void AnimationSystem::poseEntity(World& world, entt::entity e, bool placed) {
         return;
     }
     if (pose.boneToJoint.empty()) {
-        auto loaded = m_assets.loadModel(model->asset, model->mesh);
+        auto loaded = m_assets.loadMesh(model->asset, model->mesh);
         if (loaded && loaded.value()) {
-            const Model& mesh = *loaded.value();
-            pose.boneToJoint = anim::boneToJointMap(g->skeleton, mesh.boneNames);
+            const cooked::Mesh& mesh = *loaded.value();
+            pose.boneToJoint = anim::boneToJointMap(g->skeleton, mesh.bones);
             const glm::vec3 none(3.4e38f), noneMax(-3.4e38f);
             pose.boneBoxes.assign(pose.boneToJoint.size() + 1, {none, noneMax});
             for (const Vertex& v : mesh.vertices) {

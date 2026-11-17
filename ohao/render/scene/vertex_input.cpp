@@ -1,6 +1,6 @@
 #include "render/scene/vertex_input.hpp"
 
-#include "asset/model.hpp"
+#include "asset/vertex.hpp"
 
 #include <cstddef>
 

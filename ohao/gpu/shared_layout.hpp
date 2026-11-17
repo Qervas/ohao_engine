@@ -271,7 +271,7 @@ static_assert(offsetof(DIPush, weather) == 48);
 static_assert(offsetof(DIPush, trace) == 64);
 static_assert(sizeof(DIPush) == 80);
 
-// one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
+// one meshlet of the meshlet arena (asset/meshlets.hpp): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
 struct alignas(16) MeshletGpu {
     alignas(16) std::array<uint32_t, 4> range{};
     alignas(16) std::array<float, 4> sphere{};

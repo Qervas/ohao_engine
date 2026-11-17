@@ -135,7 +135,7 @@ def run_all(verbose):
             f.seek(offset)
             return f.read().decode(errors="replace")
     results = []
-    s = Serve(OUT, env=dict(os.environ, OHAO_VALIDATION="1"))
+    s = Serve(OUT, env=dict(os.environ, OHAO_VALIDATION=os.environ.get("OHAO_VALIDATION", "1")))
     try:
         for name, scene, steps, params in SCENES:
             start = os.path.getsize(log_path)

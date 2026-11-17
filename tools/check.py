@@ -18,8 +18,9 @@ Steps (sub-project 4 spec, "One entry point"):
   2. configure, if the build directory has no CMakeCache.txt;
   3. build the `shaders` target first, then everything (at most 6 jobs: heavier parallel
      load has crashed the reference machine);
-     Then the API's methods against docs/agents/ohao-cli.md's Methods table, and no binding number typed in C++
-     (tools/gen_bindings.py --check): either fails the build.
+     Then the API's methods against docs/agents/ohao-cli.md's Methods table, no binding number typed in C++
+     (tools/gen_bindings.py --check), and no barrier, render pass, framebuffer or raw allocation outside the
+     frame's two owners (FRAME_RULE): any fails the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
@@ -209,6 +210,29 @@ def ohao_exe(build_dir, config):
     return None
 
 
+# Step 4a: a pass declares what it touches (render/graph/pass.hpp) and gets its memory from the allocator; only
+# these two places record a barrier, begin a render pass or allocate device memory themselves.
+FRAME_RULE = re.compile(r"\b(vkCmdPipelineBarrier2?|vkCreateRenderPass2?|vkCreateFramebuffer|vkCmdBeginRenderPass2?|"
+                        r"vkAllocateMemory|vkCreateImage)\b")
+FRAME_OWNERS = ("ohao/render/graph/", "ohao/gpu/vulkan/")
+
+
+def check_frame_rule():
+    """[problem]: each line outside FRAME_OWNERS (engine and games) that names a call only they may make."""
+    problems = []
+    for top in ("ohao", "games"):
+        for path in sorted((ROOT / top).rglob("*")):
+            rel = path.relative_to(ROOT).as_posix()
+            if path.suffix not in (".cpp", ".hpp", ".h") or rel.startswith(FRAME_OWNERS):
+                continue
+            for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                m = FRAME_RULE.search(line)
+                if m:
+                    problems.append(f"{rel}:{n}: {m.group(1)} outside render/graph and gpu/vulkan: declare it on a "
+                                    f"render::Pass, or take the memory from GpuAllocator")
+    return problems
+
+
 def check_method_docs(build_dir, config, out):
     """The API's methods (the catalogue, from the one method table) against the Methods table of
     docs/agents/ohao-cli.md: two places that must agree (system design 4.2). -> a list of problems."""
@@ -381,7 +405,7 @@ def main(argv=None):
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
-        problems = check_method_docs(build_dir, args.config, out)
+        problems = check_method_docs(build_dir, args.config, out) + check_frame_rule()
         gen = subprocess.run([sys.executable, str(ROOT / "tools/gen_bindings.py"), "--check"], capture_output=True, text=True)
         if gen.returncode != 0:
             problems += [l for l in gen.stdout.splitlines() if l] or [f"gen_bindings --check failed: {gen.stderr[-400:]}"]

@@ -56,6 +56,7 @@ public:
     // The last set() list, sorted by order (host copy).
     [[nodiscard]] std::span<const LightDesc> descs() const noexcept { return m_descs; }
     [[nodiscard]] uint32_t rtCount() const noexcept { return static_cast<uint32_t>(m_rt.size()); }
+    [[nodiscard]] GpuBuffer& rtLights() noexcept { return m_rtBuffer; }
     [[nodiscard]] VkBuffer rtBuffer() const noexcept { return m_rtBuffer.buffer; }
 
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept;

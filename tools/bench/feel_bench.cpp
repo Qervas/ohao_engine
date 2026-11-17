@@ -6,7 +6,7 @@
 // and steps. A hidden window may never present, so the window is shown.
 //
 //   feel_bench [--check budgets.json] [--out build/feel_bench.json] [--seconds 60] [--warmup 2]
-//              [--modes immediate,mailbox,fifo] [--csv-dir build] [--frames-ahead N]
+//              [--modes immediate,mailbox,fifo] [--csv-dir build] [--render-scale S]
 //
 // Per mode, feel_bench_<mode>.csv (every frame: time, steps, phases, the latency of each movement it
 // showed) and feel_bench_<mode>_events.csv (the round's deaths, restarts, wins and reloads), on one
@@ -15,7 +15,7 @@
 // budget is gated only on a display of at least minRefreshHz with present wait, else it is reported
 // pending. Other processes' CPU is recorded over each measured minute (dwm.exe aside): beside more than
 // half a core, a gated budget is `noisy`. Exit 0: no gated budget missed; 1: one did on a quiet run,
-// or a run measured nothing; 2: noisy (tools/check.py reruns it).
+// or a run measured nothing; 2: noisy (tools/check.py reruns it), or every display is off (nothing is shown).
 
 #include "common/harness.hpp"
 #include "slice/combat.hpp"
@@ -91,7 +91,7 @@ InputEvent action(const char* name, bool down) {
 }
 
 // One present mode's scripted minute.
-ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
+ModeRun run(PresentMode mode, double seconds, double warmup, float renderScale) {
     ModeRun r;
     r.want = mode;
     LiveConfig cfg;
@@ -104,7 +104,6 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
     cfg.timeMode = TimeMode::realtime;
     cfg.root = OHAO_SOURCE_DIR;
     cfg.frameLogCapacity = 1u << 20;
-    cfg.framesAhead = framesAhead;
     LiveHost host;
     if (!host.initialize(cfg, engineTypes())) return r;
     const std::string scene = std::string(OHAO_SOURCE_DIR) + "/assets/scenes/blockout_play.scene.json";
@@ -121,6 +120,7 @@ ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
             pp->setTAAEnabled(true);
             pp->setEv100(0.0f);
         }
+        deferred->setRenderScale(renderScale);
     }
 
     // The script, by time since the start: a mouse movement every 40 to 60 ms (alternating left and
@@ -258,17 +258,34 @@ int stalls(const ModeRun& r) {
 
 } // namespace
 
+// Linux: false when no connected display is on. With the displays asleep the compositor discards every frame,
+// and the presentation engine confirms a frame only when the next one replaces it: 2026-11-10, a run measured that
+// way read as a present-wait fault. True where it cannot be told (no DRM sysfs).
+static bool displayOn() {
+    std::error_code ec;
+    bool connected = false;
+    for (const auto& e : std::filesystem::directory_iterator("/sys/class/drm", ec)) {
+        std::string status, dpms;
+        std::ifstream(e.path() / "status") >> status;
+        std::ifstream(e.path() / "dpms") >> dpms;
+        if (status != "connected") continue;
+        if (dpms == "On") return true;
+        connected = true;
+    }
+    return !connected;
+}
+
 int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/feel_bench.json", csvDir = "build";
     double seconds = 60.0, warmup = 2.0;
-    int framesAhead = -1;   // LiveConfig::framesAhead: the window's own choice
+    float renderScale = 1.0f;   // render.settings renderScale
     std::vector<PresentMode> modes{PresentMode::Immediate, PresentMode::Mailbox, PresentMode::Fifo};
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
         else if (a == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (a == "--csv-dir" && i + 1 < argc) csvDir = argv[++i];
-        else if (a == "--frames-ahead" && i + 1 < argc) framesAhead = std::atoi(argv[++i]);
+        else if (a == "--render-scale" && i + 1 < argc) renderScale = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--seconds" && i + 1 < argc) seconds = std::max(1.0, std::atof(argv[++i]));
         else if (a == "--warmup" && i + 1 < argc) warmup = std::max(0.0, std::atof(argv[++i]));
         else if (a == "--modes" && i + 1 < argc) {
@@ -286,9 +303,14 @@ int main(int argc, char** argv) {
             }
         } else {
             std::fprintf(stderr, "usage: feel_bench [--check budgets.json] [--out file] [--seconds N] [--warmup N] "
-                                 "[--modes immediate,mailbox,fifo] [--csv-dir DIR] [--frames-ahead N]\n");
+                                 "[--modes immediate,mailbox,fifo] [--csv-dir DIR] [--render-scale S]\n");
             return 1;
         }
+    }
+    if (!displayOn()) {
+        std::fprintf(stderr, "feel_bench: every display is off (DPMS): the compositor shows no frame, so no latency "
+                             "can be measured. Wake the display (kscreen-doctor --dpms on) and run again.\n");
+        return 2;
     }
     nlohmann::json budgets = nlohmann::json::object();
     int currentStep = 0;
@@ -306,7 +328,7 @@ int main(int argc, char** argv) {
     std::printf("feel_bench: the play scene, %.0f s a present mode after %.0f s of warm-up\n", seconds, warmup);
     std::vector<ModeRun> runs;
     for (const PresentMode m : modes) {
-        runs.push_back(run(m, seconds, warmup, framesAhead));
+        runs.push_back(run(m, seconds, warmup, renderScale));
         const ModeRun& r = runs.back();
         if (!r.ran) {
             std::printf("  %-9s did not run (no window or GPU)\n", std::string(presentModeName(m)).c_str());
