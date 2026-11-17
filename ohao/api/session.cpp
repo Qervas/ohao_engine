@@ -745,6 +745,17 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
     out.key("materials"); out.uint64(st->memory.materials);
     out.key("blas"); out.uint64(st->memory.blas);
     out.key("blasBytes"); out.uint64(st->memory.blasBytes);
+    out.key("targetBytes"); out.uint64(st->memory.targetBytes);
+    out.key("deviceBytes"); out.uint64(st->memory.deviceBytes);
+    out.key("targets");
+    out.beginArray();
+    for (const auto& [name, bytes] : st->memory.targets) {
+        out.beginArray();
+        out.string(name);
+        out.uint64(bytes);
+        out.endArray();
+    }
+    out.endArray();
     out.endObject();
     if (const auto& l = st->latency) {
         out.key("latency");
@@ -902,7 +913,7 @@ const std::vector<Method>& methodTable() {
         {{"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
            "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
            "saved; captures default to them. E_STATE on a host that renders nothing."}, renderSettings},
-        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, memory: {textures, textureBytes, meshes, meshBytes, meshCapacityBytes, blas, blasBytes, materials}, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
+        {{"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, memory: {textures, textureBytes, meshes, meshBytes, meshCapacityBytes, blas, blasBytes, materials, targetBytes, deviceBytes, targets: [[name, bytes], ...]}, passes?: [[name, ms], ...], lightsOverflow?, ev100?, skinning?, caustics?, vfx?, latency?, pacing?, audio?}",
            "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
            "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."}, renderStats},
         {{"events.read", p.find<EventsReadParams>(), "{events: [{seq, step, event, ...fields}], next, dropped?}",

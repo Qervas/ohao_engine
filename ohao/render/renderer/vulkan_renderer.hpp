@@ -295,6 +295,7 @@ public:
     // between initialize() and shutdown(); after shutdown() the object stays alive
     // but inert (every edit is ignored) until the renderer is destroyed.
     [[nodiscard]] render::RenderScene& renderScene() { return *m_renderScene; }
+    [[nodiscard]] const GpuAllocator& allocator() const { return m_allocator; }
 
     // Denoiser control
     void        setDenoiseMode(DenoiseMode mode);

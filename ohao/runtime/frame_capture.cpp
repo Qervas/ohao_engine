@@ -374,6 +374,11 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
             st->memory.textures = t->getLoadedTextureCount();
             st->memory.textureBytes = t->getTotalMemoryUsage();
         }
+        for (const GpuAllocator::Named& image : renderer.allocator().images()) {
+            st->memory.targets.emplace_back(image.name, image.bytes);
+            st->memory.targetBytes += image.bytes;
+        }
+        st->memory.deviceBytes = renderer.allocator().getStats().currentUsage;
         if (DeferredRenderer* d = renderer.getDeferredRenderer()) {
             // The newest frame's effects: what the last prepare built, and the records the frame drew from.
             const render::VfxFrame& frame = renderer.renderScene().vfx();
