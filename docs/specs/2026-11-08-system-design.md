@@ -184,8 +184,13 @@ added and removed, 74 tests built and cut to 10).
 
 ![Game thread, render thread, GPU](2026-11-08-system-design/5-threads.svg)
 
-Measured in step 4 (2026-11-11; `docs/changes/2026-11-17-step4-frame.md`), which corrected this section: the CPU has
-nothing to give yet. Recording and submitting a frame is 0.07 to 0.8 ms (`render_bench`, 100,000 instances included);
+**Frank, 2026-11-17: 4b is built** ("it's too crucial"), after caustics step 2c and step 4's cleanup: the job system,
+the systems' declared accesses and parallel waves, Jolt on the jobs, the frame packet and the render thread, as the
+target above. A game written before it would assume one thread and be rewritten; built first, every system and game
+is written in its final shape. The measurement below is why it was deferred on 2026-11-11, kept as the baseline 4b is
+judged against.
+
+Measured in step 4 (2026-11-11; `docs/changes/2026-11-17-step4-frame.md`): the CPU had nothing to give yet. Recording and submitting a frame is 0.07 to 0.8 ms (`render_bench`, 100,000 instances included);
 every simulation system is 0.0002 to 0.06 ms a step (`physics_bench`); the GPU frame is 2 to 37 ms. So, until a
 measurement asks:
 
@@ -308,7 +313,8 @@ jobs and the transfer queue.
 
 **Step 4, the frame (large; built 2026-11-17).** Every pass declares what it touches and records through one pass
 type; one allocator; dynamic rendering; the build refuses a barrier outside the frame's owners. 4b (jobs, waves,
-Jolt on jobs, the frame packet, the render thread) was measured and not built (4.5).
+Jolt on jobs, the frame packet, the render thread) was measured and deferred, then ruled to be built (Frank,
+2026-11-17; 4.5).
 *Done when* no barrier is placed outside the pass type, `render_bench` is no slower on any scene, the goldens are
 unchanged and synchronization validation is silent, and a frame's memory is known by image. (This said `replay_test`
 identical at 1 and N threads and the play scene's CPU frame dropping with more cores: the CPU frame is under half a
