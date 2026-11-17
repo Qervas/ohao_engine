@@ -110,7 +110,8 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
 
 void ManifoldRounds::recordReset(const Frame& frame) {
     // The header (rt/path_tracer.slang's kMC*: capacities at 16, regions at 25 (in slots), rows, batches and passes at
-    // 33-35, the dumped pixel at 36, the records' statistics at 37 (0: off), counters from 40); the batches' blocks zero
+    // 33-35, the dumped pixel at 36, the records' statistics at 37 (0: off), the sparse grid at 38, the mapped walk's
+    // orientation at 39, counters from 40); the batches' blocks zero
     // (a reservation sets its arguments' height and depth).
     std::array<uint32_t, kHeaderWords> words{};
     words[16] = m_recordCap;
@@ -128,6 +129,7 @@ void ManifoldRounds::recordReset(const Frame& frame) {
     words[36] = m_dumpPixel;
     words[37] = m_cellStats ? kCountWords : 0u;
     words[38] = m_sparse;
+    words[39] = m_oriented ? 1u : 0u;
     Pass pass(frame, nullptr, Pass::Transfer);
     pass.write(m_counts, BufferUse::CopyDst);
     if (m_clearSum) pass.write(m_sum, BufferUse::CopyDst);

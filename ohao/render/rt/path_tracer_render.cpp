@@ -617,7 +617,12 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                 const char* v = std::getenv("OHAO_MANIFOLD_SPARSE");
                 return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 0u;
             }();
+            static const bool oriented = [] {
+                const char* v = std::getenv("OHAO_MANIFOLD_ORIENTED");
+                return v == nullptr || std::string_view(v) != "0";
+            }();
             m_manifoldRounds.setSparse(sparse);
+            m_manifoldRounds.setOriented(oriented);
             m_manifoldRounds.setCellStats(cellStats);
             m_manifoldRounds.setDumpPixel(m_caustics.dumping() ? dumpPixel : ~0u);
             m_manifoldRounds.recordReset(frame);

@@ -194,6 +194,29 @@ unchanged by default. Measuring: `OHAO_MANIFOLD_SPARSE=k`, `OHAO_MANIFOLD_CELL_S
   against the floor's root cells (every one emitted). Then stage 3, then task 7's equal-time comparison decides whether
   mapped draws are owned by default.
 
+*Stage 2b as built (2026-11-17; the walk still opt-in):* `manifoldMapClip` clips a triangle by a uv rectangle's four
+sides in its own (u, v) (uv is affine in them: each side a half-plane, no inverse), so a uv-degenerate triangle keeps
+only the strip whose uvs cross the cell, at nodes and cells alike. `manifoldMapHullTest` replaces delta at triangles,
+pyramid nodes and cells: M is affine over the region and tn a convex blend of the texels' normals within rho, so h lies
+in the hull of the products `M_k (c_j - s)` grown by `rho max_k |M_k|`; seen along Hc (within dh), a root needs the
+projected hull within `tan(dh)(D + R) + R` of the origin, tested by a 2D GJK (at most 16 steps, 32 points) that prunes
+only on a separating line. The gather's BVH nodes keep delta (their region's vertices are not at hand). Oriented (word
+39; `OHAO_MANIFOLD_ORIENTED=0` off): a region is pruned when `max P . Hc + R <= 0`, nodes drop the flipped branch;
+`r . L > 0` follows from h parallel to H (`r = 2 (1 + w . L)|d| lambda^2 L`; 0 of the floor's 2,848 roots violate it).
+- **Cells a request** (stage 2 -> 2b): the helmet 11,594 -> 532 mean (512 median, 818 max) at 320x180, 11,945 -> 516
+  at 640x360; Sponza 15,789 -> 6,623 and 11,362 -> 4,070 (medians 512, 435). Pyramid tests the helmet 286 K -> 119 K,
+  Sponza 912 K -> 659 K. The pyramid stage's time the helmet 5.5 -> 3.5 ms and 9.3 -> 5.7 ms; Sponza 4.7 -> 7.4 ms and
+  8.9 -> 9.9 ms (a hull test costs more than the ball test it replaced).
+- **Left:** cells 2.0x the path floor (582 oriented against 288); nodes 20-46x at levels 0-5, from the map's own spread
+  inside the finest node (zeroing R takes leaf passes 2,824 -> 12; a leaf's ball median radius 0.585), which no convex
+  bound a node removes. Not built: the uv box's texels in place of the footprint's union ball (radius 0.93 -> 0.50, an
+  estimated 3.6x fewer triangle passes).
+- **Proofs:** completeness against the floor, the same 4 requests re-dumped: oriented, every path cell emitted
+  (171/391/355/236 of 368/756/693/511); unoriented, every root cell of either sign (458-652 of 886-1,320). The bound's
+  fp32 copy against planted roots, a third of the triangles uv-degenerate: 17,292 regions, 273,691 roots, 410,978
+  tests, none pruned (worst dh margin +1.1e-4 rad). Walk off: the caustics scene and the showcase byte-identical.
+  Synchronization validation silent, walk on and off. Cold compile 1.9 s.
+
 ### Task 6: the pass on the GPU, bounded
 
 Requests -> candidate cells -> cell solves as work items of bounded cost (a box budget an item), spread across threads

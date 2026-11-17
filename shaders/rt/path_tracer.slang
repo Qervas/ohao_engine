@@ -1537,6 +1537,7 @@ static const uint kMCPasses = 35u;
 static const uint kMCDumpPixel = 36u;   // the pixel whose requests are dumped (~0: none, ~1: any; caustic_pass.hpp)
 static const uint kMCRecordStats = 37u; // the first word of the records' statistics
 static const uint kMCSparse = 38u;      // only pixels on a grid of this step make requests (0, 1: all; a measurement)
+static const uint kMCOriented = 39u;    // mapped regions keep only a path's roots, h . H > 0 (0: either way round)
 static const uint kMCCandidates = 40u;  // the frame's counters: candidates, roots, connections, cluster, sub-cluster
                                         // and triangle tests
 static const uint kMCLost = 46u;        // items carried past the last pass (or a record past its capacity)
@@ -1570,7 +1571,8 @@ static const uint kManifoldRecordRows = 6u;
 // The batch and pass this dispatch runs (pc.jitter.z's bits: batch | pass << 16), and a block of words.
 uint manifoldBatch() { return asuint(pc.jitter.z) & 0xFFFFu; }
 uint manifoldPassIndex() { return (asuint(pc.jitter.z) >> 16u) & 0xFFu; }
-uint manifoldSegment() { return asuint(pc.jitter.z) >> 24u; }   // a pyramid round's: its segment of the queue
+uint manifoldSegment() { return asuint(pc.jitter.z) >> 24u; }
+bool manifoldOriented() { return manifoldCounts[kMCOriented] != 0u; }   // a pyramid round's: its segment of the queue
 uint manifoldBlockAt(uint pass) { return kMCBlocks + kMCBlockWords * (manifoldBatch() * manifoldCounts[kMCPasses] + pass); }
 uint manifoldBlock() { return manifoldBlockAt(manifoldPassIndex()); }
 // A queue's region in a pass: two a queue, a pass's input in one while the carries for the next go to the other (in
@@ -1898,7 +1900,8 @@ bool manifoldMappedNodeTest(uint node, float3 lo, float3 hi, ManifoldMapInfo mi,
     const uint4 h = manifoldDraws[0];
     const uint r = (h.w + 9u * h.z + h.x + node) * 4u;
     const float4 r0 = manifoldNodes[r], r1 = manifoldNodes[r + 1u], r2 = manifoldNodes[r + 2u], r3 = manifoldNodes[r + 3u];
-    return manifoldMappedTest(lo, hi, r0.xyz, r1.xyz, r2.xyz, r0.w, r1.w, manifoldMapBall(mi, r3), sigma, p, L);
+    return manifoldMappedTest(lo, hi, r0.xyz, r1.xyz, r2.xyz, r0.w, r1.w, manifoldMapBall(mi, r3), sigma, p, L,
+                              manifoldOriented());
 }
 
 // A cell's four texels' decoded normals as mapNormalAt reads them: c00, c10, c01, c11.
@@ -1975,11 +1978,13 @@ void manifoldPyramidBuild(uint3 id: SV_DispatchThreadID)
 // ---- step 2c's dump (render/rt/caustic_pass.hpp, OHAO_MANIFOLD_DUMP): one pixel's mapped requests, the cells their
 // walks reached, their draw's triangles and its map, for a CPU brute force. In causticStats from kManifoldDump: (the
 // frame dumped + 1, records, cells, the draw, its map, W, H, triangle slots, the first slot), the records (16 words: X,
-// L, the slope, the draw, slot | light << 8, the record, the pixel, the map), the cells (4 words: the record's place
-// among the dumped, the triangle slot, the cell), the draw's slots (48 words: p0 and whether the slot holds a triangle,
+// L, the slope, the draw, slot | light << 8, the record, the pixel, the map), each record's walk by level (12 words:
+// the pyramid nodes queued at levels 0 to 10, the cells), the cells (4 words: the record's place among the dumped, the
+// triangle slot, the cell), the draw's slots (48 words: p0 and whether the slot holds a triangle,
 // e1, e2, the side table's 9 rows), the map's texels (3 words: the decoded normal).
 static const uint kManifoldDump = 4096u;
 static const uint kManifoldDumpRecords = kManifoldDump + 16u;
+static const uint kManifoldDumpLevels = kManifoldDumpRecords + 64u;
 static const uint kManifoldDumpCells = kManifoldDump + 128u;
 static const uint kManifoldDumpCellCap = 262144u;
 static const uint kManifoldDumpTris = kManifoldDumpCells + 4u * kManifoldDumpCellCap;
@@ -2032,6 +2037,19 @@ void manifoldDumpCell(uint rec, uint4 item)
             causticStats[o + 2u] = item.z;
             causticStats[o + 3u] = item.w;
         }
+    }
+}
+
+// A dumped record's walk: `count` items queued at a pyramid level (11: cells).
+void manifoldDumpLevel(uint rec, uint level, uint count)
+{
+    if (count == 0u || causticStats[kManifoldDump] != pc.params.z + 1u) return;
+    const uint n = min(causticStats[kManifoldDump + 1u], 4u);
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        if (k >= n) break;
+        if (causticStats[kManifoldDumpRecords + 16u * k + 10u] == rec)
+            InterlockedAdd(causticStats[kManifoldDumpLevels + 12u * k + min(level, 11u)], count);
     }
 }
 
@@ -2321,7 +2339,7 @@ void manifoldWalkGroups()
         const uint gn = (db.y + g) * 4u;
         const float4 g0 = manifoldNodes[gn], g1 = manifoldNodes[gn + 1u], g2 = manifoldNodes[gn + 2u];
         if (mapped ? manifoldMappedNodeTest(db.y + g, g0.xyz, g1.xyz, mi, m.target, m.pX, m.L)
-                   : manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, m.pX, m.L, m.thetaS))
+                   : manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, m.pX, m.L, m.thetaS, true))
         {
             cFirst = g * kManifoldCluster;
             const uint cEnd = min(da.y, (g + 1u) * kManifoldCluster);
@@ -2400,8 +2418,9 @@ void manifoldWalkClusters()
 }
 
 // Walk, the sub-clusters' round: a sub-cluster's triangles (at most 16), those that pass the candidates. A mapped
-// draw's triangle is tested by its composed cone over its whole uv box, and one that passes becomes its footprint's
-// pyramid nodes (at most four a triangle: manifoldMapFootprint) in the pyramid queue's first segment.
+// draw's triangle is tested by the product hull of its three vertices' frames and the map's ball over its uv box
+// (manifoldMapHullTest), and one that passes becomes its footprint's pyramid nodes (at most four a triangle:
+// manifoldMapFootprint) in the pyramid queue's first segment.
 [shader("raygeneration")]
 void manifoldWalkSubs()
 {
@@ -2411,6 +2430,7 @@ void manifoldWalkSubs()
     const bool counted = (item.x & kManifoldCounted) != 0u;
     uint pass = 0u, tests = 0u, tFirst = 0u, outs = 0u, degenerate = 0u, beyond = 0u;
     bool mapped = false;
+    const bool oriented = manifoldOriented();
     ManifoldRecord m;
     ManifoldMapInfo mi = manifoldMapInfo(0u);
     if (live)
@@ -2434,10 +2454,10 @@ void manifoldWalkSubs()
             if (mapped)
             {
                 const ManifoldMapTri tri = manifoldMapTriAt(tFirst + k - sc * 16u, m.d);
-                const ManifoldMapRegion rg = manifoldMapRegionTri(tri);
                 const float4 box = manifoldUvBox(tri);
-                if (!manifoldMappedTest(rg.lo, rg.hi, rg.mt, rg.mb, rg.mn, rg.delta, rg.g, manifoldMapBall(mi, box),
-                                        m.target, m.pX, m.L))
+                const float4 ball = manifoldMapBall(mi, box);
+                float3 c[4] = { ball.xyz, ball.xyz, ball.xyz, ball.xyz };
+                if (!manifoldMapHullTest(tri, manifoldMapPolyTri(tri), c, 1u, ball.w, m.target, m.pX, m.L, oriented))
                     continue;
                 int l;
                 int4 n;
@@ -2447,7 +2467,9 @@ void manifoldWalkSubs()
                     continue;
                 }
                 pass |= 1u << (k - sc * 16u);
-                outs += (n.z != n.x ? 2u : 1u) * (n.w != n.y ? 2u : 1u);
+                const uint nodes = (n.z != n.x ? 2u : 1u) * (n.w != n.y ? 2u : 1u);
+                outs += nodes;
+                if (!counted && manifoldCounts[kMCDumpPixel] != 0xFFFFFFFFu) manifoldDumpLevel(rec, uint(l), nodes);
                 const float2 qa = tri.uv1 - tri.uv0, qb = tri.uv2 - tri.uv0;
                 const float scale = max(max(abs(qa.x), abs(qa.y)), max(abs(qb.x), abs(qb.y)));
                 if (!(abs(qa.x * qb.y - qa.y * qb.x) > 1e-10 * scale * scale) || !(scale > 0.0)) ++degenerate;
@@ -2507,9 +2529,10 @@ void manifoldWalkSubs()
 
 // The pyramid's round (step 2c), a level of mapped triangles' footprints a round, kManifoldPyramidRounds a pass (the
 // round's segment of the queue: manifoldSegment): a node's at most four children, or a leaf's at most
-// kManifoldPyramidLeaf^2 cells, each clipped to the triangle in uv (a child outside it dropped) and tested by its
-// composed cone (manifoldMappedTest: the region's box and frame, the child's ball or the cell's four texels'). A child
-// that passes goes to the next segment, a cell to the cells' queue. A node still above the leaves in the last round is
+// kManifoldPyramidLeaf^2 cells, each the part of the triangle whose uvs it holds (manifoldMapClip: a child outside the
+// triangle's uvs dropped) tested by the product hull (manifoldMapHullTest: the region's vertices' frames times the
+// child's ball or the cell's four texels; oriented unless kMCOriented is 0). A child that passes goes to the next
+// segment, a cell to the cells' queue. A node still above the leaves in the last round is
 // carried to the next pass untested.
 [shader("raygeneration")]
 void manifoldWalkPyramid()
@@ -2534,6 +2557,7 @@ void manifoldWalkPyramid()
     const bool defer = live && l > 0 && last;
     uint pass = 0u, tests = 0u;
     int2 cx = int2(0), cy = int2(0);
+    const bool oriented = manifoldOriented();
     if (live && !defer)
     {
         const ManifoldRecord m = manifoldRecord(rec);
@@ -2551,14 +2575,11 @@ void manifoldWalkPyramid()
                 if (ix >= cx.y || iy >= cy.y) continue;
                 ++tests;
                 const float2 ux = manifoldCellsUv(int2(ix, ix + 1), mi.W), uy = manifoldCellsUv(int2(iy, iy + 1), mi.H);
-                ManifoldMapRegion rg;
-                bool degenerate;
-                if (!manifoldMapClip(tri, float4(ux.x, uy.x, ux.y, uy.y), rg, degenerate)) continue;
+                ManifoldMapPoly poly;
+                if (!manifoldMapClip(tri, float4(ux.x, uy.x, ux.y, uy.y), poly)) continue;
                 float3 c[4];
                 manifoldCellTexels(mi, ix, iy, c);
-                if (manifoldCellHullTest(rg.lo, rg.hi, rg.mt, rg.mb, rg.mn, rg.delta, c[0], c[1], c[2], c[3], m.target,
-                                         m.pX, m.L))
-                    pass |= 1u << k;
+                if (manifoldMapHullTest(tri, poly, c, 4u, 0.0, m.target, m.pX, m.L, oriented)) pass |= 1u << k;
             }
         }
         else
@@ -2571,16 +2592,17 @@ void manifoldWalkPyramid()
                 if (nx.x >= nx.y || ny.x >= ny.y) continue;
                 ++tests;
                 const float2 ux = manifoldCellsUv(nx, mi.W), uy = manifoldCellsUv(ny, mi.H);
-                ManifoldMapRegion rg;
-                bool degenerate;
-                if (!manifoldMapClip(tri, float4(ux.x, uy.x, ux.y, uy.y), rg, degenerate)) continue;
-                if (manifoldMappedTest(rg.lo, rg.hi, rg.mt, rg.mb, rg.mn, rg.delta, rg.g, manifoldMapNode(mi, l - 1, CX, CY),
-                                       m.target, m.pX, m.L))
-                    pass |= 1u << k;
+                ManifoldMapPoly poly;
+                if (!manifoldMapClip(tri, float4(ux.x, uy.x, ux.y, uy.y), poly)) continue;
+                const float4 ball = manifoldMapNode(mi, l - 1, CX, CY);
+                float3 c[4] = { ball.xyz, ball.xyz, ball.xyz, ball.xyz };
+                if (manifoldMapHullTest(tri, poly, c, 1u, ball.w, m.target, m.pX, m.L, oriented)) pass |= 1u << k;
             }
         }
     }
     manifoldCountWave(kMCPyramidTests, counted ? 0u : tests);
+    if (live && !defer && !counted && manifoldCounts[kMCDumpPixel] != 0xFFFFFFFFu)
+        manifoldDumpLevel(rec, l == 0 ? 11u : uint(l - 1), countbits(pass));
     const uint stats = manifoldCounts[kMCRecordStats];
     if (stats != 0u && tests > 0u && !counted) InterlockedAdd(manifoldCounts[stats + 2u * rec + 1u], tests);
     const uint want = live && !defer ? countbits(pass) - start : 0u;

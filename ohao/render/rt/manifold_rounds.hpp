@@ -89,6 +89,9 @@ public:
     // Only the pixels on a grid of this step make requests (OHAO_MANIFOLD_SPARSE; 0 or 1: every pixel): step 2c's
     // measurement of requests whose walks a whole frame of could not hold.
     void setSparse(uint32_t step) noexcept { m_sparse = step; }
+    // The mapped walk keeps only a path's roots (h . H > 0: rt/manifold.slang, manifoldMapHullTest); off
+    // (OHAO_MANIFOLD_ORIENTED=0) it keeps either orientation, to measure what the sign prunes.
+    void setOriented(bool on) noexcept { m_oriented = on; }
     [[nodiscard]] uint32_t recordCapacity() const noexcept { return m_recordCap; }
 
     [[nodiscard]] VkBuffer records() const noexcept { return m_records.buffer; }
@@ -112,6 +115,7 @@ private:
     bool m_clearRecordStats{true};
     uint32_t m_dumpPixel{~0u};
     uint32_t m_sparse{0};
+    bool m_oriented{true};
     std::array<uint32_t, kQueues> m_caps{};
 };
 
