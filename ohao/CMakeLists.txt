@@ -1,3 +1,5 @@
+# ohao_machine (cmake/ohao_machine.cmake): the instruction set and floating point every engine target compiles with.
+include(${CMAKE_SOURCE_DIR}/cmake/ohao_machine.cmake)
 add_subdirectory(core)
 add_subdirectory(reflect)
 add_subdirectory(level)

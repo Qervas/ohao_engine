@@ -5,10 +5,9 @@ target_compile_definitions(ohao_physics PUBLIC GLM_ENABLE_EXPERIMENTAL)
 
 # Link Jolt Physics backend (modular - builds even if Jolt unavailable)
 if(TARGET Jolt)
-    # Public, though only the backend includes Jolt: its interface carries the machine flags (-mavx2 -mfma
-    # -mfpmath=sse ...) every engine and game target is compiled with; without them the slice's floating point
-    # contracts differently and every world.hash moves.
-    target_link_libraries(ohao_physics PUBLIC Jolt)
+    # Private: only the backend includes Jolt. The machine flags its interface carries are every engine target's
+    # already (ohao_machine, cmake/ohao_machine.cmake).
+    target_link_libraries(ohao_physics PRIVATE Jolt)
     target_compile_definitions(ohao_physics PRIVATE OHAO_HAS_JOLT=1)
     # JoltJobs derives from a Jolt class, and Jolt is built without RTTI.
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/private/backend/jolt/jolt_jobs.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")

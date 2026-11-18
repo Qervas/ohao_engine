@@ -8,9 +8,6 @@ target_include_directories(ohao_host PUBLIC ${CMAKE_SOURCE_DIR}/ohao ${CMAKE_SOU
 target_link_libraries(ohao_host PUBLIC
     ohao_runtime ohao_api ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_asset ohao_physics ohao_audio ohao_core
     ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
-if(TARGET Jolt)
-    target_link_libraries(ohao_host PUBLIC Jolt)
-endif()
 
 add_executable(ohao main.cpp doctor.cpp doctor.hpp)
 # doctor checks the slangc the shaders were built with (shaders/CMakeLists.txt's SLANGC), not whichever is on PATH.

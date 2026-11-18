@@ -19,9 +19,6 @@ function(ohao_example name)
             ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
         target_link_options(${name} PRIVATE -Wl,--allow-multiple-definition)
     endif()
-    if(TARGET Jolt)
-        target_link_libraries(${name} PRIVATE Jolt)
-    endif()
     add_dependencies(${name} shaders)   # every example renders: never with stale SPIR-V
 endfunction()
 
