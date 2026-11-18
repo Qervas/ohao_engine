@@ -871,10 +871,10 @@ int main(int argc, char** argv) {
         {"vfx", "vfx_sync_ms", vfxStep, vfxSyncMs, fmt("%zu frames, up to %zu effects drawn", vfxSyncMs.size(), vfxDrawn),
          {{"frames", vfxSyncMs.size()}, {"drawn", vfxDrawn}}},
         {"joints", "joints_step_ms", ragdollStep, jointsMs, fmt("%zu steps", jointsMs.size()), {{"steps", jointsMs.size()}}},
-        {"crowd", "crowd_step_ms", -1, crowdMs, fmt("%zu steps, %zu rounds fired, world.hash %016llx", crowdMs.size(), crowdShots,
+        {"crowd", "crowd_step_ms", currentStep, crowdMs, fmt("%zu steps, %zu rounds fired, world.hash %016llx", crowdMs.size(), crowdShots,
                                                     static_cast<unsigned long long>(crowdHash)),
          {{"steps", crowdMs.size()}, {"shots", crowdShots}, {"hash", fmt("%016llx", static_cast<unsigned long long>(crowdHash))}}},
-        {"crowd", "crowd_sync_ms", -1, crowdSyncMs, fmt("%zu syncs", crowdSyncMs.size()), {{"syncs", crowdSyncMs.size()}}},
+        {"crowd", "crowd_sync_ms", currentStep, crowdSyncMs, fmt("%zu syncs", crowdSyncMs.size()), {{"syncs", crowdSyncMs.size()}}},
     };
     std::printf("physics_bench (%d rounds after a warm-up)\n", rounds);
     nlohmann::json out;

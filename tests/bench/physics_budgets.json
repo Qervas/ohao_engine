@@ -1,5 +1,5 @@
 {
-  "comment": "Specs docs/specs/2026-10-26-player-physics-design.md, docs/specs/2026-10-27-combat-design.md, docs/specs/2026-10-27-feel-design.md and docs/specs/2026-10-28-animation-design.md, docs/specs/2026-10-28-vfx-design.md and docs/specs/2026-11-02-ragdoll-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat, feelStep for feel, animStep for animation, vfxStep for vfx, ragdollStep for joints and ragdolls). Changing a budget needs Frank's OK; the animation ones are the spec's proposals, OPEN ruling 16; vfx_step_ms is the vfx spec's proposal; joints_step_ms is the ragdoll spec's proposal, OPEN ruling 8, measured before it gates.",
+  "comment": "Specs docs/specs/2026-10-26-player-physics-design.md, docs/specs/2026-10-27-combat-design.md, docs/specs/2026-10-27-feel-design.md and docs/specs/2026-10-28-animation-design.md, docs/specs/2026-10-28-vfx-design.md and docs/specs/2026-11-02-ragdoll-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat, feelStep for feel, animStep for animation, vfxStep for vfx, ragdollStep for joints and ragdolls). Changing a budget needs Frank's OK; the animation ones are the spec's proposals, OPEN ruling 16; vfx_step_ms is the vfx spec's proposal; joints_step_ms is the ragdoll spec's proposal, OPEN ruling 8, measured before it gates. crowd_step_ms and crowd_sync_ms: step 4b-6's measurement (10 rounds, worst median 0.943 and 0.218 ms at the default thread count), with 1.27x and 1.37x over it.",
   "currentStep": 5,
   "combatStep": 3,
   "feelStep": 3,
@@ -23,7 +23,9 @@
     "blockout_rest_step_ms": { "max": 0.02, "gatedFrom": 1 },
     "events_1k_ms": { "max": 0.5, "gatedFrom": 1 },
     "player_step_ms": { "max": 0.1, "gatedFrom": 2 },
-    "boxes1k_step_ms": { "max": 4, "gatedFrom": 5 }
+    "boxes1k_step_ms": { "max": 4, "gatedFrom": 5 },
+    "crowd_step_ms": { "max": 1.2, "gatedFrom": 5 },
+    "crowd_sync_ms": { "max": 0.30, "gatedFrom": 5 }
   },
   "noise": { "maxCalibrationSlowdown": 1.25, "maxExternalCorePct": 50 }
 }
