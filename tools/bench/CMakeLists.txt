@@ -76,3 +76,9 @@ if(MSVC)
     target_link_options(feel_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
 add_dependencies(feel_bench shaders)
+
+# The job pool's costs (step 4b-1): spawn to run, a steal, a wake, parallelFor against a loop; --stress counts every
+# task run exactly once. CPU, headless.
+add_executable(job_bench job_bench.cpp)
+target_compile_features(job_bench PRIVATE cxx_std_20)
+target_link_libraries(job_bench PRIVATE ohao_core ohao_test_harness nlohmann_json::nlohmann_json)

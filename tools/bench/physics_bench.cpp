@@ -2,10 +2,10 @@
 // "Performance budgets").
 //
 //   physics_bench [--check budgets.json] [--out build/physics_bench.json] [--rounds N]
-//                 [--reference build/serve_bench_reference.json] [--only SCENARIO,...]
+//                 [--reference build/serve_bench_reference.json] [--only SCENARIO,...] [--threads N]
 //
 // --only runs the named scenarios (the names in main, before the first; each measure's line names its
-// own) and nothing else.
+// own) and nothing else. --threads sets the job pool's thread count (else OHAO_THREADS; OHAO_JOBS for the rest).
 //
 // Step 1 measures, CPU, headless, through the World as every host steps it (World::simulate):
 //   blockout_step_ms       one step of the blockout while its two crates fall and land (CrateA
@@ -50,6 +50,7 @@
 #include "ecs/audio_schedule.hpp"
 #include "ecs/world_hash.hpp"
 #include "engine/install.hpp"
+#include "core/jobs/pool.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -148,17 +149,19 @@ Verdict judge(const nlohmann::json& budgets, int currentStep, const std::string&
 
 int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/physics_bench.json", refPath = "build/serve_bench_reference.json";
+    int threads = 0;    // the job pool's (jobs::configFromEnvironment): the game thread and its workers
     std::string only;   // comma-separated scenarios (each block's name below); empty: all
     int rounds = 10;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
         else if (a == "--only" && i + 1 < argc) only = argv[++i];
+        else if (a == "--threads" && i + 1 < argc) threads = std::max(1, std::atoi(argv[++i]));
         else if (a == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (a == "--reference" && i + 1 < argc) refPath = argv[++i];
         else if (a == "--rounds" && i + 1 < argc) rounds = std::max(1, std::atoi(argv[++i]));
         else {
-            std::fprintf(stderr, "usage: physics_bench [--check budgets.json] [--out file] [--rounds N] [--reference file] [--only a,b]\n");
+            std::fprintf(stderr, "usage: physics_bench [--check budgets.json] [--out file] [--rounds N] [--reference file] [--only a,b] [--threads N]\n");
             return 2;
         }
     }
@@ -205,6 +208,7 @@ int main(int argc, char** argv) {
         }
         return false;
     };
+    jobs::configure(jobs::configFromEnvironment(threads));
     const double cal0 = bench::calibrationMs();
     bench::LoadMonitor monitor;
     monitor.start();

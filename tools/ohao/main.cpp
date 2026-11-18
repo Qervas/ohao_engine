@@ -14,10 +14,11 @@
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
 //                  [--denoise X] [--size WxH] [--post bloom,taa] [--ev100 EV] [--tonemap agx|neutral]
 //                  [--quality realtime|reference] [--hud] [--guiding] [--no-caustics] [--hdr out.pfm]]
-//                 [--save out.scene.json] [--frames K --uncapped [--size WxH] [--post bloom,taa]]
+//                 [--save out.scene.json] [--frames K --uncapped [--size WxH] [--post bloom,taa]] [--threads N]
 //                 --uncapped: after the steps and the script, K frames as fast as they go (headless, deferred), each
 //                 a fixed step, a sync and a render; prints {frames, frameMs, simulateMs, syncMs, recordMs, gpuMs,
-//                 hash}, each time {median, p95} (recordMs and gpuMs over the last 110 frames, the renderer's own)
+//                 hash}, each time {median, p95} (recordMs and gpuMs over the last 110 frames, the renderer's own).
+//                 --threads: the job pool's threads, the game thread and its workers (else OHAO_THREADS; all)
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
 //   ohao doctor  [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
@@ -55,6 +56,7 @@
 #include "game/module.hpp"
 #include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
+#include "core/jobs/pool.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
@@ -684,6 +686,9 @@ int cmdRun(const Args& a) {
         !numberOpt(a, "--ev100", err))
         return usage(err);
     if (has(a, "--dt") && !has(a, "--steps")) return usage("--dt needs --steps");
+    long long threads = 0;
+    if (!intOpt(a, "--threads", 1, 1024, threads, err)) return usage(err);
+    jobs::configure(jobs::configFromEnvironment(static_cast<int>(threads)));
     const bool render = has(a, "--render");
     const bool uncapped = has(a, "--uncapped");
     if (uncapped && (render || !has(a, "--frames"))) return usage("--uncapped needs --frames and no --render");
@@ -1019,7 +1024,7 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding", "--no-caustics", "--uncapped"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
                                   "--frames", "--denoise", "--size", "--post", "--ev100", "--tonemap", "--quality", "--hdr", "--save",
-                                  "--root"});
+                                  "--root", "--threads"});
         return a.error.empty() ? cmdRun(a) : usage(a.error);
     }
     if (cmd == "doctor") {
