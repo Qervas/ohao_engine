@@ -8,6 +8,7 @@
 #include <entt/entt.hpp>
 
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <span>
@@ -15,6 +16,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace ohao::jobs {
+class Graph;
+}
 
 namespace ohao::ecs {
 
@@ -38,7 +43,12 @@ class SystemContext;
 // installed them or when.
 //
 // Waves (step 4b): a phase runs as waves, each a run of consecutive systems in that order that conflict in nothing
-// (no component or resource one writes and another touches, no order between them, none exclusive). A system's
+// (no component or resource one writes and another touches, no order between them, none exclusive). A wave of
+// several runs on the job pool: the longest (by its measured mean) runs on the calling thread, any other whose mean is
+// at least kInlineUs goes to a worker, and the rest run on the calling thread in order; their events and defers wait in each system's stage (EventStage) and are flushed in
+// the systems' order once the wave has run, so the step is what one thread gives at any thread count. A wave of one
+// runs inline, unstaged. OHAO_WAVE_ORDER=reverse runs each wave's systems in reverse (a dependency the declarations
+// miss then shows as a different world.hash). A system's
 // access is its declaration plus what the handlers of the signals it writes write (onConstruct, onUpdate, onDestroy).
 // Checked at install: a cycle, two writers of one component or resource with no order between them, and a system
 // that declares nothing each throw std::logic_error and install nothing.
@@ -48,6 +58,10 @@ class SystemContext;
 // std::logic_error naming the system and the component.
 class World {
 public:
+    // A system shorter than this (its mean, measured) runs on the calling thread: a worker's wake (2.7 us measured in
+    // 4b-1) and the join cost what it would save.
+    static constexpr double kInlineUs = 5.0;
+
     using SimulateSystem = std::function<void(SystemContext&, float dt)>;
     using SyncSystem = std::function<void(SystemContext&)>;
 
@@ -286,6 +300,8 @@ private:
     };
     template <class S>
     void schedule(std::vector<S>& systems, std::vector<Wave>& waves, const char* kind, bool events);
+    template <class S, class... A>
+    void runWaves(std::vector<S>& systems, const std::vector<Wave>& waves, A... args);
     void scheduleSimulate();
     void scheduleSync();
     template <class S>
@@ -294,6 +310,9 @@ private:
     std::vector<Effect> m_effects;
     bool m_simulateDirty{true}, m_syncDirty{true};   // a system or an effect came or went since the phase's schedule
     bool m_check{false};
+    bool m_reverse{false};   // OHAO_WAVE_ORDER=reverse
+    double m_inlineUs{kInlineUs};   // OHAO_WAVE_INLINE_US, which exists to measure it
+    std::unique_ptr<jobs::Graph> m_graph;   // a wave's tasks
     std::vector<System<SimulateSystem>> m_simulate;   // in their order
     std::vector<System<SyncSystem>> m_sync;
     std::vector<Wave> m_simulateWaves, m_syncWaves;
@@ -423,6 +442,13 @@ private:
     std::string m_name;
     bool m_exclusive;
     bool m_check{false};
+    // Running in a wave of several: its emits and defers wait here until the wave's end.
+    bool m_staged{false};
+    bool m_dispatch{false};   // this wave, on a worker
+    EventStage m_stage;
+    std::vector<std::function<void(World&)>> m_deferred;
+    std::exception_ptr m_error;   // what it threw in its wave (rethrown after the wave, in order)
+    double m_meanUs{0.0};         // its time, a running mean (the inline rule)
     std::vector<TypeKey> m_reads;    // sorted: what it may read (its reads and writes, with its signals' effects)
     std::vector<TypeKey> m_writes;   // sorted
 };

@@ -2,11 +2,13 @@
 #include "ecs/fly_controller_system.hpp"
 #include "ecs/spin_system.hpp"
 #include "ecs/transform_system.hpp"
+#include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <random>
 #include <stdexcept>
@@ -45,7 +47,10 @@ glm::mat4 Transform::matrix() const {
            glm::scale(glm::mat4(1.0f), scale);
 }
 
-World::World() : m_idGen{randomSeed(), 0}, m_check(accessCheckFromEnvironment()) {
+World::World()
+    : m_idGen{randomSeed(), 0}, m_check(accessCheckFromEnvironment()), m_graph(std::make_unique<jobs::Graph>()) {
+    if (const char* order = std::getenv("OHAO_WAVE_ORDER")) m_reverse = std::string_view(order) == "reverse";
+    if (const char* us = std::getenv("OHAO_WAVE_INLINE_US")) m_inlineUs = std::atof(us);
     (void)m_events.writer<RestoreEvent>(kRestoreChannel, "world");   // its channel, before any restore
     onUpdate<Transform, &World::onTransformChanged>(this, {.writes = types<TransformDirty>()});
     // The id index follows EntityId on every path (World::destroy, registry().destroy,
@@ -632,12 +637,7 @@ void World::simulate(float dt) {
     m_events.beginStep(m_events.step() + 1);
     if (dt > 0.0f) m_stepDt = dt;
     try {
-        for (const Wave& w : m_simulateWaves)
-            for (uint32_t i = w.begin; i < w.end; ++i) {
-                auto& s = m_simulate[i];
-                const Running running(s.ctx.get());
-                s.fn(*s.ctx, dt);
-            }
+        runWaves(m_simulate, m_simulateWaves, dt);
     } catch (...) {
         m_events.endStep();
         m_deferred.clear();
@@ -653,8 +653,82 @@ void World::simulate(float dt) {
 }
 
 void World::defer(std::function<void(World&)> op) {
-    if (m_events.inStep()) m_deferred.push_back(std::move(op));
-    else op(*this);
+    if (!m_events.inStep()) {
+        op(*this);
+        return;
+    }
+    if (SystemContext* c = t_running; c && c->m_world == this && c->m_staged) c->m_deferred.push_back(std::move(op));
+    else m_deferred.push_back(std::move(op));
+}
+
+// Each wave in order. A wave of one runs here, unstaged. A wave of several: the longest runs here, the others at or
+// over the inline threshold go to the pool and the rest run here (in order, or reversed), each with its stage; after the join the stages are flushed in
+// the systems' order, and the first error in that order is rethrown (the later systems' stages dropped).
+template <class S, class... A>
+void World::runWaves(std::vector<S>& systems, const std::vector<Wave>& waves, A... args) {
+    const auto run = [&](S& s) {
+        SystemContext& c = *s.ctx;
+        const Running running(&c);
+        EventStage* const prev = currentStage();
+        setCurrentStage(c.m_staged ? &c.m_stage : nullptr);
+        const auto t0 = std::chrono::steady_clock::now();
+        try {
+            s.fn(c, args...);
+        } catch (...) {
+            c.m_error = std::current_exception();
+        }
+        const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+        c.m_meanUs += (us - c.m_meanUs) * 0.125;
+        setCurrentStage(prev);
+    };
+    for (const Wave& w : waves) {
+        if (w.end - w.begin == 1) {   // alone: unstaged and untimed (its time decides nothing)
+            S& s = systems[w.begin];
+            s.ctx->m_staged = false;
+            const Running running(s.ctx.get());
+            s.fn(*s.ctx, args...);
+            continue;
+        }
+        const uint32_t n = w.end - w.begin;
+        const auto at = [&](uint32_t k) -> S& { return systems[m_reverse ? w.end - 1 - k : w.begin + k]; };
+        // The longest stays here: the others' handoffs then overlap it.
+        uint32_t longest = 0;
+        for (uint32_t k = 1; k < n; ++k)
+            if (at(k).ctx->m_meanUs > at(longest).ctx->m_meanUs) longest = k;
+        bool dispatched = false;
+        for (uint32_t k = 0; k < n; ++k) {
+            S& s = at(k);
+            s.ctx->m_staged = true;
+            s.ctx->m_dispatch = k != longest && s.ctx->m_meanUs >= m_inlineUs;
+            if (s.ctx->m_dispatch) {
+                S* sp = &s;
+                m_graph->add(s.name.c_str(), [&run, sp] { run(*sp); });
+                dispatched = true;
+            }
+        }
+        m_events.setStaging(true);   // before the tasks are submitted: the submit publishes it to the workers
+        jobs::Counter* done = dispatched ? &m_graph->run() : nullptr;
+        for (uint32_t k = 0; k < n; ++k)
+            if (S& s = at(k); !s.ctx->m_dispatch) run(s);
+        if (done) jobs::wait(*done);
+        m_events.setStaging(false);
+        std::exception_ptr error;
+        for (uint32_t i = w.begin; i < w.end; ++i) {
+            SystemContext& c = *systems[i].ctx;
+            c.m_staged = false;
+            if (!error && c.m_error) error = c.m_error;
+            c.m_error = nullptr;
+            if (error) {
+                c.m_stage.clear();
+                c.m_deferred.clear();
+                continue;
+            }
+            c.m_stage.flush();
+            for (auto& op : c.m_deferred) m_deferred.push_back(std::move(op));
+            c.m_deferred.clear();
+        }
+        if (error) std::rethrow_exception(error);
+    }
 }
 
 void World::sync() {
@@ -671,12 +745,7 @@ void World::sync() {
     }
 #endif
     if (m_syncDirty) scheduleSync();
-    for (const Wave& w : m_syncWaves)
-        for (uint32_t i = w.begin; i < w.end; ++i) {
-            auto& s = m_sync[i];
-            const Running running(s.ctx.get());
-            s.fn(*s.ctx);
-        }
+    runWaves(m_sync, m_syncWaves);
 }
 
 bool World::runSync(std::string_view name) {

@@ -333,9 +333,10 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
                       {.after = {"physics"}, .reads = types<Animator, AnimParams>(), .writes = types<Animator, AnimParams>(),
                        .writesResources = {"animation"}, .exclusive = true});
     // The pose: after the drawn poses of what the step moved (a game's view model declares itself before it); the
-    // render extract declares itself after it. Exclusive: it emplaces and removes poses as animators come and go.
+    // render extract declares itself after it. After the transforms too, which a world without physics (and so
+    // without interpolate) would otherwise leave unordered against it. Exclusive: it emplaces and removes poses as animators come and go.
     world.addSync("pose", [system](SystemContext& c) { system->pose(c.world()); },
-                  {.after = {"interpolate"},
+                  {.after = {"transform", "interpolate"},
                    .reads = types<Animator, AnimParams, SkinnedMesh, MeshSource, JointAttach, Parent, Children, Transform,
                                   WorldTransform>(),
                    .writes = types<AnimPose, RenderPose, RenderDirty>(), .readsResources = {"animation"},

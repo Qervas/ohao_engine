@@ -5,6 +5,24 @@
 
 namespace ohao::ecs {
 
+namespace {
+thread_local EventStage* t_stage = nullptr;
+} // namespace
+
+EventStage* currentStage() noexcept { return t_stage; }
+void setCurrentStage(EventStage* stage) noexcept { t_stage = stage; }
+
+void EventStage::flush() {
+    std::vector<Staged> events = std::move(m_events);
+    m_events.clear();
+    for (const Staged& s : events) s.emit(*s.channel, s.value);
+}
+
+void EventStage::clear() {
+    for (const Staged& s : m_events) s.drop(s.value);
+    m_events.clear();
+}
+
 std::size_t EventChannelBase::after(uint64_t since) const noexcept {
     std::size_t lo = 0, hi = size();
     while (lo < hi) {

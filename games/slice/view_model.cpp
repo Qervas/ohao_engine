@@ -271,7 +271,7 @@ void installViewModel(World& world) {
     auto system = std::make_shared<ViewModelSystem>(state);
     // The gun follows the drawn camera, and the arms' pose follows the gun.
     world.addSync("view_model", [system](SystemContext& c) { system->run(c); },
-                  {.after = {"interpolate"}, .before = {"pose"},
+                  {.after = {"transform", "interpolate"}, .before = {"pose"},
                    .reads = types<ViewModel, Transform, Parent, Children, Camera, WorldTransform, PlayerState, WeaponState,
                                   Weapon, JointAttach>(),
                    .writes = types<DrawnFov, RenderPose, RenderDirty>()});

@@ -12,6 +12,11 @@ an enemy, a reload, a grenade thrown and left to explode. Every command is recor
      the start. Both loads pass the same `seed`: entity ids are drawn from std::random_device otherwise
      (ohao/ecs/world.hpp), and world.hash includes the id generator's state.
 
+The two processes run the step two ways (step 4b-5): the first on one thread (OHAO_THREADS=1), the systems of each
+wave in order; the fresh one on every thread, each wave's systems reversed (OHAO_WAVE_ORDER=reverse), every system
+but a wave's longest on the pool (OHAO_WAVE_INLINE_US=0), and the access check on (OHAO_ACCESS_CHECK=1). Equal
+hashes then prove the thread count, the order within a wave and the declarations together.
+
 world.hash covers every saved component (transforms, health, weapons, AI, animators), every system's
 registered state (physics' simulation, combat's grenades and round, the audio schedule, vfx) and the input,
 so physics, combat, the enemy AI and animation must all replay bit for bit. The test also checks that the
@@ -37,6 +42,11 @@ TMP = os.path.join(ROOT, "build", "replay_tmp", str(os.getpid()))
 SCENE = "assets/scenes/blockout_play.scene.json"
 SEED = "0000000020261108"   # entity ids from a fixed seed (16 hex digits), else from std::random_device
 
+# How each process runs the step (the module docstring).
+ONE_THREAD = {"OHAO_THREADS": "1", "OHAO_WAVE_ORDER": "natural"}
+EVERY_THREAD_REVERSED = {"OHAO_THREADS": "0", "OHAO_WAVE_ORDER": "reverse", "OHAO_WAVE_INLINE_US": "0",
+                         "OHAO_ACCESS_CHECK": "1"}
+
 failures = []
 passed = 0
 
@@ -54,11 +64,12 @@ def check(cond, what):
 class Serve:
     """`ohao serve` (headless) over stdio, MCP: one JSON-RPC message per line each way."""
 
-    def __init__(self):
+    def __init__(self, env):
         os.makedirs(TMP, exist_ok=True)
         self.err = open(os.path.join(TMP, "serve.stderr.txt"), "wb")
         self.proc = subprocess.Popen([OHAO, "serve", "--out", os.path.relpath(TMP, ROOT)], cwd=ROOT,
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err)
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err,
+                                     env=dict(os.environ, **env))
         self.lines = queue.Queue()
         self.next_id = 0
         threading.Thread(target=self._pump, daemon=True).start()
@@ -197,7 +208,7 @@ def main():
         return 1
     shutil.rmtree(TMP, ignore_errors=True)
     print("replay_test (requirement 4: gameplay replays exactly)")
-    s = Serve()
+    s = Serve(ONE_THREAD)
     try:
         s.tool("scene_load", {"path": SCENE, "replace": True, "seed": SEED})
         start_hash = hash_of(s)
@@ -246,8 +257,8 @@ def main():
     if failures:
         return finish()
 
-    # 2. A new process: load, then every command again.
-    s = Serve()
+    # 2. A new process, every thread, the waves reversed: load, then every command again.
+    s = Serve(EVERY_THREAD_REVERSED)
     try:
         s.tool("scene_load", {"path": SCENE, "replace": True, "seed": SEED})
         check(hash_of(s) == start_hash, "a new process's load has the first load's world.hash")

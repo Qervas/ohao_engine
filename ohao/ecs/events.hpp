@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -69,6 +70,42 @@ struct Cue {
 };
 
 class EventLog;
+class EventChannelBase;
+
+// What a system emits while it runs in a wave of several (World, step 4b-5): the events wait here, in the order it
+// emitted them, and the World flushes the wave's stages in the systems' order once the wave has run, so every event's
+// seq and its place in its channel are what one thread running the systems in order gives. An emit into a stage
+// returns 0 (its seq is taken at the flush).
+class EventStage {
+public:
+    EventStage() = default;
+    EventStage(const EventStage&) = delete;
+    EventStage& operator=(const EventStage&) = delete;
+    ~EventStage() { clear(); }
+
+    template <class T>
+    void add(EventChannelBase& channel, T value) {
+        m_events.push_back({&channel, new T(std::move(value)), &emitStaged<T>, [](void* v) { delete static_cast<T*>(v); }});
+    }
+    void flush();   // emits every event in order, then holds none
+    void clear();   // drops them unemitted (a system that threw)
+
+private:
+    template <class T>
+    static void emitStaged(EventChannelBase& channel, void* value);
+    struct Staged {
+        EventChannelBase* channel;
+        void* value;
+        void (*emit)(EventChannelBase&, void*);
+        void (*drop)(void*);
+    };
+    std::vector<Staged> m_events;
+};
+
+// The stage this thread's emits go to (null: straight to their channels). The World sets it around a system it runs
+// in a wave of several.
+[[nodiscard]] EventStage* currentStage() noexcept;
+void setCurrentStage(EventStage* stage) noexcept;
 
 // A channel's untyped side: the log, the API (which writes payloads through reflection) and world.hash.
 class EventChannelBase {
@@ -128,7 +165,7 @@ public:
     EventChannel(EventLog& log, std::string name, uint32_t index)
         : EventChannelBase(log, std::move(name), typeKey<T>(), index) {}
 
-    uint64_t emit(T value);   // its seq
+    uint64_t emit(T value);   // its seq (0 when it goes to the thread's stage: taken when the stage is flushed)
     [[nodiscard]] bool cue(std::size_t i, Cue& out) const override {
         if (!m_cue) return false;
         out = m_cue(at(i).value);
@@ -167,10 +204,12 @@ private:
         return out;
     }
     void emitSaved(const void* saved, std::size_t i) override {
-        emit(static_cast<const std::vector<T>*>(saved)->at(i));
+        emitNow(static_cast<const std::vector<T>*>(saved)->at(i));
     }
 
     friend class EventLog;
+    friend class EventStage;
+    uint64_t emitNow(T value);
     std::vector<Event<T>> m_held;
     std::size_t m_front{0};
     CueFn<T> m_cue{nullptr};   // the projection the engine's data binds to (a game's channels)
@@ -237,10 +276,13 @@ public:
         return EventReader<T>(&c);
     }
     // A system that reads a channel through its cues (an engine system bound by data): named among its cue readers,
-    // for the catalogue. False when no such channel exists yet.
+    // for the catalogue. False when no such channel exists yet. Safe from two systems of one wave at once.
     bool addReader(std::string_view name, std::string_view system) {
         const EventChannelBase* c = find(name);
-        if (c) addName(const_cast<EventChannelBase*>(c)->m_cueReaders, system);
+        if (c) {
+            const std::lock_guard lock(m_catalogue);
+            addName(const_cast<EventChannelBase*>(c)->m_cueReaders, system);
+        }
         return c != nullptr;
     }
     // The channel, or null (none of that name, or another payload type).
@@ -273,6 +315,9 @@ public:
     // The World's step (World::steps()): what an event is stamped with, the next one's between steps.
     [[nodiscard]] uint64_t step() const noexcept { return m_step; }
     [[nodiscard]] bool inStep() const noexcept { return m_inStep; }
+    // Whether a wave of several runs now (World): only then does an emit look for its thread's stage.
+    [[nodiscard]] bool staging() const noexcept { return m_staging; }
+    void setStaging(bool on) noexcept { m_staging = on; }
     void beginStep(uint64_t step) noexcept {
         m_step = step;
         m_inStep = true;
@@ -303,11 +348,30 @@ private:
     uint64_t m_windowSeq{1};        // the step's first event
     uint64_t m_step{0};
     bool m_inStep{false};
+    bool m_staging{false};
     uint64_t m_topology{0};
+    std::mutex m_catalogue;   // the cue readers, which systems of one wave name at once
 };
 
 template <class T>
+void EventStage::emitStaged(EventChannelBase& channel, void* value) {
+    T* v = static_cast<T*>(value);
+    static_cast<EventChannel<T>&>(channel).emitNow(std::move(*v));
+    delete v;
+}
+
+template <class T>
 uint64_t EventChannel<T>::emit(T value) {
+    if (m_log.staging()) [[unlikely]]
+        if (EventStage* stage = currentStage()) {
+            stage->add(*this, std::move(value));
+            return 0;
+        }
+    return emitNow(std::move(value));
+}
+
+template <class T>
+uint64_t EventChannel<T>::emitNow(T value) {
     const EventMeta meta = m_log.stamp(index());
     m_held.push_back(Event<T>{meta, std::move(value)});
     return meta.seq;
