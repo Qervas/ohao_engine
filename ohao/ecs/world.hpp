@@ -5,7 +5,7 @@
 #include "ecs/system.hpp"
 
 #include <ankerl/unordered_dense.h>
-#include <entt/entt.hpp>
+#include <entt/entity/registry.hpp>
 
 #include <cstdint>
 #include <exception>

@@ -42,7 +42,7 @@
 #include "physics/components.hpp"
 #include "physics/events.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/registry.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 

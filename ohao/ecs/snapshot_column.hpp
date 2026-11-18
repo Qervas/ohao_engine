@@ -7,7 +7,7 @@
 #include "reflect/hash.hpp"
 #include "reflect/type_info.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/registry.hpp>
 
 #include <algorithm>
 #include <cstdint>

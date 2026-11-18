@@ -14,7 +14,6 @@
 #include "slice/combat.hpp"
 #include "slice/components.hpp"
 
-#include <entt/entt.hpp>
 
 #include <cstdint>
 #include <span>

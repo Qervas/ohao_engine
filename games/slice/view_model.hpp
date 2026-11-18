@@ -10,7 +10,7 @@
 // and resets the motion; a round's restart resets it too.
 #include "slice/components.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>

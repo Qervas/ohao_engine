@@ -4,7 +4,7 @@
 #include "ecs/components.hpp"
 #include "visual/components.hpp"   // ModelAsset: a CollisionMesh's
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>

@@ -1,7 +1,7 @@
 #pragma once
 #include "ecs/system.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/registry.hpp>
 #include <cstddef>
 #include <vector>
 

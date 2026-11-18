@@ -34,7 +34,7 @@
 #include "ecs/events.hpp"
 #include "ecs/snapshot_hook.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <cstddef>

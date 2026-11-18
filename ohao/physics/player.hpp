@@ -1,7 +1,7 @@
 #pragma once
 // The player (step 3f): the input-driven PlayerController on a stream with the lowest id. One rule, one place:
 // the listener, the HUD, the effects, the enemies' target, the round and the grenade ask here.
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 
 #include <cstddef>
 

@@ -5,7 +5,7 @@
 // the declaration.
 #include "core/type_key.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/registry.hpp>
 
 #include <string>
 #include <string_view>

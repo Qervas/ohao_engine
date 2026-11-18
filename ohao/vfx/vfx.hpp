@@ -17,7 +17,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "vfx/effects/vfx_set.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <array>

@@ -2,7 +2,7 @@
 #include "core/input.hpp"          // Key
 #include "reflect/asset_ref.hpp"   // a plain struct; no reflection machinery
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 

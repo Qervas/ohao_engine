@@ -11,7 +11,7 @@
 #include "game/api.hpp"
 
 #include <glm/glm.hpp>
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 
 #include <cstddef>
 #include <cstdint>

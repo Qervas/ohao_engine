@@ -10,7 +10,7 @@
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/registry.hpp>
 
 #include <cstdint>
 #include <memory>

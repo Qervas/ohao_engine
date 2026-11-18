@@ -19,7 +19,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>
