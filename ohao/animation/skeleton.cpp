@@ -173,9 +173,17 @@ void skinPalette(const Skeleton& skeleton, std::span<const glm::mat4> model, std
     palette.resize(boneToJoint.size());
     for (std::size_t b = 0; b < boneToJoint.size(); ++b) {
         const int j = boneToJoint[b];
-        palette[b] = j >= 0 && j < static_cast<int>(model.size())
-                         ? model[static_cast<std::size_t>(j)] * skeleton.joints[static_cast<std::size_t>(j)].inverseBind
-                         : glm::mat4(1.0f);
+        if (j < 0 || j >= static_cast<int>(model.size())) {
+            palette[b] = glm::mat4(1.0f);
+            continue;
+        }
+        // glm's mat4 product, column by column in its order (the same bits): written out, the operands are loaded as
+        // vectors. Through glm's operator* under the machine flags (AVX2, FMA) GCC rebuilt each model matrix from
+        // general registers, at twice the time of the SSE build.
+        const glm::mat4& m = model[static_cast<std::size_t>(j)];
+        const glm::mat4& ib = skeleton.joints[static_cast<std::size_t>(j)].inverseBind;
+        glm::mat4& out = palette[b];
+        for (int c = 0; c < 4; ++c) out[c] = m[0] * ib[c][0] + m[1] * ib[c][1] + m[2] * ib[c][2] + m[3] * ib[c][3];
     }
 }
 
