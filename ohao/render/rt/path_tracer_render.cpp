@@ -668,9 +668,9 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                         if (p == 0 && region == 7) stage("pt.manifold.connect");
                         if (p == 1 && r == 0) stage("pt.manifold.carry");
                         // A pyramid round's segment, pushed with the batch and pass (pc.jitter.z's high byte); the
-                        // solve's queue the same way (1: the cells', 0: the candidates').
-                        const uint32_t seg = region == 4 ? r - 4 : region == 5 ? 1u : 0u;
-                        if (region == 4 || region == 5 || region == 6) {
+                        // rounds after them with none.
+                        const uint32_t seg = region == 4 ? r - 4 : 0u;
+                        if (region == 4 || region == 5) {
                             const uint32_t bps = bp | seg << 24;
                             vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bps, &bps);
                         }
@@ -689,7 +689,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                                                   : region == 6 ? R::argsOffset(b, p, R::Candidates)
                                                   : region == 7 ? R::argsOffset(b, p, R::Roots)
                                                                 : R::argsOffset(b, p, static_cast<R::Queue>(r));
-                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[region < 6 ? region : region - 1],
+                        vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[region],
                                                   &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
                                                   counts + args);
                     }

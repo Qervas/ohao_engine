@@ -19,24 +19,21 @@
 // F many times over). The resultant was refused (T2: its determinant underflows fp32 and a fifth of the roots are lost).
 //
 // What is solved exactly: the fp32 grids, the cell as the GPU holds it, as fp32 vertex positions are the mesh. Their
-// distance from the double polynomials is bounded (mu: the same construction on the inputs' absolute values times a
-// count of roundings) and measured (m11_poly_matches_map: at most 5.5 roundings); it moves a root by |Y| mu, as fp32
-// positions do, and is not the solver's to remove: kept as Krawczyk's margin it blurred ill-conditioned roots wider than
-// any box that could certify them (m12: 8% of cells undecided). The solver's own arithmetic (a box's extraction, the
-// evaluations) is bounded and kept as a margin in every test, so it never excludes a root of the grids. A root reported
-// is checked afterwards (in the cell, on the triangle, physical).
+// distance from the polynomials of the same inputs in double moves a root by |Y| times it; kept as Krawczyk's margin it
+// blurred ill-conditioned roots wider than any box that could certify them (m12: 8% of cells undecided), so it is made
+// small instead: d = y - p is formed from p0 - p (exact when the receiver is near the triangle, Sterbenz) plus the
+// edges, so its rounding is relative to |y - p|, not to |y|. Formed as y - p, a receiver 0.02 from a triangle 2.3 from
+// the origin moved a root 3.7e-5 of the triangle's side, across its edge (the showcase's one root missed in 139,331).
+// The solver's own arithmetic (a box's extraction, the evaluations) is bounded and kept as a margin in every test, so
+// it never excludes a root of the grids. A root reported is checked afterwards (in the cell, on the triangle,
+// physical).
 
 import rt.manifold;
 import rt.manifold_cert;
 
 static const float kPolyUlp = 5.9604645e-8;   // 2^-24: fp32's unit roundoff
-// Roundings a coefficient's error is bounded by, in units of kPolyUlp times its terms' magnitude (the same construction
-// on the inputs' absolute values). m11_poly_matches_map measures the fp32 grids against their double ones: at most 5.5
-// (0.0107 of a bound of 512, 600 cells); 64 keeps ten times that. A bound too tight could exclude a root; too loose, it
-// keeps boxes near a root from certifying (K's radius is at least |Y| times it).
-static const float kPolyRoundings = 64.0;
-// Roundings of a box's extraction from the cell's grid (two de Casteljau passes of 5 levels a direction), in units of
-// kPolyUlp times the cell grid's largest coefficient.
+// Roundings of a box's extraction from the cell's grid (two de Casteljau passes of N <= 5 levels a direction), in units
+// of kPolyUlp times the cell grid's largest coefficient.
 static const float kPolyExtractRoundings = 24.0;
 static const uint kPolyMaxRoots = 8u;
 static const uint kPolyStack = 64u;
@@ -114,13 +111,6 @@ BPoly bElevate(BPoly a)
     BPoly one = bZero(1, 1);
     for (int k = 0; k < 36; ++k) one.c[k] = 1.0;
     return bMul<1, 1>(a, one);
-}
-
-BPoly bAbs(BPoly a)
-{
-    BPoly r = a;
-    for (int k = 0; k < 36; ++k) r.c[k] = abs(a.c[k]);
-    return r;
 }
 
 float bMaxAbs(BPoly a)
@@ -226,17 +216,16 @@ BPoly bDerivative(BPoly a, int axis)
 
 // ---- the cell -----------------------------------------------------------------------------------------------------
 
-// What the solver and the checks at a root need of a cell: F1, F2 over [0, 1]^2 with their rounding bounds, and the
-// corner values the polynomials were made from ((s, t) = (0, 0), (1, 0), (0, 1), (1, 1)), to check a root in fp32.
+// What the solver and the checks at a root need of a cell: F1, F2 over [0, 1]^2, and the corner values the polynomials
+// were made from ((s, t) = (0, 0), (1, 0), (0, 1), (1, 1)), to check a root in fp32.
 struct CellPoly
 {
     BPoly F1, F2;
     BPoly D1s, D1t, D2s, D2t;  // their derivatives over the cell (cell units): a box's Jacobian is extracted from these
-    float mu1, mu2;            // bounds on each grid's coefficients' rounding (absolute)
     float2 mF;                 // the largest coefficient of F1, F2 and of their derivatives' grids
     float4 mD;
-    float3 y[4], vN[4], vT[4], vB[4], tn[4];
-    float3 p, L, a, b;
+    float3 d[4], vN[4], vT[4], vB[4], tn[4];   // d: y - p, the surface point less the receiver
+    float3 L, a, b;
     float2 sigma;
     float2 o, ds, dt;          // the triangle's (u, v) = o + ds s + dt t
 }
@@ -267,13 +256,12 @@ void polyFrameAt(ManifoldMappedTri m, float2 uv, out float3 n, out float3 t, out
 }
 
 // r = d (h . h) - 2 (d . h) h at (s, t), from the corner values, in fp32: the checks at a root.
-float3 polyReflectAt(CellPoly cp, float2 st, out float3 h, out float3 y)
+float3 polyReflectAt(CellPoly cp, float2 st, out float3 h, out float3 d)
 {
-    y = polyCorner(cp.y, st);
+    d = polyCorner(cp.d, st);
     const float3 n = polyCorner(cp.vN, st), t = polyCorner(cp.vT, st), b = polyCorner(cp.vB, st);
     const float3 tn = polyCorner(cp.tn, st);
     h = tn.x * t + tn.y * b + tn.z * n - cp.sigma.x * t - cp.sigma.y * b;
-    const float3 d = y - cp.p;
     return d * dot(h, h) - 2.0 * dot(d, h) * h;
 }
 
@@ -295,9 +283,9 @@ bool polyCellAffine(ManifoldMappedTri m, float2 origin, float2 size, out float2 
 
 // The cell's polynomials for the slope sigma: the triangle m, its cell's texels' tangent-space normals at (s, t) = (0,
 // 0), (1, 0), (0, 1), (1, 1), the texture coordinates of the cell's (0, 0) and a texel's size, the receiver p and the
-// sun's direction L. False when the triangle's texture coordinates are degenerate.
-bool cellPolyOf(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 c11, float2 origin, float2 size,
-                float3 p, float3 L, float2 sigma, out CellPoly cp)
+// sun's direction L. False when the triangle's texture coordinates are degenerate. N: the grids' degree (cellPolyGrids).
+bool cellPolyOf<let N : int>(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 c11, float2 origin,
+                             float2 size, float3 p, float3 L, float2 sigma, out CellPoly cp)
 {
     cp.F1 = bZero(5, 5);
     cp.F2 = cp.F1;
@@ -305,11 +293,8 @@ bool cellPolyOf(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 
     cp.D1t = cp.F1;
     cp.D2s = cp.F1;
     cp.D2t = cp.F1;
-    cp.mu1 = 0.0;
     cp.mF = float2(0.0);
     cp.mD = float4(0.0);
-    cp.mu2 = 0.0;
-    cp.p = p;
     cp.L = L;
     cp.sigma = sigma;
     cp.o = float2(0.0);
@@ -317,7 +302,7 @@ bool cellPolyOf(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 
     cp.dt = float2(0.0);
     for (int k = 0; k < 4; ++k)
     {
-        cp.y[k] = float3(0.0);
+        cp.d[k] = float3(0.0);
         cp.vN[k] = float3(0.0);
         cp.vT[k] = float3(0.0);
         cp.vB[k] = float3(0.0);
@@ -329,15 +314,16 @@ bool cellPolyOf(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 
     cp.a = normalize(abs(L.x) < 0.7 ? cross(L, float3(1.0, 0.0, 0.0)) : cross(L, float3(0.0, 1.0, 0.0)));
     cp.b = cross(L, cp.a);
     if (!polyCellAffine(m, origin, size, cp.o, cp.ds, cp.dt)) return false;
+    const float3 q0 = m.tri.p0 - p;
     for (int k = 0; k < 4; ++k)
     {
         const float2 st = float2(float(k & 1), float(k >> 1));
         const float2 uv = cp.o + cp.ds * st.x + cp.dt * st.y;
-        cp.y[k] = m.tri.p0 + m.tri.e1 * uv.x + m.tri.e2 * uv.y;
+        cp.d[k] = q0 + m.tri.e1 * uv.x + m.tri.e2 * uv.y;
         polyFrameAt(m, uv, cp.vN[k], cp.vT[k], cp.vB[k]);
     }
     BPoly F1, F2;
-    cellPolyGrids<false>(cp, F1, F2);
+    cellPolyGrids<N>(cp, F1, F2);
     cp.F1 = F1;
     cp.F2 = F2;
     cp.D1s = bDerivative(cp.F1, 0);
@@ -350,58 +336,48 @@ bool cellPolyOf(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 
 }
 
 // F1 = (d . a)(h . h) - 2 (d . h)(h . a) and F2 (with b) over the cell, from the corner values, at one call site (each is
-// compiled whole); MAGNITUDE: the same construction on every input's absolute value, each coefficient's terms'
-// magnitudes, the scale of its rounding (the CPU twin's alone: a generic, so the GPU never compiles it).
-void cellPolyGrids<let MAGNITUDE : bool>(CellPoly cp, out BPoly F1, out BPoly F2)
+// compiled whole), of degree N = 2 H + 1 a side, H h's. N = 5: a cell of a map, h = tn . (vT, vB, vN) - sigma . (vT,
+// vB) the product of two bilinear blends. N = 3: a cell whose four texels are equal (a plain triangle's, all (0, 0, 1)),
+// where h is the bilinear blend of its corner values, so F is of degree 3: its grids are its true degree, not degree
+// 5's elevation of it (about a third of the products and a quarter of a box's extraction: the showcase's plain solve at
+// 320x180 6.9 -> 2.4 ms).
+void cellPolyGrids<let N : int>(CellPoly cp, out BPoly F1, out BPoly F2)
 {
-    BPoly hh = bZero(4, 4), dh = bZero(3, 3), ha = bZero(2, 2), hb = bZero(2, 2), da = bZero(1, 1), db = bZero(1, 1);
+    static const int H = (N - 1) / 2;
+    BPoly hh = bZero(2 * H, 2 * H), dh = bZero(H + 1, H + 1), ha = bZero(H, H), hb = bZero(H, H), da = bZero(1, 1);
+    BPoly db = bZero(1, 1);
     for (int c = 0; c < 3; ++c)
     {
-        BPoly T = bBilinear(cp.vT[0][c], cp.vT[1][c], cp.vT[2][c], cp.vT[3][c]);
-        BPoly B = bBilinear(cp.vB[0][c], cp.vB[1][c], cp.vB[2][c], cp.vB[3][c]);
-        BPoly N = bBilinear(cp.vN[0][c], cp.vN[1][c], cp.vN[2][c], cp.vN[3][c]);
-        BPoly tx = bBilinear(cp.tn[0].x, cp.tn[1].x, cp.tn[2].x, cp.tn[3].x);
-        BPoly ty = bBilinear(cp.tn[0].y, cp.tn[1].y, cp.tn[2].y, cp.tn[3].y);
-        BPoly tz = bBilinear(cp.tn[0].z, cp.tn[1].z, cp.tn[2].z, cp.tn[3].z);
-        BPoly d = bBilinear(cp.y[0][c] - cp.p[c], cp.y[1][c] - cp.p[c], cp.y[2][c] - cp.p[c], cp.y[3][c] - cp.p[c]);
-        float2 sg = -cp.sigma;
-        float ac = cp.a[c], bc = cp.b[c];
-        if (MAGNITUDE)
+        const BPoly T = bBilinear(cp.vT[0][c], cp.vT[1][c], cp.vT[2][c], cp.vT[3][c]);
+        const BPoly B = bBilinear(cp.vB[0][c], cp.vB[1][c], cp.vB[2][c], cp.vB[3][c]);
+        const BPoly Nm = bBilinear(cp.vN[0][c], cp.vN[1][c], cp.vN[2][c], cp.vN[3][c]);
+        const BPoly tx = bBilinear(cp.tn[0].x, cp.tn[1].x, cp.tn[2].x, cp.tn[3].x);
+        const BPoly ty = bBilinear(cp.tn[0].y, cp.tn[1].y, cp.tn[2].y, cp.tn[3].y);
+        const BPoly tz = bBilinear(cp.tn[0].z, cp.tn[1].z, cp.tn[2].z, cp.tn[3].z);
+        const BPoly d = bBilinear(cp.d[0][c], cp.d[1][c], cp.d[2][c], cp.d[3][c]);
+        const float2 sg = -cp.sigma;
+        const float ac = cp.a[c], bc = cp.b[c];
+        BPoly h;
+        if (H == 2)
+            h = bAxpy(bAxpy(bAxpy(bMul<1, 1>(tx, T), 1.0, bMul<1, 1>(ty, B)), 1.0, bMul<1, 1>(tz, Nm)), 1.0,
+                      bElevate(bAxpy(bAxpy(bZero(1, 1), sg.x, T), sg.y, B)));
+        else
         {
-            T = bAbs(T);
-            B = bAbs(B);
-            N = bAbs(N);
-            tx = bAbs(tx);
-            ty = bAbs(ty);
-            tz = bAbs(tz);
-            d = bBilinear(abs(cp.y[0][c]) + abs(cp.p[c]), abs(cp.y[1][c]) + abs(cp.p[c]), abs(cp.y[2][c]) + abs(cp.p[c]),
-                          abs(cp.y[3][c]) + abs(cp.p[c]));
-            sg = abs(sg);
-            ac = abs(ac);
-            bc = abs(bc);
+            float hc[4];
+            for (int k = 0; k < 4; ++k)
+                hc[k] = cp.tn[k].x * cp.vT[k][c] + cp.tn[k].y * cp.vB[k][c] + cp.tn[k].z * cp.vN[k][c] +
+                        sg.x * cp.vT[k][c] + sg.y * cp.vB[k][c];
+            h = bBilinear(hc[0], hc[1], hc[2], hc[3]);
         }
-        const BPoly h = bAxpy(bAxpy(bAxpy(bMul<1, 1>(tx, T), 1.0, bMul<1, 1>(ty, B)), 1.0, bMul<1, 1>(tz, N)), 1.0,
-                              bElevate(bAxpy(bAxpy(bZero(1, 1), sg.x, T), sg.y, B)));
-        hh = bAxpy(hh, 1.0, bMul<2, 2>(h, h));
-        dh = bAxpy(dh, 1.0, bMul<1, 2>(d, h));
+        hh = bAxpy(hh, 1.0, bMul<H, H>(h, h));
+        dh = bAxpy(dh, 1.0, bMul<1, H>(d, h));
         ha = bAxpy(ha, ac, h);
         hb = bAxpy(hb, bc, h);
         da = bAxpy(da, ac, d);
         db = bAxpy(db, bc, d);
     }
-    const float two = MAGNITUDE ? 2.0 : -2.0;
-    F1 = bAxpy(bMul<1, 4>(da, hh), two, bMul<3, 2>(dh, ha));
-    F2 = bAxpy(bMul<1, 4>(db, hh), two, bMul<3, 2>(dh, hb));
-}
-
-// The grids' rounding bounds (mu): kPolyRoundings roundings of each coefficient's terms' magnitude. The solver does not
-// need them (it solves the grids, "What is solved exactly" above); the CPU twin's tests measure them.
-void cellPolyRounding(inout CellPoly cp)
-{
-    BPoly A1, A2;
-    cellPolyGrids<true>(cp, A1, A2);
-    cp.mu1 = kPolyRoundings * kPolyUlp * bMaxAbs(A1);
-    cp.mu2 = kPolyRoundings * kPolyUlp * bMaxAbs(A2);
+    F1 = bAxpy(bMul<1, 2 * H>(da, hh), -2.0, bMul<H + 1, H>(dh, ha));
+    F2 = bAxpy(bMul<1, 2 * H>(db, hh), -2.0, bMul<H + 1, H>(dh, hb));
 }
 
 // What a solve is given: the triangle (its frame per vertex, interpolated as it is), the cell's four texels' tangent-space
@@ -505,14 +481,13 @@ bool polyTriangleSource(ManifoldTri tri, float3 p, float3 L, float2 sigma, out P
 // dF / d(s, t): dF / d(s, t) the derivative grids at st; dF / d sigma through h, dh / d sigma = -(vT, vB), and the change
 // of r = d (h . h) - 2 (d . h) h with h by e, 2 (h . e) d - 2 (d . e) h - 2 (d . h) e. areaST: the surface's area a unit
 // of (s, t), |e1 x e2| |det (ds, dt)|. 0 where dF / d(s, t) is singular.
-float cellPolyAreaPerSlope(CellPoly cp, float2 st, float areaST)
+float cellPolyAreaPerSlope<let N : int>(CellPoly cp, float2 st, float areaST)
 {
-    const float j11 = bEval<4, 5>(cp.D1s, st.x, st.y), j12 = bEval<5, 4>(cp.D1t, st.x, st.y);
-    const float j21 = bEval<4, 5>(cp.D2s, st.x, st.y), j22 = bEval<5, 4>(cp.D2t, st.x, st.y);
+    const float j11 = bEval<N - 1, N>(cp.D1s, st.x, st.y), j12 = bEval<N, N - 1>(cp.D1t, st.x, st.y);
+    const float j21 = bEval<N - 1, N>(cp.D2s, st.x, st.y), j22 = bEval<N, N - 1>(cp.D2t, st.x, st.y);
     const float detST = j11 * j22 - j12 * j21;
-    float3 h, y;
-    polyReflectAt(cp, st, h, y);
-    const float3 d = y - cp.p;
+    float3 h, d;
+    polyReflectAt(cp, st, h, d);
     const float3 t = polyCorner(cp.vT, st), b = polyCorner(cp.vB, st);
     const float dh = dot(d, h);
     const float3 rx = 2.0 * (dot(d, t) * h + dh * t - dot(h, t) * d);
@@ -542,9 +517,9 @@ bool polyBoxOffTriangle(CellPoly cp, float4 box)
 bool polyPhysical(CellPoly cp, float2 st)
 {
     if (any(st < 0.0) || any(st > 1.0) || !polyOnTriangle(cp, st)) return false;
-    float3 h, y;
-    const float3 r = polyReflectAt(cp, st, h, y);
-    const float3 toP = cp.p - y;
+    float3 h, d;
+    const float3 r = polyReflectAt(cp, st, h, d);
+    const float3 toP = -d;
     const float lp = length(toP);
     if (!(lp > 0.0)) return false;
     return dot(r, cp.L) > 0.0 && dot(h, toP / lp + cp.L) > 0.0;
@@ -564,44 +539,45 @@ struct PolyCellResult
 // Newton from the centre, which K inside the box guarantees converges), 0: undecided; `next` the box K leaves (K
 // intersected with the box) when undecided, `blur` the part of K's radius the rounding alone makes (|Y| times F's
 // error): no box narrower than it can be certified; `centre` K's centre (c - Y F(c): Newton's estimate of a root).
-int polyKrawczyk(CellPoly cp, float4 box, out float2 root, out float4 next, out float2 blur, out float2 centre)
+int polyKrawczyk<let N : int>(CellPoly cp, float4 box, out float2 root, out float4 next, out float2 blur,
+                              out float2 centre)
 {
     root = float2(0.0);
     next = box;
     blur = float2(0.0);
     centre = 0.5 * (box.xy + box.zw);
     const float2 w = box.zw - box.xy;
-    const BPoly G1 = bBox<5, 5>(cp.F1, box), G2 = bBox<5, 5>(cp.F2, box);
     // A box's extraction rounds by m in its coefficients (past [0, 1], a grown box's extrapolation, by up to
     // (1 + 2 kPolyGrow)^5 < 3 times that). The Jacobian's grids are extracted from the cell's derivatives, so their
     // rounding is absolute too: differenced from the box's own grid it was 2 n m over the box's width, which grew as
     // boxes shrank until no box near a root could contract (m12, 45 degrees).
     const float ex = 3.0 * kPolyExtractRoundings * kPolyUlp;
     const float m1 = ex * cp.mF.x, m2 = ex * cp.mF.y;
+    // Each grid over the box is wanted for its hull alone (the centre's values and Newton's come from the cell's
+    // grids), so one is live at a time.
     float lo1, hi1, lo2, hi2;
-    bHull(G1, lo1, hi1);
-    bHull(G2, lo2, hi2);
-    if (lo1 - m1 > 0.0 || hi1 + m1 < 0.0 || lo2 - m2 > 0.0 || hi2 + m2 < 0.0) return -1;
+    bHull(bBox<N, N>(cp.F1, box), lo1, hi1);
+    if (lo1 - m1 > 0.0 || hi1 + m1 < 0.0) return -1;
+    bHull(bBox<N, N>(cp.F2, box), lo2, hi2);
+    if (lo2 - m2 > 0.0 || hi2 + m2 < 0.0) return -1;
     // The Jacobian over the box (cell units): each derivative's grid over the box, its hull with its rounding.
-    const BPoly D1s = bBox<4, 5>(cp.D1s, box), D1t = bBox<5, 4>(cp.D1t, box), D2s = bBox<4, 5>(cp.D2s, box);
-    const BPoly D2t = bBox<5, 4>(cp.D2t, box);
     float4 jLo, jHi;   // (dF1/ds, dF1/dt, dF2/ds, dF2/dt)
-    bHull(D1s, jLo.x, jHi.x);
-    bHull(D1t, jLo.y, jHi.y);
-    bHull(D2s, jLo.z, jHi.z);
-    bHull(D2t, jLo.w, jHi.w);
+    bHull(bBox<N - 1, N>(cp.D1s, box), jLo.x, jHi.x);
+    bHull(bBox<N, N - 1>(cp.D1t, box), jLo.y, jHi.y);
+    bHull(bBox<N - 1, N>(cp.D2s, box), jLo.z, jHi.z);
+    bHull(bBox<N, N - 1>(cp.D2t, box), jLo.w, jHi.w);
     const float4 jMu = ex * cp.mD;
     jLo -= jMu;
     jHi += jMu;
     // At the centre: F on the cell's grid (de Casteljau: 10 levels of convex combinations, 12 roundings of its largest
     // coefficient, 3 times that past [0, 1]), not the box's (whose extraction rounds 6 times as much: K's blur near a fold
-    // was wider than any box that could contract there); the Jacobian, Y its inverse.
+    // was wider than any box that could contract there); the Jacobian there (the cell's derivative grids), Y its inverse.
     const float2 c = 0.5 * (box.xy + box.zw);
     const float fx = (all(c >= 0.0) && all(c <= 1.0) ? 12.0 : 36.0) * kPolyUlp;
     const float e1 = fx * cp.mF.x, e2 = fx * cp.mF.y;
-    const float f1 = bEval<5, 5>(cp.F1, c.x, c.y), f2 = bEval<5, 5>(cp.F2, c.x, c.y);
-    const float4 jc = float4(bEval<4, 5>(D1s, 0.5, 0.5), bEval<5, 4>(D1t, 0.5, 0.5), bEval<4, 5>(D2s, 0.5, 0.5),
-                             bEval<5, 4>(D2t, 0.5, 0.5));
+    const float f1 = bEval<N, N>(cp.F1, c.x, c.y), f2 = bEval<N, N>(cp.F2, c.x, c.y);
+    const float4 jc = float4(bEval<N - 1, N>(cp.D1s, c.x, c.y), bEval<N, N - 1>(cp.D1t, c.x, c.y),
+                             bEval<N - 1, N>(cp.D2s, c.x, c.y), bEval<N, N - 1>(cp.D2t, c.x, c.y));
     const float det = jc.x * jc.w - jc.y * jc.z;
     const float jn = max(max(abs(jc.x), abs(jc.y)), max(abs(jc.z), abs(jc.w)));
     if (!(abs(det) > 1e-12 * jn * jn)) return 0;
@@ -631,14 +607,18 @@ int polyKrawczyk(CellPoly cp, float4 box, out float2 root, out float4 next, out 
     if (any(kHi < box.xy) || any(kLo > box.zw)) return -1;
     if (all(kLo > box.xy) && all(kHi < box.zw))
     {
-        // One root; simplified Newton with this Y converges to it inside the box.
+        // One root; simplified Newton with this Y (on the cell's grids) converges to it inside the box, until a step is
+        // within 1e-7 of the box or no longer shrinks (at fp32's rounding of F: on a box narrower than F's rounding over
+        // |Y| the first test never holds, and 40 steps ran on 8 to 17% of the roots certified).
         float2 x = c;
+        float before = 3.0e38;
         for (int it = 0; it < 40; ++it)
         {
-            const float2 l = (x - box.xy) / w;
-            const float2 dx = mul(Y, float2(bEval<5, 5>(G1, l.x, l.y), bEval<5, 5>(G2, l.x, l.y)));
+            const float2 dx = mul(Y, float2(bEval<N, N>(cp.F1, x.x, x.y), bEval<N, N>(cp.F2, x.x, x.y)));
             x -= dx;
-            if (all(abs(dx) <= 1e-7 * max(w, float2(1e-30)))) break;
+            const float step = max(abs(dx.x), abs(dx.y));
+            if (all(abs(dx) <= 1e-7 * max(w, float2(1e-30))) || step >= 0.9 * before) break;
+            before = step;
         }
         root = clamp(x, box.xy, box.zw);
         return 1;
@@ -649,7 +629,7 @@ int polyKrawczyk(CellPoly cp, float4 box, out float2 root, out float4 next, out 
 
 // A certified root (local: in the grids' own box; st: in the cell), kept if it is a path and not already kept (a root
 // another base's grids certified beside a seam, within their rounding).
-void polyKeep(CellPoly cp, float2 local, float2 st, float areaST, inout PolyCellResult res)
+void polyKeep<let N : int>(CellPoly cp, float2 local, float2 st, float areaST, inout PolyCellResult res)
 {
     if (!polyPhysical(cp, local)) return;
     for (uint q = 0u; q < min(res.roots, kPolyMaxRoots); ++q)
@@ -657,7 +637,7 @@ void polyKeep(CellPoly cp, float2 local, float2 st, float areaST, inout PolyCell
     if (res.roots < kPolyMaxRoots)
     {
         res.st[res.roots] = st;
-        res.w[res.roots] = cellPolyAreaPerSlope(cp, local, areaST);
+        res.w[res.roots] = cellPolyAreaPerSlope<N>(cp, local, areaST);
     }
     else ++res.overflow;
     ++res.roots;
@@ -703,12 +683,9 @@ struct PolySolveState
 
 PolySolveState cellPolySolveStart()
 {
+    // Entries above the top are never read: zeroing the 64 cost 3.5 of the showcase's 7.7 ms of solve at 320x180.
     PolySolveState s;
-    for (uint k = 0u; k < kPolyStack; ++k)
-    {
-        s.stack[k] = float4(0.0);
-        s.kinds[k] = 0u;
-    }
+    s.kinds[0] = 0u;
     s.stack[0] = float4(0.0, 0.0, 1.0, 1.0);
     s.top = 1u;
     return s;
@@ -739,7 +716,8 @@ float3 polyBaseSquare(uint base)
 // At most `budget` tests (a Krawczyk test or a base's grids built; one call site each: each is compiled whole) from where
 // the state stands; res accumulates the roots, the boxes tested and the undecided ones. A step pops one entry and
 // pushes at most four after a test, so the loop ends within kPolyStack + 4 (budget + 1) steps.
-void cellPolySolveSteps(PolyCellSource src, inout PolySolveState s, inout PolyCellResult res, uint budget)
+void cellPolySolveSteps<let N : int>(PolyCellSource src, inout PolySolveState s, inout PolyCellResult res,
+                                     uint budget)
 {
     CellPoly cp;
     uint built = 0xFFFFFFFFu;   // the base cp holds (none yet)
@@ -763,8 +741,8 @@ void cellPolySolveSteps(PolyCellSource src, inout PolySolveState s, inout PolyCe
             sq = polyBaseSquare(base);
             float3 c[4];
             for (uint k = 0u; k < 4u; ++k) c[k] = polyCorner(src.c, sq.xy + sq.z * float2(float(k & 1u), float(k >> 1u)));
-            usable = cellPolyOf(src.m, c[0], c[1], c[2], c[3], src.origin + src.size * sq.xy, src.size * sq.z, src.p,
-                                src.L, src.sigma, cp);
+            usable = cellPolyOf<N>(src.m, c[0], c[1], c[2], c[3], src.origin + src.size * sq.xy, src.size * sq.z,
+                                   src.p, src.L, src.sigma, cp);
             areaST = area2 * abs(cp.ds.x * cp.dt.y - cp.ds.y * cp.dt.x);
         }
         if (!usable)
@@ -779,7 +757,7 @@ void cellPolySolveSteps(PolyCellSource src, inout PolySolveState s, inout PolyCe
         const float2 g = kind == 0u ? kPolyGrow * (lb.zw - lb.xy) : float2(0.0);
         float2 root, blur, centre;
         float4 next;
-        const int k = polyKrawczyk(cp, float4(lb.xy - g, lb.zw + g), root, next, blur, centre);
+        const int k = polyKrawczyk<N>(cp, float4(lb.xy - g, lb.zw + g), root, next, blur, centre);
         if (k != 0)
         {
             if (k > 0)
@@ -790,7 +768,7 @@ void cellPolySolveSteps(PolyCellSource src, inout PolySolveState s, inout PolyCe
                                   : kind == 1u ? all(st >= box.xy) && all(st <= box.zw)
                                                : polyInHalfOpen(st, s.stack[s.top - 1u]) ||
                                                      (kind == 3u && polyInHalfOpen(st, s.stack[s.top - 2u]));
-                if (mine) polyKeep(cp, root, st, areaST, res);
+                if (mine) polyKeep<N>(cp, root, st, areaST, res);
             }
             if (kind > 0u) s.top -= kind - 1u;   // the halves under an inflation box that settled its box
             continue;

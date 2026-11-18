@@ -76,7 +76,7 @@ public:
     // mapped triangles queued, records on a mapped draw, mapped triangles with degenerate uvs.
     [[nodiscard]] std::array<uint32_t, 7> manifoldMappedCounts() const;
     // The solve's (words 2112-2117): tests run, items still open after the last pass, undecided boxes, roots in cells,
-    // roots past those an item keeps, items started over for want of a state (rt/path_tracer.slang, manifoldSolveRound).
+    // roots past those an item keeps, items started over for want of a state (rt/path_tracer.slang, manifoldSolve).
     [[nodiscard]] std::array<uint32_t, 6> manifoldSolveCounts() const;
     // Step 2c's dump (OHAO_MANIFOLD_DUMP=x,y, written at destroy to OHAO_MANIFOLD_DUMP_FILE): the stats grown to hold
     // it (rt/path_tracer.slang, kManifoldDump).

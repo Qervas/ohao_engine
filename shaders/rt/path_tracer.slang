@@ -1503,9 +1503,9 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
 //   manifoldWalkRecords  raygen, a thread a record: the draw's groups queued (kManifoldChunk at most a pass)
 //   manifoldWalk*    raygen, a thread an item: a group's cone and its <= 8 clusters, a cluster's <= 8 sub-clusters,
 //                    a sub-cluster's <= 16 triangles (2a's disc test each), those that pass appended to the next queue
-//   manifoldSolveRound  raygen, a thread an item: every root of a candidate triangle or a cell (rt/manifold_poly.slang's
-//                    subdivision), at most kManifoldSolveBudget tests a dispatch; dispatched on the cells' queue and
-//                    on the candidates'
+//   manifoldSolveCells, manifoldSolvePlain  raygen, a thread an item: every root of a cell or a candidate triangle
+//                    (rt/manifold_poly.slang's subdivision), at most kManifoldSolveBudget tests a dispatch; on the
+//                    cells' queue and on the candidates'
 //   manifoldConnect  raygen, a thread a root: the shadow ray, the retrace of y, X's surface, the contribution
 //   manifoldResolve  compute, a thread a pixel: the frame's fixed-point sum into the running mean, the counters
 // The walk and the solve are raygens, not compute: the driver rounds the same code differently as compute (the
@@ -2706,26 +2706,30 @@ ManifoldTri manifoldTriangleAt(uint t)
     return tri;
 }
 
-// Solve (step 2c, stage 3): every root of an item by rt/manifold_poly.slang's subdivision, one exact solver for both
-// kinds: a candidate triangle of 2a's walk (a plain triangle as a cell whose texels are (0, 0, 1), polyTriangleSource)
-// and a cell of a mapped triangle's walk. Dispatched twice a pass on the same code: on the cells' queue (segment 1:
-// the walk's cells and every item a solve carried) and on the candidates' (segment 0). A thread runs at most
-// kManifoldSolveBudget tests; an item not finished is carried, its stack and the roots it found kept in a state (a pool
-// in manifoldItems, kMCStateCap a batch), into the cells' queue of the next pass, where it goes on. Its roots are queued
-// for the connect as they are found, each once (the state counts those queued). An item still open after the last pass
-// is counted (kMCOpen) with its undecided boxes, never dropped silently; with no state free it starts over in the next
-// pass, its queued roots skipped (the solve is deterministic), counted (kMCRestarts).
+// Solve (step 2c): every root of an item by rt/manifold_poly.slang's subdivision, one exact solver for both kinds, a
+// raygen each so each compiles its own degree and no wave mixes them: manifoldSolvePlain on the candidates' queue (a
+// candidate triangle of 2a's walk, a plain triangle as a cell whose texels are (0, 0, 1), polyTriangleSource: grids of
+// degree 3) and manifoldSolveCells on the cells' queue (a cell of a mapped triangle's walk: degree 5). A thread runs at
+// most kManifoldSolveBudget tests; an item not finished is carried, its stack and the roots it found kept in a state (a
+// pool in manifoldItems, kMCStateCap a batch), into its own queue's next pass, where it goes on. A carried item's stack
+// is split into its groups (a group: a box, or an inflation box with the halves under it), each part an item with a
+// state of its own while states are free: each part a disjoint set of the cell's boxes, so the parts find disjoint
+// roots, and an item's tests spread over more threads each pass (a cell of Sponza's maps takes up to about 1,200
+// tests; unsplit, one thread's 96 a pass left four open after the last pass). Its roots are queued for the connect as
+// they are found, each once (the state counts those queued). An item still open after the last pass is counted
+// (kMCOpen) with its undecided boxes, never dropped silently; with no state free it starts over in the next pass, its
+// queued roots skipped (the solve is deterministic), counted (kMCRestarts); a part never starts over (it is split only
+// with its own state, and one whose stack outgrows a state is settled open).
 //
-// Items. The candidates': (record | roots queued << 24, triangle). The cells': (record | roots queued << 24 | counted << 31,
-// slot, x, y), a mapped triangle's cell (manifoldNodeCells' coordinates), or (record, slot | stated | plain, state, 0) an
-// item carried with its state. A root: 4 uint4 (record, slot, the area a unit of slope covers at y, its key), (y, 0),
-// (the shading normal, 0: the hit's own for a mapped cell), 0.
+// Items. The candidates': (record | roots queued << 24, triangle), or (record | stated, state) carried with its state.
+// The cells': (record | roots queued << 24 | counted << 31, slot, x, y), a mapped triangle's cell (manifoldNodeCells'
+// coordinates), or (record, slot | stated, state, 0) carried with its state. A root: 4 uint4 (record, slot, the area a
+// unit of slope covers at y, its key), (y, 0), (the shading normal, 0: the hit's own for a mapped cell), 0.
 static const uint kManifoldSolveBudget = 96u;
 static const uint kManifoldItemStated = 0x80000000u;
-static const uint kManifoldItemPlain = 0x40000000u;
-// A state, in uint2 slots: (x, y), (top, roots queued), (roots, undecided), (boxes, overflow), the roots' (s, t) (8),
-// their areas (4), the stack's boxes (2 a box) and words (2 a slot), kManifoldStateDepth entries at most (the solve's
-// stacks measured at most 14 deep; a deeper one starts over, counted).
+// A state, in uint2 slots: (x, y) (a plain item's: (triangle, 0)), (top, roots queued), (roots, undecided), (boxes,
+// overflow), the roots' (s, t) (8), their areas (4), the stack's boxes (2 a box) and words (2 a slot),
+// kManifoldStateDepth entries at most (the solve's stacks measured at most 14 deep; a deeper one starts over, counted).
 static const uint kManifoldStateDepth = 32u;
 static const uint kManifoldStateRoots = 4u;
 static const uint kManifoldStateAreas = 12u;
@@ -2733,11 +2737,14 @@ static const uint kManifoldStateStack = 16u;
 static const uint kManifoldStateKinds = kManifoldStateStack + 2u * kManifoldStateDepth;
 static const uint kManifoldStateSlots = kManifoldStateKinds + kManifoldStateDepth / 2u;
 
-void manifoldStateSave(uint at, int2 cell, uint queued, PolySolveState s, PolyCellResult res)
+// The stack's entries first to first + count - 1 (count <= kManifoldStateDepth) into state `at`, with the results;
+// `part`: the state holds a part of its item's boxes (a split's).
+void manifoldStateSave(uint at, int2 cell, uint queued, bool part, PolySolveState s, uint first, uint count,
+                       PolyCellResult res)
 {
     const uint o = manifoldCounts[kMCStateOffset] + at * kManifoldStateSlots;
     manifoldItems[o] = uint2(asuint(cell.x), asuint(cell.y));
-    manifoldItems[o + 1u] = uint2(s.top, queued);
+    manifoldItems[o + 1u] = uint2(count | (part ? 0x80000000u : 0u), queued);
     manifoldItems[o + 2u] = uint2(res.roots, res.undecided);
     manifoldItems[o + 3u] = uint2(res.boxes, res.overflow);
     for (uint k = 0u; k < kPolyMaxRoots; ++k) manifoldItems[o + kManifoldStateRoots + k] = asuint(res.st[k]);
@@ -2745,23 +2752,25 @@ void manifoldStateSave(uint at, int2 cell, uint queued, PolySolveState s, PolyCe
         manifoldItems[o + kManifoldStateAreas + k] = uint2(asuint(res.w[2u * k]), asuint(res.w[2u * k + 1u]));
     for (uint k = 0u; k < kManifoldStateDepth; ++k)
     {
-        if (k >= s.top) break;
-        manifoldItems[o + kManifoldStateStack + 2u * k] = asuint(s.stack[k].xy);
-        manifoldItems[o + kManifoldStateStack + 2u * k + 1u] = asuint(s.stack[k].zw);
+        if (k >= count) break;
+        manifoldItems[o + kManifoldStateStack + 2u * k] = asuint(s.stack[first + k].xy);
+        manifoldItems[o + kManifoldStateStack + 2u * k + 1u] = asuint(s.stack[first + k].zw);
     }
     for (uint k = 0u; k < kManifoldStateDepth / 2u; ++k)
     {
-        if (2u * k >= s.top) break;
-        manifoldItems[o + kManifoldStateKinds + k] = uint2(s.kinds[2u * k], s.kinds[2u * k + 1u]);
+        if (2u * k >= count) break;
+        manifoldItems[o + kManifoldStateKinds + k] = uint2(s.kinds[first + 2u * k], s.kinds[first + 2u * k + 1u]);
     }
 }
 
-void manifoldStateLoad(uint at, out int2 cell, out uint queued, inout PolySolveState s, inout PolyCellResult res)
+void manifoldStateLoad(uint at, out int2 cell, out uint queued, out bool part, inout PolySolveState s,
+                       inout PolyCellResult res)
 {
     const uint o = manifoldCounts[kMCStateOffset] + at * kManifoldStateSlots;
     const uint2 c = manifoldItems[o], w1 = manifoldItems[o + 1u], w2 = manifoldItems[o + 2u], w3 = manifoldItems[o + 3u];
     cell = int2(asint(c.x), asint(c.y));
-    s.top = min(w1.x, kManifoldStateDepth);
+    part = (w1.x & 0x80000000u) != 0u;
+    s.top = min(w1.x & 0x7FFFFFFFu, kManifoldStateDepth);
     queued = w1.y;
     res.roots = w2.x;
     res.undecided = w2.y;
@@ -2789,15 +2798,45 @@ void manifoldStateLoad(uint at, out int2 cell, out uint queued, inout PolySolveS
     }
 }
 
-[shader("raygeneration")]
-void manifoldSolveRound()
+// The group boundaries of a stack of at most kManifoldStateDepth entries (rt/manifold_poly.slang's stack: an inflation
+// box of kind 1 + n sits on the n halves it settles), from the top down, those strictly inside it: their count.
+uint manifoldStackGroups(PolySolveState s, out uint bounds[kManifoldStateDepth])
 {
-    const uint i = DispatchRaysIndex().x;
+    uint at = s.top, n = 0u;
+    for (uint k = 0u; k < kManifoldStateDepth; ++k)
+    {
+        bounds[k] = 0u;
+        if (at == 0u) continue;
+        const uint kind = s.kinds[at - 1u] & 3u, size = kind == 0u ? 1u : kind;
+        at = size >= at ? 0u : at - size;
+        if (at > 0u) bounds[n++] = at;
+    }
+    return n;
+}
+
+// n states from the batch's pool: the first, and how many were free (0 when none).
+uint manifoldStatesTake(uint n, out uint first)
+{
+    first = 0xFFFFFFFFu;
+    if (n == 0u) return 0u;
+    InterlockedAdd(manifoldCounts[manifoldBlockAt(0u) + kMCStatesTaken], n, first);
+    const uint cap = manifoldCounts[kMCStateCap];
+    return first < cap ? min(n, cap - first) : 0u;
+}
+
+void manifoldSolve<let PLAIN : bool>(uint i)
+{
+    static const uint N = PLAIN ? 3u : 5u;
     const uint block = manifoldBlock(), passIndex = manifoldPassIndex();
-    const bool cellsQueue = manifoldSegment() != 0u;
     uint4 item = uint4(0u);
     bool live;
-    if (cellsQueue)
+    if (PLAIN)
+    {
+        uint2 it;
+        live = manifoldItem(kMQCandidates, i, it);
+        item = uint4(it, 0u, 0u);
+    }
+    else
     {
         live = i < min(manifoldCounts[block + kMQCells * 4u + 3u], manifoldCounts[kMCCap + kMQCells]);
         if (live)
@@ -2806,17 +2845,9 @@ void manifoldSolveRound()
             item = uint4(manifoldItems[r], manifoldItems[r + 1u]);
         }
     }
-    else
-    {
-        uint2 it;
-        live = manifoldItem(kMQCandidates, i, it);
-        item = uint4(it, 0u, 0u);
-    }
+    const bool stated = PLAIN ? (item.x & kManifoldItemStated) != 0u : (item.y & kManifoldItemStated) != 0u;
     const uint rec = item.x & kManifoldRecordMask;
-    const bool stated = cellsQueue && (item.y & kManifoldItemStated) != 0u;
-    const bool plain = !cellsQueue || (item.y & kManifoldItemPlain) != 0u;
-    const uint slot = cellsQueue ? item.y & kManifoldSlotMask : item.y & kManifoldItemIndex;
-    const bool fresh = live && cellsQueue && !stated && (item.x & kManifoldCounted) == 0u;
+    const bool fresh = live && !PLAIN && !stated && (item.x & kManifoldCounted) == 0u;
     // A cell the walk reached, counted once (the frame's counter, its record's statistics, the dump's).
     manifoldCountWave(kMCCells, fresh ? 1u : 0u);
     const uint stats = manifoldCounts[kMCRecordStats];
@@ -2827,7 +2858,12 @@ void manifoldSolveRound()
     PolyCellResult res = cellPolyResultStart();
     int2 cell = int2(asint(item.z), asint(item.w));
     uint queued = stated ? 0u : (item.x >> 24u) & 127u;
-    if (live && stated) manifoldStateLoad(item.z, cell, queued, s, res);
+    const uint stateIn = stated ? (PLAIN ? item.y : item.z) : 0xFFFFFFFFu;
+    bool part = false;
+    if (live && stated) manifoldStateLoad(stateIn, cell, queued, part, s, res);
+    // A plain item's triangle: its item's, or its state's.
+    const uint slot = PLAIN ? (stated ? uint(cell.x) : item.y & kManifoldItemIndex) : item.y & kManifoldSlotMask;
+    if (PLAIN) cell = int2(int(slot), 0);
     const uint boxesBefore = res.boxes;
     // The item's source: its triangle (and cell).
     PolyCellSource src;
@@ -2838,7 +2874,7 @@ void manifoldSolveRound()
     if (live)
     {
         m = manifoldRecord(rec);
-        if (plain)
+        if (PLAIN)
         {
             const ManifoldTri tri = manifoldTriangleAt(slot);
             ok = polyTriangleSource(tri, m.pX, m.L, m.target, src);
@@ -2883,7 +2919,7 @@ void manifoldSolveRound()
             e1 = mt.e1;
             e2 = mt.e2;
         }
-        if (ok) cellPolySolveSteps(src, s, res, kManifoldSolveBudget);
+        if (ok) cellPolySolveSteps<N>(src, s, res, kManifoldSolveBudget);
         else
         {
             s.top = 0u;
@@ -2907,14 +2943,14 @@ void manifoldSolveRound()
         const float2 uv = uvOrigin + uvS * st.x + uvT * st.y;
         const float3 y = p0 + e1 * uv.x + e2 * uv.y;
         float3 nS = float3(0.0);
-        if (plain)
+        if (PLAIN)
         {
             // 2a's shading normal at y, turned as the tracer turns it (toward the side the triangle shows X).
-            const float3 N = normalize(n0 + a1 * uv.x + a2 * uv.y);
-            nS = dot(N, g) * (dot(g, m.pX - y) >= 0.0 ? 1.0 : -1.0) < 0.0 ? -N : N;
+            const float3 Ns = normalize(n0 + a1 * uv.x + a2 * uv.y);
+            nS = dot(Ns, g) * (dot(g, m.pX - y) >= 0.0 ? 1.0 : -1.0) < 0.0 ? -Ns : Ns;
         }
         // The stochastic rounding's key: the triangle's (2a's, a triangle holds one root but rarely two) or the cell's root.
-        const uint key = plain ? slot ^ 0x5A1A7u : pcg(asuint(st.x) ^ pcg(asuint(st.y) ^ pcg(asuint(cell.x) ^ pcg(asuint(cell.y) ^ slot))));
+        const uint key = PLAIN ? slot ^ 0x5A1A7u : pcg(asuint(st.x) ^ pcg(asuint(st.y) ^ pcg(asuint(cell.x) ^ pcg(asuint(cell.y) ^ slot))));
         manifoldRoots[(at + k) * 4u] = uint4(rec, slot, asuint(res.w[q]), key);
         manifoldRoots[(at + k) * 4u + 1u] = uint4(asuint(y), 0u);
         manifoldRoots[(at + k) * 4u + 2u] = uint4(asuint(nS), 0u);
@@ -2922,34 +2958,78 @@ void manifoldSolveRound()
     }
     queued += fit;
     manifoldCountWave(kMCCandidates + 1u, fit);
-    manifoldCountWave(kMCCellRoots, plain ? 0u : fit);
+    manifoldCountWave(kMCCellRoots, PLAIN ? 0u : fit);
     const bool done = !live || (finished && queued >= have) || (finished && want == 0u);
     // Settled (finished, or open after the last pass): its undecided boxes and roots past the kept counted.
-    const bool settled = live && (done || last);
+    // A part whose stack outgrew a state cannot start over (the whole cell again would find the other part's roots):
+    // settled open.
+    const bool fits = s.top <= kManifoldStateDepth;
+    const bool stranded = live && !done && !last && part && !fits;
+    const bool settled = live && (done || last || stranded);
     manifoldCountWave(kMCOpen, settled && !finished ? 1u : 0u);
     manifoldCountWave(kMCUndecided, settled ? res.undecided + (finished ? 0u : s.top) : 0u);
     manifoldCountWave(kMCRootOverflow, settled ? res.overflow : 0u);
     manifoldCountWave(kMCLost, settled && finished && !done ? have - queued : 0u);
-    if (settled && !plain && dumping) manifoldDumpSolved(rec, slot, cell, res, s.top);
-    // Carried: with its state (kept where it was, or a new one), else started over.
-    const bool carry = live && !done && !last;
-    uint state = stated ? item.z : 0xFFFFFFFFu;
-    if (s.top > kManifoldStateDepth) state = 0xFFFFFFFFu;
-    if (carry && !stated && s.top <= kManifoldStateDepth)
+    if (settled && !PLAIN && dumping) manifoldDumpSolved(rec, slot, cell, res, s.top);
+    // Carried: with its state (kept where it was, or a new one), its stack split into its groups (each part a state of
+    // its own, as many as are free: the first part keeps the rest), each part an item; else started over.
+    const bool carry = live && !done && !last && !stranded;
+    uint state = fits ? stateIn : 0xFFFFFFFFu;
+    if (carry && fits && state == 0xFFFFFFFFu)
     {
-        uint taken;
-        InterlockedAdd(manifoldCounts[manifoldBlockAt(0u) + kMCStatesTaken], 1u, taken);
-        if (taken < manifoldCounts[kMCStateCap]) state = taken;
+        uint first;
+        if (manifoldStatesTake(1u, first) > 0u) state = first;
     }
     const bool withState = carry && state != 0xFFFFFFFFu;
-    if (withState) manifoldStateSave(state, cell, queued, s, res);
+    uint bounds[kManifoldStateDepth];
+    const uint groups = manifoldStackGroups(s, bounds);
+    uint firstPart;
+    const uint parts = manifoldStatesTake(withState ? groups : 0u, firstPart);
+    if (withState)
+        manifoldStateSave(state, cell, queued, part || parts > 0u, s, 0u, parts > 0u ? bounds[parts - 1u] : s.top, res);
+    for (uint k = 0u; k < kManifoldStateDepth; ++k)
+    {
+        if (k >= parts) break;
+        const uint from = bounds[k], to = k == 0u ? s.top : bounds[k - 1u];
+        manifoldStateSave(firstPart + k, cell, 0u, true, s, from, to - from, cellPolyResultStart());
+    }
     manifoldCountWave(kMCRestarts, carry && !withState ? 1u : 0u);
-    const bool over = carry && !withState;
-    manifoldCarryWave4(kMQCells, withState || (over && !plain),
-                       withState ? uint4(rec, slot | kManifoldItemStated | (plain ? kManifoldItemPlain : 0u), state, 0u)
-                                 : uint4(rec | queued << 24u | kManifoldCounted, slot, asuint(cell.x), asuint(cell.y)));
-    manifoldCarryWave(kMQCandidates, over && plain, uint2(rec | queued << 24u, slot));
+    // Into its own queue's next pass (the other region); past its capacity an item is lost, counted (the parts can
+    // outnumber the pass's items).
+    const uint n = carry ? 1u + parts : 0u;
+    const uint nextBlock = manifoldBlockAt(passIndex + 1u);
+    manifoldCountWave(kMCCarried, n);
+    const uint q = PLAIN ? kMQCandidates : kMQCells;
+    const uint slots = manifoldAppendWaveIn(nextBlock, q, n), cap = manifoldCounts[kMCCap + q];
+    const uint region = manifoldRegion(q, passIndex + 1u);
+    for (uint k = 0u; k < kManifoldStateDepth + 1u; ++k)
+    {
+        if (k >= n) break;
+        if (slots + k >= cap)
+        {
+            InterlockedAdd(manifoldCounts[kMCLost], 1u);
+            continue;
+        }
+        const uint st = k == 0u ? state : firstPart + k - 1u;
+        if (PLAIN)
+            manifoldItems[region + slots + k] =
+                withState ? uint2(rec | kManifoldItemStated, st) : uint2(rec | queued << 24u, slot);
+        else
+        {
+            const uint4 it = withState
+                                 ? uint4(rec, slot | kManifoldItemStated, st, 0u)
+                                 : uint4(rec | queued << 24u | kManifoldCounted, slot, asuint(cell.x), asuint(cell.y));
+            manifoldItems[region + 2u * (slots + k)] = it.xy;
+            manifoldItems[region + 2u * (slots + k) + 1u] = it.zw;
+        }
+    }
 }
+
+[shader("raygeneration")]
+void manifoldSolvePlain() { manifoldSolve<true>(DispatchRaysIndex().x); }
+
+[shader("raygeneration")]
+void manifoldSolveCells() { manifoldSolve<false>(DispatchRaysIndex().x); }
 
 // Connect: a root's path sun -> y -> X, by the change of variables from the slope to y's area (the area a unit of slope
 // covers there, the solve's): the shadow ray, the

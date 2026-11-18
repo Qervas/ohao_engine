@@ -252,6 +252,33 @@ plain triangles; 2a's Newton (`manifoldSolve`, `manifoldMap`, its tolerance) is 
   Sponza with the walk on carries for 73 ms and leaves 4 items open (11 at 640x360), cause unconfirmed; the solve costs
   about 30x Newton.
 
+*Stage 3b (2026-11-18): the three open items.*
+- **The missed root was cancellation:** `d = y - p` with y rounded at |y| (2.3) and the receiver 0.02 away moved an fp32
+  root by 3.7e-5 of the triangle's side, to u = -6.7e-6, outside it; the certified root was then dropped by
+  `polyPhysical` and the half-open ownership test. `CellPoly` holds `d[k] = (p0 - p) + e1 u + e2 v` (`p0 - p` exact when
+  the receiver is near, Sterbenz), so the rounding is relative to |y - p|. On a CPU set biased to it (receivers close,
+  roots 1e-7 to 1e-3 inside an edge) losses 244 -> 65, every one left within 1.6 floor units of the edge (eps |J^-1| |F|;
+  up to 70 before). On the GPU against the dense double search: the caustics scene 2,027 and 34,093, the showcase 8,686
+  and 139,331, every root found, none false, none open. Cells: 1,373 of 1,373 path roots of a fresh floor.
+- **Sponza's open cells** needed 813-1,174 Krawczyk tests (sharp brick edges near folds), and arrived only in passes
+  0-2 because the pyramid queue overflows (about 1.41 M nodes against 460 K). A carried item's stack splits into its
+  groups (a box, or an inflation box with its halves), each its own item and state while states are free: disjoint
+  boxes, so no duplicate roots; a part whose stack outgrows a state is settled open and counted. Open 4 -> 0 (320x180)
+  and 11 -> 0 (640x360), at most 9 passes; carry 81 -> 62-72 ms and 50 -> 36-42 ms.
+- **The solve's cost** (the showcase 320x180, 7.7 ms measured by part): zeroing the 64-entry stack 3.5 ms (removed);
+  Newton's polish 1.5 ms, 8-17% of roots running all 40 iterations at fp32's floor (it stops when a step stops
+  shrinking, at most 13); base grids 2.4 ms, extraction 1.2 ms. Plain triangles get grids of their true degree 3 in
+  their own raygen (`manifoldSolvePlain`; cells `manifoldSolveCells`: 255 registers, 271 KB). Three other restructures
+  measured slower, reverted. Solve the caustics scene 9.6 -> 2.3 ms (320x180), 37.9 -> 9.0 (640x360); the showcase
+  6.8 -> 1.8, 29.8 -> 5.8, 1080p 253 -> 60 (`pt.manifold` 337 -> 143 ms). The helmet with the walk on 12.9 -> 8.2 ms
+  (320x180). Cold compile 3.4 s.
+- **Image, walk off, against stage 3:** the showcase identical at 320x180; the caustics scene 46 pixels, at most 4.9e-4,
+  and at 640x360 55 and 5 pixels of one fixed-point quantum (area weights moved about 1e-6 across the stochastic
+  rounding; the root sets identical at 160x90). Two captures identical.
+- **Open:** a denser walk-on run (maps 1024 and 2048, sparse 32, under sync) lost 960,946 pyramid nodes still carried
+  after pass 12 and left 231 cells open (counted); parts draw states from the same pool. The pyramid queue's capacity
+  and the state pool are the walk's next limit, before mapped draws can be owned by default.
+
 ### Task 6: the pass on the GPU, bounded
 
 Requests -> candidate cells -> cell solves as work items of bounded cost (a box budget an item), spread across threads

@@ -1,13 +1,13 @@
 #pragma once
 
 // The manifold pass as rounds of bounded items (docs/plans/2026-11-08-caustics-step2c.md, "The pass as rounds"): the
-// buffers rt/path_tracer.slang's manifoldSetup, manifoldWalk*, manifoldSolveRound, manifoldConnect and manifoldResolve
+// buffers rt/path_tracer.slang's manifoldSetup, manifoldWalk*, manifoldSolve*, manifoldConnect and manifoldResolve
 // share (the rounds after the setup traced indirectly, as many threads as the round before queued). The path tracer's
 // bindings:
 //   58 records   6 float4 a request and light (manifoldSetup writes them)
 //   59 items     uint2 an item, a region a queue: groups, clusters, sub-clusters, candidate triangles; step 2c's pyramid
 //                nodes and cells (uint4 items, two slots each); then the solve's states (kStateSlots slots each)
-//   60 roots     4 uint4 a root (manifoldSolveRound writes them, manifoldConnect reads them)
+//   60 roots     4 uint4 a root (manifoldSolve* write them, manifoldConnect reads them)
 //   61 counts    the queues' trace arguments and counts, the capacities and regions, the frame's counters (the
 //                words: rt/path_tracer.slang, "the manifold pass as rounds")
 //   62 sum       3 words a pixel: the frame's light in fixed point (kCausticSplatScale), cleared by the resolve
@@ -17,7 +17,7 @@
 // into its own queue's next pass, where every round runs again. A pass's rounds: the records, groups, clusters,
 // sub-clusters, kPyramidRounds of the pyramid queue (a segment each: a mapped triangle's footprint a level a round),
 // the solve on the cells' queue and on the candidates' (an item past its budget of tests carried with its state into
-// the cells' queue), the connect. Into the one fixed-point sum; the resolve runs once
+// its own queue, split when it holds more than one group of boxes), the connect. Into the one fixed-point sum; the resolve runs once
 // after the last batch. The queues' capacities are the batch's pixels times the peaks a pixel measured, with headroom
 // (the records' exact: kManifoldDepths a pixel and light), so carries are rare; an item still carried after the last
 // pass is counted lost (the stats' word 12).
