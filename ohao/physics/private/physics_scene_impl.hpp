@@ -3,6 +3,7 @@
 // physics_scene_joints.cpp, physics_scene_step.cpp, physics_scene_players.cpp; module.cpp installs it.
 #pragma once
 
+#include "ecs/components.hpp"
 #include "physics/physics_scene.hpp"
 #include "physics/private/backend/physics_backend.hpp"
 

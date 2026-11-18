@@ -1,4 +1,5 @@
 #include "level/level_system.hpp"
+#include "ecs/components.hpp"
 #include "level/components.hpp"
 #include "visual/components.hpp"
 #include "physics/components.hpp"

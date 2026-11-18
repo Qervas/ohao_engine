@@ -1,6 +1,7 @@
 // The core module, "ecs" (ecs/module.hpp): the World's own types and systems. A World installs no system itself
 // (World::World); every host installs the core with the rest (engine::install), or alone ({"ecs"}).
 #include "ecs/module.hpp"
+#include "ecs/components.hpp"
 
 #include "ecs/fly_controller_system.hpp"
 #include "ecs/spin_system.hpp"

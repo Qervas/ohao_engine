@@ -37,7 +37,6 @@
 // No reflection: only components and the backend (physics/private/backend, the module's own).
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/asset_resolver.hpp"
-#include "ecs/components.hpp"
 #include "ecs/world.hpp"
 #include "physics/components.hpp"
 #include "physics/events.hpp"

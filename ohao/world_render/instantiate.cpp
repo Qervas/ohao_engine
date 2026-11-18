@@ -1,4 +1,5 @@
 #include "world_render/instantiate.hpp"
+#include "ecs/components.hpp"
 #include "world_render/private/systems.hpp"
 #include "world_render/components.hpp"
 #include "world_render/private/components.hpp"

@@ -1,4 +1,5 @@
 #include "ecs/world.hpp"
+#include "ecs/components.hpp"
 #include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 
@@ -205,9 +206,13 @@ void World::reserve(std::size_t entities) {
     m_registry.storage<CreationOrder>().reserve(entities);
 }
 
+entt::entity World::create(std::string_view name) { return create(name, Transform{}); }
+
 entt::entity World::create(std::string_view name, const Transform& local) {
     return createImpl(nextId(), name, local);
 }
+
+entt::entity World::createWithId(uint64_t id, std::string_view name) { return createWithId(id, name, Transform{}); }
 
 entt::entity World::createWithId(uint64_t id, std::string_view name, const Transform& local, entt::entity hint) {
     if (id == 0 || !claim(id)) return entt::null;

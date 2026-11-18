@@ -1,4 +1,5 @@
 #include "level/level_hints.hpp"
+#include "ecs/components.hpp"
 #include "level/components.hpp"
 #include "physics/components.hpp"
 

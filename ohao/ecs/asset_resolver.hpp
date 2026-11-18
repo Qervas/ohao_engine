@@ -6,7 +6,7 @@
 #include "asset/cooked.hpp"
 #include "cook/cook.hpp"
 #include "core/result.hpp"
-#include "ecs/components.hpp"
+#include "reflect/asset_ref.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -17,6 +17,8 @@
 #include <vector>
 
 namespace ohao::ecs {
+
+using AssetRef = reflect::AssetRef;   // as ecs/components.hpp names it
 
 struct AssetError {
     std::string code;      // E_ASSET_NOT_FOUND (no such file, or a path outside the project) or E_ASSET_INVALID

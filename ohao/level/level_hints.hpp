@@ -15,7 +15,6 @@
 //     of the node's hints stand.
 //
 // Load-time only: reflection reads the passed-through components.
-#include "ecs/components.hpp"
 #include "physics/components.hpp"
 #include "cook/gltf_structure.hpp"
 #include "reflect/decode.hpp"

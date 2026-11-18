@@ -5,6 +5,7 @@
 #include "ecs/scene_types.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <stdexcept>
 #include <cstring>
 
@@ -310,7 +311,8 @@ RestoreStats restoreComponents(World& world, const Snapshot& s) {
     // columns are exactly what step 3 wrote (comparing them again would only take a cache
     // miss per entity), and the other columns are plain emplaces.
     if (!intoEmpty) stamp.assign(entitySlots(reg), 0);
-    RestoreScratch scratch{live, fresh, std::move(stamp), 0, intoEmpty};
+    RestoreScratch scratch{live, fresh, std::move(stamp), 0, intoEmpty,
+                           std::as_const(reg).storage<EntityId>()};
     for (std::size_t i = 0; i < s.columns.size(); ++i) {
         const SnapshotColumn& c = s.columns[i];
         if (intoEmpty && (static_cast<int>(i) == s.nameColumn || static_cast<int>(i) == s.transformColumn)) continue;

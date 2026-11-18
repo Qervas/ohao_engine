@@ -3,7 +3,6 @@
 // and restore code that makeComponentOps<T> instantiates for it. Columns hold values in
 // the component's EnTT packed order; trivially copyable components are captured with one
 // memcpy per storage page.
-#include "ecs/components.hpp"
 #include "reflect/hash.hpp"
 #include "reflect/type_info.hpp"
 
@@ -37,6 +36,8 @@ struct RestoreScratch {
     // Every live entity was created by this restore (it restores into an empty world):
     // no entity holds T yet, so values are emplaced with no lookup, comparison or drop pass.
     bool intoEmpty{false};
+    // The managed entities (EntityId's storage; null when none has one): a value of T on any other entity is kept.
+    const entt::sparse_set* managed{nullptr};
 };
 
 // One component value that differs between a snapshot and the live world (world.diff):
@@ -137,7 +138,7 @@ std::size_t restoreColumn(entt::registry& r, const SnapshotColumn& col, RestoreS
     }
     std::vector<entt::entity> drop;
     for (const entt::entity e : static_cast<const entt::sparse_set&>(s))
-        if (sc.stamp[entityIndex(e)] != epoch && r.all_of<EntityId>(e)) drop.push_back(e);
+        if (sc.stamp[entityIndex(e)] != epoch && sc.managed && sc.managed->contains(e)) drop.push_back(e);
     for (const entt::entity e : drop) r.remove<T>(e);
     return writes + drop.size();
 }

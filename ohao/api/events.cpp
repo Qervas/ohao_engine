@@ -2,6 +2,7 @@
 // a cursor, every channel or the named ones, each event's payload written from its reflection. Reading changes
 // nothing, so it does not sync.
 #include "api/internal.hpp"
+#include "ecs/components.hpp"
 
 #include "ecs/events.hpp"
 #include "reflect/registry.hpp"

@@ -1,6 +1,5 @@
 #pragma once
 #include "core/input.hpp"
-#include "ecs/components.hpp"
 #include "ecs/events.hpp"
 #include "ecs/system.hpp"
 
@@ -32,6 +31,7 @@ struct RestoreEvent {
 
 class World;
 class SystemContext;
+struct Transform;   // ecs/components.hpp: the World's interface names the core's components, it does not hold them
 
 // The game world: an EnTT registry plus the systems of two phases (sub-project 4 spec, "System phases").
 //   simulate  behaviour (spin, physics, gameplay): once per fixed step, with the fixed dt. simulate(dt) runs them.
@@ -135,11 +135,13 @@ public:
 
     // Creates an entity with a fresh EntityId, Name, Transform (tagged TransformDirty), an
     // empty Children and its CreationOrder.
-    entt::entity create(std::string_view name, const Transform& local = {});
+    entt::entity create(std::string_view name);   // at the identity Transform
+    entt::entity create(std::string_view name, const Transform& local);
     // Same, with a caller-chosen id (from a file or a command). Returns entt::null and
     // creates nothing when id is 0 or already in use. `hint`: the handle to take when it is free (a snapshot
     // restore recreates an entity as it was, so references held as handles stay valid).
-    entt::entity createWithId(uint64_t id, std::string_view name, const Transform& local = {},
+    entt::entity createWithId(uint64_t id, std::string_view name);   // at the identity Transform
+    entt::entity createWithId(uint64_t id, std::string_view name, const Transform& local,
                               entt::entity hint = entt::null);
 
     // Stable ids. Generated ids are splitmix64(seed + counter++), skipping 0 and ids in

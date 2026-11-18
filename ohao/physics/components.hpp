@@ -1,7 +1,6 @@
 #pragma once
 // The physics module's components (physics/module.hpp): colliders, bodies, joints and the players the physics
 // system moves (physics/physics_scene.hpp).
-#include "ecs/components.hpp"
 #include "visual/components.hpp"   // ModelAsset: a CollisionMesh's
 
 #include <entt/entity/entity.hpp>

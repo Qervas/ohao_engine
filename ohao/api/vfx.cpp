@@ -5,6 +5,7 @@
 // kind and the records after a cursor. The frame half (particles live) comes with the renderer's
 // effects; until then `particles` is null.
 #include "api/internal.hpp"
+#include "ecs/components.hpp"
 
 #include "vfx/vfx.hpp"
 
