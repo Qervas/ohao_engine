@@ -47,6 +47,25 @@
   against a game reload, and what reloading a module's state would need (Jolt's bodies rebuilt from components).
   Built only if the measurement shows it is the edit loop's largest cost.
 
+- **Corrections from build 1** (commits 1-5, 2026-11-18):
+  - *`only`* installs the core and exactly the named modules, not their DEPENDS closure: while animation, audio and vfx
+    are still inside `ohao_ecs`, the closure installed them into benches that measure physics alone. At commit 10
+    (every module its own) `only` closes over DEPENDS again, and an install whose dependencies are missing is refused,
+    the one rule for engine modules and games (P5).
+  - *Staged modules:* until a module moves, `engine::modules()` lists a stand-in for it, so `only` and `game.reload`
+    have one path from commit 3.
+  - *Exceptions until commit 8:* `ohao_ecs->ohao_visual` and `ohao_ecs->ohao_physics` (animation, audio and vfx still
+    in `ohao_ecs` read them).
+  - *The machine's floating-point flags come from Jolt's interface* (`-mavx2 -mfma -mfpmath=sse`): linking Jolt
+    private moved the crowd's hash and replay checkpoints 2-6 (A/B), so Jolt is linked public. Build 2 makes the flags
+    one explicit engine-wide setting every engine and game target links, Jolt private, the hashes unchanged.
+  - *`spawnLight` and `lookRotation`* had no callers: deleted, not moved.
+  - *R4 on the player:* it stays in physics. Its step runs inside the physics step, between the bodies' sync and Jolt's
+    substeps (`physics_scene_players.cpp:462-498`); its footsteps and landings are sorted with contacts, triggers and
+    joint breaks into one emission (`physics_scene_step.cpp:144-149`); one snapshot holds it with the bodies. As its own
+    module it would collide with stale bodies and move `world.hash`. It is physics' feature (characters), not a
+    feature on top of physics.
+
 ## 0. What must be true (the requirement)
 
 Frank, 2026-11-18: subsystems must be modules, or the engine is "difficult to maintain and hard to impl across all

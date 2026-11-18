@@ -492,7 +492,6 @@ $ build/Release/ohao.exe schema audio-bank -o build/doc_tmp/audio_bank.schema.js
 | `E_LEVEL_UNSUPPORTED` | A level file that needs Draco or meshopt compression. Exit code 2. |
 | `E_LEVEL_EXTRAS` | A level node's extras with a bad hint value or an unknown capitalised key (a misspelt component); the node loads without it. On the level entity's `InstantiateError`. Exit code 2. |
 | `W_UNKNOWN_COMPONENT` | Warning: an unknown component close to a known name, kept but probably a typo. |
-| `W_UNSAVEABLE_MESH` | Warning: a mesh made in code, with no MeshSource, is not saved. |
 | `W_LEVEL_EXTRAS` | Warning: an unknown lower-case key in a level node's extras (another tool's property). |
 | `W_LEVEL_UNSUPPORTED` | Warning: level content OHAO ignores (skins, animations, morph targets, orthographic cameras, `KHR_materials_*` but ior, specular, emissive_strength, clearcoat and sheen). |
 | `W_LEVEL_DYNAMIC_MESH` | Warning: a dynamic body with a `Mesh` collider; it is built as the mesh's convex hull. |
