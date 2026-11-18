@@ -337,7 +337,8 @@ would be built twice. Its CPU solver (`901b4a37`) is done and stays.
 the order of section 5, with the boundary before the frame because games are built by other people's agents.
 
 **Open, each decided by measurement in its step's plan:**
-- The job system: our own work-stealing pool, or enkiTS (zlib) or Taskflow (MIT). Deferred with the jobs (4.5).
+- The job system: **our own** work-stealing task graph (Frank, 2026-11-18; over enkiTS and Taskflow: no new
+  dependency, determinism for replay in our hands), built in step 4b (Frank, 2026-11-17: "we hav to build it").
 - The scene writers: the generic reflection writer if it meets the 10 ms save budget on bench10k, else generated.
 - The texture compressor and container: bc7enc_rdo or Compressonator, KTX-Software for KTX2.
 - Descriptor buffers (`VK_EXT_descriptor_buffer`) or classic descriptor sets for the bindless table. Classic sets
