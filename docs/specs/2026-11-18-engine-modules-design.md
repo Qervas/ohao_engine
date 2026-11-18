@@ -66,6 +66,21 @@
     module it would collide with stale bodies and move `world.hash`. It is physics' feature (characters), not a
     feature on top of physics.
 
+- **Corrections from build 2** (commits 6-8, 2026-11-18):
+  - *The machine flags* are `ohao_machine` (`cmake/ohao_machine.cmake`, exactly Jolt's interface flags), linked public
+    by `ohao_core` and `ohao_reflect`; Jolt is private to physics. About a dozen libraries had no flags before (the
+    renderer's CPU code, anim, vfx, audio, level and others), so three goldens moved once: the helmet 3 pixels and
+    glass 1.28% by 1 level (the renderer's CPU math), the play scene 0.95% by at most 3 (anim's poses), spread over the
+    frame with no structure. The CPU twin (`ohao_openpbr_cpu`, its tables) gets none: its tables were made without.
+  - *Rules by direction:* an undeclared include of a module at the same level or below is rule 2 ("animation does not
+    declare physics"); an include upward is rule 1. P4 is refused from commit 8, when the core's exceptions go.
+  - *Footsteps is its own module* through one extension point in the audio schedule, `SoundSource`, called where the
+    footstep code was (before a game's cues, and per clip event before `animSoundNames`), so requests reach the voice
+    table in the same order; its reads join the schedule's declaration by `World::addAccess`, which carries resources
+    too. It has no event channel of its own: a new channel moves every `world.hash` (the hash covers the step's events
+    and the next seq).
+  - *R1's registration units* are split into contiguous parts called in the old order (`ohao schema` byte-identical).
+
 ## 0. What must be true (the requirement)
 
 Frank, 2026-11-18: subsystems must be modules, or the engine is "difficult to maintain and hard to impl across all
