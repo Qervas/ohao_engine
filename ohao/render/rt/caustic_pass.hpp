@@ -47,6 +47,7 @@ public:
     // Something to trace: a directional light and a caster.
     [[nodiscard]] bool active() const noexcept { return m_casters.totalPower > 0.0f; }
     [[nodiscard]] uint32_t casterCount() const noexcept { return m_casterCount; }
+    [[nodiscard]] uint32_t lightCount() const noexcept { return uint32_t(m_casters.lightIrradiance.size()); }
 
     // The splat buffer for `pixels` pixels (the one it replaces is retired). False: the pass stays off.
     bool ensure(uint32_t pixels);
@@ -55,7 +56,7 @@ public:
     void recordBeginFrame(const Frame& frame);
     // What the traces declare: the light pass (causticTrace) reads the table, adds to the splats and counts the
     // clamped ones; the camera pass (raygenCaustics) reads and clears the splats; the manifold pass
-    // (manifoldConnect) reads the table and counts.
+    // (its rounds, render/rt/manifold_rounds.hpp) reads the table and counts.
     void lightPass(Pass& pass);
     void cameraPass(Pass& pass);
     void manifoldPass(Pass& pass);
@@ -66,6 +67,15 @@ public:
     // connections that carried light, the pruning's cluster, sub-cluster and triangle tests, and step 2b's walks, paths
     // found, connections through solids and paths at the re-find trials' ceiling.
     [[nodiscard]] std::array<uint32_t, 11> manifoldCounts() const;
+    // The manifold rounds' words since the last clear (words 12-22): items lost past the last pass, fixed-point words
+    // clamped, items carried to a later pass, the passes that held an item (the most), then the peak counts in a batch
+    // and pass of the records and of the records' items, groups, clusters, sub-clusters, candidates and roots
+    // (render/rt/manifold_rounds.hpp).
+    [[nodiscard]] std::array<uint32_t, 11> manifoldRoundCounts() const;
+    // The solve's (words 23-28): tests run, items still open after the last pass, undecided boxes, roots past those an
+    // item keeps, items started over for want of a state (rt/path_tracer.slang, manifoldSolvePlain), and the peak states
+    // a batch and pass's pool was asked for.
+    [[nodiscard]] std::array<uint32_t, 6> manifoldSolveCounts() const;
     void clearCounts() noexcept { m_clearCounts = true; }
 
     [[nodiscard]] VkBuffer table() const noexcept { return m_table.buffer; }
@@ -74,8 +84,8 @@ public:
 
     // The packed table (float4 rows), as rt/caustics.slang reads it; at most kRows rows.
     static constexpr uint32_t kRows = 4096;
-    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters.
-    static constexpr uint32_t kStatsBytes = 64;
+    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters, 12-22 its rounds', 23-28 its solve's.
+    static constexpr uint32_t kStatsBytes = 32 * 4;
     [[nodiscard]] static std::vector<glm::vec4> pack(const CausticCasters& c, glm::vec3 sceneCenter, float sceneRadius);
 
 private:

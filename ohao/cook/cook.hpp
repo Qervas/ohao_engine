@@ -16,7 +16,7 @@
 namespace ohao::cook {
 
 // Raised whenever the importer or a cooked format changes what a cook writes: every name changes with it.
-inline constexpr uint32_t kCookerVersion = 3;
+inline constexpr uint32_t kCookerVersion = 4;
 
 enum class ModelKind : uint32_t {
     Meshes,   // each glTF mesh on its own, untransformed (a level's nodes place them)

@@ -6,9 +6,11 @@
 #include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstring>
 #include <unordered_set>
+#include <vector>
 
 namespace ohao::render {
 
@@ -148,8 +150,9 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
     std::copy(sel.materialBits.begin(), sel.materialBits.end(), words.begin() + 4 + 12 * D);
 
     // Device buffers only grow (frames in flight read the old ones, which are retired).
+    // The triangles; the nodes (8 sub-clusters a cluster).
     const VkDeviceSize trisBytes = std::max<VkDeviceSize>(VkDeviceSize{T} * kTriBytes, kTriBytes);
-    const VkDeviceSize nodesBytes = std::max<VkDeviceSize>(VkDeviceSize{C * 9 + G + D} * kNodeBytes, kNodeBytes);   // 8 sub-clusters a cluster
+    const VkDeviceSize nodesBytes = std::max<VkDeviceSize>(VkDeviceSize{C * 9 + G + D} * kNodeBytes, kNodeBytes);
     // A failed growth keeps the pass off from then on (no retry every frame).
     if (m_growthFailed) T = 0;
     else if (trisBytes > m_trisBytes || nodesBytes > m_nodesBytes) {
@@ -276,6 +279,10 @@ void ManifoldCasters::cameraPass(Pass& pass, uint32_t frameSlot) {
 void ManifoldCasters::manifoldPass(Pass& pass, uint32_t frameSlot) {
     pass.read(m_tris, BufferUse::Storage).read(m_nodes, BufferUse::Storage).read(m_draws[frameSlot], BufferUse::Storage);
     pass.write(m_requests, BufferUse::Storage);
+}
+
+void ManifoldCasters::roundPass(Pass& pass, uint32_t frameSlot) {
+    pass.read(m_tris, BufferUse::Storage).read(m_nodes, BufferUse::Storage).read(m_draws[frameSlot], BufferUse::Storage);
 }
 
 } // namespace ohao::render

@@ -222,12 +222,11 @@ GBufferOut shade(GVertex v, bool frontFacing, float4 fragCoord, bool masked)
     {
         const float2 normalUV = v.texCoord;
         const float3 tangentNormal = normalFromMap(sampleTexture(normalTexIdx, normalUV).rg);
-        float3 T;
-        float3 B;
         if (dot(v.tangent.xyz, v.tangent.xyz) > 1e-6)
         {
-            T = normalize(v.tangent.xyz - N * dot(N, v.tangent.xyz));
-            B = normalize(cross(N, T)) * v.tangent.w;
+            // From behind, the whole mapped normal turns with the surface (N was turned above).
+            const float side = dot(N, v.normal) < 0.0 ? -1.0 : 1.0;
+            N = side * mikkTSpaceNormal(tangentNormal, v.normal, v.tangent.xyz, v.bitangent);
         }
         else
         {
@@ -235,11 +234,10 @@ GBufferOut shade(GVertex v, bool frontFacing, float4 fragCoord, bool masked)
             const float3 dPdy = ddy(v.worldPos);
             const float2 dUVdx = ddx(normalUV);
             const float2 dUVdy = ddy(normalUV);
-            T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
-            B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+            const float3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
+            const float3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+            N = normalize(T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z);
         }
-        // T, B, N as the columns (GLSL's mat3(T, B, N) * tangentNormal).
-        N = normalize(mul(tangentNormal, float3x3(T, B, N)));
     }
 
     // Roughness and metallic, times glTF's metallicRoughness texture (G, B; uv 0); occlusion only

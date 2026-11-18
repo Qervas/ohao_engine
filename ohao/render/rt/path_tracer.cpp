@@ -38,11 +38,13 @@ bool PathTracer::loadFunctionPointers() {
         (PFN_vkGetRayTracingShaderGroupHandlesKHR)vkGetDeviceProcAddr(m_device, "vkGetRayTracingShaderGroupHandlesKHR");
     vkCmdTraceRaysKHR =
         (PFN_vkCmdTraceRaysKHR)vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysKHR");
+    vkCmdTraceRaysIndirectKHR =
+        (PFN_vkCmdTraceRaysIndirectKHR)vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysIndirectKHR");
     vkGetBufferDeviceAddressFn =
         (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(m_device, "vkGetBufferDeviceAddress");
 
     return vkCreateRayTracingPipelinesKHR && vkGetRayTracingShaderGroupHandlesKHR &&
-           vkCmdTraceRaysKHR && vkGetBufferDeviceAddressFn;
+           vkCmdTraceRaysKHR && vkCmdTraceRaysIndirectKHR && vkGetBufferDeviceAddressFn;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -107,6 +109,10 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice, GpuAlloc
     }
     if (!m_manifold.create(m_device, allocator)) {
         OHAO_LOG(Error, render, "PathTracer: failed to create the manifold pass's buffers");
+        return false;
+    }
+    if (!m_manifoldRounds.create(m_device, allocator)) {
+        OHAO_LOG(Error, render, "PathTracer: failed to create the manifold rounds' buffers");
         return false;
     }
 
@@ -366,6 +372,7 @@ void PathTracer::destroy() {
     m_guiding.destroy();
     m_caustics.destroy();
     m_manifold.destroy();
+    m_manifoldRounds.destroy();
 
     // SBT
     for (GpuBuffer* sbt : {&m_sbt, &m_causticsSbt, &m_manifoldSbt}) m_allocator->retire(*sbt);
@@ -380,6 +387,7 @@ void PathTracer::destroy() {
     if (m_causticsPipeline) { vkDestroyPipeline(m_device, m_causticsPipeline, nullptr); m_causticsPipeline = VK_NULL_HANDLE; }
     m_causticsPipelineFailed = false;
     if (m_manifoldPipeline) { vkDestroyPipeline(m_device, m_manifoldPipeline, nullptr); m_manifoldPipeline = VK_NULL_HANDLE; }
+    if (m_manifoldResolvePipe) { vkDestroyPipeline(m_device, m_manifoldResolvePipe, nullptr); m_manifoldResolvePipe = VK_NULL_HANDLE; }
     m_manifoldPipelineFailed = false;
     if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
 

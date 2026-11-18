@@ -272,6 +272,13 @@ on m9 and m10 (the CPU twin, t15's form), and the rounds a frame needs.
 
 ## Step 2c: normal-mapped glints (proposed, 2026-11-05)
 
+**Outcome (2026-11-18):** built, measured and not shipped for mapped draws: owned by the manifold pass they cost about
+49,000x the light pass a pixel-spp at equal error, and both converge to the same image, so normal-mapped casters stay
+with step 1's light pass (M7 holds). What 2c left: MikkTSpace's normal in both renderers, the fp32 map read, the pass
+as bounded rounds, and plain triangles on the exact solver below (Bernstein subdivision and Krawczyk) in place of 2a's
+Newton. The section below is the design as proposed; `docs/plans/2026-11-08-caustics-step2c.md` has what was measured,
+`docs/changes/2026-11-18-caustics-step2c.md` the record.
+
 **Why.** Step 2a left normal-mapped casters to the camera side (ruling M7), and the showcase's remaining dots are theirs:
 removing casters one group at a time put two dots on the helmet (normal-mapped metal), one on the helmet and the glass
 ball together, one on Sponza's own surfaces. At equal time 2a does not improve the showcase until these are owned.

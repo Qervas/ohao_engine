@@ -37,6 +37,7 @@ import rt.lights;
 import rt.caustics;
 import rt.manifold;
 import rt.manifold_cert;
+import rt.manifold_poly;
 import rt.pt_hit;
 import display.display;
 
@@ -75,6 +76,14 @@ import display.display;
 [[vk::binding(55, 0)]] StructuredBuffer<float4> manifoldNodes;
 [[vk::binding(56, 0)]] StructuredBuffer<uint4> manifoldDraws;
 [[vk::binding(57, 0)]] RWStructuredBuffer<float4> manifoldRequests;
+// The manifold pass's rounds (render/rt/manifold_rounds.hpp): the requests' records (6 float4 each), the queues' items
+// (a region a queue, uint2 each), the roots (4 uint4 each), the counts and dispatch arguments, the frame's sum (3 words a
+// pixel, fixed point at kCausticSplatScale).
+[[vk::binding(58, 0)]] RWStructuredBuffer<float4> manifoldRecords;
+[[vk::binding(59, 0)]] RWStructuredBuffer<uint2> manifoldItems;
+[[vk::binding(60, 0)]] RWStructuredBuffer<uint4> manifoldRoots;
+[[vk::binding(61, 0)]] RWStructuredBuffer<uint> manifoldCounts;
+[[vk::binding(62, 0)]] RWStructuredBuffer<uint> manifoldSum;
 
 // The push constants (PTPushConstants, 256 bytes): matrices as their four columns.
 struct PushConstants
@@ -118,7 +127,7 @@ static const uint kFlagManifoldGlass = 1u << 23u;
 static const uint kManifoldOwnedBit = 1u;
 static const uint kManifoldBaseBit = 2u;
 static const uint kManifoldCoatBit = 4u;
-// A material's word (the draws buffer after its draws: row 1 + 2 D + w / 4).
+// A material's word (the draws buffer after its draws: row 1 + 3 D + w / 4).
 uint manifoldMaterialBits(uint material)
 {
     const uint4 h = manifoldDraws[0];
@@ -1480,27 +1489,216 @@ float3 manifoldGlass(uint slot, uint material, float4 sphere, float alpha, float
     return light * float(trials);
 }
 
-// The manifold pass (render/rt/path_tracer_render.cpp, after raygenCaustics): a thread a pixel over its requests. Each
-// retraces the ray that met X, and for each directional light and owned draw draws one slope in the draw's smooth
-// lobes' cores, solves every triangle the cones keep for the points whose half vector between X and the light has that
-// slope, and connects them (X -> y and y -> the light visible): the term sun -> the core at y -> X's rough reflection,
-// by the change of variables from the slope to y's area. The sum goes into the running mean the raygen just wrote.
-[shader("raygeneration")]
-void manifoldConnect()
+// ---- the manifold pass as rounds (docs/plans/2026-11-08-caustics-step2c.md, "The pass as rounds") ----------------
+//
+// Step 2a's estimator over queues of items of bounded cost, each round a dispatch (render/rt/manifold_rounds.hpp):
+//   manifoldSetup    raygen, a thread a pixel: each request's X retraced, a draw and a slope drawn for each light, a
+//                    record written and its item queued; step 2b's glass walk here
+//   manifoldWalkRecords  raygen, a thread a record: the draw's groups queued (kManifoldChunk at most a pass)
+//   manifoldWalk*    raygen, a thread an item: a group's cone and its <= 8 clusters, a cluster's <= 8 sub-clusters,
+//                    a sub-cluster's <= 16 triangles (2a's disc test each), those that pass appended to the next queue
+//   manifoldSolvePlain  raygen, a thread an item: every root of a candidate triangle (rt/manifold_poly.slang's
+//                    subdivision), at most kManifoldSolveBudget tests a dispatch
+//   manifoldConnect  raygen, a thread a root: the shadow ray, the retrace of y, X's surface, the contribution
+//   manifoldResolve  compute, a thread a pixel: the frame's fixed-point sum into the running mean, the counters
+// The walk and the solve are raygens, not compute: the driver rounds the same code differently as compute (the
+// renderer's ensureManifoldPipeline). Every random number is keyed by the request (pixel, sample, slot, light) and the triangle, never by a queue
+// position, and each contribution is added as integers (kCausticSplatScale, rounded stochastically by such a key):
+// the image is the same in any order the GPU runs the items in.
+//
+// The frame's pixels are taken in batches of rows (the host's rowsPerBatch, sized so a batch's items fit the queues
+// with headroom), and each batch in passes (the host's kMCPasses): pass 0 runs the setup and every round; an item a
+// round could not finish, its outputs past their queue's capacity, is carried into its own queue's next pass, and every
+// later pass runs every round again on what was carried and what it yields. An item still carried after the last pass
+// is counted lost (the stats' word 12). All into the one fixed-point sum; the resolve runs once.
+//
+// manifoldCounts (uint words): the header (the host's capacities, regions, rows, batches and passes; the frame's
+// counters), then a block of kMCBlockWords a batch and pass: a queue q's trace arguments (width, 1, 1) and count at 4q,
+// the records' count at kMCRecords, the solve's states its pass's pool holds and was asked for at kMCStatesKept to
+// kMCStatesParts (manifoldStateTake).
+static const uint kMQRecords = 0u;      // the records' items (R0's input): (record, the next group)
+static const uint kMQGroups = 1u;
+static const uint kMQClusters = 2u;
+static const uint kMQSubs = 3u;
+static const uint kMQCandidates = 4u;
+static const uint kMQRoots = 5u;        // 4 uint4 each, in manifoldRoots
+static const uint kMCCapRecords = 16u;  // the header: capacities (records, then a queue each)
+static const uint kMCCap = 17u;
+static const uint kMCOffset = 23u;      // a queue's first region in manifoldItems (its second at + its capacity)
+static const uint kMCRows = 29u;
+static const uint kMCBatches = 30u;
+static const uint kMCPasses = 31u;
+static const uint kMCCandidates = 32u;  // the frame's counters: candidates, roots, connections, cluster, sub-cluster
+                                        // and triangle tests
+static const uint kMCLost = 38u;        // items carried past the last pass (or a record past its capacity)
+static const uint kMCClamped = 39u;     // fixed-point words clamped
+static const uint kMCCarried = 40u;     // items carried to a later pass
+static const uint kMCBoxes = 41u;       // the solve's: tests run (Krawczyk's and grids built), items still open after the
+static const uint kMCOpen = 42u;        // last pass, undecided boxes, roots past kPolyMaxRoots, items a full pool of
+static const uint kMCUndecided = 43u;   // states sent back to start over
+static const uint kMCRootOverflow = 44u;
+static const uint kMCRestarts = 45u;
+static const uint kMCStateCap = 46u;    // the solve's states: their capacity and first slot in manifoldItems
+static const uint kMCStateOffset = 47u;
+static const uint kMCBlocks = 64u;      // then a block of kMCBlockWords words a batch and pass
+static const uint kMCBlockWords = 32u;
+static const uint kMCRecords = 24u;     // in a block: the records' count (pass 0's)
+static const uint kMCStatesKept = 25u;  // in a block: the states its pass's pool holds, kept by items going on (up from
+static const uint kMCStatesAsked = 26u; // the pool's bottom), and asked for and given to others (down from its top)
+static const uint kMCStatesFit = 27u;
+static const uint kMCStatesParts = 28u;
+// An item: (record | its children already emitted << 24 | counted << 31, its node); counted: an item carried, whose
+// tests are already counted.
+static const uint kManifoldRecordMask = 0x00FFFFFFu;
+static const uint kManifoldCounted = 0x80000000u;
+static const uint kManifoldChunk = 256u;   // groups a record's item emits a pass at most
+// A record: 6 float4 (origin, pixel), (ray direction, slot | light << 8 | (channel + 1) << 24), (beta, 1 / the
+// draw's probability), (X, the draw), (the slope, its angle, 0), (L, the hash the slope came from).
+static const uint kManifoldRecordRows = 6u;
+
+// The batch and pass this dispatch runs (pc.jitter.z's bits: batch | pass << 16), and a block of words.
+uint manifoldBatch() { return asuint(pc.jitter.z) & 0xFFFFu; }
+uint manifoldPassIndex() { return asuint(pc.jitter.z) >> 16u; }
+uint manifoldBlockAt(uint pass) { return kMCBlocks + kMCBlockWords * (manifoldBatch() * manifoldCounts[kMCPasses] + pass); }
+uint manifoldBlock() { return manifoldBlockAt(manifoldPassIndex()); }
+// A queue's region in a pass: two a queue, a pass's input in one while the carries for the next go to the other.
+uint manifoldRegion(uint q, uint pass)
 {
-    const uint2 pixel = DispatchRaysIndex().xy;
+    return manifoldCounts[kMCOffset + q] + (pass & 1u) * manifoldCounts[kMCCap + q];
+}
+
+// Reserves n slots of queue q's in a block (its four words), its capacity of them its to fill: the first index. Those
+// below the capacity are the caller's to write; past it the caller carries what it could not write. The trace arguments
+// (width, 1, 1) are the items below the capacity rounded up to 64: every 64th slot reserved adds 64.
+uint manifoldReserveIn(uint block, uint q, uint n)
+{
+    const uint word = block + q * 4u, cap = manifoldCounts[kMCCap + q];
+    uint base;
+    InterlockedAdd(manifoldCounts[word + 3u], n, base);
+    const uint started = (min(base + n, cap) + 63u) / 64u - (min(base, cap) + 63u) / 64u;
+    if (started > 0u)
+    {
+        InterlockedAdd(manifoldCounts[word], started * 64u);
+        manifoldCounts[word + 1u] = 1u;
+        manifoldCounts[word + 2u] = 1u;
+    }
+    return base;
+}
+
+// The same for a wave: every active lane calls it (n may be 0), one atomic for them all; the lane's first index.
+uint manifoldAppendWaveIn(uint block, uint q, uint n)
+{
+    const uint offset = WavePrefixSum(n);
+    const uint total = WaveActiveSum(n);
+    uint base = 0u;
+    if (WaveIsFirstLane() && total > 0u) base = manifoldReserveIn(block, q, total);
+    return WaveReadLaneFirst(base) + offset;
+}
+
+// A counter of this frame (kMCCandidates + i, ...), a wave's sum at a time.
+void manifoldCountWave(uint word, uint n)
+{
+    const uint total = WaveActiveSum(n);
+    if (WaveIsFirstLane() && total > 0u) InterlockedAdd(manifoldCounts[word], total);
+}
+
+// An item this round could not finish (its outputs past their queue's capacity), into its own queue's next pass (the
+// other region: never full, since a pass's carries are at most its inputs). Every active lane calls it. Past the last
+// pass it is lost, and counted.
+void manifoldCarryWave(uint q, bool carry, uint2 item)
+{
+    const uint next = manifoldPassIndex() + 1u;
+    manifoldCountWave(kMCCarried, carry ? 1u : 0u);
+    if (next >= manifoldCounts[kMCPasses])
+    {
+        manifoldCountWave(kMCLost, carry ? 1u : 0u);
+        return;
+    }
+    const uint at = manifoldAppendWaveIn(manifoldBlockAt(next), q, carry ? 1u : 0u);
+    if (!carry) return;
+    if (at < manifoldCounts[kMCCap + q]) manifoldItems[manifoldRegion(q, next) + at] = item;
+    else InterlockedAdd(manifoldCounts[kMCLost], 1u);
+}
+
+// A contribution into the pixel's fixed-point sum, each channel rounded stochastically by `key`'s hashes; a word
+// that would pass 2^32 (or a value past 2^28) is clamped and counted.
+void manifoldSplat(uint pixelIndex, float3 c, uint key)
+{
+    uint h = key;
+    [unroll] for (uint k = 0u; k < 3u; ++k)
+    {
+        h = pcg(h);
+        bool clamped;
+        const uint q = causticQuantize(c[k], manifoldUnit(h), clamped);
+        uint before = 0u;
+        if (q > 0u) InterlockedAdd(manifoldSum[pixelIndex * 3u + k], q, before);
+        if (clamped || before > 0xFFFFFFFFu - q) InterlockedAdd(manifoldCounts[kMCClamped], 1u);
+    }
+}
+
+struct ManifoldRecord
+{
+    float3 origin, rayDir, beta, pX, L;
+    uint pixelIndex, slot, light, d, h2;
+    int channel;
+    float invP, thetaS;
+    float2 target;
+};
+
+ManifoldRecord manifoldRecord(uint rec)
+{
+    const uint b = rec * kManifoldRecordRows;
+    const float4 r0 = manifoldRecords[b], r1 = manifoldRecords[b + 1u], r2 = manifoldRecords[b + 2u];
+    const float4 r3 = manifoldRecords[b + 3u], r4 = manifoldRecords[b + 4u], r5 = manifoldRecords[b + 5u];
+    ManifoldRecord m;
+    m.origin = r0.xyz;
+    m.pixelIndex = asuint(r0.w);
+    m.rayDir = r1.xyz;
+    const uint meta = asuint(r1.w);
+    m.slot = meta & 255u;
+    m.light = (meta >> 8u) & 0xFFFFu;
+    m.channel = int(meta >> 24u) - 1;
+    m.beta = r2.xyz;
+    m.invP = r2.w;
+    m.pX = r3.xyz;
+    m.d = asuint(r3.w);
+    m.target = r4.xy;
+    m.thetaS = r4.z;
+    m.L = r5.xyz;
+    m.h2 = asuint(r5.w);
+    return m;
+}
+
+// A queue's item i in this pass (manifoldItems, the queue's region), and whether i is one this round handles.
+bool manifoldItem(uint q, uint i, out uint2 item)
+{
+    item = uint2(0u);
+    if (i >= min(manifoldCounts[manifoldBlock() + q * 4u + 3u], manifoldCounts[kMCCap + q])) return false;
+    item = manifoldItems[manifoldRegion(q, manifoldPassIndex()) + i];
+    return true;
+}
+
+// The caustics step 2 debug stop (OHAO_MANIFOLD_STAGE): 3 after X, 1 at the candidates, 2 at the roots.
+uint manifoldDebugStage() { return (pc.control.x >> 21u) & 3u; }
+
+// Setup: a thread a pixel of the batch's rows over its requests (kManifoldDepths). Each retraces the ray that met X, and for each
+// directional light draws one owned draw by its solid angle from X (Russian roulette on the request first) and one
+// slope from the draw's smooth lobes (GGX's, rt/manifold.slang), then writes the request's record and its item for R0. Step 2b
+// (manifoldGlass, opt-in) runs here on the same draw; its light goes into the fixed-point sum as the roots' does.
+[shader("raygeneration")]
+void manifoldSetup()
+{
+    const uint2 pixel = DispatchRaysIndex().xy + uint2(0u, manifoldBatch() * manifoldCounts[kMCRows]);
     const uint2 size = pc.params.xy;
     const uint pixelIndex = pixel.y * size.x + pixel.x;
     const uint flags = pc.control.x;
-    const uint classMask = (flags >> 11u) & 255u;
-    const uint debugStage = (flags >> 21u) & 3u;   // OHAO_MANIFOLD_STAGE: 3 stop after X, 1 at the candidates, 2 at the roots
+    const uint debugStage = manifoldDebugStage();
     OpenPBRTables tables;
     tables.data = openpbrTables;
     const uint4 header = manifoldDraws[0];   // (D, T, C, G)
     const uint lights = asuint(causticCasters[0].x);
-    float3 sum = float3(0.0);
-    uint requests = 0u, candidates = 0u, roots = 0u, connections = 0u;
-    uint clusterTests = 0u, subTests = 0u, triTests = 0u;
+    float3 glass = float3(0.0);
+    uint requests = 0u;
     uint4 glassCounts = uint4(0u);   // step 2b: walks, paths found, connections, at the trials' ceiling
     for (uint slot = 0u; slot < kManifoldDepths; ++slot)
     {
@@ -1508,6 +1706,7 @@ void manifoldConnect()
         const float4 r0 = manifoldRequests[r];
         const uint meta = asuint(r0.w);
         if ((meta & 1u) == 0u) continue;
+        manifoldRequests[r] = float4(0.0);
         ++requests;
         const float3 rayDir = manifoldRequests[r + 1u].xyz;
         const float3 beta = manifoldRequests[r + 2u].xyz;
@@ -1516,8 +1715,6 @@ void manifoldConnect()
         if ((hx.flags & kHit) == 0u || (hx.flags & kHitEmitter) != 0u) continue;
         const ManifoldSurface sx = manifoldSurface(hx, channel, float3(0.0));
         if (sx.fromInside) continue;
-        const OpenPBRSurface bx = OpenPBRSurface(sx.mi);
-        const float3 wo = toLocal(-rayDir, sx.t, sx.b, sx.n);
         const float3 pX = hx.position + hx.geoNormal * 1e-3;
         if (debugStage == 3u) continue;
         for (uint l = 0u; l < lights; ++l)
@@ -1550,147 +1747,57 @@ void manifoldConnect()
                 }
             }
             const float invP = wSum / (wPick * keep);
+            const uint4 da = manifoldDraws[1u + 3u * d], db = manifoldDraws[2u + 3u * d];
+            // The draw's lobes' alpha bounds, from its material's factors (the gather's record).
+            const float2 alphas = manifoldNodes[(header.w + header.z + d) * 4u].xy;
+            if (!(alphas.x > 0.0 || alphas.y > 0.0)) continue;
+            const uint h0 = manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, d);
+            const uint h1 = pcg(h0), h2 = pcg(h1);
+            const float2 target = manifoldDrawSlope(alphas, float3(manifoldUnit(h0), manifoldUnit(h1), manifoldUnit(h2)));
+            const float thetaS = atan(length(target));
+            const uint groupsInDraw = (da.y + kManifoldCluster - 1u) / kManifoldCluster;   // a cluster a meshlet
+            if (groupsInDraw > 0u)
             {
-                const uint4 da = manifoldDraws[1u + 3u * d], db = manifoldDraws[2u + 3u * d];
-                // The draw's lobes' alpha bounds, from its material's factors (the gather's record).
-                const float2 alphas = manifoldNodes[(header.w + header.z + d) * 4u].xy;
-                if (!(alphas.x > 0.0 || alphas.y > 0.0)) continue;
-                const uint h0 = manifoldHash(pixelIndex, pc.params.z, slot * 64u + l, d);
-                const uint h1 = pcg(h0), h2 = pcg(h1);
-                const float2 coreSlope = float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2);
-                const float2 target = manifoldDrawSlope(alphas, coreSlope,
-                                                        float3(manifoldUnit(h0), manifoldUnit(h1), manifoldUnit(h2)));
-                const float thetaS = atan(length(target));
-                const float aMin = alphas.x > 0.0 && alphas.y > 0.0 ? min(alphas.x, alphas.y) : max(alphas.x, alphas.y);
-                const float tol = max(1e-3 * aMin, 1e-6);
-                const uint clustersInDraw = da.y;   // a cluster a meshlet (rt/manifold_gather.slang)
-                const uint groupsInDraw = (clustersInDraw + kManifoldCluster - 1u) / kManifoldCluster;
-                for (uint g = 0u; g < groupsInDraw; ++g)
+                // The record (at most kManifoldDepths a pixel and light: the host's capacity), and its item for R0.
+                uint rec;
+                InterlockedAdd(manifoldCounts[manifoldBlockAt(0u) + kMCRecords], 1u, rec);
+                if (rec < manifoldCounts[kMCCapRecords])
                 {
-                    const uint gn = (db.y + g) * 4u;
-                    const float4 g0 = manifoldNodes[gn], g1 = manifoldNodes[gn + 1u], g2 = manifoldNodes[gn + 2u];
-                    if (!manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, pX, L, thetaS)) continue;
-                    const uint cEnd = min(clustersInDraw, (g + 1u) * kManifoldCluster);
-                    for (uint c = g * kManifoldCluster; c < cEnd; ++c)
-                    {
-                        ++clusterTests;
-                        const uint cn = (header.w + db.x + c) * 4u;
-                        const float4 c0 = manifoldNodes[cn], c1 = manifoldNodes[cn + 1u], c2 = manifoldNodes[cn + 2u];
-                        const float3 cRef = manifoldNodes[cn + 3u].xyz;   // the cluster's frame of reference
-                        if (!manifoldDiscTestTerm(c0.xyz, c1.xyz, c2.xyz, c0.w, c2.w, cRef, target, pX, L)) continue;
-                        const uint count = asuint(c1.w);
-                        for (uint sc = 0u; sc * 16u < count; ++sc)
-                        {
-                        ++subTests;
-                        const uint sn = (header.w + header.z + header.x + (db.x + c) * 8u + sc) * 4u;
-                        const float4 s0 = manifoldNodes[sn], s1 = manifoldNodes[sn + 1u], s2 = manifoldNodes[sn + 2u];
-                        if (!manifoldDiscTestTerm(s0.xyz, s1.xyz, s2.xyz, s0.w, s2.w, cRef, target, pX, L)) continue;
-                        const uint kEnd = min(count, sc * 16u + 16u);
-                        for (uint k = sc * 16u; k < kEnd; ++k)
-                        {
-                            const uint i = ((db.x + c) * 128u + k) * 9u;
-                            ++triTests;
-                            const float4 b0 = manifoldTris[i + 6u], b1 = manifoldTris[i + 7u], b2 = manifoldTris[i + 8u];
-                            if (!manifoldDiscTestTerm(b0.xyz, b1.xyz, b2.xyz, b0.w, b2.w, cRef, target, pX, L)) continue;
-                            ManifoldTri tri;
-                            tri.p0 = manifoldTris[i].xyz;
-                            tri.e1 = manifoldTris[i + 1u].xyz;
-                            tri.e2 = manifoldTris[i + 2u].xyz;
-                            tri.n0 = manifoldTris[i + 3u].xyz;
-                            tri.a1 = manifoldTris[i + 4u].xyz;
-                            tri.a2 = manifoldTris[i + 5u].xyz;
-                            tri.c = cRef;
-                            ++candidates;
-                            if (debugStage == 1u) continue;
-                            float2 uv;
-                            if (!manifoldSolve(tri, pX, L, target, tol, uv)) continue;
-                            if (!(uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0)) continue;
-                            float2 sigma, du, dv;
-                            float3 y, nS;
-                            if (!manifoldMap(tri, pX, L, uv, sigma, du, dv, y, nS)) continue;
-                            ++roots;
-                            if (debugStage == 2u) continue;
-                            // X and the light on opposite sides of the triangle: no reflection there reaches X.
-                            const float3 gS = cross(tri.e1, tri.e2);
-                            if (dot(gS, pX - y) * dot(gS, L) <= 0.0) continue;
-                            const float3 toY = y - pX;
-                            const float dist = length(toY);
-                            const float3 w = toY / dist;
-                            if (dot(w, hx.geoNormal) <= 0.0) continue;
-                            // The sun's shadow ray first (an any-hit ray: a root on a solid's far side, or in shadow, is
-                            // turned away before the closest-hit trace), from y off its side toward X, as the camera's
-                            // light sample leaves its hit.
-                            float3 T;
-                            if (!visible(y + normalize(gS) * (dot(gS, pX - y) > 0.0 ? 1e-3 : -1e-3), L, 1.0e4, T)) continue;
-                            // X -> y as the camera's bounce ray traces it: the first thing it meets must be y.
-                            const PathPayload hs = trace(pX, w, kPathMask | kTlasMaskEmitter, 1.0e4);
-                            if ((hs.flags & kHit) == 0u || (hs.flags & kHitEmitter) != 0u || hs.material != db.z ||
-                                abs(hs.t - dist) > 1e-4 * dist + 1e-5) continue;
-                            if (dot(L, hs.geoNormal) <= 0.0) continue;
-                            int ch = channel;
-                            float3 chMask = float3(1.0);
-                            const float4 row13 = materials[hs.material * kMaterialRows + kTransmissionRowFirst + 1u];
-                            ManifoldSurface ss = manifoldSurface(hs, -1, nS);
-                            if (ss.fromInside) continue;
-                            if (ch < 0 && row13.z > 0.0 && ss.mi.transmissionWeight > 0.0 && ss.mi.baseMetalness < 1.0)
-                            {
-                                // A dispersive surface draws the path's wavelength, as the camera side does there:
-                                // that channel alone, three times over (all three at 3 read dispersive glints 3x bright).
-                                ch = int(min(manifoldUnit(pcg(h2 ^ k)) * 3.0, 2.0));
-                                chMask = float3(ch == 0 ? 3.0 : 0.0, ch == 1 ? 3.0 : 0.0, ch == 2 ? 3.0 : 0.0);
-                            }
-                            if (ch >= 0) ss = manifoldSurface(hs, ch, nS);
-                            const float3 woS = toLocal(-w, ss.t, ss.b, ss.n), wiS = toLocal(L, ss.t, ss.b, ss.n);
-                            const float3 core =
-                                OpenPBRSurface(ss.mi).evalSmoothCore(woS, wiS, tables, kCausticRough, coreSlope);
-                            if (!any(core > 0.0)) continue;
-                            float3 sm, ro;
-                            bx.evalParts(wo, toLocal(w, sx.t, sx.b, sx.n), tables, kCausticRough, sm, ro);
-                            const float3 e12 = cross(tri.e1, tri.e2);
-                            const float area2 = length(e12);
-                            const float cosY = abs(dot(e12, w)) / area2;
-                            const float det = abs(du.x * dv.y - dv.x * du.y);
-                            const float dens = manifoldSlopeDensity(alphas, coreSlope, sigma);
-                            if (!(det > 0.0) || !(dens > 0.0)) continue;
-                            const float3 c = beta * ro * core * E * T * chMask * (invP * cosY * area2 / (dist * dist * det * dens));
-                            if (all(isfinite(c)))
-                            {
-                                sum += c;
-                                ++connections;
-                            }
-                        }
-                        }
-                    }
+                    const uint b = rec * kManifoldRecordRows;
+                    manifoldRecords[b] = float4(r0.xyz, asfloat(pixelIndex));
+                    manifoldRecords[b + 1u] = float4(rayDir, asfloat(slot | l << 8u | uint(channel + 1) << 24u));
+                    manifoldRecords[b + 2u] = float4(beta, invP);
+                    manifoldRecords[b + 3u] = float4(pX, asfloat(d));
+                    manifoldRecords[b + 4u] = float4(target, thetaS, 0.0);
+                    manifoldRecords[b + 5u] = float4(L, asfloat(h2));
+                    const uint at = manifoldReserveIn(manifoldBlockAt(0u), kMQRecords, 1u);
+                    if (at < manifoldCounts[kMCCap + kMQRecords])
+                        manifoldItems[manifoldRegion(kMQRecords, 0u) + at] = uint2(rec, 0u);
+                    else InterlockedAdd(manifoldCounts[kMCLost], 1u);
                 }
-                // Step 2b: the same draw, a transmissive solid, refracting the sun through itself onto X. The walk takes
-                // the whole instance, so one draw of each (instance, material) runs it (db.w, the host's mark: a merged
-                // model's runs of one glass are several draws), with that draw's own choice probability. Not for a solid
-                // that cannot refract (metalness 1, thin-walled), nor for a coat or a specular-weight texture (the walk's
-                // single interface and IOR would not be the BSDF's: manifoldGlass).
-                if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0 && db.w != 0u)
-                {
-                    const uint mrow = db.z * kMaterialRows;
-                    const float4 row12 = materials[mrow + kTransmissionRowFirst];
-                    const float4 row13 = materials[mrow + kTransmissionRowFirst + 1u];
-                    const bool single = materials[mrow + kLayerRowFirst].w <= 0.0 && asuint(materials[mrow + 5u].w) >= 4096u;
-                    if (row12.w > 0.0 && row13.y <= 0.5 && materials[mrow + 1u].y < 1.0 && single)
-                        sum += beta * invP *
-                               manifoldGlass(da.w, db.z, asfloat(manifoldDraws[3u + 3u * d]), alphas.x, pX, hx.geoNormal,
-                                             -rayDir, sx, tables, L, E, channel, pcg(h2 ^ 0x6B1A55u), glassCounts);
-                }
+                else InterlockedAdd(manifoldCounts[kMCLost], 1u);
+            }
+            // Step 2b: the same draw, a transmissive solid, refracting the sun through itself onto X. The walk takes
+            // the whole instance, so one draw of each (instance, material) runs it (db.w bit 0, the host's mark: a merged
+            // model's runs of one glass are several draws), with that draw's own choice probability. Not for a solid
+            // that cannot refract (metalness 1, thin-walled), nor for a coat or a specular-weight texture (the walk's
+            // single interface and IOR would not be the BSDF's: manifoldGlass).
+            if ((flags & kFlagManifoldGlass) != 0u && alphas.x > 0.0 && (db.w & 1u) != 0u)
+            {
+                const uint mrow = db.z * kMaterialRows;
+                const float4 row12 = materials[mrow + kTransmissionRowFirst];
+                const float4 row13 = materials[mrow + kTransmissionRowFirst + 1u];
+                const bool single = materials[mrow + kLayerRowFirst].w <= 0.0 && asuint(materials[mrow + 5u].w) >= 4096u;
+                if (row12.w > 0.0 && row13.y <= 0.5 && materials[mrow + 1u].y < 1.0 && single)
+                    glass += beta * invP *
+                             manifoldGlass(da.w, db.z, asfloat(manifoldDraws[3u + 3u * d]), alphas.x, pX, hx.geoNormal,
+                                           -rayDir, sx, tables, L, E, channel, pcg(h2 ^ 0x6B1A55u), glassCounts);
             }
         }
-        manifoldRequests[r] = float4(0.0);
     }
     if (requests > 0u)
     {
         InterlockedAdd(causticStats[1], requests);
-        InterlockedAdd(causticStats[2], candidates);
-        InterlockedAdd(causticStats[3], roots);
-        InterlockedAdd(causticStats[4], connections);
-        InterlockedAdd(causticStats[5], clusterTests);
-        InterlockedAdd(causticStats[6], subTests);
-        InterlockedAdd(causticStats[7], triTests);
         if (any(glassCounts > 0u))
         {
             InterlockedAdd(causticStats[8], glassCounts.x);
@@ -1699,14 +1806,544 @@ void manifoldConnect()
             InterlockedAdd(causticStats[11], glassCounts.w);
         }
     }
-    sum *= classKeep(classMask, kClassManifold);
-    if (any(sum != 0.0))
+    if (any(glass != 0.0))
+        manifoldSplat(pixelIndex, glass, manifoldHash(pixelIndex, pc.params.z, 0xFFFFu, 0x61A55u));
+}
+
+// The draw's groups of a record (R0): from its next group, kManifoldChunk at most a pass; what does not fit, or is past
+// the chunk, carried.
+[shader("raygeneration")]
+void manifoldWalkRecords()
+{
+    uint2 item;
+    const bool live = manifoldItem(kMQRecords, DispatchRaysIndex().x, item);
+    const uint rec = item.x & kManifoldRecordMask, g0 = item.y;
+    uint want = 0u, groups = 0u;
+    if (live)
     {
-        float4 acc = accumBuffer[pixel];
-        acc.rgb += sum / max(acc.w, 1.0);
-        accumBuffer[pixel] = acc;
-        outputImage[pixel] = float4(displayPixel(acc.rgb, pc.tuning.z, asuint(pc.tuning.w)), 1.0);
+        const uint d = asuint(manifoldRecords[rec * kManifoldRecordRows + 3u].w);
+        groups = (manifoldDraws[1u + 3u * d].y + kManifoldCluster - 1u) / kManifoldCluster;   // a cluster a meshlet
+        want = min(groups - g0, kManifoldChunk);
     }
+    const uint at = manifoldAppendWaveIn(manifoldBlock(), kMQGroups, want);
+    const uint cap = manifoldCounts[kMCCap + kMQGroups], region = manifoldRegion(kMQGroups, manifoldPassIndex());
+    const uint fit = at >= cap ? 0u : min(want, cap - at);
+    for (uint i = 0u; i < fit; ++i) manifoldItems[region + at + i] = uint2(rec, g0 + i);
+    manifoldCarryWave(kMQRecords, live && g0 + fit < groups, uint2(rec, g0 + fit));
+}
+
+// A walk item's outputs: the children `pass` marks (bit k: child k), the first `start` of them emitted in an earlier
+// pass; those that fit appended to queue q (at its slots from `at`), the item carried with its new start otherwise.
+// Returns the outputs written.
+uint manifoldFit(uint q, uint at, uint want)
+{
+    const uint cap = manifoldCounts[kMCCap + q];
+    return at >= cap ? 0u : min(want, cap - at);
+}
+
+// Walk, the groups' round: a group's cone test, then its clusters' disc tests (at most kManifoldCluster).
+[shader("raygeneration")]
+void manifoldWalkGroups()
+{
+    uint2 item;
+    const bool live = manifoldItem(kMQGroups, DispatchRaysIndex().x, item);
+    const uint rec = item.x & kManifoldRecordMask, start = (item.x >> 24u) & 127u;
+    const bool counted = (item.x & kManifoldCounted) != 0u;
+    uint pass = 0u, tests = 0u, cFirst = 0u;
+    if (live)
+    {
+        const ManifoldRecord m = manifoldRecord(rec);
+        const uint4 header = manifoldDraws[0];
+        const uint4 da = manifoldDraws[1u + 3u * m.d], db = manifoldDraws[2u + 3u * m.d];
+        const uint g = item.y;
+        const uint gn = (db.y + g) * 4u;
+        const float4 g0 = manifoldNodes[gn], g1 = manifoldNodes[gn + 1u], g2 = manifoldNodes[gn + 2u];
+        if (manifoldConeTest(g0.xyz, g1.xyz, g2.xyz, g0.w, m.pX, m.L, m.thetaS))
+        {
+            cFirst = g * kManifoldCluster;
+            const uint cEnd = min(da.y, (g + 1u) * kManifoldCluster);
+            for (uint c = cFirst; c < cEnd; ++c)
+            {
+                ++tests;
+                const uint cn = (header.w + db.x + c) * 4u;
+                const float4 c0 = manifoldNodes[cn], c1 = manifoldNodes[cn + 1u], c2 = manifoldNodes[cn + 2u];
+                const float3 cRef = manifoldNodes[cn + 3u].xyz;   // the cluster's frame of reference
+                if (manifoldDiscTestTerm(c0.xyz, c1.xyz, c2.xyz, c0.w, c2.w, cRef, m.target, m.pX, m.L))
+                    pass |= 1u << (c - cFirst);
+            }
+        }
+    }
+    manifoldCountWave(kMCCandidates + 3u, counted ? 0u : tests);
+    const uint want = live ? countbits(pass) - start : 0u;
+    const uint at = manifoldAppendWaveIn(manifoldBlock(), kMQClusters, want);
+    const uint fit = manifoldFit(kMQClusters, at, want), region = manifoldRegion(kMQClusters, manifoldPassIndex());
+    uint j = 0u;
+    for (uint k = 0u; k < kManifoldCluster; ++k)
+        if ((pass & (1u << k)) != 0u)
+        {
+            if (j >= start && j < start + fit) manifoldItems[region + at + j - start] = uint2(rec, cFirst + k);
+            ++j;
+        }
+    manifoldCarryWave(kMQGroups, live && fit < want, uint2(rec | (start + fit) << 24u | kManifoldCounted, item.y));
+}
+
+// Walk, the clusters' round: a cluster's sub-clusters (16 triangles each, at most 8).
+[shader("raygeneration")]
+void manifoldWalkClusters()
+{
+    uint2 item;
+    const bool live = manifoldItem(kMQClusters, DispatchRaysIndex().x, item);
+    const uint rec = item.x & kManifoldRecordMask, start = (item.x >> 24u) & 127u;
+    const bool counted = (item.x & kManifoldCounted) != 0u;
+    uint pass = 0u, tests = 0u;
+    const uint c = item.y;
+    if (live)
+    {
+        const ManifoldRecord m = manifoldRecord(rec);
+        const uint4 header = manifoldDraws[0];
+        const uint4 db = manifoldDraws[2u + 3u * m.d];
+        const uint cn = (header.w + db.x + c) * 4u;
+        const uint count = asuint(manifoldNodes[cn + 1u].w);
+        const float3 cRef = manifoldNodes[cn + 3u].xyz;
+        for (uint sc = 0u; sc < 8u && sc * 16u < count; ++sc)
+        {
+            ++tests;
+            const uint sn = (header.w + header.z + header.x + (db.x + c) * 8u + sc) * 4u;
+            const float4 s0 = manifoldNodes[sn], s1 = manifoldNodes[sn + 1u], s2 = manifoldNodes[sn + 2u];
+            if (manifoldDiscTestTerm(s0.xyz, s1.xyz, s2.xyz, s0.w, s2.w, cRef, m.target, m.pX, m.L)) pass |= 1u << sc;
+        }
+    }
+    manifoldCountWave(kMCCandidates + 4u, counted ? 0u : tests);
+    const uint want = live ? countbits(pass) - start : 0u;
+    const uint at = manifoldAppendWaveIn(manifoldBlock(), kMQSubs, want);
+    const uint fit = manifoldFit(kMQSubs, at, want), region = manifoldRegion(kMQSubs, manifoldPassIndex());
+    uint j = 0u;
+    for (uint k = 0u; k < 8u; ++k)
+        if ((pass & (1u << k)) != 0u)
+        {
+            if (j >= start && j < start + fit) manifoldItems[region + at + j - start] = uint2(rec, c << 3u | k);
+            ++j;
+        }
+    manifoldCarryWave(kMQClusters, live && fit < want, uint2(rec | (start + fit) << 24u | kManifoldCounted, item.y));
+}
+
+// Walk, the sub-clusters' round: a sub-cluster's triangles (at most 16), those that pass the candidates.
+[shader("raygeneration")]
+void manifoldWalkSubs()
+{
+    uint2 item;
+    const bool live = manifoldItem(kMQSubs, DispatchRaysIndex().x, item);
+    const uint rec = item.x & kManifoldRecordMask, start = (item.x >> 24u) & 127u;
+    const bool counted = (item.x & kManifoldCounted) != 0u;
+    uint pass = 0u, tests = 0u, tFirst = 0u;
+    if (live)
+    {
+        const ManifoldRecord m = manifoldRecord(rec);
+        const uint4 header = manifoldDraws[0];
+        const uint4 db = manifoldDraws[2u + 3u * m.d];
+        const uint c = item.y >> 3u, sc = item.y & 7u;
+        const uint cn = (header.w + db.x + c) * 4u;
+        const uint count = asuint(manifoldNodes[cn + 1u].w);
+        const float3 cRef = manifoldNodes[cn + 3u].xyz;
+        tFirst = (db.x + c) * 128u + sc * 16u;
+        const uint kEnd = min(count, sc * 16u + 16u);
+        for (uint k = sc * 16u; k < kEnd; ++k)
+        {
+            const uint i = ((db.x + c) * 128u + k) * 9u;
+            ++tests;
+            const float4 b0 = manifoldTris[i + 6u], b1 = manifoldTris[i + 7u], b2 = manifoldTris[i + 8u];
+            if (manifoldDiscTestTerm(b0.xyz, b1.xyz, b2.xyz, b0.w, b2.w, cRef, m.target, m.pX, m.L))
+                pass |= 1u << (k - sc * 16u);
+        }
+    }
+    manifoldCountWave(kMCCandidates + 5u, counted ? 0u : tests);
+    manifoldCountWave(kMCCandidates, counted ? 0u : countbits(pass));
+    const uint want = live && manifoldDebugStage() != 1u ? countbits(pass) - start : 0u;
+    const uint at = manifoldAppendWaveIn(manifoldBlock(), kMQCandidates, want);
+    const uint fit = manifoldFit(kMQCandidates, at, want), region = manifoldRegion(kMQCandidates, manifoldPassIndex());
+    uint j = 0u;
+    for (uint k = 0u; k < 16u; ++k)
+        if ((pass & (1u << k)) != 0u)
+        {
+            if (j >= start && j < start + fit) manifoldItems[region + at + j - start] = uint2(rec, tFirst + k);
+            ++j;
+        }
+    manifoldCarryWave(kMQSubs, live && fit < want, uint2(rec | (start + fit) << 24u | kManifoldCounted, item.y));
+}
+
+// A triangle slot's ManifoldTri (its frame of reference its cluster's).
+ManifoldTri manifoldTriangleAt(uint t)
+{
+    const uint i = t * 9u;
+    ManifoldTri tri;
+    tri.p0 = manifoldTris[i].xyz;
+    tri.e1 = manifoldTris[i + 1u].xyz;
+    tri.e2 = manifoldTris[i + 2u].xyz;
+    tri.n0 = manifoldTris[i + 3u].xyz;
+    tri.a1 = manifoldTris[i + 4u].xyz;
+    tri.a2 = manifoldTris[i + 5u].xyz;
+    tri.c = manifoldNodes[(manifoldDraws[0].w + (t >> 7u)) * 4u + 3u].xyz;
+    return tri;
+}
+
+// Solve (step 2c): every root of a candidate triangle of 2a's walk by rt/manifold_poly.slang's subdivision, the
+// triangle as a cell whose texels are (0, 0, 1) (polyTriangleSource: grids of degree 3). A thread runs at most
+// kManifoldSolveBudget tests; an item not finished is carried, its stack and the roots it found kept in a state (a pool
+// in manifoldItems a pass, kMCStateCap each: manifoldStateTake), into the candidates' next pass, where it goes on. A
+// carried item's stack is split in two at a boundary of its groups (a group: a box, or an inflation box with the halves
+// under it), the part an item with a state of its own while states are free: each part a disjoint set of the
+// triangle's boxes, so the parts find disjoint roots, and an item's tests spread over twice the threads each pass. Its
+// roots are queued for the connect as they are found, each once (the state counts those queued). An item still open
+// after the last pass is counted (kMCOpen) with its undecided boxes, never dropped silently; with no state free it
+// starts over in the next pass, its queued roots skipped (the solve is deterministic), counted (kMCRestarts); a part
+// never starts over (it is split only with its own state, and one whose stack outgrows a state is settled open).
+//
+// Items: (record | roots queued << 24, triangle), or (record | stated, state) carried with its state. A root: 4 uint4
+// (record, triangle, the area a unit of slope covers at y, its key), (y, 0), (the shading normal, 0), 0.
+static const uint kManifoldSolveBudget = 96u;
+static const uint kManifoldItemStated = 0x80000000u;
+// A state, in uint2 slots: (triangle, 0), (top, roots queued), (roots, undecided), (boxes, overflow), the roots' (s, t)
+// (8), their areas (4), the stack's boxes (2 a box) and words (2 a slot), kManifoldStateDepth entries at most (the
+// solve's stacks measured at most 14 deep; a deeper one is settled open, counted).
+static const uint kManifoldStateDepth = 32u;
+static const uint kManifoldStateRoots = 4u;
+static const uint kManifoldStateAreas = 12u;
+static const uint kManifoldStateStack = 16u;
+static const uint kManifoldStateKinds = kManifoldStateStack + 2u * kManifoldStateDepth;
+static const uint kManifoldStateSlots = kManifoldStateKinds + kManifoldStateDepth / 2u;
+
+// A pass's pool of states: the other pass's is the one its carries are saved to (each pass reads every state its pool
+// holds, so a pool is free again once its pass has run).
+uint manifoldStateAt(uint pass, uint at)
+{
+    return manifoldCounts[kMCStateOffset] + ((pass & 1u) * manifoldCounts[kMCStateCap] + at) * kManifoldStateSlots;
+}
+
+// The stack's entries first to first + count - 1 (count <= kManifoldStateDepth) into state `at`, with the results;
+// `part`: the state holds a part of its item's boxes (a split's).
+void manifoldStateSave(uint pass, uint at, uint slot, uint queued, bool part, PolySolveState s, uint first, uint count,
+                       PolyCellResult res)
+{
+    const uint o = manifoldStateAt(pass, at);
+    manifoldItems[o] = uint2(slot, 0u);
+    manifoldItems[o + 1u] = uint2(count | (part ? 0x80000000u : 0u), queued);
+    manifoldItems[o + 2u] = uint2(res.roots, res.undecided);
+    manifoldItems[o + 3u] = uint2(res.boxes, res.overflow);
+    for (uint k = 0u; k < kPolyMaxRoots; ++k) manifoldItems[o + kManifoldStateRoots + k] = asuint(res.st[k]);
+    for (uint k = 0u; k < kPolyMaxRoots / 2u; ++k)
+        manifoldItems[o + kManifoldStateAreas + k] = uint2(asuint(res.w[2u * k]), asuint(res.w[2u * k + 1u]));
+    for (uint k = 0u; k < kManifoldStateDepth; ++k)
+    {
+        if (k >= count) break;
+        manifoldItems[o + kManifoldStateStack + 2u * k] = asuint(s.stack[first + k].xy);
+        manifoldItems[o + kManifoldStateStack + 2u * k + 1u] = asuint(s.stack[first + k].zw);
+    }
+    for (uint k = 0u; k < kManifoldStateDepth / 2u; ++k)
+    {
+        if (2u * k >= count) break;
+        manifoldItems[o + kManifoldStateKinds + k] = uint2(s.kinds[first + 2u * k], s.kinds[first + 2u * k + 1u]);
+    }
+}
+
+void manifoldStateLoad(uint pass, uint at, out uint slot, out uint queued, out bool part, inout PolySolveState s,
+                       inout PolyCellResult res)
+{
+    const uint o = manifoldStateAt(pass, at);
+    const uint2 w1 = manifoldItems[o + 1u], w2 = manifoldItems[o + 2u], w3 = manifoldItems[o + 3u];
+    slot = manifoldItems[o].x;
+    part = (w1.x & 0x80000000u) != 0u;
+    s.top = min(w1.x & 0x7FFFFFFFu, kManifoldStateDepth);
+    queued = w1.y;
+    res.roots = w2.x;
+    res.undecided = w2.y;
+    res.boxes = w3.x;
+    res.overflow = w3.y;
+    for (uint k = 0u; k < kPolyMaxRoots; ++k) res.st[k] = asfloat(manifoldItems[o + kManifoldStateRoots + k]);
+    for (uint k = 0u; k < kPolyMaxRoots / 2u; ++k)
+    {
+        const uint2 a = manifoldItems[o + kManifoldStateAreas + k];
+        res.w[2u * k] = asfloat(a.x);
+        res.w[2u * k + 1u] = asfloat(a.y);
+    }
+    for (uint k = 0u; k < kManifoldStateDepth; ++k)
+    {
+        if (k >= s.top) break;
+        s.stack[k] = float4(asfloat(manifoldItems[o + kManifoldStateStack + 2u * k]),
+                            asfloat(manifoldItems[o + kManifoldStateStack + 2u * k + 1u]));
+    }
+    for (uint k = 0u; k < kManifoldStateDepth / 2u; ++k)
+    {
+        if (2u * k >= s.top) break;
+        const uint2 w = manifoldItems[o + kManifoldStateKinds + k];
+        s.kinds[2u * k] = w.x;
+        s.kinds[2u * k + 1u] = w.y;
+    }
+}
+
+// The group boundaries of a stack of at most kManifoldStateDepth entries (rt/manifold_poly.slang's stack: an inflation
+// box of kind 1 + n sits on the n halves it settles), from the top down, those strictly inside it: their count.
+uint manifoldStackGroups(PolySolveState s, out uint bounds[kManifoldStateDepth])
+{
+    uint at = s.top, n = 0u;
+    for (uint k = 0u; k < kManifoldStateDepth; ++k)
+    {
+        bounds[k] = 0u;
+        if (at == 0u) continue;
+        const uint kind = s.kinds[at - 1u] & 3u, size = kind == 0u ? 1u : kind;
+        at = size >= at ? 0u : at - size;
+        if (at > 0u) bounds[n++] = at;
+    }
+    return n;
+}
+
+// States in the next pass's pool (kMCStateCap). An item that holds a state this pass and goes on keeps one, counted up
+// from the bottom (kMCStatesKept): always free, since those are at most the states this pass holds (kMCStatesKept and
+// kMCStatesFit of this pass's block, written by the pass before). The room above them is halved: an item's first carry
+// takes its state down from the top (kMCStatesAsked), a split's part up from the held ones (kMCStatesParts), so parts
+// never take the states a first carry needs to go on at all. Each: the state's index, or ~0 when none is free.
+uint manifoldStateKeep()
+{
+    uint at;
+    InterlockedAdd(manifoldCounts[manifoldBlockAt(manifoldPassIndex() + 1u) + kMCStatesKept], 1u, at);
+    return at;
+}
+uint manifoldStateTake(bool part)
+{
+    const uint block = manifoldBlock(), next = manifoldBlockAt(manifoldPassIndex() + 1u);
+    const uint cap = manifoldCounts[kMCStateCap];
+    const uint held = min(manifoldCounts[block + kMCStatesKept] + manifoldCounts[block + kMCStatesFit], cap);
+    const uint partsRoom = (cap - held) / 2u, room = part ? partsRoom : cap - held - partsRoom;
+    uint at;
+    InterlockedAdd(manifoldCounts[next + (part ? kMCStatesParts : kMCStatesAsked)], 1u, at);
+    if (at >= room) return 0xFFFFFFFFu;
+    InterlockedAdd(manifoldCounts[next + kMCStatesFit], 1u);
+    return part ? held + at : cap - 1u - at;
+}
+
+[shader("raygeneration")]
+void manifoldSolvePlain()
+{
+    const uint block = manifoldBlock(), passIndex = manifoldPassIndex();
+    uint2 item;
+    const bool live = manifoldItem(kMQCandidates, DispatchRaysIndex().x, item);
+    const bool stated = (item.x & kManifoldItemStated) != 0u;
+    const uint rec = item.x & kManifoldRecordMask;
+    PolySolveState s = cellPolySolveStart();
+    PolyCellResult res = cellPolyResultStart();
+    // The item's triangle: its own, or its state's.
+    uint slot = item.y;
+    uint queued = stated ? 0u : (item.x >> 24u) & 127u;
+    bool part = false;
+    if (live && stated) manifoldStateLoad(passIndex, item.y, slot, queued, part, s, res);
+    const uint boxesBefore = res.boxes;
+    ManifoldTri tri = {};
+    ManifoldRecord m = manifoldRecord(0u);
+    if (live)
+    {
+        m = manifoldRecord(rec);
+        tri = manifoldTriangleAt(slot);
+        PolyCellSource src;
+        if (polyTriangleSource(tri, m.pX, m.L, m.target, src)) cellPolySolveSteps<3>(src, s, res, kManifoldSolveBudget);
+        else
+        {
+            s.top = 0u;
+            ++res.undecided;   // a frame the triangle's polynomials cannot be made from
+        }
+    }
+    manifoldCountWave(kMCBoxes, res.boxes - boxesBefore);
+    const bool finished = live && s.top == 0u;
+    const bool last = passIndex + 1u >= manifoldCounts[kMCPasses];
+    // The roots found and not yet queued, queued (none at the debug stop at the roots).
+    const uint have = live ? min(res.roots, kPolyMaxRoots) : 0u;
+    const uint want = manifoldDebugStage() != 2u && have > queued ? have - queued : 0u;
+    const uint at = manifoldAppendWaveIn(block, kMQRoots, want);
+    const uint fit = manifoldFit(kMQRoots, at, want);
+    const float3 g = cross(tri.e1, tri.e2);
+    for (uint k = 0u; k < kPolyMaxRoots; ++k)
+    {
+        if (k >= fit) break;
+        const uint q = queued + k;
+        const float2 uv = res.st[q];
+        const float3 y = tri.p0 + tri.e1 * uv.x + tri.e2 * uv.y;
+        // 2a's shading normal at y, turned as the tracer turns it (toward the side the triangle shows X).
+        const float3 Ns = normalize(tri.n0 + tri.a1 * uv.x + tri.a2 * uv.y);
+        const float3 nS = dot(Ns, g) * (dot(g, m.pX - y) >= 0.0 ? 1.0 : -1.0) < 0.0 ? -Ns : Ns;
+        // The stochastic rounding's key: the triangle's (2a's: a triangle holds one root but rarely two).
+        manifoldRoots[(at + k) * 4u] = uint4(rec, slot, asuint(res.w[q]), slot ^ 0x5A1A7u);
+        manifoldRoots[(at + k) * 4u + 1u] = uint4(asuint(y), 0u);
+        manifoldRoots[(at + k) * 4u + 2u] = uint4(asuint(nS), 0u);
+        manifoldRoots[(at + k) * 4u + 3u] = uint4(0u);
+    }
+    queued += fit;
+    manifoldCountWave(kMCCandidates + 1u, fit);
+    const bool done = !live || (finished && queued >= have) || (finished && want == 0u);
+    // Carried: with its state (in the next pass's pool: kept if it holds one, else a new one if one is free), its stack
+    // split in two at a group boundary when a part's state is free (the part the upper groups, the item the rest: an
+    // item's threads double each pass while it lasts), each part an item; with no state free it starts over. A stack
+    // deeper than a state is settled open: started over it would only end there again (the solve is deterministic), and
+    // a part cannot start over (the whole triangle again would find the other parts' roots).
+    const bool going = live && !done && !last;
+    const bool stranded = going && s.top > kManifoldStateDepth;
+    const bool carry = going && !stranded;
+    uint state = 0xFFFFFFFFu;
+    if (carry) state = stated ? manifoldStateKeep() : manifoldStateTake(false);
+    const bool withState = state != 0xFFFFFFFFu;
+    uint bounds[kManifoldStateDepth];
+    const uint groups = manifoldStackGroups(s, bounds);
+    const uint partState = withState && groups > 0u ? manifoldStateTake(true) : 0xFFFFFFFFu;
+    const uint parts = partState != 0xFFFFFFFFu ? 1u : 0u;
+    const uint split = parts > 0u ? bounds[(groups - 1u) / 2u] : s.top;
+    if (withState) manifoldStateSave(passIndex + 1u, state, slot, queued, part || parts > 0u, s, 0u, split, res);
+    if (parts > 0u)
+        manifoldStateSave(passIndex + 1u, partState, slot, 0u, true, s, split, s.top - split, cellPolyResultStart());
+    // Settled (finished, open after the last pass, or stranded): its undecided boxes and roots past the kept counted.
+    const bool settled = live && (done || last || stranded);
+    manifoldCountWave(kMCOpen, settled && !finished ? 1u : 0u);
+    manifoldCountWave(kMCUndecided, settled ? res.undecided + (finished ? 0u : s.top) : 0u);
+    manifoldCountWave(kMCRootOverflow, settled ? res.overflow : 0u);
+    manifoldCountWave(kMCLost, settled && finished && !done ? have - queued : 0u);
+    manifoldCountWave(kMCRestarts, carry && !withState ? 1u : 0u);
+    // Into the candidates' next pass (the other region); past its capacity an item is lost, counted (the parts can
+    // outnumber the pass's items).
+    const uint n = carry ? 1u + parts : 0u;
+    manifoldCountWave(kMCCarried, n);
+    const uint slots = manifoldAppendWaveIn(manifoldBlockAt(passIndex + 1u), kMQCandidates, n);
+    const uint cap = manifoldCounts[kMCCap + kMQCandidates], region = manifoldRegion(kMQCandidates, passIndex + 1u);
+    for (uint k = 0u; k < 2u; ++k)
+    {
+        if (k >= n) break;
+        if (slots + k >= cap)
+        {
+            InterlockedAdd(manifoldCounts[kMCLost], 1u);
+            continue;
+        }
+        manifoldItems[region + slots + k] = withState ? uint2(rec | kManifoldItemStated, k == 0u ? state : partState)
+                                                      : uint2(rec | queued << 24u, slot);
+    }
+}
+
+// Connect: a root's path sun -> y -> X, by the change of variables from the slope to y's area (the area a unit of slope
+// covers there, the solve's): the shadow ray, the
+// retrace of y (the first thing X's ray toward y meets), X's surface again (its request's ray retraced), and the
+// term into the pixel's fixed-point sum.
+[shader("raygeneration")]
+void manifoldConnect()
+{
+    const uint at = DispatchRaysIndex().x;
+    if (at >= min(manifoldCounts[manifoldBlock() + kMQRoots * 4u + 3u], manifoldCounts[kMCCap + kMQRoots])) return;
+    const uint4 q0 = manifoldRoots[at * 4u], q1 = manifoldRoots[at * 4u + 1u], q2 = manifoldRoots[at * 4u + 2u];
+    const ManifoldRecord m = manifoldRecord(q0.x & kManifoldRecordMask);
+    const uint t = q0.y;
+    const ManifoldTri tri = manifoldTriangleAt(t);
+    const float areaPerSlope = asfloat(q0.z);
+    const float3 y = asfloat(q1.xyz), nS = asfloat(q2.xyz);
+    const uint4 header = manifoldDraws[0];
+    const uint4 db = manifoldDraws[2u + 3u * m.d];
+    const float2 alphas = manifoldNodes[(header.w + header.z + m.d) * 4u].xy;
+    const float3 E = causticCasters[3u + 3u * m.light].rgb;
+    const float3 L = m.L, pX = m.pX;
+    // X and the light on opposite sides of the triangle: no reflection there reaches X.
+    const float3 gS = cross(tri.e1, tri.e2);
+    if (dot(gS, pX - y) * dot(gS, L) <= 0.0) return;
+    const float3 toY = y - pX;
+    const float dist = length(toY);
+    const float3 w = toY / dist;
+    const PathPayload hx = trace(m.origin, m.rayDir, kPathMask | kTlasMaskEmitter, 1.0e4);
+    if (dot(w, hx.geoNormal) <= 0.0) return;
+    // The sun's shadow ray first (an any-hit ray: a root on a solid's far side, or in shadow, is turned away before
+    // the closest-hit trace), from y off its side toward X, as the camera's light sample leaves its hit.
+    float3 T;
+    if (!visible(y + normalize(gS) * (dot(gS, pX - y) > 0.0 ? 1e-3 : -1e-3), L, 1.0e4, T)) return;
+    // X -> y as the camera's bounce ray traces it: the first thing it meets must be y.
+    const PathPayload hs = trace(pX, w, kPathMask | kTlasMaskEmitter, 1.0e4);
+    if ((hs.flags & kHit) == 0u || (hs.flags & kHitEmitter) != 0u || hs.material != db.z ||
+        abs(hs.t - dist) > 1e-4 * dist + 1e-5) return;
+    if (dot(L, hs.geoNormal) <= 0.0) return;
+    OpenPBRTables tables;
+    tables.data = openpbrTables;
+    int ch = m.channel;
+    float3 chMask = float3(1.0);
+    const float4 row13 = materials[hs.material * kMaterialRows + kTransmissionRowFirst + 1u];
+    ManifoldSurface ss = manifoldSurface(hs, -1, nS);
+    if (ss.fromInside) return;
+    if (ch < 0 && row13.z > 0.0 && ss.mi.transmissionWeight > 0.0 && ss.mi.baseMetalness < 1.0)
+    {
+        // A dispersive surface draws the path's wavelength, as the camera side does there: that channel alone, three
+        // times over (all three at 3 read dispersive glints 3x bright).
+        ch = int(min(manifoldUnit(pcg(m.h2 ^ (t & 127u))) * 3.0, 2.0));
+        chMask = float3(ch == 0 ? 3.0 : 0.0, ch == 1 ? 3.0 : 0.0, ch == 2 ? 3.0 : 0.0);
+    }
+    if (ch >= 0) ss = manifoldSurface(hs, ch, nS);
+    const float3 woS = toLocal(-w, ss.t, ss.b, ss.n), wiS = toLocal(L, ss.t, ss.b, ss.n);
+    const float2 coreSlope = float2(kManifoldCoreSlope2, kManifoldCoreMinSlope2);
+    const float3 core = OpenPBRSurface(ss.mi).evalSmoothCore(woS, wiS, tables, kCausticRough, coreSlope);
+    if (!any(core > 0.0)) return;
+    const ManifoldSurface sx = manifoldSurface(hx, m.channel, float3(0.0));
+    const OpenPBRSurface bx = OpenPBRSurface(sx.mi);
+    const float3 wo = toLocal(-m.rayDir, sx.t, sx.b, sx.n);
+    float3 sm, ro;
+    bx.evalParts(wo, toLocal(w, sx.t, sx.b, sx.n), tables, kCausticRough, sm, ro);
+    const float cosY = abs(dot(normalize(gS), w));
+    const float dens = manifoldSlopeDensity(alphas, m.target);
+    if (!(areaPerSlope > 0.0) || !(dens > 0.0)) return;
+    const float3 c = m.beta * ro * core * E * T * chMask * (m.invP * cosY * areaPerSlope / (dist * dist * dens));
+    if (!all(isfinite(c))) return;
+    InterlockedAdd(manifoldCounts[kMCCandidates + 2u], 1u);
+    manifoldSplat(m.pixelIndex, c, manifoldHash(m.pixelIndex, pc.params.z, m.slot * 64u + m.light, q0.w));
+}
+
+// Resolve: a pixel's fixed-point sum (cleared for the next frame) added to the running mean the raygen wrote, as
+// sum / frames, and the displayed pixel redrawn; thread 0 adds the frame's counters to the stats (words 2-7, 12 the
+// items lost past the last pass, 13 the clamped words, 14 the items carried, 15 the passes that held an item, 16-22 the
+// peak counts in a batch and pass of the records and the six queues, 23-27 the solve's, 28 the peak states).
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void manifoldResolve(uint3 id: SV_DispatchThreadID)
+{
+    const uint2 size = pc.params.xy;
+    if (id.x == 0u)
+    {
+        for (uint k = 0u; k < 6u; ++k)
+            if (manifoldCounts[kMCCandidates + k] > 0u) InterlockedAdd(causticStats[2u + k], manifoldCounts[kMCCandidates + k]);
+        if (manifoldCounts[kMCLost] > 0u) InterlockedAdd(causticStats[12], manifoldCounts[kMCLost]);
+        if (manifoldCounts[kMCClamped] > 0u) InterlockedAdd(causticStats[13], manifoldCounts[kMCClamped]);
+        if (manifoldCounts[kMCCarried] > 0u) InterlockedAdd(causticStats[14], manifoldCounts[kMCCarried]);
+        // The solve's: tests, items open after the last pass, undecided boxes, roots past those kept, items started over.
+        for (uint k = 0u; k < 5u; ++k)
+            if (manifoldCounts[kMCBoxes + k] > 0u) InterlockedAdd(causticStats[23u + k], manifoldCounts[kMCBoxes + k]);
+        // The peaks (the fullest batch and pass's, asked for: past a capacity too) and the passes that held an item (at
+        // most kMaxBatches x kMCPasses blocks).
+        const uint passes = manifoldCounts[kMCPasses];
+        for (uint b = 0u; b < manifoldCounts[kMCBatches]; ++b)
+            for (uint p = 0u; p < passes; ++p)
+            {
+                const uint block = kMCBlocks + kMCBlockWords * (b * passes + p);
+                InterlockedMax(causticStats[16], manifoldCounts[block + kMCRecords]);
+                uint any = 0u;
+                for (uint q = 0u; q < 6u; ++q)
+                {
+                    const uint n = manifoldCounts[block + q * 4u + 3u];
+                    InterlockedMax(causticStats[17u + q], n);   // 17-22
+                    any |= n;
+                }
+                InterlockedMax(causticStats[28], manifoldCounts[block + kMCStatesKept] + manifoldCounts[block + kMCStatesAsked] +
+                                                     manifoldCounts[block + kMCStatesParts]);
+                if (any != 0u) InterlockedMax(causticStats[15], p + 1u);
+            }
+    }
+    if (id.x >= size.x * size.y) return;
+    const uint3 s = uint3(manifoldSum[id.x * 3u], manifoldSum[id.x * 3u + 1u], manifoldSum[id.x * 3u + 2u]);
+    if (all(s == 0u)) return;
+    manifoldSum[id.x * 3u] = 0u;
+    manifoldSum[id.x * 3u + 1u] = 0u;
+    manifoldSum[id.x * 3u + 2u] = 0u;
+    const float3 sum = float3(s) * (1.0 / kCausticSplatScale) * classKeep((pc.control.x >> 11u) & 255u, kClassManifold);
+    if (!any(sum != 0.0)) return;
+    const uint2 pixel = uint2(id.x % size.x, id.x / size.x);
+    float4 acc = accumBuffer[pixel];
+    acc.rgb += sum / max(acc.w, 1.0);
+    accumBuffer[pixel] = acc;
+    outputImage[pixel] = float4(displayPixel(acc.rgb, pc.tuning.z, asuint(pc.tuning.w)), 1.0);
 }
 
 // Whether the camera sees p first along its ray (the camera's mask and its pass through culled back

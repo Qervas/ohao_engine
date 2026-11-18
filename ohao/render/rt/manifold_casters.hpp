@@ -10,9 +10,10 @@
 //               material (kManifoldOwned* bits)
 //   57 requests 3 float4 a request: (origin, meta bits), (direction, 0), (throughput, 0); meta 0 = none
 //
-// A material is owned when a lobe of it can be smooth, it has no normal map, and every draw using it is gathered
-// (static, not an emitter or a first-person gun). The camera side subtracts the core of a smooth reflection only at an
-// owned material, and the pass connects only through owned draws: the split stays exact (ruling M7).
+// A material is owned when a lobe of it can be smooth, it has no normal map (step 2c: the light pass carries a mapped
+// reflector's glints; docs/plans/2026-11-08-caustics-step2c.md, task 7) and every draw using it is gathered (static, not
+// an emitter or a first-person gun). The camera side subtracts the core of a smooth reflection only at an owned
+// material, and the pass connects only through owned draws: the split stays exact (ruling M7).
 
 #include <vulkan/vulkan.h>
 
@@ -21,11 +22,8 @@
 #include "render/graph/pass.hpp"
 #include "render/rt/caustic_casters.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
-#include <span>
-#include <vector>
 
 namespace ohao::render {
 
@@ -49,10 +47,12 @@ public:
     // The gather from the scene's arenas, and the requests cleared on the first frame after they were
     // (re)allocated.
     void record(const Frame& frame, const RenderScene& scene);
-    // What the traces declare: the camera pass (raygenCaustics) reads the casters and writes its requests; the
-    // manifold pass (manifoldConnect) reads the casters and their triangles, and answers and clears the requests.
+    // What the passes declare: the camera pass (raygenCaustics) reads the casters and writes its requests; the
+    // manifold pass's setup (manifoldSetup) reads the casters and their triangles, and answers and clears the
+    // requests; its later rounds (render/rt/manifold_rounds.hpp) read the casters and their triangles.
     void cameraPass(Pass& pass, uint32_t frameSlot);
     void manifoldPass(Pass& pass, uint32_t frameSlot);
+    void roundPass(Pass& pass, uint32_t frameSlot);
 
     [[nodiscard]] VkBuffer tris() const noexcept { return m_tris.buffer; }
     [[nodiscard]] VkBuffer nodes() const noexcept { return m_nodes.buffer; }

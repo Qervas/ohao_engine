@@ -27,7 +27,8 @@ struct MaterialSmoothness {
     float coatWeight{0.0f};
     float coatRoughness{0.0f};
     float coatTexMin{1.0f};
-    bool normalMap{false};   // caustics step 2: a normal-mapped material stays with the camera side (ruling M7)
+    // Whether it has a normal map (caustics step 2c: such a material stays with the camera side and the light pass).
+    bool normalMapped{false};
 };
 
 // Whether any lobe can be under `cut` anywhere on the material (the module clamps roughness at 0.01;
@@ -115,7 +116,9 @@ struct ManifoldSelection {
     std::vector<uint32_t> materialBits;   // a word a material (0 to the largest material index used + 1)
 };
 
-// The owned materials and the draws to gather. `smoothness(material)` the host's record of it.
+// The owned materials and the draws to gather; `smoothness(material)` the host's record of it. A normal-mapped material
+// is not owned (step 2c, docs/plans/2026-11-08-caustics-step2c.md, task 7: at equal time the light pass carries its
+// glints about 49,000x cheaper than the manifold pass solving its map's cells).
 template <class Smoothness>
 ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, Smoothness&& smoothness, float cut);
 
@@ -132,7 +135,7 @@ ManifoldSelection selectManifoldDraws(std::span<const ManifoldDrawInput> draws, 
         if (baseCanBeSmooth(m, cut)) bits |= kManifoldBaseSmooth;
         if (coatCanBeSmooth(m, cut)) bits |= kManifoldCoatSmooth;
         s.materialBits[d.material] = bits;
-        if (bits == 0 || m.normalMap || d.skinned || d.emitter || d.viewModel || !d.hasMeshlets) blocked[d.material] = 1;
+        if (bits == 0 || m.normalMapped || d.skinned || d.emitter || d.viewModel || !d.hasMeshlets) blocked[d.material] = 1;
     }
     for (uint32_t k = 0; k < materials; ++k)
         if (s.materialBits[k] != 0 && !blocked[k]) s.materialBits[k] |= kManifoldOwned;

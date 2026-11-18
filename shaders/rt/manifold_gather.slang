@@ -6,8 +6,9 @@
 // (Index order made clusters strips round a sphere's rings, their cones a third of the sphere wide: nothing pruned.)
 //
 // draws (host-written): row 0 (D draws, C * 128, C clusters, G groups); then three rows a draw:
-//   (first meshlet, meshlets, vertex offset, instance slot), (first cluster, first group, material, 0), its world
-//   bounding sphere (centre, radius as float bits); then a word a material (manifold bits, at 1 + 3 D rows: rows of 4).
+//   (first meshlet, meshlets, vertex offset, instance slot), (first cluster, first group, material, step 2b's glass
+//   owner), its world bounding sphere (centre, radius as float bits); then a word a material (manifold bits, at 1 + 3 D
+//   rows: rows of 4).
 // tris: 9 float4 a triangle slot: (p0, c.x), (e1, c.y), (e2, c.z), (n0, 0), (a1, 0), (a2, 0), and its bounds
 //   (box min, the cone's half angle), (box max, 0), (the cone's axis, its disc term); normals by the instance's inverse
 //   transpose, unnormalised (fillHit's direction).
@@ -118,6 +119,7 @@ void clusters(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
     const uint m = a.x + (c - b.x);
     const uint4 range = meshlets[m * 3u];   // first vertex entry, first triangle entry, vertices, triangles
     const uint count = min(range.w, kSlots);
+    const uint stride = kInstanceGpuStride / 16u;
     gsValid[lane] = 0u;
     const uint slot = c * kSlots + lane;
     ManifoldTri tri;
@@ -127,7 +129,6 @@ void clusters(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
         const uint v0 = a.z + meshletVertices[range.x + (packed & 0xFFu)];
         const uint v1 = a.z + meshletVertices[range.x + ((packed >> 8u) & 0xFFu)];
         const uint v2 = a.z + meshletVertices[range.x + ((packed >> 16u) & 0xFFu)];
-        const uint stride = kInstanceGpuStride / 16u;
         tri = manifoldTriangleFrom(instances[a.w * stride], instances[a.w * stride + 1u], instances[a.w * stride + 2u],
                                    instances[a.w * stride + 3u], vertexF3(v0, 0u), vertexF3(v1, 0u), vertexF3(v2, 0u),
                                    vertexF3(v0, 6u), vertexF3(v1, 6u), vertexF3(v2, 6u));
