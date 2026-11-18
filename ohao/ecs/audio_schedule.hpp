@@ -168,7 +168,6 @@ struct AudioWarning {
 // A voice the schedule holds now (audio.info).
 struct ScheduledVoice {
     uint32_t id{0};
-    uint64_t seq{0};          // its play event's
     uint16_t sound{0};
     uint8_t bus{0}, priority{0};
     float audible{0.0f};      // its gain at the listener when it started (distance and occlusion)
@@ -243,6 +242,7 @@ public:
     void hashState(StateHash& h) const;   // what saveState keeps (world.hash)
 
 private:
+    friend AudioSchedule& installAudio(World& world, AssetResolver& assets);
     struct Impl;
     std::unique_ptr<Impl> m;
 };

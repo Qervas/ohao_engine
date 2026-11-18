@@ -105,7 +105,7 @@ void registerGameTypes(reflect::TypeRegistry& types, const Module& module) {
 }
 
 void installGame(ecs::World& world, const Module& module) {
-    if (world.registry().ctx().contains<InstalledGame>()) throw std::logic_error("a game is installed already");
+    if (world.context().contains<InstalledGame>()) throw std::logic_error("a game is installed already");
     const Inventory before = inventory(world);
     try {
         module.install(world);
@@ -114,11 +114,11 @@ void installGame(ecs::World& world, const Module& module) {
         module.uninstall(world);
         throw;
     }
-    world.registry().ctx().emplace<InstalledGame>(diff(module, before, inventory(world)));
+    world.context().emplace<InstalledGame>(diff(module, before, inventory(world)));
 }
 
 void uninstallGame(ecs::World& world) {
-    auto& ctx = world.registry().ctx();
+    auto& ctx = world.context();
     const auto* g = ctx.find<InstalledGame>();
     if (!g) return;
     const InstalledGame record = *g;
@@ -128,13 +128,13 @@ void uninstallGame(ecs::World& world) {
 }
 
 const Module* installedGame(const ecs::World& world) {
-    const auto* g = world.registry().ctx().find<InstalledGame>();
+    const auto* g = world.context().find<InstalledGame>();
     return g ? g->module : nullptr;
 }
 
 bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, const Module& next, ReloadReport& report,
                 std::string& error) {
-    const auto* g = world.registry().ctx().find<InstalledGame>();
+    const auto* g = world.context().find<InstalledGame>();
     if (!g) {
         error = "no game is installed";
         return false;
@@ -201,7 +201,7 @@ bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, const Mod
     }
     restoreInto(&report.carried);
     for (const std::string_view h : ecs::snapshotHookNames(world.registry()))
-        if (const auto* now = world.registry().ctx().find<InstalledGame>();
+        if (const auto* now = world.context().find<InstalledGame>();
             now && std::find(now->hooks.begin(), now->hooks.end(), std::string(h)) != now->hooks.end() &&
             !states.contains(std::string(h)))
             report.fresh.emplace_back(h);

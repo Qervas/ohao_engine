@@ -21,7 +21,7 @@ Steps (sub-project 4 spec, "One entry point"):
      Then the API's methods against docs/agents/ohao-cli.md's Methods table, no binding number typed in C++
      (tools/gen_bindings.py --check), and no barrier, render pass, framebuffer or raw allocation outside the
      frame's two owners (FRAME_RULE), and no thread started outside the job pool and the two threads that block
-     (THREAD_RULE): any fails the build.
+     (THREAD_RULE), and no EnTT signal connected outside the World (SIGNAL_RULE): any fails the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
@@ -259,6 +259,29 @@ def check_thread_rule():
     return problems
 
 
+# Step 4b-4: a signal's handler joins the access of every system that writes its component, so it is connected through
+# the World (World::onConstruct, onUpdate, onDestroy), which records what it writes; a raw connect would hide it.
+SIGNAL_RULE = re.compile(r"\bon_(construct|update|destroy)\s*<")
+SIGNAL_OWNERS = ("ohao/ecs/world.hpp",)
+
+
+def check_signal_rule():
+    """[problem]: each line outside SIGNAL_OWNERS (engine, games, tools, tests, examples) that connects to an EnTT
+    signal directly."""
+    problems = []
+    for top in ("ohao", "games", "tools", "tests", "examples"):
+        for path in sorted((ROOT / top).rglob("*")):
+            rel = path.relative_to(ROOT).as_posix()
+            if path.suffix not in (".cpp", ".hpp", ".h") or rel.startswith(SIGNAL_OWNERS):
+                continue
+            for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                m = SIGNAL_RULE.search(line)
+                if m:
+                    problems.append(f"{rel}:{n}: on_{m.group(1)} outside the World: connect with World::on"
+                                    f"{m.group(1).capitalize()} and declare what the handler writes (SignalEffect)")
+    return problems
+
+
 def check_method_docs(build_dir, config, out):
     """The API's methods (the catalogue, from the one method table) against the Methods table of
     docs/agents/ohao-cli.md: two places that must agree (system design 4.2). -> a list of problems."""
@@ -431,7 +454,7 @@ def main(argv=None):
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
-        problems = check_method_docs(build_dir, args.config, out) + check_frame_rule() + check_thread_rule()
+        problems = check_method_docs(build_dir, args.config, out) + check_frame_rule() + check_thread_rule() + check_signal_rule()
         gen = subprocess.run([sys.executable, str(ROOT / "tools/gen_bindings.py"), "--check"], capture_output=True, text=True)
         if gen.returncode != 0:
             problems += [l for l in gen.stdout.splitlines() if l] or [f"gen_bindings --check failed: {gen.stderr[-400:]}"]

@@ -2,15 +2,18 @@
 #include "core/input.hpp"
 #include "ecs/components.hpp"
 #include "ecs/events.hpp"
+#include "ecs/system.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <entt/entt.hpp>
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ohao::ecs {
@@ -22,17 +25,8 @@ struct RestoreEvent {
     uint64_t step{0};   // the World's step the world went back to
 };
 
-// Where a system runs among its phase's others (step 3h): it runs after every system it names in `after` and before
-// every one in `before`, when that system is installed (a name not installed is no constraint). In the simulate
-// phase every event writer also runs before the channel's typed readers (EventLog::writer/reader name them) and,
-// when the channel has a cue, before every system that reads cues.
-struct SystemOrder {
-    std::vector<std::string> after;
-    std::vector<std::string> before;
-    // It reads channels by their cues, which its data binds (the audio schedule, vfx): it runs after the writers of
-    // every channel with a cue, whatever its data binds, so loading data never moves a system.
-    bool readsCues{false};
-};
+class World;
+class SystemContext;
 
 // The game world: an EnTT registry plus the systems of two phases (sub-project 4 spec, "System phases").
 //   simulate  behaviour (spin, physics, gameplay): once per fixed step, with the fixed dt. simulate(dt) runs them.
@@ -40,19 +34,88 @@ struct SystemOrder {
 //             batch of steps, with no dt. sync() runs them.
 // A frame's simulation is then independent of how often it is rendered: a realtime session and a lockstep one that
 // run the same steps reach the same state. Each phase's order is computed from what its systems declare
-// (SystemOrder, the event edges), ties going to the lesser name: a function of the systems installed, never of who
+// (SystemDecl, the event edges), ties going to the lesser name: a function of the systems installed, never of who
 // installed them or when.
+//
+// Waves (step 4b): a phase runs as waves, each a run of consecutive systems in that order that conflict in nothing
+// (no component or resource one writes and another touches, no order between them, none exclusive). A system's
+// access is its declaration plus what the handlers of the signals it writes write (onConstruct, onUpdate, onDestroy).
+// Checked at install: a cycle, two writers of one component or resource with no order between them, and a system
+// that declares nothing each throw std::logic_error and install nothing.
+//
+// The check mode (OHAO_ACCESS_CHECK=1; on in Debug unless 0): a system that is not exclusive reaches components only
+// through its SystemContext, within its declaration; any other access, or World::registry() while it runs, throws
+// std::logic_error naming the system and the component.
 class World {
 public:
-    using SimulateSystem = std::function<void(World&, float dt)>;
-    using SyncSystem = std::function<void(World&)>;
+    using SimulateSystem = std::function<void(SystemContext&, float dt)>;
+    using SyncSystem = std::function<void(SystemContext&)>;
 
     World();
     World(const World&) = delete;
     World& operator=(const World&) = delete;
+    ~World();
 
-    [[nodiscard]] entt::registry& registry() noexcept { return m_registry; }
-    [[nodiscard]] const entt::registry& registry() const noexcept { return m_registry; }
+    // The raw registry: between steps, and for exclusive systems. In the check mode it throws while a system that is
+    // not exclusive runs on this thread (that system reaches components through its SystemContext).
+    [[nodiscard]] entt::registry& registry() {
+        if (m_check) [[unlikely]] checkRaw();
+        return m_registry;
+    }
+    [[nodiscard]] const entt::registry& registry() const {
+        if (m_check) [[unlikely]] checkRaw();
+        return m_registry;
+    }
+    // The registry's context entries (installed subsystems, requests between systems). Never checked: an entry is
+    // named state a system declares as a resource.
+    [[nodiscard]] entt::registry::context& context() noexcept { return m_registry.ctx(); }
+    [[nodiscard]] const entt::registry::context& context() const noexcept { return m_registry.ctx(); }
+    // Whether the check mode is on (OHAO_ACCESS_CHECK, read at construction).
+    [[nodiscard]] bool accessCheck() const noexcept { return m_check; }
+
+    // A signal's handler, connected to the registry: fn runs when a C is constructed, updated (patch, replace) or
+    // destroyed. `effect` is what the handler writes, which joins the access of every system that writes C.
+    // Instance: the handler's object (Fn a member of it), or omitted for a free function.
+    template <class C, auto Fn, class Instance>
+    void onConstruct(Instance* instance, SignalEffect effect) {
+        m_registry.on_construct<C>().template connect<Fn>(instance);
+        addEffect(componentType<C>(), instance, std::move(effect));
+    }
+    template <class C, auto Fn, class Instance>
+    void onUpdate(Instance* instance, SignalEffect effect) {
+        m_registry.on_update<C>().template connect<Fn>(instance);
+        addEffect(componentType<C>(), instance, std::move(effect));
+    }
+    template <class C, auto Fn, class Instance>
+    void onDestroy(Instance* instance, SignalEffect effect) {
+        m_registry.on_destroy<C>().template connect<Fn>(instance);
+        addEffect(componentType<C>(), instance, std::move(effect));
+    }
+    template <class C, auto Fn>
+    void onConstruct(SignalEffect effect) {
+        m_registry.on_construct<C>().template connect<Fn>();
+        addEffect(componentType<C>(), &kHandlerTag<Fn>, std::move(effect));
+    }
+    template <class C, auto Fn>
+    void onDestroy(SignalEffect effect) {
+        m_registry.on_destroy<C>().template connect<Fn>();
+        addEffect(componentType<C>(), &kHandlerTag<Fn>, std::move(effect));
+    }
+    // Every handler of `instance` on C's signals goes, with its effects.
+    template <class C, class Instance>
+    void disconnect(Instance* instance) {
+        m_registry.on_construct<C>().disconnect(instance);
+        m_registry.on_update<C>().disconnect(instance);
+        m_registry.on_destroy<C>().disconnect(instance);
+        removeEffects(typeKey<C>(), instance);
+    }
+    template <class C, auto Fn>
+    void disconnect() {
+        m_registry.on_construct<C>().template disconnect<Fn>();
+        m_registry.on_update<C>().template disconnect<Fn>();
+        m_registry.on_destroy<C>().template disconnect<Fn>();
+        removeEffects(typeKey<C>(), &kHandlerTag<Fn>);
+    }
 
     // Creates an entity with a fresh EntityId, Name, Transform (tagged TransformDirty), an
     // empty Children and its CreationOrder.
@@ -101,16 +164,23 @@ public:
     void attach(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
-    // Installs a system at the place its order and the others' give it. A name already installed, an order with a
-    // cycle, or a simulate system added inside a step throws std::logic_error and installs nothing.
-    void addSimulate(std::string name, SimulateSystem fn, SystemOrder order = {});
-    void addSync(std::string name, SyncSystem fn, SystemOrder order = {});
+    // Installs a system at the place its declaration and the others' give it. A name already installed, an order with
+    // a cycle, two unordered writers, a declaration of nothing, or a simulate system added inside a step throws
+    // std::logic_error and installs nothing.
+    void addSimulate(std::string name, SimulateSystem fn, SystemDecl decl);
+    void addSync(std::string name, SyncSystem fn, SystemDecl decl);
     // Removes a system (a game's, before its next build installs: game/reload.hpp); a simulate system also leaves the
     // event log (EventLog::forgetSystem). Between steps; a name not installed does nothing.
     void removeSimulate(std::string_view name);
     void removeSync(std::string_view name);
     [[nodiscard]] std::vector<std::string> simulateNames() const;   // in their order
     [[nodiscard]] std::vector<std::string> syncNames() const;
+    // An installed system's context (null when none of that name): a subsystem that also answers between steps (an
+    // API's query) reads the registry through its system's, so one declaration covers both.
+    [[nodiscard]] SystemContext* systemContext(std::string_view name) noexcept;
+    // Each phase's waves, in order, each its systems in order (computed again first when something changed).
+    [[nodiscard]] std::vector<std::vector<std::string>> simulateWaves();
+    [[nodiscard]] std::vector<std::vector<std::string>> syncWaves();
     // One fixed step: every simulate system, in order. The step's events become history after it (ecs/events.hpp),
     // then what the step deferred runs. When systems took new event handles since the last step, the order is
     // computed again first; a cycle then throws std::logic_error, before the step.
@@ -178,6 +248,7 @@ public:
     [[nodiscard]] std::size_t transformMismatches() const noexcept { return m_transformMismatches; }
 
 private:
+    friend class SystemContext;
     void onTransformChanged(entt::registry& r, entt::entity e);
     void onParentDestroyed(entt::registry& r, entt::entity child);
     void onChildrenDestroyed(entt::registry& r, entt::entity parent);
@@ -185,6 +256,11 @@ private:
     void onIdDestroyed(entt::registry& r, entt::entity e);
     void onIdUpdated(entt::registry& r, entt::entity e);
     void onInputActionsChanged(entt::registry& r, entt::entity e);
+    void checkRaw() const;
+    void addEffect(ComponentType trigger, const void* owner, SignalEffect effect);
+    void removeEffects(TypeKey trigger, const void* owner);
+    template <auto Fn>
+    static constexpr char kHandlerTag = 0;   // a free handler's identity among the effects
     entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local, entt::entity hint = entt::null);
     uint64_t nextId();
     bool claim(uint64_t id);
@@ -197,12 +273,31 @@ private:
     struct System {
         std::string name;
         Fn fn;
-        SystemOrder order;
+        SystemDecl decl;
+        std::unique_ptr<SystemContext> ctx;
     };
-    void orderSimulate();
+    struct Effect {
+        ComponentType trigger;
+        const void* owner{nullptr};
+        SignalEffect effect;
+    };
+    struct Wave {
+        uint32_t begin{0}, end{0};   // the systems [begin, end) of the phase, in order
+    };
+    template <class S>
+    void schedule(std::vector<S>& systems, std::vector<Wave>& waves, const char* kind, bool events);
+    void scheduleSimulate();
+    void scheduleSync();
+    template <class S>
+    static std::vector<std::vector<std::string>> waveNames(const std::vector<S>& systems, const std::vector<Wave>& waves);
+    // Before the systems: their subsystems disconnect their handlers (and effects) as they go.
+    std::vector<Effect> m_effects;
+    bool m_simulateDirty{true}, m_syncDirty{true};   // a system or an effect came or went since the phase's schedule
+    bool m_check{false};
     std::vector<System<SimulateSystem>> m_simulate;   // in their order
     std::vector<System<SyncSystem>> m_sync;
-    uint64_t m_simulateTopology{~uint64_t{0}};   // the event log's topology m_simulate was ordered with
+    std::vector<Wave> m_simulateWaves, m_syncWaves;
+    uint64_t m_simulateTopology{~uint64_t{0}};   // the event log's topology m_simulate was scheduled with
     std::vector<InputMap> m_inputs = std::vector<InputMap>(1);   // by stream
     EventLog m_events;
     std::vector<std::function<void(World&)>> m_deferred;
@@ -214,5 +309,123 @@ private:
     uint64_t m_nextSeq{0};
     std::size_t m_transformMismatches{0};
 };
+
+// The registry as a system sees it (step 4b-4): EnTT's names, each checked against the system's declaration in the
+// check mode. Reads: valid, all_of, any_of, get, try_get, view with const types, exclude. Writes: get_mut, try_get_mut,
+// view with mutable types, patch, replace, emplace, emplace_or_replace, get_or_emplace, remove. An emplace or a remove
+// is a write of that component's storage alone; creating or destroying an entity is the raw registry's, an exclusive
+// system's. The World, the events, the clock and the input come from world().
+class SystemContext {
+public:
+    SystemContext(World& world, std::string name, bool exclusive);
+
+    [[nodiscard]] World& world() const noexcept { return *m_world; }
+    [[nodiscard]] const std::string& name() const noexcept { return m_name; }
+    [[nodiscard]] bool exclusive() const noexcept { return m_exclusive; }
+
+    [[nodiscard]] bool valid(entt::entity e) const { return m_reg->valid(e); }
+    // The entity's EntityId (0 when invalid or none): ids change only with entities, so reading one is no access.
+    [[nodiscard]] uint64_t idOf(entt::entity e) const;
+    template <class... C>
+    [[nodiscard]] bool all_of(entt::entity e) const {
+        (read<C>(), ...);
+        return m_reg->all_of<std::remove_const_t<C>...>(e);
+    }
+    template <class... C>
+    [[nodiscard]] bool any_of(entt::entity e) const {
+        (read<C>(), ...);
+        return m_reg->any_of<std::remove_const_t<C>...>(e);
+    }
+    template <class C>
+    [[nodiscard]] const std::remove_const_t<C>& get(entt::entity e) const {
+        read<C>();
+        return std::as_const(*m_reg).get<std::remove_const_t<C>>(e);
+    }
+    template <class C>
+    [[nodiscard]] const std::remove_const_t<C>* try_get(entt::entity e) const {
+        read<C>();
+        return std::as_const(*m_reg).try_get<std::remove_const_t<C>>(e);
+    }
+    // view<const A, B>(entt::exclude<X>): A read, B written, X read.
+    template <class... C, class... X>
+    [[nodiscard]] auto view(entt::exclude_t<X...> = entt::exclude_t<X...>{}) const {
+        (touch<C>(), ...);
+        (read<X>(), ...);
+        return m_reg->view<C...>(entt::exclude<X...>);
+    }
+
+    template <class C>
+    [[nodiscard]] C& get_mut(entt::entity e) const {
+        write<C>();
+        return m_reg->get<C>(e);
+    }
+    template <class C>
+    [[nodiscard]] C* try_get_mut(entt::entity e) const {
+        write<C>();
+        return m_reg->try_get<C>(e);
+    }
+    template <class C, class... F>
+    decltype(auto) patch(entt::entity e, F&&... fn) const {
+        write<C>();
+        return m_reg->patch<C>(e, std::forward<F>(fn)...);
+    }
+    template <class C, class... A>
+    decltype(auto) replace(entt::entity e, A&&... args) const {
+        write<C>();
+        return m_reg->replace<C>(e, std::forward<A>(args)...);
+    }
+    template <class C, class... A>
+    decltype(auto) emplace(entt::entity e, A&&... args) const {
+        write<C>();
+        return m_reg->emplace<C>(e, std::forward<A>(args)...);
+    }
+    template <class C, class... A>
+    decltype(auto) emplace_or_replace(entt::entity e, A&&... args) const {
+        write<C>();
+        return m_reg->emplace_or_replace<C>(e, std::forward<A>(args)...);
+    }
+    template <class C, class... A>
+    decltype(auto) get_or_emplace(entt::entity e, A&&... args) const {
+        write<C>();
+        return m_reg->get_or_emplace<C>(e, std::forward<A>(args)...);
+    }
+    template <class... C>
+    std::size_t remove(entt::entity e) const {
+        (write<C>(), ...);
+        return m_reg->remove<C...>(e);
+    }
+
+    // Context entries: never checked (a resource the system declares).
+    [[nodiscard]] entt::registry::context& ctx() const noexcept { return m_reg->ctx(); }
+    // The raw registry: an exclusive system's (the check mode throws for any other).
+    [[nodiscard]] entt::registry& registry() const;
+
+private:
+    friend class World;
+    template <class C>
+    void read() const {
+        if (m_check) [[unlikely]] checkRead(typeKey<std::remove_const_t<C>>(), typeName<std::remove_const_t<C>>());
+    }
+    template <class C>
+    void write() const {
+        if (m_check) [[unlikely]] checkWrite(typeKey<std::remove_const_t<C>>(), typeName<std::remove_const_t<C>>());
+    }
+    template <class C>
+    void touch() const {
+        if constexpr (std::is_const_v<C>) read<C>();
+        else write<C>();
+    }
+    void checkRead(TypeKey key, std::string_view type) const;
+    void checkWrite(TypeKey key, std::string_view type) const;
+
+    World* m_world;
+    entt::registry* m_reg;
+    std::string m_name;
+    bool m_exclusive;
+    bool m_check{false};
+    std::vector<TypeKey> m_reads;    // sorted: what it may read (its reads and writes, with its signals' effects)
+    std::vector<TypeKey> m_writes;   // sorted
+};
+
 
 } // namespace ohao::ecs

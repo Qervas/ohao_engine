@@ -40,7 +40,7 @@ glm::mat4 poseAlong(glm::vec3 at, glm::vec3 along) {
 
 // Where `e` stands at this step: its Transforms up the chain (WorldTransform can be a step behind
 // inside one). A decal is placed against this, so every host, made early or late, attaches alike.
-glm::mat4 stepWorld(const entt::registry& reg, entt::entity e) {
+glm::mat4 stepWorld(const SystemContext& reg, entt::entity e) {
     const auto* t = reg.try_get<Transform>(e);
     glm::mat4 m = t ? t->matrix() : glm::mat4(1.0f);
     int depth = 0;
@@ -57,7 +57,7 @@ struct BoxHit {
     glm::vec3 point{0.0f}, normal{0.0f};
 };
 
-void hitBoxes(const entt::registry& reg, entt::entity e, glm::vec3 origin, glm::vec3 dir, BoxHit& best, int depth) {
+void hitBoxes(const SystemContext& reg, entt::entity e, glm::vec3 origin, glm::vec3 dir, BoxHit& best, int depth) {
     if (depth > 4 || !reg.valid(e)) return;
     if (const auto* ms = reg.try_get<MeshSource>(e))
         if (const auto* box = std::get_if<BoxPrim>(&ms->source)) {
@@ -142,6 +142,7 @@ struct VfxSystem::Impl {
 
     World& world;
     AssetResolver& assets;
+    const SystemContext* sys{nullptr};   // its system's: the registry as it reads it
     vfx::VfxSet set{vfx::defaultVfxSet()};
     bool setForced{false};
     bool setRead{false};
@@ -173,7 +174,7 @@ struct VfxSystem::Impl {
     // the live records (their indices named the old set's entries).
     void refreshSet() {
         if (setForced) return;
-        const auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         std::string path;
         entt::entity owner = entt::null;
         for (auto [e, vs] : reg.view<const VfxSet>().each()) {
@@ -255,7 +256,7 @@ struct VfxSystem::Impl {
 
 
     bool under(entt::entity e, entt::entity ancestor) const {
-        const auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         for (int depth = 0; depth < 64 && e != entt::null && reg.valid(e); ++depth) {
             if (e == ancestor) return true;
             const auto* p = reg.try_get<Parent>(e);
@@ -293,7 +294,7 @@ struct VfxSystem::Impl {
     // its direction, else up; a tracer from there to where it ended (else kTracerMiss on), at the set's cadence
     // on the cue's count; a decal on what it reached (the player never), or on the world.
     void spawn(const vfx::EventBinding& b, uint32_t channel, uint32_t place, uint64_t seq, const Cue& e, entt::entity player) {
-        const auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         const entt::entity source = world.findById(e.source);
         const std::string surface = e.tag.empty() ? std::string("default") : std::string(e.tag);
         const bool moving = glm::length(e.dir) > 1e-6f;
@@ -371,7 +372,7 @@ struct VfxSystem::Impl {
     }
 
     void stepEmitters(float dt) {
-        auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         std::vector<std::pair<uint64_t, entt::entity>> placed;
         for (auto [e, em] : reg.view<const VfxEmitter>().each()) placed.emplace_back(world.idOf(e), e);
         std::sort(placed.begin(), placed.end());   // id order, whatever the storage's
@@ -420,7 +421,7 @@ struct VfxSystem::Impl {
         refreshSet();
         // A game's events, in the order they happened, as the set binds them.
         bindEvents();
-        const entt::entity player = playerOf(world);
+        const entt::entity player = playerOf(*sys);
         world.events().visitWindow([&](const EventChannelBase& c, std::size_t i) {
             if (c.index() >= bound.size() || !bound[c.index()].binding) return;
             Cue cue;
@@ -522,7 +523,12 @@ VfxSystem& installVfx(World& world, AssetResolver& assets) {
     auto system = std::make_shared<VfxSystem>(world, assets);
     reg.ctx().emplace<VfxInstalled>(VfxInstalled{system.get()});
     // Effects ride the poses the step's animation left, and spawn from the cues its set binds.
-    world.addSimulate("vfx", [system](World&, float dt) { system->step(dt); }, {.after = {"animation"}, .readsCues = true});
+    world.addSimulate("vfx", [system](SystemContext&, float dt) { system->step(dt); },
+                      {.after = {"animation"}, .readsCues = true,
+                       .reads = types<VfxSet, VfxEmitter, MeshSource, Transform, WorldTransform, Parent, Children,
+                                      PlayerController>(),
+                       .writesResources = {"vfx"}});
+    system->m->sys = world.systemContext("vfx");
     VfxSystem* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"vfx", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) {
@@ -533,12 +539,12 @@ VfxSystem& installVfx(World& world, AssetResolver& assets) {
 }
 
 VfxSystem* vfxSystem(World& world) {
-    const auto* installed = world.registry().ctx().find<VfxInstalled>();
+    const auto* installed = world.context().find<VfxInstalled>();
     return installed ? installed->system : nullptr;
 }
 
 const VfxSystem* vfxSystem(const World& world) {
-    const auto* installed = world.registry().ctx().find<VfxInstalled>();
+    const auto* installed = world.context().find<VfxInstalled>();
     return installed ? installed->system : nullptr;
 }
 

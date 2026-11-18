@@ -109,7 +109,7 @@ glm::vec3 spreadDirection(glm::vec3 aim, float coneDeg, uint32_t seed, uint32_t 
 
 struct CombatSystem::Impl {
     World& world;
-    entt::registry& reg;
+    const SystemContext& reg;   // its system's: every component it touches, as its declaration allows
     struct Out {
         EventWriter<ShotEvent> shot;
         EventWriter<HitEvent> hit;
@@ -122,7 +122,7 @@ struct CombatSystem::Impl {
     double lastMs{0.0};
     std::vector<std::pair<uint64_t, entt::entity>> order;   // the step's weapons by id
 
-    explicit Impl(World& w) : world(w), reg(w.registry()) {
+    Impl(World& w, const SystemContext& c) : world(w), reg(c) {
         namespace se = slice_events;
         EventLog& log = w.events();
         out.shot = log.writer<ShotEvent>(se::kShot, "combat", &shotCue);
@@ -137,7 +137,7 @@ struct CombatSystem::Impl {
         out.explode = log.writer<ExplodeEvent>(se::kExplode, "combat", &explodeCue);
     }
 
-    [[nodiscard]] uint64_t idOf(entt::entity e) const { return e != entt::null && reg.valid(e) ? world.idOf(e) : 0; }
+    [[nodiscard]] uint64_t idOf(entt::entity e) const { return e != entt::null && reg.valid(e) ? reg.idOf(e) : 0; }
 
     // The entity whose Health a hit on `e` takes from: itself or its nearest ancestor with one.
     [[nodiscard]] entt::entity healthOf(entt::entity e) const {
@@ -164,7 +164,7 @@ struct CombatSystem::Impl {
         out.damage.emit(DamageEvent{idOf(source), idOf(owner), point, before - after, after});
         if (after == 0.0f) {
             out.death.emit(DeathEvent{idOf(source), idOf(owner), point});
-            OHAO_LOG(Debug, ecs, "combat: {} killed {}", world.idOf(source), world.idOf(owner));
+            OHAO_LOG(Debug, ecs, "combat: {} killed {}", reg.idOf(source), reg.idOf(owner));
         }
         return after;
     }
@@ -234,7 +234,7 @@ struct CombatSystem::Impl {
     void updateWeapon(entt::entity e, float dt, PhysicsScene& physics) {
         const Weapon w = reg.get<Weapon>(e);   // a copy: damage may touch other pools
         if (!reg.all_of<WeaponState>(e)) reg.emplace<WeaponState>(e, WeaponState{w.magazine});
-        WeaponState& s = reg.get<WeaponState>(e);
+        WeaponState& s = reg.get_mut<WeaponState>(e);
         if (s.ammo > w.magazine) s.ammo = w.magazine;
         const bool living = alive(e);
 
@@ -246,7 +246,7 @@ struct CombatSystem::Impl {
             pressed = in.pressed(w.fire);
             reload = in.pressed(w.reload);
             aiming = in.held(w.aim);
-        } else if (auto* t = reg.try_get<WeaponTrigger>(e)) {
+        } else if (auto* t = reg.try_get_mut<WeaponTrigger>(e)) {
             held = t->pull;
             pressed = t->pull && !s.triggerHeld;
             reload = t->reload;
@@ -326,11 +326,11 @@ struct CombatSystem::Impl {
         PhysicsScene* physics = physicsScene(world);
         // The enemies decide first: their triggers fire in this step's weapons, their moves walk in
         // the next step's physics.
-        if (physics && dt > 0.0f) stepEnemies(world, *physics, dt);
-        const auto weapons = reg.view<Weapon>();
+        if (physics && dt > 0.0f) stepEnemies(reg, *physics, dt);
+        const auto weapons = reg.view<const Weapon>();
         if (physics && !weapons.empty() && dt > 0.0f) {
             order.clear();
-            for (const entt::entity e : weapons) order.emplace_back(world.idOf(e), e);
+            for (const entt::entity e : weapons) order.emplace_back(reg.idOf(e), e);
             std::sort(order.begin(), order.end());
             for (const auto& [id, e] : order)
                 if (reg.valid(e) && reg.all_of<Weapon>(e)) updateWeapon(e, dt, *physics);
@@ -357,7 +357,7 @@ struct CombatSystem::Impl {
     // goes off when its fuse runs out: an Explode event at its place.
     void stepGrenades(float dt, PhysicsScene& physics) {
         grenadeCooldown = std::max(0.0f, grenadeCooldown - dt);
-        const entt::entity player = playerOf(world);
+        const entt::entity player = playerOf(reg);
         if (player != entt::null && alive(player) && grenadeCooldown <= kTimeEps &&
             std::as_const(world).input(reg.get<PlayerController>(player).stream).pressed(combat::kGrenadeAction))
             if (const auto info = physics.playerInfo(player)) {
@@ -410,7 +410,7 @@ struct CombatSystem::Impl {
         const auto rounds = reg.view<const Round>();
         if (rounds.empty()) return;
         const Round round = reg.get<Round>(rounds.front());
-        const auto* hook = reg.ctx().find<WorldSnapshots>();
+        const auto* hook = world.context().find<WorldSnapshots>();
         if (!hook || !hook->save || !hook->restore) {
             if (!warnedNoHook)
                 OHAO_LOG(Warn, ecs, "combat: the world has a Round but its host installed no WorldSnapshots; no round runs");
@@ -429,7 +429,7 @@ struct CombatSystem::Impl {
             return;
         }
         // The player (ecs/player.hpp).
-        const entt::entity player = playerOf(world);
+        const entt::entity player = playerOf(reg);
         const auto* playerHealth = player != entt::null ? reg.try_get<Health>(player) : nullptr;
         const bool playerDead = playerHealth && !(playerHealth->current > 0.0f);
         std::size_t enemies = 0, dead = 0;
@@ -524,7 +524,7 @@ struct CombatSystem::Impl {
     }
 };
 
-CombatSystem::CombatSystem(World& world) : m(std::make_unique<Impl>(world)) {}
+CombatSystem::CombatSystem(World& world, const SystemContext& ctx) : m(std::make_unique<Impl>(world, ctx)) {}
 CombatSystem::~CombatSystem() = default;
 
 void CombatSystem::step(float dt) { m->step(dt); }
@@ -553,18 +553,30 @@ std::vector<CombatGrenade> CombatSystem::grenadesInFlight() const {
 CombatSystem& installCombat(World& world) {
     auto& reg = world.registry();
     if (const auto* installed = reg.ctx().find<CombatInstalled>()) return *installed->system;
-    // The system owns the combat state: it goes with the World's systems.
-    auto system = std::make_shared<CombatSystem>(world);
-    reg.ctx().emplace<CombatInstalled>(CombatInstalled{system.get()});
-    // Rounds and grenades meet the world as the step's physics left it.
-    world.addSimulate("combat", [system](World&, float dt) { system->step(dt); }, {.after = {"physics"}});
+    // The system owns the combat state: it goes with the World's systems, and is made with the system's context, so
+    // the step and the methods between steps (damage) touch the registry through it.
+    auto holder = std::make_shared<std::unique_ptr<CombatSystem>>();
+    // Rounds and grenades meet the world as the step's physics left it. The enemies decide inside it (enemy_ai.cpp):
+    // they emplace their state, and a dead one loses its PlayerController.
+    world.addSimulate("combat", [holder](SystemContext&, float dt) { (*holder)->step(dt); },
+                      {.after = {"physics"},
+                       .reads = types<Weapon, Health, Parent, Children, PlayerController, WorldTransform, Transform,
+                                      Collider, Muzzle, Light, Round, Enemy, WeaponState>(),
+                       .writes = types<Health, WeaponState, WeaponTrigger, Light, EnemyState, MoveIntent,
+                                       PlayerController>(),
+                       .readsResources = {"world.snapshots"},
+                       .writesResources = {"physics.scene", "audio.mix"}});
+    *holder = std::make_unique<CombatSystem>(world, *world.systemContext("combat"));
+    CombatSystem* system = holder->get();
+    reg.ctx().emplace<CombatInstalled>(CombatInstalled{system});
+    requestMixSnapshot(world, "default");   // the request exists before a step asks for another
     // A dead player stands, or falls, where it died until the round restarts.
     if (PhysicsScene* physics = physicsScene(world))
         physics->setInputControl([](const entt::registry& r, entt::entity e) {
             const auto* h = r.try_get<Health>(e);
             return !h || h->current > 0.0f;
         });
-    CombatSystem* raw = system.get();
+    CombatSystem* raw = system;
     addSnapshotHook(reg, SnapshotHook{"combat", [raw] { return raw->saveState(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreState(s); },
                                       [raw](StateHash& h) { raw->hashState(h); }, layoutKey<CombatSystem::Impl::State>()});
@@ -574,17 +586,17 @@ CombatSystem& installCombat(World& world) {
 }
 
 void uninstallCombat(World& world) {
-    world.registry().ctx().erase<CombatInstalled>();
+    world.context().erase<CombatInstalled>();
     uninstallViewModel(world);
 }
 
 CombatSystem* combatSystem(World& world) {
-    const auto* installed = world.registry().ctx().find<CombatInstalled>();
+    const auto* installed = world.context().find<CombatInstalled>();
     return installed ? installed->system : nullptr;
 }
 
 const CombatSystem* combatSystem(const World& world) {
-    const auto* installed = world.registry().ctx().find<CombatInstalled>();
+    const auto* installed = world.context().find<CombatInstalled>();
     return installed ? installed->system : nullptr;
 }
 

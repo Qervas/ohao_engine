@@ -7,8 +7,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
-#include <stdexcept>
+#include <cstdlib>
 #include <random>
+#include <stdexcept>
 
 namespace ohao::ecs {
 
@@ -23,6 +24,15 @@ constexpr uint64_t splitmix64(uint64_t x) noexcept {
     return x ^ (x >> 31);
 }
 
+bool accessCheckFromEnvironment() {
+    const char* v = std::getenv("OHAO_ACCESS_CHECK");
+#ifdef NDEBUG
+    return v && *v && std::string_view(v) != "0";
+#else
+    return !(v && std::string_view(v) == "0");
+#endif
+}
+
 uint64_t randomSeed() {
     std::random_device rd;
     return (static_cast<uint64_t>(rd()) << 32) ^ rd();
@@ -35,33 +45,38 @@ glm::mat4 Transform::matrix() const {
            glm::scale(glm::mat4(1.0f), scale);
 }
 
-World::World() : m_idGen{randomSeed(), 0} {
+World::World() : m_idGen{randomSeed(), 0}, m_check(accessCheckFromEnvironment()) {
     (void)m_events.writer<RestoreEvent>(kRestoreChannel, "world");   // its channel, before any restore
-    m_registry.on_update<Transform>().connect<&World::onTransformChanged>(this);
+    onUpdate<Transform, &World::onTransformChanged>(this, {.writes = types<TransformDirty>()});
     // The id index follows EntityId on every path (World::destroy, registry().destroy,
     // registry().clear). These hooks only touch m_byId, never a pool.
-    m_registry.on_construct<EntityId>().connect<&World::onIdConstructed>(this);
-    m_registry.on_destroy<EntityId>().connect<&World::onIdDestroyed>(this);
-    m_registry.on_update<EntityId>().connect<&World::onIdUpdated>(this);
+    onConstruct<EntityId, &World::onIdConstructed>(this, {.writesResources = {"world.ids"}});
+    onDestroy<EntityId, &World::onIdDestroyed>(this, {.writesResources = {"world.ids"}});
+    onUpdate<EntityId, &World::onIdUpdated>(this, {.writesResources = {"world.ids"}});
     // Hierarchy hooks keep Parent/Children consistent on every destroy path,
     // registry().destroy() and registry().clear() included. Pool creation order is
     // deliberate: registry().clear() empties pools newest first, so Children is
     // cleared while Parent and TransformDirty are still intact (the Children hook
     // writes to both) and they are emptied after it.
     m_registry.storage<TransformDirty>();
-    m_registry.on_destroy<Parent>().connect<&World::onParentDestroyed>(this);
-    m_registry.on_destroy<Children>().connect<&World::onChildrenDestroyed>(this);
+    onDestroy<Parent, &World::onParentDestroyed>(this, {.writes = types<Children>()});
+    onDestroy<Children, &World::onChildrenDestroyed>(this, {.writes = types<Parent, TransformDirty>()});
     // The controls: the input map is rebuilt from InputActions at the next step.
-    m_registry.on_construct<InputActions>().connect<&World::onInputActionsChanged>(this);
-    m_registry.on_update<InputActions>().connect<&World::onInputActionsChanged>(this);
-    m_registry.on_destroy<InputActions>().connect<&World::onInputActionsChanged>(this);
+    const SignalEffect bindings{.writesResources = {"world.bindings"}};
+    onConstruct<InputActions, &World::onInputActionsChanged>(this, bindings);
+    onUpdate<InputActions, &World::onInputActionsChanged>(this, bindings);
+    onDestroy<InputActions, &World::onInputActionsChanged>(this, bindings);
     // Engine-provided behaviour, once per fixed step: they move entities, before the physics and the gameplay that
-    // read where entities are.
-    addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); }, {.before = {"physics"}});
-    addSimulate("fly_controller", [](World& w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); },
-                {.before = {"physics"}});
+    // read where entities are. The flying camera turns first, then what spins.
+    addSimulate("spin", [](SystemContext& c, float dt) { updateSpin(c, dt); },
+                {.after = {"fly_controller"}, .before = {"physics"}, .reads = types<Spin>(), .writes = types<Transform>()});
+    addSimulate("fly_controller", [](SystemContext& c, float dt) { updateFlyControllers(c, std::as_const(c.world()).input(), dt); },
+                {.before = {"physics"}, .reads = types<FlyController>(), .writes = types<Transform>()});
     // Structural: transforms are propagated (the other systems declare themselves around it).
-    addSync("transform", [](World& w) { updateTransforms(w.registry()); });
+    addSync("transform", [](SystemContext& c) { updateTransforms(c.registry()); },
+            {.reads = types<Transform, Parent, Children, PhysicsBody, ColliderPart>(),
+             .writes = types<WorldTransform, MovedLastFrame, RenderDirty, PhysicsMoved, TransformDirty>(),
+             .exclusive = true});
 }
 
 void World::onTransformChanged(entt::registry& r, entt::entity e) {
@@ -270,12 +285,21 @@ void World::setTransform(entt::entity e, const Transform& local) {
 
 namespace {
 
+thread_local SystemContext* t_running = nullptr;   // the system this thread runs now
+
+// Sets the system this thread runs for the length of its call.
+struct Running {
+    SystemContext* prev;
+    explicit Running(SystemContext* ctx) : prev(t_running) { t_running = ctx; }
+    ~Running() { t_running = prev; }
+};
+
 // The order of a phase's systems: each after what it names in `after` and before what it names in `before` (names
 // not installed are ignored), and after its predecessors in `edges` (from, to: from runs first); among the systems
 // ready at once the lesser name runs first (Kahn's algorithm), so the order depends only on the set. Returns the
-// systems' indices in their order; a cycle throws, naming one.
+// systems' indices in their order, and `edges` becomes every edge (deduplicated); a cycle throws, naming one.
 template <class S>
-std::vector<std::size_t> orderSystems(const std::vector<S>& systems, std::vector<std::pair<std::size_t, std::size_t>> edges,
+std::vector<std::size_t> orderSystems(const std::vector<S>& systems, std::vector<std::pair<std::size_t, std::size_t>>& edges,
                                       const char* kind) {
     const std::size_t n = systems.size();
     const auto indexOf = [&](std::string_view name) {
@@ -284,17 +308,17 @@ std::vector<std::size_t> orderSystems(const std::vector<S>& systems, std::vector
         return n;
     };
     for (std::size_t i = 0; i < n; ++i) {
-        for (const std::string& a : systems[i].order.after)
+        for (const std::string& a : systems[i].decl.after)
             if (const std::size_t j = indexOf(a); j < n) edges.emplace_back(j, i);
-        for (const std::string& b : systems[i].order.before)
+        for (const std::string& b : systems[i].decl.before)
             if (const std::size_t j = indexOf(b); j < n) edges.emplace_back(i, j);
     }
-    std::vector<std::vector<std::size_t>> next(n), prev(n);
-    std::vector<std::size_t> waits(n, 0);
+    std::erase_if(edges, [](const auto& e) { return e.first == e.second; });
     std::sort(edges.begin(), edges.end());
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    std::vector<std::vector<std::size_t>> next(n), prev(n);
+    std::vector<std::size_t> waits(n, 0);
     for (const auto& [from, to] : edges) {
-        if (from == to) continue;
         next[from].push_back(to);
         prev[to].push_back(from);
         ++waits[to];
@@ -334,53 +358,238 @@ void permute(std::vector<S>& systems, const std::vector<std::size_t>& order) {
 }
 
 template <class S>
-std::string listNames(const std::vector<S>& systems) {
-    std::string out;
-    for (const S& s : systems) out += (out.empty() ? "" : ", ") + s.name;
-    return out;
-}
-
-template <class S>
 bool installed(const std::vector<S>& systems, std::string_view name) {
     return std::any_of(systems.begin(), systems.end(), [&](const S& s) { return s.name == name; });
 }
 
-} // namespace
-
-// The simulate order, from the declarations and the event edges: a channel's writers before its typed readers and,
-// when it has a cue, before every system that reads cues.
-void World::orderSimulate() {
-    const auto indexOf = [&](std::string_view name) {
-        for (std::size_t i = 0; i < m_simulate.size(); ++i)
-            if (m_simulate[i].name == name) return i;
-        return m_simulate.size();
-    };
-    std::vector<std::pair<std::size_t, std::size_t>> edges;
-    for (const auto& c : m_events.channels())
-        for (const std::string& w : c->writers()) {
-            const std::size_t from = indexOf(w);
-            if (from == m_simulate.size()) continue;
-            for (const std::string& r : c->readers())
-                if (const std::size_t to = indexOf(r); to < m_simulate.size()) edges.emplace_back(from, to);
-            if (c->hasCue())
-                for (std::size_t to = 0; to < m_simulate.size(); ++to)
-                    if (m_simulate[to].order.readsCues) edges.emplace_back(from, to);
-        }
-    permute(m_simulate, orderSystems(m_simulate, std::move(edges), "simulate"));
-    m_simulateTopology = m_events.topology();
-    OHAO_LOG(Debug, ecs, "simulate order: {}", listNames(m_simulate));
+void insertSorted(std::vector<TypeKey>& keys, TypeKey k) {
+    const auto it = std::lower_bound(keys.begin(), keys.end(), k);
+    if (it == keys.end() || *it != k) keys.insert(it, k);
 }
 
-void World::addSimulate(std::string name, SimulateSystem fn, SystemOrder order) {
+bool containsSorted(const std::vector<TypeKey>& keys, TypeKey k) { return std::binary_search(keys.begin(), keys.end(), k); }
+
+// A system's access with its signals' effects: what it reads (its writes included) and writes.
+struct Access {
+    std::vector<TypeKey> reads, writes;   // sorted
+    std::vector<std::string> readsRes, writesRes;   // sorted
+};
+
+void insertName(std::vector<std::string>& names, const std::string& n) {
+    const auto it = std::lower_bound(names.begin(), names.end(), n);
+    if (it == names.end() || *it != n) names.insert(it, n);
+}
+
+template <class T>
+const T* firstShared(const std::vector<T>& a, const std::vector<T>& b) {
+    for (auto i = a.begin(), j = b.begin(); i != a.end() && j != b.end();) {
+        if (*i < *j) ++i;
+        else if (*j < *i) ++j;
+        else return &*i;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+World::~World() = default;
+
+void World::checkRaw() const {
+    if (const SystemContext* c = t_running; c && c->m_world == this && !c->exclusive())
+        throw std::logic_error("system '" + c->name() +
+                               "' used the raw registry: a system that is not exclusive reaches components through its "
+                               "SystemContext");
+}
+
+void World::addEffect(ComponentType trigger, const void* owner, SignalEffect effect) {
+    m_effects.push_back({std::move(trigger), owner, std::move(effect)});
+    m_simulateDirty = m_syncDirty = true;
+}
+
+void World::removeEffects(TypeKey trigger, const void* owner) {
+    std::erase_if(m_effects, [&](const Effect& e) { return e.trigger.key == trigger && e.owner == owner; });
+    m_simulateDirty = m_syncDirty = true;
+}
+
+// A phase's schedule: the order (from the declarations and, in the simulate phase, the event edges: a channel's
+// writers before its typed readers and, when it has a cue, before every system that reads cues), each system's access
+// with its signals' effects, the install check, and the waves.
+template <class S>
+void World::schedule(std::vector<S>& systems, std::vector<Wave>& waves, const char* kind, bool events) {
+    const std::size_t n = systems.size();
+    std::vector<std::pair<std::size_t, std::size_t>> edges;
+    if (events) {
+        const auto indexOf = [&](std::string_view name) {
+            for (std::size_t i = 0; i < n; ++i)
+                if (systems[i].name == name) return i;
+            return n;
+        };
+        for (const auto& c : m_events.channels())
+            for (const std::string& w : c->writers()) {
+                const std::size_t from = indexOf(w);
+                if (from == n) continue;
+                for (const std::string& r : c->readers())
+                    if (const std::size_t to = indexOf(r); to < n) edges.emplace_back(from, to);
+                if (c->hasCue())
+                    for (std::size_t to = 0; to < n; ++to)
+                        if (systems[to].decl.readsCues) edges.emplace_back(from, to);
+            }
+    }
+    const std::vector<std::size_t> order = orderSystems(systems, edges, kind);
+    std::vector<std::size_t> at(n);
+    for (std::size_t k = 0; k < n; ++k) at[order[k]] = k;
+    permute(systems, order);
+    // reach[i][j]: j runs after i by some chain of edges (positions in the order; edges only go forward).
+    std::vector<std::vector<bool>> reach(n, std::vector<bool>(n, false));
+    std::vector<std::vector<std::size_t>> next(n);
+    for (const auto& [from, to] : edges) next[at[from]].push_back(at[to]);
+    for (std::size_t i = n; i-- > 0;)
+        for (const std::size_t j : next[i]) {
+            reach[i][j] = true;
+            for (std::size_t k = j + 1; k < n; ++k)
+                if (reach[j][k]) reach[i][k] = true;
+        }
+
+    // Each system's access: its declaration, closed over the effects of the signals of what it writes.
+    ankerl::unordered_dense::map<TypeKey, std::string> names;
+    std::vector<Access> access(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const SystemDecl& d = systems[i].decl;
+        if (d.reads.empty() && d.writes.empty() && d.readsResources.empty() && d.writesResources.empty() && !d.exclusive)
+            throw std::logic_error(std::string(kind) + " system '" + systems[i].name +
+                                   "' declares no access: SystemDecl's reads, writes, resources or exclusive");
+        Access& a = access[i];
+        for (const ComponentType& t : d.writes) {
+            insertSorted(a.writes, t.key);
+            names.try_emplace(t.key, t.name);
+            t.assure(m_registry);
+        }
+        for (const ComponentType& t : d.reads) {
+            insertSorted(a.reads, t.key);
+            names.try_emplace(t.key, t.name);
+            t.assure(m_registry);
+        }
+        for (const std::string& r : d.writesResources) insertName(a.writesRes, r);
+        for (const std::string& r : d.readsResources) insertName(a.readsRes, r);
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (const Effect& e : m_effects) {
+                if (!containsSorted(a.writes, e.trigger.key)) continue;
+                for (const ComponentType& t : e.effect.writes)
+                    if (!containsSorted(a.writes, t.key)) {
+                        insertSorted(a.writes, t.key);
+                        names.try_emplace(t.key, t.name);
+                        t.assure(m_registry);
+                        grew = true;
+                    }
+                for (const std::string& r : e.effect.writesResources) insertName(a.writesRes, r);
+            }
+        }
+        for (const TypeKey k : a.writes) insertSorted(a.reads, k);
+        for (const std::string& r : a.writesRes) insertName(a.readsRes, r);
+    }
+
+    // Two writers of one component or resource run in an order the declarations give, never the names'.
+    for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t j = i + 1; j < n; ++j) {
+            if (reach[i][j]) continue;
+            std::string what;
+            if (const TypeKey* k = firstShared(access[i].writes, access[j].writes)) what = names[*k];
+            else if (const std::string* r = firstShared(access[i].writesRes, access[j].writesRes)) what = "the resource " + *r;
+            else continue;
+            throw std::logic_error(std::string("the ") + kind + " systems '" + systems[i].name + "' and '" +
+                                   systems[j].name + "' both write " + what +
+                                   " with no order between them: declare one after the other");
+        }
+
+    // The waves: runs of consecutive systems that conflict in nothing.
+    const auto conflict = [&](std::size_t i, std::size_t j) {
+        const Access &a = access[i], &b = access[j];
+        return firstShared(a.writes, b.reads) || firstShared(b.writes, a.reads) || firstShared(a.writesRes, b.readsRes) ||
+               firstShared(b.writesRes, a.readsRes);
+    };
+    waves.clear();
+    std::size_t begin = 0;
+    for (std::size_t k = 1; k <= n; ++k) {
+        bool split = k == n || systems[k].decl.exclusive || systems[begin].decl.exclusive;
+        for (std::size_t m = begin; !split && m < k; ++m) split = reach[m][k] || conflict(m, k);
+        if (split) {
+            waves.push_back({static_cast<uint32_t>(begin), static_cast<uint32_t>(k)});
+            begin = k;
+        }
+    }
+    if (n == 0) waves.clear();
+
+    for (std::size_t i = 0; i < n; ++i) {
+        S& s = systems[i];
+        if (!s.ctx) s.ctx = std::make_unique<SystemContext>(*this, s.name, s.decl.exclusive);
+        s.ctx->m_exclusive = s.decl.exclusive;
+        s.ctx->m_check = m_check && !s.decl.exclusive;
+        s.ctx->m_reads = std::move(access[i].reads);
+        s.ctx->m_writes = std::move(access[i].writes);
+    }
+    std::string log;
+    for (const Wave& w : waves) {
+        log += log.empty() ? "[" : " [";
+        for (uint32_t i = w.begin; i < w.end; ++i) log += (i == w.begin ? "" : ", ") + systems[i].name;
+        log += "]";
+    }
+    OHAO_LOG(Debug, ecs, "{} waves: {}", kind, log);
+}
+
+void World::scheduleSimulate() {
+    schedule(m_simulate, m_simulateWaves, "simulate", true);
+    m_simulateTopology = m_events.topology();
+    m_simulateDirty = false;
+}
+
+void World::scheduleSync() {
+    schedule(m_sync, m_syncWaves, "sync", false);
+    m_syncDirty = false;
+}
+
+template <class S>
+std::vector<std::vector<std::string>> World::waveNames(const std::vector<S>& systems, const std::vector<Wave>& waves) {
+    std::vector<std::vector<std::string>> out;
+    for (const Wave& w : waves) {
+        auto& names = out.emplace_back();
+        for (uint32_t i = w.begin; i < w.end; ++i) names.push_back(systems[i].name);
+    }
+    return out;
+}
+
+std::vector<std::vector<std::string>> World::simulateWaves() {
+    if (m_simulateDirty || m_events.topology() != m_simulateTopology) scheduleSimulate();
+    return waveNames(m_simulate, m_simulateWaves);
+}
+
+std::vector<std::vector<std::string>> World::syncWaves() {
+    if (m_syncDirty) scheduleSync();
+    return waveNames(m_sync, m_syncWaves);
+}
+
+void World::addSimulate(std::string name, SimulateSystem fn, SystemDecl decl) {
     if (m_events.inStep()) throw std::logic_error("simulate system '" + name + "' added inside a step");
     if (installed(m_simulate, name)) throw std::logic_error("simulate system '" + name + "' installed twice");
-    m_simulate.push_back({name, std::move(fn), std::move(order)});
+    m_simulate.push_back({name, std::move(fn), std::move(decl), nullptr});
     try {
-        orderSimulate();
+        scheduleSimulate();
     } catch (...) {
         m_simulate.erase(std::find_if(m_simulate.begin(), m_simulate.end(),
                                       [&](const auto& s) { return s.name == name; }));
-        m_simulateTopology = ~uint64_t{0};   // the next step orders the rest again
+        m_simulateDirty = true;   // the next step schedules the rest again
+        throw;
+    }
+}
+
+void World::addSync(std::string name, SyncSystem fn, SystemDecl decl) {
+    if (installed(m_sync, name)) throw std::logic_error("sync system '" + name + "' installed twice");
+    m_sync.push_back({name, std::move(fn), std::move(decl), nullptr});
+    try {
+        scheduleSync();
+    } catch (...) {
+        m_sync.erase(std::find_if(m_sync.begin(), m_sync.end(), [&](const auto& s) { return s.name == name; }));
+        m_syncDirty = true;
         throw;
     }
 }
@@ -389,11 +598,20 @@ void World::removeSimulate(std::string_view name) {
     if (m_events.inStep()) throw std::logic_error("simulate system '" + std::string(name) + "' removed inside a step");
     std::erase_if(m_simulate, [&](const auto& s) { return s.name == name; });
     m_events.forgetSystem(name);   // the order is computed again before the next step
+    m_simulateDirty = true;
 }
 
 void World::removeSync(std::string_view name) {
     std::erase_if(m_sync, [&](const auto& s) { return s.name == name; });
-    permute(m_sync, orderSystems(m_sync, {}, "sync"));
+    m_syncDirty = true;
+}
+
+SystemContext* World::systemContext(std::string_view name) noexcept {
+    for (auto& s : m_simulate)
+        if (s.name == name) return s.ctx.get();
+    for (auto& s : m_sync)
+        if (s.name == name) return s.ctx.get();
+    return nullptr;
 }
 
 std::vector<std::string> World::simulateNames() const {
@@ -408,23 +626,23 @@ std::vector<std::string> World::syncNames() const {
     return out;
 }
 
-void World::addSync(std::string name, SyncSystem fn, SystemOrder order) {
-    if (installed(m_sync, name)) throw std::logic_error("sync system '" + name + "' installed twice");
-    m_sync.push_back({name, std::move(fn), std::move(order)});
-    try {
-        permute(m_sync, orderSystems(m_sync, {}, "sync"));
-    } catch (...) {
-        m_sync.pop_back();
-        throw;
-    }
-    OHAO_LOG(Debug, ecs, "sync order: {}", listNames(m_sync));
-}
-
 void World::simulate(float dt) {
-    if (m_events.topology() != m_simulateTopology) orderSimulate();   // new event handles since the last step
+    // New systems, effects or event handles since the last step: scheduled again (a conflict throws, before the step).
+    if (m_simulateDirty || m_events.topology() != m_simulateTopology) scheduleSimulate();
     m_events.beginStep(m_events.step() + 1);
     if (dt > 0.0f) m_stepDt = dt;
-    for (auto& s : m_simulate) s.fn(*this, dt);
+    try {
+        for (const Wave& w : m_simulateWaves)
+            for (uint32_t i = w.begin; i < w.end; ++i) {
+                auto& s = m_simulate[i];
+                const Running running(s.ctx.get());
+                s.fn(*s.ctx, dt);
+            }
+    } catch (...) {
+        m_events.endStep();
+        m_deferred.clear();
+        throw;
+    }
     m_events.endStep();
     m_pendingLook = glm::vec2(0.0f);   // the step took it
     for (std::size_t i = 0; i < m_deferred.size(); ++i) {   // between steps now: an op may defer another (at once)
@@ -452,16 +670,48 @@ void World::sync() {
                      m_transformMismatches);
     }
 #endif
-    for (auto& s : m_sync) s.fn(*this);
+    if (m_syncDirty) scheduleSync();
+    for (const Wave& w : m_syncWaves)
+        for (uint32_t i = w.begin; i < w.end; ++i) {
+            auto& s = m_sync[i];
+            const Running running(s.ctx.get());
+            s.fn(*s.ctx);
+        }
 }
 
 bool World::runSync(std::string_view name) {
+    if (m_syncDirty) scheduleSync();
     for (auto& s : m_sync)
         if (s.name == name) {
-            s.fn(*this);
+            const Running running(s.ctx.get());
+            s.fn(*s.ctx);
             return true;
         }
     return false;
+}
+
+SystemContext::SystemContext(World& world, std::string name, bool exclusive)
+    : m_world(&world), m_reg(&world.m_registry), m_name(std::move(name)), m_exclusive(exclusive) {}
+
+uint64_t SystemContext::idOf(entt::entity e) const { return m_world->idOf(e); }
+
+entt::registry& SystemContext::registry() const {
+    if (m_world->accessCheck() && !m_exclusive)
+        throw std::logic_error("system '" + m_name +
+                               "' used the raw registry: a system that is not exclusive reaches components through its "
+                               "SystemContext");
+    return *m_reg;
+}
+
+void SystemContext::checkRead(TypeKey key, std::string_view type) const {
+    if (!containsSorted(m_reads, key))
+        throw std::logic_error("system '" + m_name + "' reads " + std::string(type) + ", which it does not declare");
+}
+
+void SystemContext::checkWrite(TypeKey key, std::string_view type) const {
+    if (!containsSorted(m_writes, key))
+        throw std::logic_error("system '" + m_name + "' writes " + std::string(type) + ", which it declares " +
+                               (containsSorted(m_reads, key) ? "only as a read" : "nowhere"));
 }
 
 } // namespace ohao::ecs

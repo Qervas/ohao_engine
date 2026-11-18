@@ -169,7 +169,7 @@ render::HudList CombatHud::layout(const HudState& s, uint32_t width, uint32_t he
 }
 
 CombatHud& combatHudOf(World& world) {
-    auto& ctx = world.registry().ctx();
+    auto& ctx = world.context();
     if (auto* h = ctx.find<CombatHudHolder>()) return *h->hud;
     return *ctx.emplace<CombatHudHolder>(CombatHudHolder{std::make_shared<CombatHud>()}).hud;
 }
@@ -180,7 +180,7 @@ render::HudList combatHud(World& world, uint32_t width, uint32_t height) {
     return CombatHud::layout(hud.state(world, width, height), width, height);
 }
 
-void forgetHud(World& world) { world.registry().ctx().erase<CombatHudHolder>(); }
+void forgetHud(World& world) { world.context().erase<CombatHudHolder>(); }
 
 // What the slice presents (world_render/present.hpp): this HUD and the grenades in flight.
 void installSlicePresentation(World& world) {

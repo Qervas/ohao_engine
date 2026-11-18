@@ -1,7 +1,7 @@
 #pragma once
 #include "core/input.hpp"
 
-#include <entt/entt.hpp>
+#include "ecs/world.hpp"
 
 namespace ohao::ecs {
 
@@ -15,6 +15,6 @@ namespace ohao::ecs {
 //              right = rotation * +X (the turn of this step included).
 // Written through patch<Transform>, and only when something moved: an idle controller
 // leaves its entity untouched. Deterministic for a given input and dt sequence.
-void updateFlyControllers(entt::registry& reg, const InputMap& input, float dt);
+void updateFlyControllers(SystemContext& reg, const InputMap& input, float dt);
 
 } // namespace ohao::ecs

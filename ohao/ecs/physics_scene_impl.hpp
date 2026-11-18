@@ -141,6 +141,7 @@ struct PhysicsScene::Impl {
         uint64_t since{0};   // the step it began in
     };
 
+    World& world;
     entt::registry& reg;
     AssetResolver& assets;
     std::unique_ptr<pb::IPhysicsBackend> backend;
@@ -253,7 +254,7 @@ struct PhysicsScene::Impl {
     std::vector<entt::entity> jointsBroken;    // JointState changed by anything but a step: re-enable or disable
     bool writingJoint{false};
 
-    Impl(entt::registry& r, AssetResolver& a);
+    Impl(World& w, AssetResolver& a);
 
     ~Impl();
 
@@ -283,17 +284,17 @@ struct PhysicsScene::Impl {
     // world; else the parked one goes and false.
     bool unpark(entt::entity e, const PlayerController& pc, PlayerRecord& out);
 
+    // What the handlers write: the queues the next sync or step reads; a player's removal also the simulation.
+    static SignalEffect queued() { return {.writesResources = {"physics.touched"}}; }
     template <class T>
     void connect() {
-        reg.on_construct<T>().template connect<&Impl::touch>(this);
-        reg.on_update<T>().template connect<&Impl::touch>(this);
-        reg.on_destroy<T>().template connect<&Impl::touch>(this);
+        world.onConstruct<T, &Impl::touch>(this, queued());
+        world.onUpdate<T, &Impl::touch>(this, queued());
+        world.onDestroy<T, &Impl::touch>(this, queued());
     }
     template <class T>
     void disconnect() {
-        reg.on_construct<T>().disconnect(this);
-        reg.on_update<T>().disconnect(this);
-        reg.on_destroy<T>().disconnect(this);
+        world.disconnect<T>(this);
     }
     // Only queued: the entity may be in the middle of being destroyed.
     void touch(entt::registry&, entt::entity e) { touched.push_back(e); }

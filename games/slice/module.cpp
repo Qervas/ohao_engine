@@ -17,7 +17,7 @@ public:
     [[nodiscard]] std::string_view name() const override { return "slice"; }
     void registerTypes(reflect::TypeRegistry& types) const override { registerSliceTypes(types); }
     void install(World& world) const override {
-        auto& ctx = world.registry().ctx();
+        auto& ctx = world.context();
         if (ctx.contains<SliceInstalled>()) return;
         ctx.emplace<SliceInstalled>();
         installCombat(world);   // its channels, the round, the enemies, the view model, the dead player's rule
@@ -30,7 +30,7 @@ public:
     void uninstall(World& world) const override {
         forgetHud(world);
         uninstallCombat(world);
-        world.registry().ctx().erase<SliceInstalled>();
+        world.context().erase<SliceInstalled>();
     }
     [[nodiscard]] std::span<const game::Method> methods() const override { return sliceMethods(); }
 };

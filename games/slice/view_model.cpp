@@ -59,13 +59,13 @@ void yawPitch(const glm::mat4& world, float& yawDeg, float& pitchDeg) {
     pitchDeg = glm::degrees(std::asin(std::clamp(f.y, -1.0f, 1.0f)));
 }
 
-const glm::mat4& drawnOrStep(const entt::registry& reg, entt::entity e) {
+const glm::mat4& drawnOrStep(const SystemContext& reg, entt::entity e) {
     if (const auto* rp = reg.try_get<RenderPose>(e)) return rp->world;
     return reg.get<WorldTransform>(e).world;
 }
 
 // The nearest ancestor of e (not e) holding a Camera, and the root above it (the gun's owner).
-entt::entity cameraAbove(const entt::registry& reg, entt::entity e, entt::entity& root) {
+entt::entity cameraAbove(const SystemContext& reg, entt::entity e, entt::entity& root) {
     entt::entity camera = entt::null;
     root = e;
     for (int depth = 0; depth < 64; ++depth) {
@@ -81,8 +81,8 @@ class ViewModelSystem {
 public:
     explicit ViewModelSystem(std::shared_ptr<ViewModelState> state) : m_state(std::move(state)) {}
 
-    void run(World& world) {
-        auto& reg = world.registry();
+    void run(const SystemContext& reg) {
+        World& world = reg.world();
         ViewModelState& st = *m_state;
         const float dt = world.presentationDt();
         const bool live = dt > 0.0f;
@@ -205,7 +205,7 @@ public:
 
         // A camera no gun narrowed this frame draws at its own field of view.
         m_wide.clear();
-        for (const entt::entity c : reg.view<DrawnFov>())
+        for (const entt::entity c : reg.view<const DrawnFov>())
             if (std::find(m_narrowed.begin(), m_narrowed.end(), c) == m_narrowed.end()) m_wide.push_back(c);
         for (const entt::entity c : m_wide) reg.remove<DrawnFov>(c);
 
@@ -231,7 +231,7 @@ public:
 private:
     // x drawn at `world` this frame. Its previous pose is what this system drew last frame (or, new,
     // the pose itself: no motion). Tagged for the render extract only when the drawn pose changed.
-    void setDrawn(entt::registry& reg, entt::entity x, const glm::mat4& world) {
+    void setDrawn(const SystemContext& reg, entt::entity x, const glm::mat4& world) {
         if (!reg.valid(x) || !reg.all_of<WorldTransform>(x)) return;
         m_seen.push_back(x);
         auto& drawn = m_state->drawn;
@@ -263,25 +263,28 @@ void removeFirstPerson(entt::registry& reg, entt::entity e) { reg.remove<FirstPe
 void installViewModel(World& world) {
     auto& reg = world.registry();
     if (reg.ctx().contains<ViewModelInstalled>()) return;
-    reg.on_construct<ViewModel>().connect<&addFirstPerson>();
-    reg.on_destroy<ViewModel>().connect<&removeFirstPerson>();
+    world.onConstruct<ViewModel, &addFirstPerson>({.writes = types<FirstPerson>()});
+    world.onDestroy<ViewModel, &removeFirstPerson>({.writes = types<FirstPerson>()});
     for (const entt::entity e : reg.view<ViewModel>()) reg.emplace_or_replace<FirstPerson>(e);
     auto state = std::make_shared<ViewModelState>();
     reg.ctx().emplace<ViewModelInstalled>(ViewModelInstalled{state});
     auto system = std::make_shared<ViewModelSystem>(state);
     // The gun follows the drawn camera, and the arms' pose follows the gun.
-    world.addSync("view_model", [system](World& w) { system->run(w); }, {.after = {"interpolate"}, .before = {"pose"}});
+    world.addSync("view_model", [system](SystemContext& c) { system->run(c); },
+                  {.after = {"interpolate"}, .before = {"pose"},
+                   .reads = types<ViewModel, Transform, Parent, Children, Camera, WorldTransform, PlayerState, WeaponState,
+                                  Weapon, JointAttach>(),
+                   .writes = types<DrawnFov, RenderPose, RenderDirty>()});
 }
 
 void uninstallViewModel(World& world) {
-    auto& reg = world.registry();
-    reg.on_construct<ViewModel>().disconnect<&addFirstPerson>();
-    reg.on_destroy<ViewModel>().disconnect<&removeFirstPerson>();
-    reg.ctx().erase<ViewModelInstalled>();
+    world.disconnect<ViewModel, &addFirstPerson>();
+    world.disconnect<ViewModel, &removeFirstPerson>();
+    world.context().erase<ViewModelInstalled>();
 }
 
 const ViewModelMotion* viewModelMotion(const World& world, entt::entity gun) {
-    const auto* installed = world.registry().ctx().find<ViewModelInstalled>();
+    const auto* installed = world.context().find<ViewModelInstalled>();
     if (!installed) return nullptr;
     const auto it = installed->state->guns.find(gun);
     return it != installed->state->guns.end() ? &it->second.motion : nullptr;

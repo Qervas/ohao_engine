@@ -36,19 +36,27 @@ Occlusion grade(uint8_t walls) {
 
 float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
 
+// The helpers read the registry through `reg`: the schedule's SystemContext in a step, or the raw registry between
+// steps (the API's questions).
+
+entt::entity playerIn(const World& world, const entt::registry&) { return playerOf(world); }
+entt::entity playerIn(const World&, const SystemContext& reg) { return playerOf(reg); }
+
 // The character a body belongs to (the entity or an ancestor holding a PlayerController), or null.
-entt::entity characterOf(const entt::registry& reg, entt::entity e) {
+template <class Reg>
+entt::entity characterOf(const Reg& reg, entt::entity e) {
     for (int depth = 0; depth < 64 && e != entt::null && reg.valid(e); ++depth) {
-        if (reg.all_of<PlayerController>(e)) return e;
-        const auto* p = reg.try_get<Parent>(e);
+        if (reg.template all_of<PlayerController>(e)) return e;
+        const auto* p = reg.template try_get<Parent>(e);
         e = p ? p->entity : entt::null;
     }
     return entt::null;
 }
 
-glm::mat4 worldOf(const entt::registry& reg, entt::entity e) {
-    if (const auto* wt = reg.try_get<WorldTransform>(e)) return wt->world;
-    if (const auto* t = reg.try_get<Transform>(e)) return t->matrix();
+template <class Reg>
+glm::mat4 worldOf(const Reg& reg, entt::entity e) {
+    if (const auto* wt = reg.template try_get<WorldTransform>(e)) return wt->world;
+    if (const auto* t = reg.template try_get<Transform>(e)) return t->matrix();
     return glm::mat4(1.0f);
 }
 
@@ -66,19 +74,19 @@ struct LocalBox {
     glm::vec3 lo{0.0f}, hi{0.0f};
 };
 
-bool inside(const entt::registry& reg, entt::entity e, const LocalBox& box, glm::vec3 p) {
+template <class Reg>
+bool inside(const Reg& reg, entt::entity e, const LocalBox& box, glm::vec3 p) {
     const glm::vec3 local = glm::vec3(glm::inverse(worldOf(reg, e)) * glm::vec4(p, 1.0f));
     return glm::all(glm::greaterThanEqual(local, box.lo - kFaceSlack)) && glm::all(glm::lessThanEqual(local, box.hi + kFaceSlack));
 }
 
 // The zone holding `p`: the highest priority, then the lowest id. `box` gives a zone's box (false:
 // none, the zone is skipped); `known` whether its preset counts.
-template <class BoxOf, class Known>
-std::string pickZone(const World& world, glm::vec3 p, BoxOf box, Known known) {
-    const auto& reg = world.registry();
+template <class Reg, class BoxOf, class Known>
+std::string pickZone(const World& world, const Reg& reg, glm::vec3 p, BoxOf box, Known known) {
     const ReverbZone* best = nullptr;
     uint64_t bestId = 0;
-    for (auto [e, z] : reg.view<const ReverbZone>().each()) {
+    for (auto [e, z] : reg.template view<const ReverbZone>().each()) {
         if (!known(e, z)) continue;
         LocalBox b;
         if (!box(e, z, b) || !inside(reg, e, b, p)) continue;
@@ -102,32 +110,28 @@ struct AudioInstalled {
     AudioSchedule* system{nullptr};
 };
 
-} // namespace
-
-// ---- the listener, occlusion, zones ------------------------------------------------------------
-
-std::optional<AudioListener> listenerAtStep(const World& world) {
-    const auto& reg = world.registry();
-    const entt::entity player = playerOf(world);   // the device's player hears
+template <class Reg>
+std::optional<AudioListener> listenerIn(const World& world, const Reg& reg) {
+    const entt::entity player = playerIn(world, reg);   // the device's player hears
     const uint64_t playerId = player != entt::null ? world.idOf(player) : 0;
     if (player != entt::null) {
-        const auto* t = reg.try_get<Transform>(player);
+        const auto* t = reg.template try_get<Transform>(player);
         if (!t) return std::nullopt;
         // Its head: its child with a Camera (the lowest id), at the step's pose.
         entt::entity head = entt::null;
         uint64_t headId = std::numeric_limits<uint64_t>::max();
-        for (auto [e, cam, parent] : reg.view<const Camera, const Parent>().each()) {
+        for (auto [e, cam, parent] : reg.template view<const Camera, const Parent>().each()) {
             const uint64_t id = world.idOf(e);
             if (parent.entity == player && id < headId) head = e, headId = id;
         }
-        glm::vec3 eye{0.0f, reg.get<PlayerController>(player).eyeHeight, 0.0f};
+        glm::vec3 eye{0.0f, reg.template get<PlayerController>(player).eyeHeight, 0.0f};
         if (head != entt::null)
-            if (const auto* ht = reg.try_get<Transform>(head)) eye = ht->position;
+            if (const auto* ht = reg.template try_get<Transform>(head)) eye = ht->position;
         return AudioListener{t->position + t->rotation * eye, player, playerId};
     }
     entt::entity cam = entt::null;
     uint64_t camId = std::numeric_limits<uint64_t>::max();
-    for (auto [e, c] : reg.view<const Camera>().each()) {
+    for (auto [e, c] : reg.template view<const Camera>().each()) {
         const uint64_t id = world.idOf(e);
         if (c.active && id < camId) cam = e, camId = id;
     }
@@ -135,7 +139,8 @@ std::optional<AudioListener> listenerAtStep(const World& world) {
     return AudioListener{glm::vec3(worldOf(reg, cam)[3]), entt::null, 0};
 }
 
-Occlusion occlusionBetween(const World& world, const AudioListener& listener, glm::vec3 source) {
+template <class Reg>
+Occlusion occlusionIn(const World& world, const Reg& reg, const AudioListener& listener, glm::vec3 source) {
     const PhysicsScene* physics = physicsScene(world);
     if (!physics) return {};
     const glm::vec3 toSource = source - listener.position;
@@ -151,7 +156,7 @@ Occlusion occlusionBetween(const World& world, const AudioListener& listener, gl
     for (int i = 0; i < 8 && remaining > 0.0f && walls < 2; ++i) {
         const auto hit = physics->raycastFrom(from, dir, remaining, ignore);
         if (!hit) break;
-        const entt::entity character = characterOf(world.registry(), hit->entity);
+        const entt::entity character = characterOf(reg, hit->entity);
         if (character != entt::null) {
             if (++hops > 4) break;
             ignore = character;
@@ -166,10 +171,32 @@ Occlusion occlusionBetween(const World& world, const AudioListener& listener, gl
     return grade(walls);
 }
 
+template <class Reg>
+uint64_t animSoundOwnerIn(const World& world, const Reg& reg, uint64_t entityId, uint64_t playerId) {
+    if (playerId == 0) return entityId;
+    entt::entity at = world.findById(entityId);
+    for (int depth = 0; depth < 64 && at != entt::null && reg.valid(at); ++depth) {
+        if (world.idOf(at) == playerId) return playerId;
+        const auto* p = reg.template try_get<Parent>(at);
+        at = p ? p->entity : entt::null;
+    }
+    return entityId;
+}
+
+} // namespace
+
+// ---- the listener, occlusion, zones ------------------------------------------------------------
+
+std::optional<AudioListener> listenerAtStep(const World& world) { return listenerIn(world, world.registry()); }
+
+Occlusion occlusionBetween(const World& world, const AudioListener& listener, glm::vec3 source) {
+    return occlusionIn(world, world.registry(), listener, source);
+}
+
 std::string listenerZone(const World& world, glm::vec3 listener) {
     if (const AudioSchedule* s = audioSchedule(world)) return s->zoneAt(listener);
     return pickZone(
-        world, listener, [](entt::entity, const ReverbZone& z, LocalBox& b) { return sizedBox(z, b); },
+        world, world.registry(), listener, [](entt::entity, const ReverbZone& z, LocalBox& b) { return sizedBox(z, b); },
         [](entt::entity, const ReverbZone&) { return true; });
 }
 
@@ -182,15 +209,7 @@ std::vector<std::string> animSoundNames(const ClipEvent& e) {
 }
 
 uint64_t animSoundOwner(const World& world, uint64_t entityId, uint64_t playerId) {
-    if (playerId == 0) return entityId;
-    const auto& reg = world.registry();
-    entt::entity at = world.findById(entityId);
-    for (int depth = 0; depth < 64 && at != entt::null && reg.valid(at); ++depth) {
-        if (world.idOf(at) == playerId) return playerId;
-        const auto* p = reg.try_get<Parent>(at);
-        at = p ? p->entity : entt::null;
-    }
-    return entityId;
+    return animSoundOwnerIn(world, world.registry(), entityId, playerId);
 }
 
 float footstepScale(bool landing, float speed) noexcept {
@@ -215,6 +234,7 @@ float distanceGain(float distance, const ShapeDesc& shape) noexcept {
 struct AudioSchedule::Impl {
     World& world;
     AssetResolver& assets;
+    const SystemContext* sys{nullptr};   // its system's: the registry as it reads it, in a step and between steps
 
     // The world's bank (its AudioMix's, else the default; or the one set).
     std::string bankPath;
@@ -235,8 +255,7 @@ struct AudioSchedule::Impl {
 
     // The director's state: what a snapshot carries.
     struct Voice {
-        uint32_t id{0};
-        uint64_t seq{0};
+        uint32_t id{0};   // in start order (ids only grow, and a restore keeps them)
         uint16_t sound{0};
         uint8_t bus{0}, priority{0};
         float audible{0.0f};
@@ -346,7 +365,7 @@ struct AudioSchedule::Impl {
     // The bank the world's AudioMix names (read once per path), else the default.
     void refreshBank() {
         if (bankSet) return;
-        const auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         std::string path;
         entt::entity mixEntity = entt::null;
         for (auto [e, mix] : reg.view<const AudioMix>().each()) {
@@ -380,7 +399,7 @@ struct AudioSchedule::Impl {
     // A zone's box in its frame: its size, else fitted to its mesh (cached per mesh).
     bool boxOf(entt::entity e, const ReverbZone& z, LocalBox& out) const {
         if (sizedBox(z, out)) return true;
-        const auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         const ModelAsset* asset = nullptr;
         if (const auto* cm = reg.try_get<CollisionMesh>(e)) asset = &cm->source;
         else if (const auto* ms = reg.try_get<MeshSource>(e)) asset = std::get_if<ModelAsset>(&ms->source);
@@ -412,7 +431,7 @@ struct AudioSchedule::Impl {
 
     std::string zoneAt(glm::vec3 p) const {
         return pickZone(
-            world, p, [this](entt::entity e, const ReverbZone& z, LocalBox& b) { return boxOf(e, z, b); },
+            world, *sys, p, [this](entt::entity e, const ReverbZone& z, LocalBox& b) { return boxOf(e, z, b); },
             [this](entt::entity, const ReverbZone& z) { return bank.preset(z.preset) != nullptr; });
     }
 
@@ -424,12 +443,12 @@ struct AudioSchedule::Impl {
         }
         ++raysThisStep;
         ++stats.raysCast;
-        return occlusionBetween(world, at, source);
+        return occlusionIn(world, *sys, at, source);
     }
 
     // Whether a character's graph plays its footsteps from clip events (foot_l, foot_r).
     bool footFromClips(entt::entity character) {
-        const auto* animator = world.registry().try_get<Animator>(character);
+        const auto* animator = sys->try_get<Animator>(character);
         if (!animator || animator->graph.path.empty()) return false;
         const auto it = footGraphs.find(animator->graph.path);
         if (it != footGraphs.end()) return it->second;
@@ -481,7 +500,7 @@ struct AudioSchedule::Impl {
                         continue;
                     }
                     const Voice& p = s.voices[pick];
-                    if (v.priority < p.priority || (v.priority == p.priority && (v.audible < p.audible || (v.audible == p.audible && v.seq < p.seq))))
+                    if (v.priority < p.priority || (v.priority == p.priority && (v.audible < p.audible || (v.audible == p.audible && v.id < p.id))))
                         pick = i;
                 }
                 if (pick == s.voices.size()) return false;
@@ -536,11 +555,10 @@ struct AudioSchedule::Impl {
         c.outcome = taken.empty() ? AudioOutcome::Played : AudioOutcome::Stole;
         ++(taken.empty() ? stats.played : stats.stole);
         const uint32_t voice = c.voice;
-        const uint64_t seq = out.play.emit(std::move(c));
+        out.play.emit(std::move(c));
 
         Voice v;
         v.id = voice;
-        v.seq = seq;
         v.sound = sound;
         v.bus = static_cast<uint8_t>(bus);
         v.priority = desc.priority;
@@ -582,7 +600,7 @@ struct AudioSchedule::Impl {
 
     // The snapshot the game asks for (requestMixSnapshot), if the bank has it, else the default.
     std::string snapshotTarget() const {
-        const auto* request = world.registry().ctx().find<MixRequest>();
+        const auto* request = world.context().find<MixRequest>();
         const std::string want = request ? request->snapshot : std::string("default");
         const auto has = [&](const std::string& n) {
             return std::any_of(bank.snapshots.begin(), bank.snapshots.end(), [&](const SnapshotDesc& d) { return d.name == n; });
@@ -676,7 +694,7 @@ struct AudioSchedule::Impl {
     void step() {
         raysThisStep = 0;
         refreshBank();
-        ears = listenerAtStep(world);
+        ears = listenerIn(world, *sys);
 
         // 1. Any restore since the last step (a round's restart too): the device's world voices fade; the
         // restored mix is resent.
@@ -687,7 +705,7 @@ struct AudioSchedule::Impl {
         }
 
         // 2. The listener's zone. Unknown presets warn here, once per zone.
-        for (auto [e, z] : world.registry().view<const ReverbZone>().each()) (void)known(e, z);
+        for (auto [e, z] : sys->view<const ReverbZone>().each()) (void)known(e, z);
         if (const std::string preset = zoneTarget(); ears && preset != s.zone) {
             s.zone = preset;
             heard.zone = preset;
@@ -706,7 +724,7 @@ struct AudioSchedule::Impl {
         // 4. Voices that have ended let go; then the step's sounds.
         std::erase_if(s.voices, [&](const Voice& v) { return world.steps() >= v.end; });
         const uint64_t playerId = ears ? ears->playerId : 0;
-        const auto& reg = world.registry();
+        const SystemContext& reg = *sys;
         // Footsteps and landings in the order physics emitted them (a restart in the step ended what came before).
         {
             const auto steps = footsteps.read(), lands = landings.read();
@@ -726,7 +744,7 @@ struct AudioSchedule::Impl {
                 for (const std::string& name : animSoundNames(e)) {
                     const entt::entity who = world.findById(e.entity);
                     if (who == entt::null) continue;
-                    const uint64_t owner = animSoundOwner(world, e.entity, playerId);
+                    const uint64_t owner = animSoundOwnerIn(world, reg, e.entity, playerId);
                     glm::vec3 at = glm::vec3(worldOf(reg, who)[3]);
                     if (name == "footstep") {
                         const entt::entity character = characterOf(reg, who);
@@ -792,7 +810,7 @@ std::string AudioSchedule::zoneAt(glm::vec3 p) const { return m->zoneAt(p); }
 std::vector<ScheduledVoice> AudioSchedule::voices() const {
     std::vector<ScheduledVoice> out;
     for (const auto& v : m->s.voices)
-        out.push_back({v.id, v.seq, v.sound, v.bus, v.priority, v.audible, v.start, v.end});
+        out.push_back({v.id, v.sound, v.bus, v.priority, v.audible, v.start, v.end});
     return out;
 }
 
@@ -808,8 +826,6 @@ void AudioSchedule::restoreState(const std::shared_ptr<const void>& state) {
 void AudioSchedule::hashState(StateHash& h) const {
     const Impl::State& s = m->s;
     h.u64(s.voices.size());
-    // v.seq is its play command's place in the log, which is history (never rewound by a restore) and orders
-    // voices only against each other, an order a restore keeps: not hashed.
     for (const Impl::Voice& v : s.voices) {
         h.u32(v.id);
         h.u32(v.sound);
@@ -846,8 +862,16 @@ AudioSchedule& installAudio(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<AudioInstalled>()) return *installed->system;
     auto system = std::make_shared<AudioSchedule>(world, assets);
     reg.ctx().emplace<AudioInstalled>(AudioInstalled{system.get()});
-    // Its typed readers order it after physics and animation; it plays the cues its bank binds.
-    world.addSimulate("audio_schedule", [system](World&, float) { system->step(); }, {.readsCues = true});
+    // Its typed readers order it after physics and animation; it plays the cues its bank binds. It reads the registry
+    // through its context, in its steps and between them.
+    world.addSimulate("audio_schedule", [system](SystemContext&, float) { system->step(); },
+                      {.readsCues = true,
+                       .reads = types<AudioMix, ReverbZone, CollisionMesh, MeshSource, Animator, PlayerController,
+                                      Transform, WorldTransform, Camera, Parent>(),
+                       .readsResources = {"physics.scene", "animation", "audio.mix"},
+                       .writesResources = {"audio.schedule"}});
+    system->m->sys = world.systemContext("audio_schedule");
+    requestMixSnapshot(world, "default");   // the request exists before any step asks for another
     // Snapshots carry the schedule's state.
     AudioSchedule* raw = system.get();
     addSnapshotHook(reg, SnapshotHook{"audio_schedule", [raw] { return raw->saveState(); },
@@ -859,12 +883,12 @@ AudioSchedule& installAudio(World& world, AssetResolver& assets) {
 }
 
 AudioSchedule* audioSchedule(World& world) {
-    const auto* installed = world.registry().ctx().find<AudioInstalled>();
+    const auto* installed = world.context().find<AudioInstalled>();
     return installed ? installed->system : nullptr;
 }
 
 const AudioSchedule* audioSchedule(const World& world) {
-    const auto* installed = world.registry().ctx().find<AudioInstalled>();
+    const auto* installed = world.context().find<AudioInstalled>();
     return installed ? installed->system : nullptr;
 }
 
@@ -873,7 +897,7 @@ const AudioSchedule* audioSchedule(const World& world) {
 namespace ohao::ecs {
 
 void requestMixSnapshot(World& world, std::string_view snapshot) {
-    auto& ctx = world.registry().ctx();
+    auto& ctx = world.context();
     if (auto* r = ctx.find<MixRequest>()) {
         if (r->snapshot != snapshot) r->snapshot = snapshot;
     } else {

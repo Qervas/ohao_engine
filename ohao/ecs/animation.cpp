@@ -324,23 +324,32 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
         void on(entt::registry&, entt::entity e) { s->markPlaced(e); }
     };
     auto placed = std::make_shared<Placed>(Placed{system.get()});
-    reg.on_construct<Animator>().connect<&Placed::on>(*placed);
-    reg.on_update<Animator>().connect<&Placed::on>(*placed);
-    // It animates what the step moved; a game's drivers' event readers order it after their writers.
-    world.addSimulate("animation", [system, placed](World& w, float) { system->step(w); }, {.after = {"physics"}});
+    const SignalEffect placement{.writesResources = {"animation.placed"}};
+    world.onConstruct<Animator, &Placed::on>(placed.get(), placement);
+    world.onUpdate<Animator, &Placed::on>(placed.get(), placement);
+    // It animates what the step moved; a game's drivers' event readers order it after their writers. Exclusive: the
+    // drivers, a game's code, read the registry through the World.
+    world.addSimulate("animation", [system, placed](SystemContext& c, float) { system->step(c.world()); },
+                      {.after = {"physics"}, .reads = types<Animator, AnimParams>(), .writes = types<Animator, AnimParams>(),
+                       .writesResources = {"animation"}, .exclusive = true});
     // The pose: after the drawn poses of what the step moved (a game's view model declares itself before it); the
-    // render extract declares itself after it.
-    world.addSync("pose", [system](World& w) { system->pose(w); }, {.after = {"interpolate"}});
+    // render extract declares itself after it. Exclusive: it emplaces and removes poses as animators come and go.
+    world.addSync("pose", [system](SystemContext& c) { system->pose(c.world()); },
+                  {.after = {"interpolate"},
+                   .reads = types<Animator, AnimParams, SkinnedMesh, MeshSource, JointAttach, Parent, Children, Transform,
+                                  WorldTransform>(),
+                   .writes = types<AnimPose, RenderPose, RenderDirty>(), .readsResources = {"animation"},
+                   .exclusive = true});
     return *system;
 }
 
 AnimationSystem* animationSystem(World& world) {
-    const auto* installed = world.registry().ctx().find<AnimationInstalled>();
+    const auto* installed = world.context().find<AnimationInstalled>();
     return installed ? installed->system : nullptr;
 }
 
 const AnimationSystem* animationSystem(const World& world) {
-    const auto* installed = world.registry().ctx().find<AnimationInstalled>();
+    const auto* installed = world.context().find<AnimationInstalled>();
     return installed ? installed->system : nullptr;
 }
 

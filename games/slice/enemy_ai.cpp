@@ -37,14 +37,14 @@ struct Target {
 };
 
 // The player the enemies fight: the first living character moved by input, in id order.
-Target findTarget(const World& world, const entt::registry& reg, const PhysicsScene& physics) {
+Target findTarget(const SystemContext& reg, const PhysicsScene& physics) {
     Target best;
     uint64_t bestId = UINT64_MAX;
     for (auto [e, pc] : reg.view<const PlayerController>().each()) {
         if (!pc.input) continue;
         if (const auto* h = reg.try_get<Health>(e); h && !(h->current > 0.0f)) continue;
         const auto info = physics.playerInfo(e);
-        const uint64_t id = world.idOf(e);
+        const uint64_t id = reg.idOf(e);
         if (!info || id >= bestId) continue;
         bestId = id;
         best.e = e;
@@ -57,24 +57,23 @@ Target findTarget(const World& world, const entt::registry& reg, const PhysicsSc
 // A dead enemy stops where it stood: its character goes (it blocks nothing and rays pass). Its
 // Transform stays upright; the animation's death clip is the fall (sub-project 10, OPEN ruling 7,
 // provisional: it replaced a rigid 90-degree tip).
-void die(entt::registry& reg, entt::entity e, EnemyState& s) {
+void die(const SystemContext& reg, entt::entity e, EnemyState& s) {
     s.mode = EnemyMode::Dead;
-    if (auto* mi = reg.try_get<MoveIntent>(e)) mi->move = glm::vec2(0.0f);
-    if (auto* t = reg.try_get<WeaponTrigger>(e)) t->pull = false;
+    if (auto* mi = reg.try_get_mut<MoveIntent>(e)) mi->move = glm::vec2(0.0f);
+    if (auto* t = reg.try_get_mut<WeaponTrigger>(e)) t->pull = false;
     reg.remove<PlayerController>(e);
 }
 
 } // namespace
 
-void stepEnemies(World& world, PhysicsScene& physics, float dt) {
-    auto& reg = world.registry();
-    const auto view = reg.view<Enemy>();
+void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt) {
+    const auto view = reg.view<const Enemy>();
     if (view.empty()) return;
     std::vector<std::pair<uint64_t, entt::entity>> order;
     order.reserve(view.size());
-    for (const entt::entity e : view) order.emplace_back(world.idOf(e), e);
+    for (const entt::entity e : view) order.emplace_back(reg.idOf(e), e);
     std::sort(order.begin(), order.end());
-    const Target target = findTarget(world, reg, physics);
+    const Target target = findTarget(reg, physics);
 
     for (const auto& [id, e] : order) {
         if (!reg.valid(e) || !reg.all_of<Enemy>(e)) continue;
@@ -86,7 +85,7 @@ void stepEnemies(World& world, PhysicsScene& physics, float dt) {
             if (const auto* ws = reg.try_get<WeaponState>(e)) st.shotsSeen = ws->shots;
             reg.emplace<EnemyState>(e, st);
         }
-        EnemyState& s = reg.get<EnemyState>(e);
+        EnemyState& s = reg.get_mut<EnemyState>(e);
         if (s.mode == EnemyMode::Dead) continue;
         if (health && !(health->current > 0.0f)) {
             die(reg, e, s);
@@ -97,8 +96,8 @@ void stepEnemies(World& world, PhysicsScene& physics, float dt) {
         const PlayerController& pc = reg.get<PlayerController>(e);
         if (!reg.all_of<MoveIntent>(e)) reg.emplace<MoveIntent>(e, MoveIntent{{0.0f, 0.0f}, me->yawDeg, me->pitchDeg});
         if (!reg.all_of<WeaponTrigger>(e)) reg.emplace<WeaponTrigger>(e);
-        MoveIntent& mi = reg.get<MoveIntent>(e);
-        WeaponTrigger& trigger = reg.get<WeaponTrigger>(e);
+        MoveIntent& mi = reg.get_mut<MoveIntent>(e);
+        WeaponTrigger& trigger = reg.get_mut<WeaponTrigger>(e);
         trigger.pull = false;
         mi.move = glm::vec2(0.0f);
 

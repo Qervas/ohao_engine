@@ -79,16 +79,15 @@ public:
             if (t->role == reflect::TypeRole::Component && t->serialized && ecs::componentOps(*t) && !t->alwaysPresent &&
                 t != types.find<ecs::Parent>() && t != types.find<ecs::Level>())
                 m_managed.push_back(t);
-        m_reg.on_construct<ecs::Level>().connect<&LevelState::markDirty>(this);
-        m_reg.on_update<ecs::Level>().connect<&LevelState::markDirty>(this);
-        m_reg.on_destroy<ecs::Level>().connect<&LevelState::onGone>(this);
+        const ecs::SignalEffect dirty{.writes = ecs::types<ecs::LevelDirty>()};
+        world.onConstruct<ecs::Level, &LevelState::markDirty>(this, dirty);
+        world.onUpdate<ecs::Level, &LevelState::markDirty>(this, dirty);
+        world.onDestroy<ecs::Level, &LevelState::onGone>(this, {.writesResources = {"level.gone"}});
         for (const entt::entity e : m_reg.view<ecs::Level>()) m_reg.emplace_or_replace<ecs::LevelDirty>(e);
     }
 
     ~LevelState() {
-        m_reg.on_construct<ecs::Level>().disconnect(this);
-        m_reg.on_update<ecs::Level>().disconnect(this);
-        m_reg.on_destroy<ecs::Level>().disconnect(this);
+        m_world.disconnect<ecs::Level>(this);
     }
 
     void run() {
@@ -449,29 +448,32 @@ void installLevels(World& world, ecs::AssetResolver& assets, const reflect::Type
     auto state = std::make_shared<LevelState>(world, assets, types);
     reg.ctx().emplace<LevelInstalled>(LevelInstalled{state});
     // The entities it expands get their transforms in the same sync.
-    world.addSync("level", [state](World&) { state->run(); }, {.before = {"transform"}});
+    // Exclusive: it creates and destroys the levels' nodes.
+    world.addSync("level", [state](ecs::SystemContext&) { state->run(); },
+                  {.before = {"transform"}, .reads = ecs::types<ecs::Level>(), .writes = ecs::types<ecs::LevelDirty>(),
+                   .writesResources = {"level.gone"}, .exclusive = true});
 }
 
 std::vector<Diagnostic> levelDiagnostics(const World& world, entt::entity level) {
-    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    const auto* installed = world.context().find<LevelInstalled>();
     if (!installed) return {};
     const auto state = installed->state.lock();
     return state ? state->diagnostics(level) : std::vector<Diagnostic>{};
 }
 
 bool levelsInstalled(const World& world) {
-    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    const auto* installed = world.context().find<LevelInstalled>();
     return installed && !installed->state.expired();
 }
 
 std::optional<LevelSummary> levelSummary(const World& world, entt::entity level) {
-    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    const auto* installed = world.context().find<LevelInstalled>();
     const auto state = installed ? installed->state.lock() : nullptr;
     return state ? state->summary(level) : std::nullopt;
 }
 
 bool reloadLevel(World& world, entt::entity level) {
-    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    const auto* installed = world.context().find<LevelInstalled>();
     const auto state = installed ? installed->state.lock() : nullptr;
     if (!state || !world.registry().valid(level) || !world.registry().all_of<ecs::Level>(level)) return false;
     state->reload(level);

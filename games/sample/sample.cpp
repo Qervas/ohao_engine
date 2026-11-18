@@ -18,7 +18,7 @@ Cue hitCue(const TargetHit& h) {
 }
 
 // The target a body belongs to: the entity or its nearest ancestor with a Target.
-entt::entity targetOf(const entt::registry& reg, entt::entity e) {
+entt::entity targetOf(const SystemContext& reg, entt::entity e) {
     for (int depth = 0; depth < 64 && e != entt::null && reg.valid(e); ++depth) {
         if (reg.all_of<Target>(e)) return e;
         const auto* p = reg.try_get<Parent>(e);
@@ -33,13 +33,13 @@ class Shooting {
 public:
     explicit Shooting(World& world) : m_hits(world.events().writer<TargetHit>(kHitChannel, "shoot", &hitCue)) {}
 
-    void step(World& world) {
+    void step(const SystemContext& reg) {
+        World& world = reg.world();
         PhysicsScene* physics = physicsScene(world);
         if (!physics) return;
-        auto& reg = world.registry();
         std::vector<std::pair<uint64_t, entt::entity>> players;
         for (auto [e, pc] : reg.view<const PlayerController>().each())
-            if (pc.input) players.emplace_back(world.idOf(e), e);
+            if (pc.input) players.emplace_back(reg.idOf(e), e);
         std::sort(players.begin(), players.end());
         for (const auto& [id, e] : players) {
             const PlayerController& pc = reg.get<PlayerController>(e);
@@ -56,7 +56,7 @@ public:
             reg.patch<Target>(t, [](Target& x) { x.down = true; });
             reg.remove<Spin>(t);
             if (reg.all_of<RigidBody>(t)) reg.patch<RigidBody>(t, [](RigidBody& b) { b.motion = Motion::Dynamic; });
-            m_hits.emit(TargetHit{id, world.idOf(t), hit->point, hit->normal});
+            m_hits.emit(TargetHit{id, reg.idOf(t), hit->point, hit->normal});
         }
     }
 
@@ -127,7 +127,10 @@ public:
         const auto installed = world.simulateNames();
         if (std::find(installed.begin(), installed.end(), "shoot") != installed.end()) return;
         auto shooting = std::make_shared<Shooting>(world);
-        world.addSimulate("shoot", [shooting](World& w, float) { shooting->step(w); }, {.after = {"physics"}});
+        // A downed target stops spinning and falls: it writes Spin (a remove) and RigidBody (its physics follows).
+        world.addSimulate("shoot", [shooting](SystemContext& c, float) { shooting->step(c); },
+                          {.after = {"physics"}, .reads = types<PlayerController, Parent, Target>(),
+                           .writes = types<Target, Spin, RigidBody>(), .readsResources = {"physics.scene"}});
     }
     [[nodiscard]] std::span<const game::Method> methods() const override {
         static const std::vector<game::Method> rows = {

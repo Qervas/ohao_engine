@@ -25,4 +25,13 @@ constexpr TypeKey typeKey() noexcept {
     return key;
 }
 
+// The type's name as the compiler spells it ("ohao::ecs::Health"), for messages.
+template <class T>
+constexpr std::string_view typeName() noexcept {
+    constexpr std::string_view f = __PRETTY_FUNCTION__;   // "... typeName() [with T = <the type>; ...]"
+    constexpr std::size_t at = f.find("T = ") + 4;
+    constexpr std::size_t end = f.find_first_of(";]", at);
+    return f.substr(at, end - at);
+}
+
 } // namespace ohao

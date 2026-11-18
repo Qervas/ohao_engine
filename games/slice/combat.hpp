@@ -119,7 +119,7 @@ struct CombatGrenade {
 
 class CombatSystem {
 public:
-    explicit CombatSystem(World& world);
+    CombatSystem(World& world, const SystemContext& ctx);
     ~CombatSystem();
     CombatSystem(const CombatSystem&) = delete;
     CombatSystem& operator=(const CombatSystem&) = delete;

@@ -187,7 +187,7 @@ struct LookResult {
 
 class PhysicsScene {
 public:
-    PhysicsScene(entt::registry& reg, AssetResolver& assets);
+    PhysicsScene(World& world, AssetResolver& assets);
     ~PhysicsScene();
     PhysicsScene(const PhysicsScene&) = delete;
     PhysicsScene& operator=(const PhysicsScene&) = delete;

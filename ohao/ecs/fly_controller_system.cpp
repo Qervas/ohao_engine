@@ -8,7 +8,7 @@
 
 namespace ohao::ecs {
 
-void updateFlyControllers(entt::registry& reg, const InputMap& input, float dt) {
+void updateFlyControllers(SystemContext& reg, const InputMap& input, float dt) {
     if (!std::isfinite(dt)) return;
     const glm::vec2 mouse = input.mouseDelta();
     const auto view = reg.view<const FlyController, const Transform>();   // patch changes no membership

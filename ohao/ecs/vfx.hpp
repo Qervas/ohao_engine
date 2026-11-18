@@ -105,6 +105,7 @@ public:
     struct Impl;
 
 private:
+    friend VfxSystem& installVfx(World& world, AssetResolver& assets);
     std::unique_ptr<Impl> m;
 };
 

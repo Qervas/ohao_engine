@@ -16,7 +16,8 @@
 #include "ecs/scene_types.hpp"        // makeComponentOps<T>(): a component's registration
 #include "ecs/scene_view.hpp"         // the camera a frame is drawn from
 #include "ecs/snapshot_hook.hpp"      // state a later step reads: save, restore, hash, layout
-#include "ecs/world.hpp"              // World: systems (SystemOrder), events, defer, the clock, input per player
+#include "ecs/world.hpp"              // World: systems (SystemDecl, SystemContext, types<>), signals (onConstruct,
+                                      // onUpdate, onDestroy with their SignalEffect), events, defer, the clock, input
 #include "ecs/world_snapshots.hpp"    // the whole world kept and gone back to (a round's start)
 #include "reflect/decode.hpp"         // a method's params (DecodeContext)
 #include "reflect/json_value.hpp"     // JsonNode

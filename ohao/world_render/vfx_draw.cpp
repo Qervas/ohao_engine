@@ -192,7 +192,10 @@ struct VfxDraw {
 void installVfxDraw(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets) {
     auto state = std::make_shared<VfxDraw>(VfxDraw{scene, textures, assets});
     // The effects go into the frame the extract filled.
-    world.addSync("vfx_draw", [state](World& w) { state->run(w); }, {.after = {"render_extract"}});
+    // Exclusive: it loads the set's textures into the renderer and reads the registry through the World.
+    world.addSync("vfx_draw", [state](SystemContext& c) { state->run(c.world()); },
+                  {.after = {"render_extract"}, .reads = types<RenderPose, WorldTransform, Transform>(),
+                   .readsResources = {"vfx"}, .writesResources = {"render.scene"}, .exclusive = true});
 }
 
 } // namespace ohao::ecs

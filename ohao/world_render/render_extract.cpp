@@ -39,14 +39,18 @@ uint64_t creationSeq(const entt::registry& reg, entt::entity e) {
 // still disconnect and release).
 class ExtractState {
 public:
-    ExtractState(entt::registry& reg, render::RenderScene& rs) : m_reg(reg), m_rs(rs) {
-        reg.on_construct<MeshRenderer>().connect<&ExtractState::markRenderDirty>(this);
-        reg.on_update<MeshRenderer>().connect<&ExtractState::markRenderDirty>(this);
-        reg.on_destroy<MeshRenderer>().connect<&ExtractState::onMeshRendererDestroy>(this);
-        reg.on_destroy<RenderSlot>().connect<&ExtractState::onRenderSlotDestroy>(this);
-        reg.on_construct<Light>().connect<&ExtractState::markLightsDirty>(this);
-        reg.on_update<Light>().connect<&ExtractState::markLightsDirty>(this);
-        reg.on_destroy<Light>().connect<&ExtractState::markLightsDirty>(this);
+    ExtractState(World& world, render::RenderScene& rs) : m_world(world), m_reg(world.registry()), m_rs(rs) {
+        entt::registry& reg = m_reg;
+        const SignalEffect dirty{.writes = types<RenderDirty>()};
+        const SignalEffect released{.writesResources = {"render.releases"}};
+        const SignalEffect lights{.writesResources = {"render.lights"}};
+        world.onConstruct<MeshRenderer, &ExtractState::markRenderDirty>(this, dirty);
+        world.onUpdate<MeshRenderer, &ExtractState::markRenderDirty>(this, dirty);
+        world.onDestroy<MeshRenderer, &ExtractState::onMeshRendererDestroy>(this, released);
+        world.onDestroy<RenderSlot, &ExtractState::onRenderSlotDestroy>(this, released);
+        world.onConstruct<Light, &ExtractState::markLightsDirty>(this, lights);
+        world.onUpdate<Light, &ExtractState::markLightsDirty>(this, lights);
+        world.onDestroy<Light, &ExtractState::markLightsDirty>(this, lights);
         // Installed into a world that already has renderables or lights (a host that
         // starts its renderer after loading): they are picked up on the first run.
         for (const entt::entity e : reg.view<MeshRenderer>()) reg.emplace_or_replace<RenderDirty>(e);
@@ -54,13 +58,9 @@ public:
     }
 
     ~ExtractState() {
-        m_reg.on_construct<MeshRenderer>().disconnect(this);
-        m_reg.on_update<MeshRenderer>().disconnect(this);
-        m_reg.on_destroy<MeshRenderer>().disconnect(this);
-        m_reg.on_destroy<RenderSlot>().disconnect(this);
-        m_reg.on_construct<Light>().disconnect(this);
-        m_reg.on_update<Light>().disconnect(this);
-        m_reg.on_destroy<Light>().disconnect(this);
+        m_world.disconnect<MeshRenderer>(this);
+        m_world.disconnect<RenderSlot>(this);
+        m_world.disconnect<Light>(this);
         // The World is going away: take its instances and lights out of the scene.
         for (uint32_t slot = 0; slot < m_owner.size(); ++slot)
             if (m_owner[slot] != entt::null) m_rs.destroyInstance(slot);
@@ -258,6 +258,7 @@ private:
         queueRelease(e, reg.get<RenderSlot>(e).slot);
     }
 
+    World& m_world;
     entt::registry& m_reg;
     render::RenderScene& m_rs;
     std::vector<entt::entity> m_owner;                              // slot -> entity
@@ -283,11 +284,14 @@ void installRenderExtract(World& world, render::RenderScene& scene) {
         return;
     }
     reg.ctx().emplace<RenderExtractInstalled>();
-    auto state = std::make_shared<ExtractState>(reg, scene);
+    auto state = std::make_shared<ExtractState>(world, scene);
     // After every drawn pose (transforms, interpolation, skeletons, a game's view model before the pose) and the
-    // meshes.
-    world.addSync("render_extract", [state](World&) { state->run(); },
-                  {.after = {"transform", "interpolate", "pose", "instantiate"}});
+    // meshes. Exclusive: it reads the registry itself, and emplaces and removes RenderSlot.
+    world.addSync("render_extract", [state](SystemContext&) { state->run(); },
+                  {.after = {"transform", "interpolate", "pose", "instantiate"},
+                   .reads = types<MeshRenderer, WorldTransform, RenderPose, AnimPose, SkinnedMesh, Light, CreationOrder>(),
+                   .writes = types<RenderSlot, RenderDirty, MovedLastFrame>(),
+                   .writesResources = {"render.scene", "render.releases", "render.lights"}, .exclusive = true});
 }
 
 } // namespace ohao::ecs

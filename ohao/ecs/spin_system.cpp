@@ -8,7 +8,7 @@
 
 namespace ohao::ecs {
 
-void updateSpin(entt::registry& reg, float dt) {
+void updateSpin(SystemContext& reg, float dt) {
     if (dt == 0.0f || !std::isfinite(dt)) return;
     const auto view = reg.view<const Spin, const Transform>();   // patch changes no membership
     for (const entt::entity e : view) {

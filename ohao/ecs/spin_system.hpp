@@ -1,5 +1,5 @@
 #pragma once
-#include <entt/entt.hpp>
+#include "ecs/world.hpp"
 
 namespace ohao::ecs {
 
@@ -10,6 +10,6 @@ namespace ohao::ecs {
 // written through patch<Transform>, so the transform system and the render extract pick
 // it up the same update. An entity with dt, rate or axis zero (or not finite) is not
 // touched: no TransformDirty, nothing re-uploaded. Deterministic for a given dt sequence.
-void updateSpin(entt::registry& reg, float dt);
+void updateSpin(SystemContext& reg, float dt);
 
 } // namespace ohao::ecs

@@ -44,7 +44,7 @@ void installWorldSnapshots(World& world, const reflect::TypeRegistry& types) {
     hook.restore = [&world](const std::shared_ptr<const void>& s) {
         if (s) restoreSnapshot(world, *static_cast<const Snapshot*>(s.get()), RestoreInput::No);
     };
-    world.registry().ctx().insert_or_assign(std::move(hook));
+    world.context().insert_or_assign(std::move(hook));
 }
 
 // Everything is read in EnTT packed order, which for a world built by World::create is

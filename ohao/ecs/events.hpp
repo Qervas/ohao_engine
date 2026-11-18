@@ -96,7 +96,7 @@ public:
     [[nodiscard]] std::size_t after(uint64_t since) const noexcept;
     // The event's cue (false: the channel has no projection).
     [[nodiscard]] virtual bool cue(std::size_t i, Cue& out) const = 0;
-    // Whether it has one: its writers then run before every system that reads cues (SystemOrder::readsCues).
+    // Whether it has one: its writers then run before every system that reads cues (SystemDecl::readsCues).
     [[nodiscard]] virtual bool hasCue() const noexcept = 0;
 
 protected:

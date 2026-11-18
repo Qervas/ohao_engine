@@ -109,24 +109,22 @@ class InstantiateState {
 public:
     InstantiateState(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets)
         : m_world(world), m_reg(world.registry()), m_scene(scene), m_textures(textures), m_assets(assets) {
-        m_reg.on_construct<MeshSource>().connect<&InstantiateState::markDirty>(this);
-        m_reg.on_update<MeshSource>().connect<&InstantiateState::markDirty>(this);
-        m_reg.on_destroy<MeshSource>().connect<&InstantiateState::onSourceDestroy>(this);
-        m_reg.on_construct<Material>().connect<&InstantiateState::markDirty>(this);
-        m_reg.on_update<Material>().connect<&InstantiateState::markDirty>(this);
-        m_reg.on_destroy<Material>().connect<&InstantiateState::onOverrideDestroy>(this);
+        const SignalEffect dirty{.writes = types<InstantiateDirty>()};
+        const SignalEffect gone{.writesResources = {"instantiate.gone"}};
+        world.onConstruct<MeshSource, &InstantiateState::markDirty>(this, dirty);
+        world.onUpdate<MeshSource, &InstantiateState::markDirty>(this, dirty);
+        world.onDestroy<MeshSource, &InstantiateState::onSourceDestroy>(this, gone);
+        world.onConstruct<Material, &InstantiateState::markDirty>(this, dirty);
+        world.onUpdate<Material, &InstantiateState::markDirty>(this, dirty);
+        world.onDestroy<Material, &InstantiateState::onOverrideDestroy>(this, gone);
         // Installed into a world that already has sources (a host that starts its renderer
         // after loading, like `ohao run`): they are instantiated on the first run.
         for (const entt::entity e : m_reg.view<MeshSource>()) m_reg.emplace_or_replace<InstantiateDirty>(e);
     }
 
     ~InstantiateState() {
-        m_reg.on_construct<MeshSource>().disconnect(this);
-        m_reg.on_update<MeshSource>().disconnect(this);
-        m_reg.on_destroy<MeshSource>().disconnect(this);
-        m_reg.on_construct<Material>().disconnect(this);
-        m_reg.on_update<Material>().disconnect(this);
-        m_reg.on_destroy<Material>().disconnect(this);
+        m_world.disconnect<MeshSource>(this);
+        m_world.disconnect<Material>(this);
         // The World is going away: give back every mesh, material and texture it still holds.
         for (auto& [key, entry] : m_meshes) release(entry);
         for (auto& [key, shared] : m_materials) m_scene.releaseMaterial(shared.handle);
@@ -330,7 +328,12 @@ void installInstantiate(World& world, render::RenderScene& scene, BindlessTextur
     reg.ctx().emplace<InstantiateInstalled>();
     auto state = std::make_shared<InstantiateState>(world, scene, textures, assets);
     // A level's MeshSources, once it expanded them.
-    world.addSync("instantiate", [state](World&) { state->run(); }, {.after = {"level"}});
+    // Exclusive: it uploads meshes and reads the registry itself. Before the transforms: both tag RenderDirty (its
+    // MeshRenderers through the extract's signal).
+    world.addSync("instantiate", [state](SystemContext&) { state->run(); },
+                  {.after = {"level"}, .before = {"transform"}, .reads = types<MeshSource, Material, InstantiateDirty>(),
+                   .writes = types<MeshRenderer, InstantiateDirty, InstantiateError>(),
+                   .writesResources = {"render.meshes", "instantiate.gone"}, .exclusive = true});
 }
 
 std::vector<entt::entity> instantiateErrors(const World& world) {

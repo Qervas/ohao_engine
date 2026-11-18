@@ -10,6 +10,6 @@
 
 namespace ohao::slice {
 
-void stepEnemies(World& world, PhysicsScene& physics, float dt);
+void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt);
 
 } // namespace ohao::slice

@@ -60,25 +60,25 @@ FittedCollider fitCollider(const MeshData& mesh, ColliderShape shape, glm::vec3 
     return f;
 }
 
-PhysicsScene::Impl::Impl(entt::registry& r, AssetResolver& a) : reg(r), assets(a) {
+PhysicsScene::Impl::Impl(World& w, AssetResolver& a) : world(w), reg(w.registry()), assets(a) {
     connect<Collider>();
     connect<RigidBody>();
     connect<ColliderPart>();
     connect<CollisionMesh>();
     connect<MeshSource>();
-    reg.on_destroy<PhysicsBody>().connect<&Impl::onBodyGone>(this);
-    reg.on_construct<PlayerController>().connect<&Impl::touchPlayer>(this);
-    reg.on_update<PlayerController>().connect<&Impl::touchPlayer>(this);
-    reg.on_destroy<PlayerController>().connect<&Impl::onPlayerGone>(this);
-    reg.on_construct<BodyMotion>().connect<&Impl::touchMotion>(this);
-    reg.on_update<BodyMotion>().connect<&Impl::touchMotion>(this);
-    reg.on_update<Transform>().connect<&Impl::touchPose>(this);
-    reg.on_construct<Joint>().connect<&Impl::touchJoint>(this);
-    reg.on_update<Joint>().connect<&Impl::touchJoint>(this);
-    reg.on_destroy<Joint>().connect<&Impl::touchJoint>(this);
-    reg.on_construct<JointState>().connect<&Impl::touchJointState>(this);
-    reg.on_update<JointState>().connect<&Impl::touchJointState>(this);
-    reg.on_destroy<JointState>().connect<&Impl::touchJointState>(this);
+    world.onDestroy<PhysicsBody, &Impl::onBodyGone>(this, queued());
+    world.onConstruct<PlayerController, &Impl::touchPlayer>(this, queued());
+    world.onUpdate<PlayerController, &Impl::touchPlayer>(this, queued());
+    world.onDestroy<PlayerController, &Impl::onPlayerGone>(this, {.writesResources = {"physics.scene", "physics.touched"}});
+    world.onConstruct<BodyMotion, &Impl::touchMotion>(this, queued());
+    world.onUpdate<BodyMotion, &Impl::touchMotion>(this, queued());
+    world.onUpdate<Transform, &Impl::touchPose>(this, queued());
+    world.onConstruct<Joint, &Impl::touchJoint>(this, queued());
+    world.onUpdate<Joint, &Impl::touchJoint>(this, queued());
+    world.onDestroy<Joint, &Impl::touchJoint>(this, queued());
+    world.onConstruct<JointState, &Impl::touchJointState>(this, queued());
+    world.onUpdate<JointState, &Impl::touchJointState>(this, queued());
+    world.onDestroy<JointState, &Impl::touchJointState>(this, queued());
     for (const entt::entity e : reg.view<Joint>()) jointsTouched.push_back(e);
     for (const entt::entity e : reg.view<Collider>()) touched.push_back(e);
     for (const entt::entity e : reg.view<ColliderPart>()) touched.push_back(e);
@@ -91,19 +91,12 @@ PhysicsScene::Impl::~Impl() {
     disconnect<ColliderPart>();
     disconnect<CollisionMesh>();
     disconnect<MeshSource>();
-    reg.on_destroy<PhysicsBody>().disconnect(this);
-    reg.on_construct<PlayerController>().disconnect(this);
-    reg.on_update<PlayerController>().disconnect(this);
-    reg.on_destroy<PlayerController>().disconnect(this);
-    reg.on_construct<BodyMotion>().disconnect(this);
-    reg.on_update<BodyMotion>().disconnect(this);
-    reg.on_update<Transform>().disconnect(this);
-    reg.on_construct<Joint>().disconnect(this);
-    reg.on_update<Joint>().disconnect(this);
-    reg.on_destroy<Joint>().disconnect(this);
-    reg.on_construct<JointState>().disconnect(this);
-    reg.on_update<JointState>().disconnect(this);
-    reg.on_destroy<JointState>().disconnect(this);
+    world.disconnect<PhysicsBody>(this);
+    world.disconnect<PlayerController>(this);
+    world.disconnect<BodyMotion>(this);
+    world.disconnect<Transform>(this);
+    world.disconnect<Joint>(this);
+    world.disconnect<JointState>(this);
     if (backend) {
         for (auto& [e, p] : players) backend->destroyCharacter(p.character);
         for (auto& [e, k] : parked) backend->destroyCharacter(k.record.character);
@@ -746,7 +739,7 @@ bool PhysicsScene::Impl::restoreSaved() {
     return true;
 }
 
-PhysicsScene::PhysicsScene(entt::registry& reg, AssetResolver& assets) : m(std::make_unique<Impl>(reg, assets)) {}
+PhysicsScene::PhysicsScene(World& world, AssetResolver& assets) : m(std::make_unique<Impl>(world, assets)) {}
 
 std::shared_ptr<const void> PhysicsScene::saveSimulation() const { return m->saveSimulation(); }
 void PhysicsScene::restoreSimulation(const std::shared_ptr<const void>& state) { m->restoreSimulation(state); }
@@ -908,7 +901,7 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     auto& reg = world.registry();
     if (const auto* installed = reg.ctx().find<PhysicsInstalled>()) return *installed->scene;
     // The system owns the scene: it goes with the World's systems, before the registry.
-    auto scene = std::make_shared<PhysicsScene>(reg, assets);
+    auto scene = std::make_shared<PhysicsScene>(world, assets);
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
     // Snapshots carry the simulation, so a restore replays exactly (spec "Snapshots and replay").
     PhysicsScene* raw = scene.get();
@@ -918,24 +911,38 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
                                       [raw](StateHash& h) { raw->hashSimulation(h); }});
     // Players spawn, from the entities a level expanded, before the transform system: a play scene's first frame
     // is the spawn's.
-    world.addSync("player_spawn", [scene](World&) { scene->spawnPlayers(); }, {.after = {"level"}, .before = {"transform"}});
+    // All four are exclusive: the scene reads and writes the registry itself.
+    world.addSync("player_spawn", [scene](SystemContext&) { scene->spawnPlayers(); },
+                  {.after = {"level"}, .before = {"transform"}, .reads = types<PlayerController, Transform>(),
+                   .writes = types<PlayerState, Transform>(), .writesResources = {"physics.scene", "physics.touched"},
+                   .exclusive = true});
     // Bodies follow their entities' world transforms.
-    world.addSync("physics", [scene](World& w) { scene->sync(w.registry()); }, {.after = {"transform"}});
+    world.addSync("physics", [scene](SystemContext& c) { scene->sync(c.registry()); },
+                  {.after = {"transform"},
+                   .reads = types<Transform, WorldTransform, Collider, RigidBody, ColliderPart, CollisionMesh, MeshSource,
+                                  Joint, PlayerController>(),
+                   .writes = types<PhysicsBody, PhysicsMoved, BodyMotion, JointState>(),
+                   .writesResources = {"physics.scene", "physics.touched"}, .exclusive = true});
     // Render interpolation between the last two steps, from the bodies as the sync left them.
-    world.addSync("interpolate", [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); },
-                  {.after = {"physics"}});
+    world.addSync("interpolate",
+                  [scene](SystemContext& c) { scene->interpolate(c.world().renderAlpha(), c.world().pendingLook()); },
+                  {.after = {"physics"}, .reads = types<PlayerController, WorldTransform>(),
+                   .writes = types<RenderPose, RenderDirty>(), .readsResources = {"physics.scene"}, .exclusive = true});
     // Once per fixed step; its events order it before their readers.
-    world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w, dt); });
+    world.addSimulate("physics", [scene](SystemContext& c, float dt) { scene->step(c.world(), dt); },
+                      {.reads = types<PlayerController, MoveIntent, RigidBody, Collider, Joint>(),
+                       .writes = types<Transform, BodyMotion, PlayerState, JointState>(),
+                       .writesResources = {"physics.scene", "physics.touched"}, .exclusive = true});
     return *scene;
 }
 
 PhysicsScene* physicsScene(World& world) {
-    const auto* installed = world.registry().ctx().find<PhysicsInstalled>();
+    const auto* installed = world.context().find<PhysicsInstalled>();
     return installed ? installed->scene : nullptr;
 }
 
 const PhysicsScene* physicsScene(const World& world) {
-    const auto* installed = world.registry().ctx().find<PhysicsInstalled>();
+    const auto* installed = world.context().find<PhysicsInstalled>();
     return installed ? installed->scene : nullptr;
 }
 
