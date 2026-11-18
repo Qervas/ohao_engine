@@ -272,8 +272,12 @@ bool polyCellAffine(ManifoldMappedTri m, float2 origin, float2 size, out float2 
     o = float2(0.0);
     ds = float2(0.0);
     dt = float2(0.0);
+    // Degenerate below 1e-5 of the sides' product: two equal texture coordinates leave only fp32's rounding of the
+    // products (about 1e-7 of it), and a cell's map to the triangle is then rounding amplified (the showcase's Sponza:
+    // 104 such triangles, with tangents across the normal; the least of its others 1e-4).
     const float det = m.uvA.x * m.uvB.y - m.uvB.x * m.uvA.y;
-    if (!(abs(det) > 1e-20)) return false;
+    const float sa = max(abs(m.uvA.x), abs(m.uvA.y)), sb = max(abs(m.uvB.x), abs(m.uvB.y));
+    if (!(abs(det) > 1e-5 * sa * sb)) return false;
     const float2x2 inv = float2x2(m.uvB.y, -m.uvB.x, -m.uvA.y, m.uvA.x) / det;
     o = mul(inv, origin - m.uv0);
     ds = float2(inv[0][0], inv[1][0]) * size.x;

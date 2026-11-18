@@ -59,12 +59,14 @@ void CausticPass::destroy() {
                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]);
     if (const auto v = manifoldSolveCounts(); v[0] > 0)
         OHAO_LOG(Info, render, "caustics' manifold solve: {} tests, {} items open after the last pass, {} boxes "
-                 "undecided, {} roots in cells, {} roots past those kept, {} items started over",
-                 v[0], v[1], v[2], v[3], v[4], v[5]);
+                 "undecided, {} roots in cells, {} roots past those kept, {} items started over; peak a batch and pass "
+                 "{} states",
+                 v[0], v[1], v[2], v[3], v[4], v[5], manifoldMappedCounts()[8]);
     if (const auto c = manifoldMappedCounts(); c[5] > 0) {
         OHAO_LOG(Info, render, "caustics' manifold pass, normal-mapped: {} requests, {} triangles into the pyramid ({} with "
-                 "degenerate uvs), {} pyramid tests, {} cells; peak a batch and pass {} pyramid nodes, {} cells",
-                 c[5], c[4], c[6], c[3], c[2], c[0], c[1]);
+                 "degenerate uvs), {} pyramid tests, {} cells; peak a batch and pass {} pyramid nodes a round ({} a "
+                 "pass), {} cells",
+                 c[5], c[4], c[6], c[3], c[2], c[0], c[7], c[1]);
         // The cell statistics' histograms (maps of 2048 texels or more, the smaller): cells a request.
         for (uint32_t k = 0; k < 2; ++k) {
             std::array<uint32_t, 1040> h{};
@@ -237,8 +239,8 @@ std::array<uint32_t, 11> CausticPass::manifoldRoundCounts() const {
     return v;
 }
 
-std::array<uint32_t, 7> CausticPass::manifoldMappedCounts() const {
-    std::array<uint32_t, 7> v{};
+std::array<uint32_t, 9> CausticPass::manifoldMappedCounts() const {
+    std::array<uint32_t, 9> v{};
     readStats(v.data(), 23 * 4, sizeof v);
     return v;
 }

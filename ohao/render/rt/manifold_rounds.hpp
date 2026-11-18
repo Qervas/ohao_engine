@@ -12,15 +12,16 @@
 //                words: rt/path_tracer.slang, "the manifold pass as rounds")
 //   62 sum       3 words a pixel: the frame's light in fixed point (kCausticSplatScale), cleared by the resolve
 //
-// The frame's pixels are taken in batches of whole rows, at most kBatchPixels each, and each batch in kPasses passes:
+// The frame's pixels are taken in batches of whole rows, at most kBatchPixels each, and each batch in passes() passes:
 // pass 0 runs the setup and every round on the batch's rows; an item whose outputs do not fit their queue is carried
 // into its own queue's next pass, where every round runs again. A pass's rounds: the records, groups, clusters,
-// sub-clusters, kPyramidRounds of the pyramid queue (a segment each: a mapped triangle's footprint a level a round),
-// the solve on the cells' queue and on the candidates' (an item past its budget of tests carried with its state into
-// its own queue, split when it holds more than one group of boxes), the connect. Into the one fixed-point sum; the resolve runs once
-// after the last batch. The queues' capacities are the batch's pixels times the peaks a pixel measured, with headroom
-// (the records' exact: kManifoldDepths a pixel and light), so carries are rare; an item still carried after the last
-// pass is counted lost (the stats' word 12).
+// sub-clusters, kPyramidRounds of the pyramid queue (a segment each, its two buffers alternating: every node of a
+// mapped triangle's footprint a round reads is tested, its children and the items that could not finish going to the
+// next round), the solve on the cells' queue and on the candidates' (an item past its budget of tests carried with its
+// state into its own queue, split in two when it holds more than one group of boxes), the connect. Into the one
+// fixed-point sum; the resolve runs once after the last batch. The queues' capacities are the batch's pixels times the
+// peaks a pixel measured, with headroom (the records' exact: kManifoldDepths a pixel and light), so carries are rare;
+// an item still carried after the last pass is counted lost (the stats' word 12).
 
 #include <vulkan/vulkan.h>
 
@@ -45,21 +46,26 @@ public:
     // a batch: every round runs once a pass, on the items the last pass carried and what they yield. Measured on the
     // showcase at 1920x1080 (2026-11-17) with the queues planted smaller: at a tenth of their capacities (a fifth of
     // the fullest band's peaks) 6 passes held an item, at a sixteenth (an eighth of the peaks) 10, none lost; an empty
-    // pass costs its six traces, about 10 us each.
+    // pass costs its six traces, about 10 us each. With a normal-mapped draw owned, kMappedPasses: the showcase's mapped
+    // walk (OHAO_MANIFOLD_SPARSE=32 at 320x180, 2026-11-18) left 99 solve items open after 12, 1 after 24 with the
+    // capacities below, 0 with these.
     static constexpr uint32_t kBatchPixels = 131072u;
     static constexpr uint32_t kMaxBatches = 256u;
     static constexpr uint32_t kPasses = 12u;
+    static constexpr uint32_t kMappedPasses = 24u;
     // The solve's states (rt/path_tracer.slang's kManifoldStateSlots uint2 slots each: a stack of at most 32 boxes, the
-    // roots found): a quarter of a batch's pixels; with none free an item starts over (counted).
+    // roots found): two pools (a pass's carries go to the other's), each a quarter of a batch's pixels, or one a pixel
+    // with a mapped draw owned; with none free an item starts over (counted).
     static constexpr uint32_t kStateSlots = 96u;
     static constexpr uint32_t kStatePixels = 4u;
 
     bool create(VkDevice device, GpuAllocator& allocator);
     void destroy();
 
-    // The batches and buffers for a width x height frame lit by `lights` directional lights (the buffers they replace
-    // are retired). False: the pass stays off.
-    bool ensure(uint32_t width, uint32_t height, uint32_t lights);
+    // The batches and buffers for a width x height frame lit by `lights` directional lights, `mapped`: with a
+    // normal-mapped draw owned (the buffers they replace are retired). False: the pass stays off.
+    bool ensure(uint32_t width, uint32_t height, uint32_t lights, bool mapped);
+    [[nodiscard]] uint32_t passes() const noexcept { return m_passes; }
     [[nodiscard]] uint32_t batches() const noexcept { return m_batches; }
     [[nodiscard]] uint32_t rowsPerBatch() const noexcept { return m_rows; }
 
@@ -77,14 +83,14 @@ public:
     // A batch and pass's queue's trace arguments (VkTraceRaysIndirectCommandKHR: its items rounded up to 64) in the
     // counts buffer; the pyramid queue's segment j's (0: its queue's).
     static constexpr uint32_t kHeaderWords = 128;
-    static constexpr uint32_t kBlockWords = 96;
-    [[nodiscard]] static VkDeviceSize blockOffset(uint32_t batch, uint32_t pass) noexcept {
-        return 4u * (kHeaderWords + kBlockWords * (VkDeviceSize{batch} * kPasses + pass));
+    static constexpr uint32_t kBlockWords = 128;
+    [[nodiscard]] VkDeviceSize blockOffset(uint32_t batch, uint32_t pass) const noexcept {
+        return 4u * (kHeaderWords + kBlockWords * (VkDeviceSize{batch} * m_passes + pass));
     }
-    [[nodiscard]] static VkDeviceSize argsOffset(uint32_t batch, uint32_t pass, Queue q) noexcept {
+    [[nodiscard]] VkDeviceSize argsOffset(uint32_t batch, uint32_t pass, Queue q) const noexcept {
         return blockOffset(batch, pass) + VkDeviceSize{q} * 16u;
     }
-    [[nodiscard]] static VkDeviceSize segmentOffset(uint32_t batch, uint32_t pass, uint32_t j) noexcept {
+    [[nodiscard]] VkDeviceSize segmentOffset(uint32_t batch, uint32_t pass, uint32_t j) const noexcept {
         return j == 0 ? argsOffset(batch, pass, Pyramid) : blockOffset(batch, pass) + 4u * (36u + 4u * (j - 1u));
     }
     // Step 2c's cell statistics (each record's cells and pyramid tests, binned after each batch: OHAO_MANIFOLD_CELL_STATS)
@@ -111,9 +117,9 @@ private:
     VkDevice m_device{VK_NULL_HANDLE};
     GpuAllocator* m_allocator{nullptr};
     GpuBuffer m_records, m_items, m_roots, m_counts, m_sum;
-    uint32_t m_rows{1}, m_batches{1};
+    uint32_t m_rows{1}, m_batches{1}, m_passes{kPasses};
     uint32_t m_queuePixels{0}, m_queueLights{0}, m_sumPixels{0};
-    bool m_queues{false};
+    bool m_queues{false}, m_queuesMapped{false};
     bool m_clearSum{true};
     uint32_t m_recordCap{0};
     uint32_t m_stateCap{0};

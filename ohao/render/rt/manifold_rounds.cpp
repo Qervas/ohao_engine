@@ -18,16 +18,18 @@ constexpr uint32_t kRootBytes = 4 * 16;     // 4 uint4
 // words a record (step 2c's cell statistics), cleared by the statistics' pass.
 constexpr uint32_t kHeaderWords = ManifoldRounds::kHeaderWords;
 constexpr uint32_t kBlockWords = ManifoldRounds::kBlockWords;
-constexpr uint32_t kCountWords = kHeaderWords + kBlockWords * ManifoldRounds::kMaxBatches * ManifoldRounds::kPasses;
+constexpr uint32_t kCountWords = kHeaderWords + kBlockWords * ManifoldRounds::kMaxBatches * ManifoldRounds::kMappedPasses;
 
 // Capacities a pixel of a batch. A batch is a band of rows, and a band over the showcase's casters is denser than the
 // frame: the fullest 1280x720 band (102 rows) held 0.92 records, 6.5 groups, 6.4 clusters, 18.3 sub-clusters, 10.6
 // candidates and 0.89 roots a pixel (2026-11-17), against the frame's 0.60, 4.2, 3.7, 10.5, 5.9 and 0.58. Records: a
 // request a depth and light, kManifoldDepths with one light; the queues about 2.3 times the fullest band. Step 2c's
-// pyramid nodes (over a pass's segments) and cells, uint4 items: 8 each, a placeholder (the showcase's mapped walk
-// asked for 2,700 pyramid nodes a pixel at 320x180, stage 2's measurement, far past any capacity; carried or lost).
+// pyramid nodes (a round's) and cells, uint4 items: 8 each, 16 with a mapped draw owned. Their throughput, not a
+// loss, is what they set: an item that does not fit waits in its queue (the showcase's mapped walk at
+// OHAO_MANIFOLD_SPARSE=32, 320x180: 2.2 M pyramid nodes asked a round, 58 M over the frame, 1.15 M cells).
 constexpr std::array<uint32_t, 7> kPerPixel{16, 16, 48, 24, 2, 8, 8};   // groups, clusters, sub-clusters, candidates,
-                                                                          // roots, pyramid nodes, cells
+                                                                         // roots, pyramid nodes, cells
+constexpr uint32_t kMappedNodes = 16, kMappedCells = 16;
 
 } // namespace
 
@@ -55,7 +57,7 @@ void ManifoldRounds::destroy() {
     m_sumPixels = 0;
 }
 
-bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
+bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights, bool mapped) {
     if (m_device == VK_NULL_HANDLE || width == 0 || height == 0) return false;
     lights = std::max(lights, 1u);
     // The batch: whole rows, kBatchPixels at most (one row at least), and at most kMaxBatches of them.
@@ -63,15 +65,20 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
     m_rows = std::max(m_rows, (height + kMaxBatches - 1) / kMaxBatches);
     m_batches = (height + m_rows - 1) / m_rows;
     const uint32_t batchPixels = m_rows * width;
-    if (!m_queues || m_queuePixels < batchPixels || m_queueLights < lights) {
+    m_passes = mapped ? kMappedPasses : kPasses;
+    if (!m_queues || m_queuePixels < batchPixels || m_queueLights < lights || m_queuesMapped != mapped) {
         m_recordCap = batchPixels * gpu::shared::kManifoldDepths * lights;
         m_caps[Records] = m_recordCap;
         uint64_t items = 0;
         for (uint32_t q = Groups; q < kQueues; ++q) m_caps[q] = batchPixels * kPerPixel[q - 1];
+        if (mapped) {
+            m_caps[Pyramid] = batchPixels * kMappedNodes;
+            m_caps[Cells] = batchPixels * kMappedCells;
+        }
         for (uint32_t q = 0; q < kQueues; ++q)
             if (q != Roots) items += (q >= Pyramid ? 4ull : 2ull) * m_caps[q];   // two regions each (uint4: two slots)
-        m_stateCap = batchPixels / kStatePixels;
-        items += uint64_t{m_stateCap} * kStateSlots;
+        m_stateCap = mapped ? batchPixels : batchPixels / kStatePixels;
+        items += 2ull * m_stateCap * kStateSlots;   // a pool a pass, the passes alternating
         m_queues = allocate(m_records, VkDeviceSize{m_recordCap} * kRecordBytes) &&
                    allocate(m_items, VkDeviceSize{items} * kItemBytes) &&
                    allocate(m_roots, VkDeviceSize{m_caps[Roots]} * kRootBytes) &&
@@ -88,6 +95,7 @@ bool ManifoldRounds::ensure(uint32_t width, uint32_t height, uint32_t lights) {
             return false;
         }
         m_clearRecordStats = true;
+        m_queuesMapped = mapped;
         m_queuePixels = batchPixels;
         m_queueLights = lights;
         OHAO_LOG(Debug, render, "manifold rounds: batches of {} pixels: {} records, {} items, {} roots ({} MB)",
@@ -127,7 +135,7 @@ void ManifoldRounds::recordReset(const Frame& frame) {
     }
     words[33] = m_rows;
     words[34] = m_batches;
-    words[35] = kPasses;
+    words[35] = m_passes;
     words[36] = m_dumpPixel;
     words[37] = m_cellStats ? kCountWords : 0u;
     words[38] = m_sparse;
@@ -139,7 +147,7 @@ void ManifoldRounds::recordReset(const Frame& frame) {
     if (m_clearSum) pass.write(m_sum, BufferUse::CopyDst);
     pass.begin();
     vkCmdUpdateBuffer(frame.cmd, m_counts.buffer, 0, sizeof words, words.data());
-    vkCmdFillBuffer(frame.cmd, m_counts.buffer, sizeof words, VkDeviceSize{kBlockWords} * 4u * m_batches * kPasses, 0u);
+    vkCmdFillBuffer(frame.cmd, m_counts.buffer, sizeof words, VkDeviceSize{kBlockWords} * 4u * m_batches * m_passes, 0u);
     if (m_clearRecordStats) {
         vkCmdFillBuffer(frame.cmd, m_counts.buffer, VkDeviceSize{kCountWords} * 4u, VK_WHOLE_SIZE, 0u);
         m_clearRecordStats = false;

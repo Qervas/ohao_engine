@@ -279,6 +279,29 @@ plain triangles; 2a's Newton (`manifoldSolve`, `manifoldMap`, its tolerance) is 
   after pass 12 and left 231 cells open (counted); parts draw states from the same pool. The pyramid queue's capacity
   and the state pool are the walk's next limit, before mapped draws can be owned by default.
 
+*Task 7 (2026-11-18): the walk without loss, and the verdict.*
+- **The loss was the pyramid queue's layout:** breadth-first rounds stacked in one region of the capacity, so a pass
+  read at most `cap` nodes in all (12 x 460 K against about 58 M asked). The queue's two buffers alternate each round,
+  every round tests nodes of any level, a carry goes into the next segment from the top down (a round that read n
+  keeps its children below `cap - n`), so only what the frame's last round cannot test is lost (counted). The solve's
+  states: a pool a pass, alternating; an item holding a state keeps one; a stack splits in two (into all its groups it
+  flooded the queue: 190 M tests); a stack deeper than a state settles open. Open cells were Sponza's needle triangles
+  (uv1 == uv2; 104 of 11,310 slots): `polyCellAffine` takes a determinant below 1e-5 of the sides' product as
+  degenerate (1e-20 let pure rounding through). With a mapped draw owned: pyramid and cells 16 a pixel, states 1, 24
+  passes; else as before.
+- **Result** (the showcase, maps on): sparse 32 at 320x180, lost 964,981 -> 0 and open 139 -> 0 (about 700 ms a frame:
+  234 M pyramid tests, 40 M solve tests, 779 K roots, 220 connections for 109 requests); sparse 64 at 640x360, 0 and 0
+  (345 ms). Every pixel would be about 1,000x that (about 10 minutes a frame at 320x180), past the 2 s fence: not run.
+  Proofs: sparse 64 byte-identical to stage 3b (the same 19,517,100 pyramid tests); planted at 1/16 capacity, 2.79 M
+  carried, nothing lost, byte-identical; a fresh floor 11,617 of 11,617 path roots; walk off byte-identical; m8_repeat.
+- **The verdict at equal time:** maps off (the light pass carries mapped reflectors) 0.19 us a pixel-spp; maps on 9.2
+  ms (10.3 at 640x360), about 49,000x. Against maps off at 32,768 spp (320x180): maps off reaches RMSE 0.00028 at 4,096
+  spp (0.77 ms a pixel) before maps on finishes its first sample (0.036 at 1 spp). Paired on the same seeds the two
+  arms agree (grid sum +0.0005 +- 0.0009 at 320x180, -9e-5 +- 7e-5 at 640x360; per-pixel z RMS 0.7): the 2c chain is
+  unbiased. **Decided: mapped draws are not owned, at any map size;** the light pass carries them.
+- The showcase at 640x360, maps off, 4,096 spp: `build/manifold_task7/showcase/` (the gold ball's caustic a clean warm
+  patch on Sponza's floor, the glass ball's refraction; the helmet mostly in shadow, its glints faint).
+
 ### Task 6: the pass on the GPU, bounded
 
 Requests -> candidate cells -> cell solves as work items of bounded cost (a box budget an item), spread across threads

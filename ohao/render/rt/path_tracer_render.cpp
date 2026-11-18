@@ -98,7 +98,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
         m_manifold.prepare(frameSlot, *m_scene, gpu::shared::kCausticRough, m_bindlessImageViews);
     const bool manifoldOn = causticsOn && !manifoldOff && manifoldFrame && m_manifold.active() &&
                             m_manifold.ensureRequests(m_width * m_height) &&
-                            (manifoldSplitOnly || (m_manifoldRounds.ensure(m_width, m_height, m_caustics.lightCount()) && ensureManifoldPipeline()));
+                            (manifoldSplitOnly || (m_manifoldRounds.ensure(m_width, m_height, m_caustics.lightCount(), m_manifold.mapped()) && ensureManifoldPipeline()));
     const bool manifoldPass = manifoldOn && !manifoldSplitOnly;
     // The emissive triangle lights: this frame's table, before anything binds or traces them.
     m_emissive->prepare(frameSlot, m_emissiveInstances, m_emissiveVersion, m_instanceSlotEnd, m_analyticLightPower);
@@ -654,7 +654,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                 // Each pass the rounds follow the levels (records, groups, clusters, sub-clusters), then the solve and
                 // the connect: each traces as many threads as its queue holds this pass (the items the rounds before
                 // it queued, and those it carried from the last pass). A pass after the first is all carries.
-                for (uint32_t p = 0; p < R::kPasses; ++p) {
+                for (uint32_t p = 0; p < m_manifoldRounds.passes(); ++p) {
                     const uint32_t bp = b | p << 16;
                     if (p > 0) vkCmdPushConstants(cmd, m_pipelineLayout, kPushStages, kBatchOffset, sizeof bp, &bp);
                     for (uint32_t r = 0; r < kRounds; ++r) {
@@ -684,11 +684,12 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
                         }
                         if (region >= 5) m_caustics.manifoldPass(round);
                         round.begin();
-                        const VkDeviceSize args = region == 4 ? R::segmentOffset(b, p, seg)
-                                                  : region == 5 ? R::argsOffset(b, p, R::Cells)
-                                                  : region == 6 ? R::argsOffset(b, p, R::Candidates)
-                                                  : region == 7 ? R::argsOffset(b, p, R::Roots)
-                                                                : R::argsOffset(b, p, static_cast<R::Queue>(r));
+                        const R& mr = m_manifoldRounds;
+                        const VkDeviceSize args = region == 4 ? mr.segmentOffset(b, p, seg)
+                                                  : region == 5 ? mr.argsOffset(b, p, R::Cells)
+                                                  : region == 6 ? mr.argsOffset(b, p, R::Candidates)
+                                                  : region == 7 ? mr.argsOffset(b, p, R::Roots)
+                                                                : mr.argsOffset(b, p, static_cast<R::Queue>(r));
                         vkCmdTraceRaysIndirectKHR(cmd, &m_manifoldRoundRegions[region],
                                                   &m_manifoldMissRegion, &m_manifoldHitRegion, &m_callRegion,
                                                   counts + args);

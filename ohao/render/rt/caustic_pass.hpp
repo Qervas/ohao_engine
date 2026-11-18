@@ -72,9 +72,10 @@ public:
     // and pass of the records and of the records' items, groups, clusters, sub-clusters, candidates and roots
     // (render/rt/manifold_rounds.hpp).
     [[nodiscard]] std::array<uint32_t, 11> manifoldRoundCounts() const;
-    // Step 2c's (words 23-29): the peak pyramid nodes and cells in a batch and pass, cells reached, pyramid tests,
-    // mapped triangles queued, records on a mapped draw, mapped triangles with degenerate uvs.
-    [[nodiscard]] std::array<uint32_t, 7> manifoldMappedCounts() const;
+    // Step 2c's (words 23-31): the peak pyramid nodes a round and cells in a batch and pass, cells reached, pyramid
+    // tests, mapped triangles queued, records on a mapped draw, mapped triangles with degenerate uvs, the peak pyramid
+    // nodes a pass's rounds read and solve states a pass's pool was asked for.
+    [[nodiscard]] std::array<uint32_t, 9> manifoldMappedCounts() const;
     // The solve's (words 2112-2117): tests run, items still open after the last pass, undecided boxes, roots in cells,
     // roots past those an item keeps, items started over for want of a state (rt/path_tracer.slang, manifoldSolve).
     [[nodiscard]] std::array<uint32_t, 6> manifoldSolveCounts() const;
@@ -89,7 +90,7 @@ public:
 
     // The packed table (float4 rows), as rt/caustics.slang reads it; at most kRows rows.
     static constexpr uint32_t kRows = 4096;
-    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters, 12-24 its rounds', 25-29 step 2c's,
+    // The stats: word 0 the splats clamped, 1-11 the manifold pass's counters, 12-24 its rounds', 25-31 step 2c's,
     // from word 32 the cell statistics' histograms (rt/path_tracer.slang, kManifoldHist), 2112-2117 the solve's; from
     // word 4096 the dump.
     static constexpr uint32_t kStatsBytes = 4096 * 4;
