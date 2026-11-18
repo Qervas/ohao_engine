@@ -18,6 +18,90 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     using render::MaterialHandle;
     using render::MeshHandle;
 
+    // ---- ecs: the World: ids, names, the hierarchy, transforms, input, spawn points, spin and fly -----------
+    r.setModule("ecs");
+    registerKeyEnum(r);
+    r.type<Name>("Name").component().alwaysPresent().host(makeComponentOps<Name>())
+        .doc("Display name for people and agents. Not unique; entities are identified by id.")
+        .field("value", &Name::value).doc("The name");
+    r.type<Transform>("Transform").component().alwaysPresent().host(makeComponentOps<Transform>())
+        .doc("Local transform relative to the parent (or the world for a root entity). "
+             "World matrix = parent world * T * R * S.")
+        .field("position", &Transform::position).doc("Local translation").unit("m")
+        .field("rotation", &Transform::rotation).doc("Local rotation as a unit quaternion, written [x, y, z, w]").unitless()
+        .field("scale", &Transform::scale).doc("Local scale per axis; a negative value mirrors").unitless();
+    r.type<Parent>("Parent").component().host(makeComponentOps<Parent>())
+        .doc("Attaches the entity to a parent; its Transform is then relative to the parent. "
+             "Cycles are rejected.")
+        .field("entity", &Parent::entity).doc("The parent entity's id; null makes the entity a root");
+    r.type<Spin>("Spin").component().host(makeComponentOps<Spin>())
+        .doc("Turns the entity about an axis of its own frame at a constant rate (the spin system, which runs "
+             "before the transform system on every world update).")
+        .field("axis", &Spin::axis).doc("Rotation axis in the entity's local frame; any length (normalized), "
+                                        "zero for no rotation").unitless()
+        .field("degreesPerSecond", &Spin::degreesPerSecond).doc("Turn rate; negative turns the other way")
+            .unit("deg/s").uiRange(-720.0, 720.0);
+    r.type<ActionBinding>("ActionBinding")
+        .doc("An action name bound to a key: held while the key is down.")
+        .field("action", &ActionBinding::action).doc("The action's name, as systems and input.inject use it")
+        .field("key", &ActionBinding::key).doc("The key or mouse button");
+    r.type<AxisBinding>("AxisBinding")
+        .doc("An axis name bound to two keys: +1 while positive is down, -1 while negative is, 0 for both or neither.")
+        .field("axis", &AxisBinding::axis).doc("The axis's name, as systems and input.inject use it")
+        .field("positive", &AxisBinding::positive).doc("The key for +1 (None: no key)")
+        .field("negative", &AxisBinding::negative).doc("The key for -1 (None: no key)");
+    r.type<InputActions>("InputActions").component().singleton().host(makeComponentOps<InputActions>())
+        .doc("The world's controls (one per world): action and axis names over keys. The world's input map is rebuilt "
+             "from it whenever it is set, changed or removed.")
+        .field("actions", &InputActions::actions).doc("Action bindings; an action with several keys is held while any is")
+        .field("axes", &InputActions::axes).doc("Axis bindings");
+    r.type<FlyController>("FlyController").component().host(makeComponentOps<FlyController>())
+        .doc("Flies the entity from named axes and actions, once per fixed step: forward along its -Z, right along its "
+             "+X, up along world +Y; while `look` is held the mouse turns it (yaw about world +Y, pitch about its +X). "
+             "On the Camera entity it is a fly camera.")
+        .field("moveSpeed", &FlyController::moveSpeed).doc("Speed at an axis value of 1").unit("m/s").min(0.0)
+            .uiRange(0.0, 50.0)
+        .field("fastMultiplier", &FlyController::fastMultiplier).doc("Speed multiplier while `fast` is held")
+            .unitless().min(0.0).uiRange(1.0, 10.0)
+        .field("lookDegPerUnit", &FlyController::lookDegPerUnit).doc("Turn per unit of mouse movement while `look` is held")
+            .unit("deg").min(0.0).uiRange(0.0, 1.0)
+        .field("moveForward", &FlyController::moveForward).doc("Axis moving along the entity's -Z")
+        .field("moveRight", &FlyController::moveRight).doc("Axis moving along the entity's +X")
+        .field("moveUp", &FlyController::moveUp).doc("Axis moving along world +Y")
+        .field("look", &FlyController::look).doc("Action that, while held, lets the mouse turn the entity")
+        .field("fast", &FlyController::fast).doc("Action that, while held, multiplies the speed");
+    r.type<SpawnPoint>("SpawnPoint").component().host(makeComponentOps<SpawnPoint>())
+        .doc("A named place to spawn something, at the entity's world position, facing its -Z. Spawns are taken in "
+             "creation order (a level's node order).")
+        .field("tag", &SpawnPoint::tag).doc("What spawns here: player, enemy, ...").maxLength(32);
+    r.type<Children>("Children").component().runtime().host(makeComponentOps<Children>())
+        .doc("The entity's children in attach order. Derived: rebuilt from Parent.")
+        .field("entities", &Children::entities).doc("Child entities");
+    r.type<WorldTransform>("WorldTransform").component().runtime().host(makeComponentOps<WorldTransform>())
+        .doc("World matrices computed by the transform system from Transform and Parent.")
+        .field("world", &WorldTransform::world).doc("Object-to-world matrix this frame, column-major").unitless()
+        .field("prevWorld", &WorldTransform::prevWorld).doc("Last frame's object-to-world matrix (motion vectors)").unitless();
+    r.type<CreationOrder>("CreationOrder").component().runtime().host(makeComponentOps<CreationOrder>())
+        .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
+        .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");
+    r.type<PreservedComponent>("PreservedComponent").runtime()
+        .doc("One unknown component kept from a scene file.")
+        .field("name", &PreservedComponent::name).doc("Component name as written in the file")
+        .field("version", &PreservedComponent::version).doc("Its version from the file header (1 if absent)").unitless()
+        .field("json", &PreservedComponent::json).doc("Its value as canonical compact JSON");
+    r.type<PreservedComponents>("PreservedComponents").component().runtime().host(makeComponentOps<PreservedComponents>())
+        .doc("Components a scene file carried that this build does not know; written back on save.")
+        .field("entries", &PreservedComponents::entries).doc("The kept components, in file order");
+    r.type<TransformDirty>("TransformDirty").component().runtime()
+        .doc("Tag: the local transform changed; world matrices are recomputed this frame.");
+    r.type<RenderDirty>("RenderDirty").component().runtime()
+        .doc("Tag: the entity's render instance is re-uploaded this frame.");
+    r.type<MovedLastFrame>("MovedLastFrame").component().runtime()
+        .doc("Tag: moved last frame; uploaded once more so prevWorld catches up.");
+    registerWorldEvents(r);
+
+    // ---- visual: what an entity looks like and where it is seen from ----------------------------------------
+    r.setModule("visual");
     r.enumeration<LightType>("LightType")
         .doc("Light shape. Position and direction come from the entity's world transform; "
              "the direction is the entity's -Z axis.")
@@ -25,56 +109,12 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .value("Directional", LightType::Directional, "Infinitely distant light (a sun) shining along -Z")
         .value("Spot", LightType::Spot, "Cone of light along -Z, shaped by innerConeDeg/outerConeDeg")
         .value("AreaRect", LightType::AreaRect, "Rectangle spanned by areaEdge1 and areaEdge2, emitting along -Z");
-
-    registerKeyEnum(r);
-
     r.enumeration<MaterialAlpha>("MaterialAlpha")
         .doc("A material's alpha mode (glTF's alphaMode)")
         .value("Opaque", MaterialAlpha::Opaque, "Opaque: opacity is ignored")
         .value("Mask", MaterialAlpha::Mask, "Alpha-tested: cut where opacity is below 0.5, in raster and every ray")
         .value("Blend", MaterialAlpha::Blend,
                "Blended by opacity in the sorted forward pass; casts no shadow and bounces no GI in the hybrid frame");
-
-    r.enumeration<ColliderShape>("ColliderShape")
-        .doc("A collider's shape, fitted to the entity's mesh unless a size is given.")
-        .value("Box", ColliderShape::Box, "The mesh's bounding box")
-        .value("Sphere", ColliderShape::Sphere, "Around the bounding box's centre, to the farthest vertex")
-        .value("Capsule", ColliderShape::Capsule, "Along the bounding box's longest axis")
-        .value("Convex", ColliderShape::Convex, "The convex hull of the mesh's vertices")
-        .value("Mesh", ColliderShape::Mesh, "The mesh's triangles (static and kinematic bodies; a dynamic one is made convex)")
-        .value("None", ColliderShape::None, "No collision");
-    r.enumeration<Motion>("Motion")
-        .doc("How a rigid body moves.")
-        .value("Static", Motion::Static, "Never moves")
-        .value("Dynamic", Motion::Dynamic, "Moved by the simulation; writes its entity's Transform each step")
-        .value("Kinematic", Motion::Kinematic, "Moved by its transform; dynamic bodies collide with it");
-    r.enumeration<JointType>("JointType")
-        .doc("What a joint lets its two bodies do.")
-        .value("Fixed", JointType::Fixed, "Nothing: welded as they were built")
-        .value("Point", JointType::Point, "Turn freely about the anchor (ball and socket)")
-        .value("Hinge", JointType::Hinge, "Turn about the axis through the anchor (a door)")
-        .value("Slider", JointType::Slider, "Slide along the axis without turning")
-        .value("SwingTwist", JointType::SwingTwist, "Swing within a cone about the axis and twist about it (a shoulder)")
-        .value("Distance", JointType::Distance, "Keep the anchors within a distance (a rope, a chain link)");
-
-    // ---- authoring components (saved in scene files) -----------------------------------
-
-    r.type<Name>("Name").component().alwaysPresent().host(makeComponentOps<Name>())
-        .doc("Display name for people and agents. Not unique; entities are identified by id.")
-        .field("value", &Name::value).doc("The name");
-
-    r.type<Transform>("Transform").component().alwaysPresent().host(makeComponentOps<Transform>())
-        .doc("Local transform relative to the parent (or the world for a root entity). "
-             "World matrix = parent world * T * R * S.")
-        .field("position", &Transform::position).doc("Local translation").unit("m")
-        .field("rotation", &Transform::rotation).doc("Local rotation as a unit quaternion, written [x, y, z, w]").unitless()
-        .field("scale", &Transform::scale).doc("Local scale per axis; a negative value mirrors").unitless();
-
-    r.type<Parent>("Parent").component().host(makeComponentOps<Parent>())
-        .doc("Attaches the entity to a parent; its Transform is then relative to the parent. "
-             "Cycles are rejected.")
-        .field("entity", &Parent::entity).doc("The parent entity's id; null makes the entity a root");
-
     r.type<Light>("Light").component().host(makeComponentOps<Light>())
         .doc("A light source. Position and direction come from the transform (direction = -Z).")
         .field("type", &Light::type).doc("Light shape")
@@ -91,7 +131,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
                  "each, for the first 4 lights that cast them), or the cascaded shadow map for a directional "
                  "light when RT shadows are off. False lights through everything. The path tracer always "
                  "traces visibility");
-
     // Mesh sources: an asset or a parametric primitive.
     r.type<ModelAsset>("ModelAsset")
         .doc("A model file (glb, gltf) loaded through the asset resolver; its own "
@@ -137,7 +176,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("lo", &BoxPrim::lo).doc("Minimum corner").unit("m")
         .field("hi", &BoxPrim::hi).doc("Maximum corner").unit("m")
         .field("color", &BoxPrim::color).doc("Vertex color").unit("linear-rgb").color().min(0.0);
-
     r.type<MeshSource>("MeshSource").component().host(makeComponentOps<MeshSource>())
         .doc("Where the entity's mesh comes from: a model asset or a primitive. Instantiate builds the GPU mesh; "
              "entities with equal sources share one mesh.")
@@ -229,7 +267,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .doc("subsurface_radius per channel (red travels furthest in skin)").unit("linear-rgb").min(0.0).max(1.0)
         .field("subsurface_scatter_anisotropy", &Material::subsurfaceScatterAnisotropy)
             .doc("The volume's Henyey-Greenstein anisotropy: > 0 forward, < 0 backward").unitless().min(-1.0).max(1.0);
-
     r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())
         .doc("The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y "
              "up; roll is ignored.")
@@ -247,46 +284,62 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("sky", &Environment::sky)
             .doc("Without an hdri: the physical sky for the scene's sun (none without a directional light); false: "
                  "no environment (black)");
+    r.type<InstantiateError>("InstantiateError").component().runtime().host(makeComponentOps<InstantiateError>())
+        .doc("Why instantiate could not build the entity's mesh. The entity then has no MeshRenderer.")
+        .field("code", &InstantiateError::code).doc("E_ASSET_NOT_FOUND, E_ASSET_INVALID or E_MESH_INVALID")
+        .field("message", &InstantiateError::message).doc("What went wrong, for people and agents");
 
-    r.type<Spin>("Spin").component().host(makeComponentOps<Spin>())
-        .doc("Turns the entity about an axis of its own frame at a constant rate (the spin system, which runs "
-             "before the transform system on every world update).")
-        .field("axis", &Spin::axis).doc("Rotation axis in the entity's local frame; any length (normalized), "
-                                        "zero for no rotation").unitless()
-        .field("degreesPerSecond", &Spin::degreesPerSecond).doc("Turn rate; negative turns the other way")
-            .unit("deg/s").uiRange(-720.0, 720.0);
+    // ---- animation: skins, animators, attachments -----------------------------------------------------------
+    r.setModule("animation");
+    r.type<SkinnedMesh>("SkinnedMesh").component().host(makeComponentOps<SkinnedMesh>())
+        .doc("A skinned mesh: the entity's MeshSource (a ModelAsset with `mesh`) is deformed by a skin of a glTF file, "
+             "posed by the entity's Animator. The instance gets its own deformed copy of the mesh.")
+        .field("file", &SkinnedMesh::file).doc("The glTF (.glb) holding the skin")
+        .field("skin", &SkinnedMesh::skin).doc("The skin's name or \"#<index>\"; empty: the file's first skin")
+            .maxLength(256);
+    r.type<AnimLayerState>("AnimLayerState")
+        .doc("One layer of an Animator: its state, the steps in it, and the fade from the state it left.")
+        .field("state", &AnimLayerState::state).doc("The layer's current state (empty: its initial state)").maxLength(256)
+        .field("steps", &AnimLayerState::steps).doc("Simulation steps since entering it").unitless()
+        .field("from", &AnimLayerState::from).doc("The state faded from; empty when not fading").maxLength(256)
+        .field("fromSteps", &AnimLayerState::fromSteps).doc("Its steps").unitless()
+        .field("fade", &AnimLayerState::fade).doc("The fade's length in steps (0: none)").unitless()
+        .field("faded", &AnimLayerState::faded).doc("Steps of the fade done").unitless();
+    r.type<Animator>("Animator").component().host(makeComponentOps<Animator>())
+        .doc("Poses an entity by an animation graph (.animgraph.json): each layer's state machine advances one step a "
+             "simulation step (integers only, so a snapshot holds it exactly). The pose is presentation: never saved or "
+             "hashed.")
+        .field("graph", &Animator::graph).doc("The animation graph file")
+        .field("layers", &Animator::layers).doc("One a graph layer, in order; empty: filled at the first step");
+    r.type<JointAttach>("JointAttach").component().host(makeComponentOps<JointAttach>())
+        .doc("Drawn at a joint of its parent's pose (times its own Transform): a rifle in a hand. Presentation: its "
+             "Transform, and what the step sees, do not follow the joint.")
+        .field("joint", &JointAttach::joint).doc("The joint's name in the parent's skeleton").maxLength(256);
+    registerAnimationEvents(r);
 
-    r.type<ActionBinding>("ActionBinding")
-        .doc("An action name bound to a key: held while the key is down.")
-        .field("action", &ActionBinding::action).doc("The action's name, as systems and input.inject use it")
-        .field("key", &ActionBinding::key).doc("The key or mouse button");
-    r.type<AxisBinding>("AxisBinding")
-        .doc("An axis name bound to two keys: +1 while positive is down, -1 while negative is, 0 for both or neither.")
-        .field("axis", &AxisBinding::axis).doc("The axis's name, as systems and input.inject use it")
-        .field("positive", &AxisBinding::positive).doc("The key for +1 (None: no key)")
-        .field("negative", &AxisBinding::negative).doc("The key for -1 (None: no key)");
-    r.type<InputActions>("InputActions").component().singleton().host(makeComponentOps<InputActions>())
-        .doc("The world's controls (one per world): action and axis names over keys. The world's input map is rebuilt "
-             "from it whenever it is set, changed or removed.")
-        .field("actions", &InputActions::actions).doc("Action bindings; an action with several keys is held while any is")
-        .field("axes", &InputActions::axes).doc("Axis bindings");
-
-    r.type<FlyController>("FlyController").component().host(makeComponentOps<FlyController>())
-        .doc("Flies the entity from named axes and actions, once per fixed step: forward along its -Z, right along its "
-             "+X, up along world +Y; while `look` is held the mouse turns it (yaw about world +Y, pitch about its +X). "
-             "On the Camera entity it is a fly camera.")
-        .field("moveSpeed", &FlyController::moveSpeed).doc("Speed at an axis value of 1").unit("m/s").min(0.0)
-            .uiRange(0.0, 50.0)
-        .field("fastMultiplier", &FlyController::fastMultiplier).doc("Speed multiplier while `fast` is held")
-            .unitless().min(0.0).uiRange(1.0, 10.0)
-        .field("lookDegPerUnit", &FlyController::lookDegPerUnit).doc("Turn per unit of mouse movement while `look` is held")
-            .unit("deg").min(0.0).uiRange(0.0, 1.0)
-        .field("moveForward", &FlyController::moveForward).doc("Axis moving along the entity's -Z")
-        .field("moveRight", &FlyController::moveRight).doc("Axis moving along the entity's +X")
-        .field("moveUp", &FlyController::moveUp).doc("Axis moving along world +Y")
-        .field("look", &FlyController::look).doc("Action that, while held, lets the mouse turn the entity")
-        .field("fast", &FlyController::fast).doc("Action that, while held, multiplies the speed");
-
+    // ---- physics: colliders, bodies, joints, players --------------------------------------------------------
+    r.setModule("physics");
+    r.enumeration<ColliderShape>("ColliderShape")
+        .doc("A collider's shape, fitted to the entity's mesh unless a size is given.")
+        .value("Box", ColliderShape::Box, "The mesh's bounding box")
+        .value("Sphere", ColliderShape::Sphere, "Around the bounding box's centre, to the farthest vertex")
+        .value("Capsule", ColliderShape::Capsule, "Along the bounding box's longest axis")
+        .value("Convex", ColliderShape::Convex, "The convex hull of the mesh's vertices")
+        .value("Mesh", ColliderShape::Mesh, "The mesh's triangles (static and kinematic bodies; a dynamic one is made convex)")
+        .value("None", ColliderShape::None, "No collision");
+    r.enumeration<Motion>("Motion")
+        .doc("How a rigid body moves.")
+        .value("Static", Motion::Static, "Never moves")
+        .value("Dynamic", Motion::Dynamic, "Moved by the simulation; writes its entity's Transform each step")
+        .value("Kinematic", Motion::Kinematic, "Moved by its transform; dynamic bodies collide with it");
+    r.enumeration<JointType>("JointType")
+        .doc("What a joint lets its two bodies do.")
+        .value("Fixed", JointType::Fixed, "Nothing: welded as they were built")
+        .value("Point", JointType::Point, "Turn freely about the anchor (ball and socket)")
+        .value("Hinge", JointType::Hinge, "Turn about the axis through the anchor (a door)")
+        .value("Slider", JointType::Slider, "Slide along the axis without turning")
+        .value("SwingTwist", JointType::SwingTwist, "Swing within a cone about the axis and twist about it (a shoulder)")
+        .value("Distance", JointType::Distance, "Keep the anchors within a distance (a rope, a chain link)");
     r.type<PlayerController>("PlayerController").component().host(makeComponentOps<PlayerController>())
         .doc("A first-person player: a capsule standing on the entity's position (its feet), turned about +Y. Once per "
              "fixed step, before bodies step, it walks from the named axes and actions (forward along its -Z, right "
@@ -339,24 +392,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("pitchDeg", &MoveIntent::pitchDeg).doc("The look up (positive) or down").unit("deg").min(-89.0).max(89.0)
         .field("jump", &MoveIntent::jump).doc("Jump (when on the ground)")
         .field("sprint", &MoveIntent::sprint).doc("Walk at sprintSpeed");
-
-    r.type<Level>("Level").component().host(makeComponentOps<Level>())
-        .doc("A level file (glTF) placed in the world. The level system expands it into one child entity per node of "
-             "the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those "
-             "entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, trig, "
-             "surf, vis, spawn, socket, verb) and components by name.")
-        .field("asset", &Level::asset).doc("Project-relative path of the .glb or .gltf file, '/' separators")
-        .field("lightScale", &Level::lightScale).doc("Multiplier on the file's KHR_lights_punctual intensities")
-            .unitless().min(0.0).uiRange(0.0, 10.0)
-        .field("collision", &Level::collision).doc("Whether the level's nodes get colliders; false: render only");
-    r.type<SpawnPoint>("SpawnPoint").component().host(makeComponentOps<SpawnPoint>())
-        .doc("A named place to spawn something, at the entity's world position, facing its -Z. Spawns are taken in "
-             "creation order (a level's node order).")
-        .field("tag", &SpawnPoint::tag).doc("What spawns here: player, enemy, ...").maxLength(32);
-    r.type<Socket>("Socket").component().host(makeComponentOps<Socket>())
-        .doc("An attach point at the entity's transform (a level's SOCKET_ empties).")
-        .field("name", &Socket::name).doc("The socket's name, as attachments refer to it").maxLength(64);
-
     r.type<Collider>("Collider").component().host(makeComponentOps<Collider>())
         .doc("The entity collides: the physics system builds a body for it (static unless it has a RigidBody). A zero "
              "size fits the shape to the entity's mesh, in its frame and at its world scale.")
@@ -405,117 +440,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("The joint broke: its constraint stays built and does nothing. The physics step adds it; a restore from "
              "before the break makes the joint whole.")
         .field("broken", &JointState::broken).doc("The joint is broken; false makes it whole again");
-
-    r.type<AudioMix>("AudioMix").component().singleton().host(makeComponentOps<AudioMix>())
-        .doc("The world's sound bank and mix (one per world): an .audio.json declaring the buses and their voice caps, "
-             "the sounds (files, bus, priority, distance shape, how long each holds its voice), the ducks, the "
-             "snapshots and the reverb presets. Without one, the default bank (master over sfx, music, ambient).")
-        .field("asset", &AudioMix::asset).doc("Project-relative path of the .audio.json file, '/' separators");
-    r.type<ReverbZone>("ReverbZone").component().host(makeComponentOps<ReverbZone>())
-        .doc("A volume whose reverb preset the listener hears while inside it: a box about the entity, in its frame. "
-             "Of the zones holding the listener the highest priority wins, then the lowest id; outside them all, the "
-             "bank's defaultZone. A volume, not a body: nothing collides with it.")
-        .field("preset", &ReverbZone::preset).doc("A reverb preset of the world's .audio.json (room, outdoor, ...)")
-            .maxLength(32)
-        .field("priority", &ReverbZone::priority).doc("Higher wins where zones overlap").unitless()
-        .field("size", &ReverbZone::size).doc("The box's half extents; zero fits it to the entity's mesh").unit("m").min(0.0);
-
-    // ---- effects (sub-project 12) -------------------------------------------------------
-    r.type<VfxSet>("VfxSet").component().singleton().host(makeComponentOps<VfxSet>())
-        .doc("The world's effect set (one per world): a .vfx.json declaring the effects (emitters of closed-form "
-             "particles), decals, tracers and which events' cues spawn them. Without one, the default set.")
-        .field("asset", &VfxSet::asset).doc("Project-relative path of the .vfx.json file, '/' separators");
-    r.type<VfxEmitter>("VfxEmitter").component().host(makeComponentOps<VfxEmitter>())
-        .doc("A placed effect at the entity's pose: while active, rate spawns a second by step count from the step "
-             "it became active, or one spawn when it becomes active with rate 0.")
-        .field("effect", &VfxEmitter::effect).doc("An effect of the world's .vfx.json").maxLength(64)
-        .field("rate", &VfxEmitter::rate).doc("Spawns a second while active; 0: one when it becomes active").unit("Hz")
-            .min(0.0).max(1000.0)
-        .field("seed", &VfxEmitter::seed).doc("Varies its particles' random draws").unitless()
-        .field("active", &VfxEmitter::active).doc("Spawning; turning it on starts the count again");
-
-    // ---- animation (sub-project 10) ----------------------------------------------------
-    r.type<SkinnedMesh>("SkinnedMesh").component().host(makeComponentOps<SkinnedMesh>())
-        .doc("A skinned mesh: the entity's MeshSource (a ModelAsset with `mesh`) is deformed by a skin of a glTF file, "
-             "posed by the entity's Animator. The instance gets its own deformed copy of the mesh.")
-        .field("file", &SkinnedMesh::file).doc("The glTF (.glb) holding the skin")
-        .field("skin", &SkinnedMesh::skin).doc("The skin's name or \"#<index>\"; empty: the file's first skin")
-            .maxLength(256);
-    r.type<AnimLayerState>("AnimLayerState")
-        .doc("One layer of an Animator: its state, the steps in it, and the fade from the state it left.")
-        .field("state", &AnimLayerState::state).doc("The layer's current state (empty: its initial state)").maxLength(256)
-        .field("steps", &AnimLayerState::steps).doc("Simulation steps since entering it").unitless()
-        .field("from", &AnimLayerState::from).doc("The state faded from; empty when not fading").maxLength(256)
-        .field("fromSteps", &AnimLayerState::fromSteps).doc("Its steps").unitless()
-        .field("fade", &AnimLayerState::fade).doc("The fade's length in steps (0: none)").unitless()
-        .field("faded", &AnimLayerState::faded).doc("Steps of the fade done").unitless();
-    r.type<Animator>("Animator").component().host(makeComponentOps<Animator>())
-        .doc("Poses an entity by an animation graph (.animgraph.json): each layer's state machine advances one step a "
-             "simulation step (integers only, so a snapshot holds it exactly). The pose is presentation: never saved or "
-             "hashed.")
-        .field("graph", &Animator::graph).doc("The animation graph file")
-        .field("layers", &Animator::layers).doc("One a graph layer, in order; empty: filled at the first step");
-    r.type<JointAttach>("JointAttach").component().host(makeComponentOps<JointAttach>())
-        .doc("Drawn at a joint of its parent's pose (times its own Transform): a rifle in a hand. Presentation: its "
-             "Transform, and what the step sees, do not follow the joint.")
-        .field("joint", &JointAttach::joint).doc("The joint's name in the parent's skeleton").maxLength(256);
-
-    // ---- runtime state (catalogue only, never saved) -----------------------------------
-
-    r.type<MeshHandle>("MeshHandle").runtime()
-        .doc("A mesh slot in the GPU render scene. Runtime only: files refer to meshes by source.")
-        .field("index", &MeshHandle::index).doc("Slot index; 4294967295 means none").unitless()
-        .field("generation", &MeshHandle::generation).doc("Slot generation; a stale handle no longer matches").unitless();
-    r.type<MaterialHandle>("MaterialHandle").runtime()
-        .doc("A material slot in the GPU render scene. Runtime only.")
-        .field("index", &MaterialHandle::index).doc("Slot index; 4294967295 means none").unitless()
-        .field("generation", &MaterialHandle::generation).doc("Slot generation").unitless();
-
-    r.type<Children>("Children").component().runtime().host(makeComponentOps<Children>())
-        .doc("The entity's children in attach order. Derived: rebuilt from Parent.")
-        .field("entities", &Children::entities).doc("Child entities");
-    r.type<WorldTransform>("WorldTransform").component().runtime().host(makeComponentOps<WorldTransform>())
-        .doc("World matrices computed by the transform system from Transform and Parent.")
-        .field("world", &WorldTransform::world).doc("Object-to-world matrix this frame, column-major").unitless()
-        .field("prevWorld", &WorldTransform::prevWorld).doc("Last frame's object-to-world matrix (motion vectors)").unitless();
-    r.type<MeshRenderer>("MeshRenderer").component().runtime().host(makeComponentOps<MeshRenderer>())
-        .doc("The GPU mesh and materials an entity renders with. Built from the entity's mesh source.")
-        .field("mesh", &MeshRenderer::mesh).doc("Mesh slot")
-        .field("materials", &MeshRenderer::materials).doc("One material per submesh, in submesh order")
-        .field("visible", &MeshRenderer::visible).doc("Whether the entity is drawn");
-    r.type<RenderSlot>("RenderSlot").component().runtime().host(makeComponentOps<RenderSlot>())
-        .doc("The entity's instance slot in the GPU render scene. Owned by the render extract.")
-        .field("slot", &RenderSlot::slot).doc("Instance slot index").unitless();
-    r.type<CreationOrder>("CreationOrder").component().runtime().host(makeComponentOps<CreationOrder>())
-        .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
-        .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");
-    r.type<PreservedComponent>("PreservedComponent").runtime()
-        .doc("One unknown component kept from a scene file.")
-        .field("name", &PreservedComponent::name).doc("Component name as written in the file")
-        .field("version", &PreservedComponent::version).doc("Its version from the file header (1 if absent)").unitless()
-        .field("json", &PreservedComponent::json).doc("Its value as canonical compact JSON");
-    r.type<PreservedComponents>("PreservedComponents").component().runtime().host(makeComponentOps<PreservedComponents>())
-        .doc("Components a scene file carried that this build does not know; written back on save.")
-        .field("entries", &PreservedComponents::entries).doc("The kept components, in file order");
-    r.type<TransformDirty>("TransformDirty").component().runtime()
-        .doc("Tag: the local transform changed; world matrices are recomputed this frame.");
-    r.type<RenderDirty>("RenderDirty").component().runtime()
-        .doc("Tag: the entity's render instance is re-uploaded this frame.");
-    r.type<MovedLastFrame>("MovedLastFrame").component().runtime()
-        .doc("Tag: moved last frame; uploaded once more so prevWorld catches up.");
-    r.type<InstantiateDirty>("InstantiateDirty").component().runtime()
-        .doc("Tag: MeshSource or Material changed; instantiate rebuilds the mesh renderer this frame.");
-    r.type<InstantiateError>("InstantiateError").component().runtime().host(makeComponentOps<InstantiateError>())
-        .doc("Why instantiate could not build the entity's mesh. The entity then has no MeshRenderer.")
-        .field("code", &InstantiateError::code).doc("E_ASSET_NOT_FOUND, E_ASSET_INVALID or E_MESH_INVALID")
-        .field("message", &InstantiateError::message).doc("What went wrong, for people and agents");
-    r.type<LevelNode>("LevelNode").component().runtime().host(makeComponentOps<LevelNode>())
-        .doc("This entity is a node of a level: made by the level system from the file, never saved, rebuilt from "
-             "the file when its Level changes.")
-        .field("level", &LevelNode::level).doc("The entity with the Level")
-        .field("index", &LevelNode::index).doc("The node's index in the default scene, depth first").unitless();
-    r.type<LevelDirty>("LevelDirty").component().runtime()
-        .doc("Tag: the Level changed; the level system re-expands it this frame.");
     r.type<ColliderPart>("ColliderPart").component().runtime().host(makeComponentOps<ColliderPart>())
         .doc("This entity's collider is part of another entity's body (a level's UCX_ hulls): one compound body.")
         .field("body", &ColliderPart::body).doc("The entity whose body it is part of");
@@ -541,7 +465,84 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("linear", &BodyMotion::linear).doc("Linear velocity, world (a player's velocity)").unit("m/s")
         .field("angular", &BodyMotion::angular).doc("Angular velocity, world").unit("rad/s")
         .field("asleep", &BodyMotion::asleep).doc("The body sleeps; its velocities are zero");
-    registerEventTypes(r);
+    registerPhysicsEvents(r);
+
+    // ---- audio: the bank and the reverb zones ---------------------------------------------------------------
+    r.setModule("audio");
+    r.type<AudioMix>("AudioMix").component().singleton().host(makeComponentOps<AudioMix>())
+        .doc("The world's sound bank and mix (one per world): an .audio.json declaring the buses and their voice caps, "
+             "the sounds (files, bus, priority, distance shape, how long each holds its voice), the ducks, the "
+             "snapshots and the reverb presets. Without one, the default bank (master over sfx, music, ambient).")
+        .field("asset", &AudioMix::asset).doc("Project-relative path of the .audio.json file, '/' separators");
+    r.type<ReverbZone>("ReverbZone").component().host(makeComponentOps<ReverbZone>())
+        .doc("A volume whose reverb preset the listener hears while inside it: a box about the entity, in its frame. "
+             "Of the zones holding the listener the highest priority wins, then the lowest id; outside them all, the "
+             "bank's defaultZone. A volume, not a body: nothing collides with it.")
+        .field("preset", &ReverbZone::preset).doc("A reverb preset of the world's .audio.json (room, outdoor, ...)")
+            .maxLength(32)
+        .field("priority", &ReverbZone::priority).doc("Higher wins where zones overlap").unitless()
+        .field("size", &ReverbZone::size).doc("The box's half extents; zero fits it to the entity's mesh").unit("m").min(0.0);
+    registerAudioEvents(r);
+
+    // ---- vfx: the effect set and placed emitters ------------------------------------------------------------
+    r.setModule("vfx");
+    r.type<VfxSet>("VfxSet").component().singleton().host(makeComponentOps<VfxSet>())
+        .doc("The world's effect set (one per world): a .vfx.json declaring the effects (emitters of closed-form "
+             "particles), decals, tracers and which events' cues spawn them. Without one, the default set.")
+        .field("asset", &VfxSet::asset).doc("Project-relative path of the .vfx.json file, '/' separators");
+    r.type<VfxEmitter>("VfxEmitter").component().host(makeComponentOps<VfxEmitter>())
+        .doc("A placed effect at the entity's pose: while active, rate spawns a second by step count from the step "
+             "it became active, or one spawn when it becomes active with rate 0.")
+        .field("effect", &VfxEmitter::effect).doc("An effect of the world's .vfx.json").maxLength(64)
+        .field("rate", &VfxEmitter::rate).doc("Spawns a second while active; 0: one when it becomes active").unit("Hz")
+            .min(0.0).max(1000.0)
+        .field("seed", &VfxEmitter::seed).doc("Varies its particles' random draws").unitless()
+        .field("active", &VfxEmitter::active).doc("Spawning; turning it on starts the count again");
+
+    // ---- level: level files and their nodes -----------------------------------------------------------------
+    r.setModule("level");
+    r.type<Level>("Level").component().host(makeComponentOps<Level>())
+        .doc("A level file (glTF) placed in the world. The level system expands it into one child entity per node of "
+             "the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those "
+             "entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, trig, "
+             "surf, vis, spawn, socket, verb) and components by name.")
+        .field("asset", &Level::asset).doc("Project-relative path of the .glb or .gltf file, '/' separators")
+        .field("lightScale", &Level::lightScale).doc("Multiplier on the file's KHR_lights_punctual intensities")
+            .unitless().min(0.0).uiRange(0.0, 10.0)
+        .field("collision", &Level::collision).doc("Whether the level's nodes get colliders; false: render only");
+    r.type<Socket>("Socket").component().host(makeComponentOps<Socket>())
+        .doc("An attach point at the entity's transform (a level's SOCKET_ empties).")
+        .field("name", &Socket::name).doc("The socket's name, as attachments refer to it").maxLength(64);
+    r.type<LevelNode>("LevelNode").component().runtime().host(makeComponentOps<LevelNode>())
+        .doc("This entity is a node of a level: made by the level system from the file, never saved, rebuilt from "
+             "the file when its Level changes.")
+        .field("level", &LevelNode::level).doc("The entity with the Level")
+        .field("index", &LevelNode::index).doc("The node's index in the default scene, depth first").unitless();
+    r.type<LevelDirty>("LevelDirty").component().runtime()
+        .doc("Tag: the Level changed; the level system re-expands it this frame.");
+
+    // ---- world_render: the GPU side of an entity ------------------------------------------------------------
+    r.setModule("world_render");
+    r.type<MeshHandle>("MeshHandle").runtime()
+        .doc("A mesh slot in the GPU render scene. Runtime only: files refer to meshes by source.")
+        .field("index", &MeshHandle::index).doc("Slot index; 4294967295 means none").unitless()
+        .field("generation", &MeshHandle::generation).doc("Slot generation; a stale handle no longer matches").unitless();
+    r.type<MaterialHandle>("MaterialHandle").runtime()
+        .doc("A material slot in the GPU render scene. Runtime only.")
+        .field("index", &MaterialHandle::index).doc("Slot index; 4294967295 means none").unitless()
+        .field("generation", &MaterialHandle::generation).doc("Slot generation").unitless();
+    r.type<MeshRenderer>("MeshRenderer").component().runtime().host(makeComponentOps<MeshRenderer>())
+        .doc("The GPU mesh and materials an entity renders with. Built from the entity's mesh source.")
+        .field("mesh", &MeshRenderer::mesh).doc("Mesh slot")
+        .field("materials", &MeshRenderer::materials).doc("One material per submesh, in submesh order")
+        .field("visible", &MeshRenderer::visible).doc("Whether the entity is drawn");
+    r.type<RenderSlot>("RenderSlot").component().runtime().host(makeComponentOps<RenderSlot>())
+        .doc("The entity's instance slot in the GPU render scene. Owned by the render extract.")
+        .field("slot", &RenderSlot::slot).doc("Instance slot index").unitless();
+    r.type<InstantiateDirty>("InstantiateDirty").component().runtime()
+        .doc("Tag: MeshSource or Material changed; instantiate rebuilds the mesh renderer this frame.");
+
+    r.setModule({});
 }
 
 } // namespace ohao::ecs

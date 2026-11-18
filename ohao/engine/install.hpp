@@ -20,8 +20,8 @@ struct EngineConfig {
     const reflect::TypeRegistry& types;
 };
 
-// Levels, physics, animation, the audio schedule, vfx: the engine's simulation and its snapshot hooks. No game
-// system: a host that plays a game installs it after (game::Module::install; the slice: slice/module.hpp).
+// Animation, physics, the audio schedule, vfx, levels (module order): the engine's simulation and its snapshot hooks.
+// No game system: a host that plays a game installs it after (game::Module::install; the slice: slice/module.hpp).
 void installEngine(ecs::World& world, const EngineConfig& config);
 
 // Instantiate (MeshSources into meshes), the render extract, the effects' draw: what a renderer needs.

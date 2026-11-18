@@ -8,8 +8,7 @@
 
 namespace ohao::ecs {
 
-void registerEventTypes(reflect::TypeRegistry& r) {
-    // ---- physics ------------------------------------------------------------------------------
+void registerPhysicsEvents(reflect::TypeRegistry& r) {
     r.type<ContactEvent>("ContactEvent").event()
         .doc("physics.contact_begin and physics.contact_end: a body pair began or ended touching (sub-shape contacts "
              "collapsed; a removed body ends its pairs at once)")
@@ -39,22 +38,25 @@ void registerEventTypes(reflect::TypeRegistry& r) {
         .field("joint", &JointBreakEvent::joint).entity().doc("The Joint's entity")
         .field("other", &JointBreakEvent::other).entity().doc("The other body's entity; none: the world")
         .field("point", &JointBreakEvent::point).doc("Its anchor, world").unit("m");
+}
 
-    // ---- the World ----------------------------------------------------------------------------
+void registerWorldEvents(reflect::TypeRegistry& r) {
     r.type<RestoreEvent>("RestoreEvent").event()
         .doc("world.restore: a restore (world.restore, a round's restart) put the world back to another moment; in "
              "the history only, before the restored next-step events")
         .field("step", &RestoreEvent::step).doc("The World's step the world went back to");
+}
 
-    // ---- animation ----------------------------------------------------------------------------
+void registerAnimationEvents(reflect::TypeRegistry& r) {
     r.type<ClipEvent>("ClipEvent").event()
         .doc("anim.clip_event: an event a layer's clip fired in the step (mag_out, mag_in, bolt, body_fall, foot_l, ...)")
         .field("entity", &ClipEvent::entity).entity().doc("The animated entity")
         .field("layer", &ClipEvent::layer).doc("The graph layer").unitless()
         .field("clip", &ClipEvent::clip).doc("The clip that fired it")
         .field("name", &ClipEvent::name).doc("The event's name in the clip");
+}
 
-    // ---- the audio schedule -------------------------------------------------------------------
+void registerAudioEvents(reflect::TypeRegistry& r) {
     r.enumeration<AudioOutcome>("AudioOutcome")
         .doc("What became of a play")
         .value("played", AudioOutcome::Played, "It plays")

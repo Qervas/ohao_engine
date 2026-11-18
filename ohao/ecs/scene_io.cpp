@@ -42,6 +42,8 @@ std::vector<SavedType> savedTypes(const TypeRegistry& r) {
     for (const TypeInfo* t : r.types())
         if (t->serialized && t->role == reflect::TypeRole::Component)
             if (const ComponentOps* ops = componentOps(*t)) out.push_back({t, ops});
+    // By name, never by registration (an entity's components in its file; ecs::snapshotTypes' order).
+    std::sort(out.begin(), out.end(), [](const SavedType& a, const SavedType& b) { return a.type->name < b.type->name; });
     return out;
 }
 

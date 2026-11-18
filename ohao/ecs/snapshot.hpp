@@ -88,8 +88,8 @@ void installWorldSnapshots(World& world, const reflect::TypeRegistry& types);
 // The parts of a capture, for code that reads the world in snapshot order without copying
 // its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;
 // no columns, the frame untouched) with `rowOf` mapping an entity index to its row
-// (kNoRow: none), and the component types a snapshot has a column for, in column order
-// (`runtime` false: without BodyMotion, the saved state alone).
+// (kNoRow: none), and the component types a snapshot has a column for, in column order: the saved components by
+// name, then PreservedComponents, then BodyMotion (`runtime` false: without it, the saved state alone).
 void captureEntityTable(const World& world, Snapshot& into, std::vector<uint32_t>& rowOf);
 [[nodiscard]] std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types, bool runtime = true);
 

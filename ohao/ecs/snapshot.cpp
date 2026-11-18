@@ -90,6 +90,8 @@ std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry&
     const reflect::TypeInfo* tParent = types.find<Parent>();
     for (const reflect::TypeInfo* t : types.types())
         if (t->role == reflect::TypeRole::Component && t->serialized && t != tParent && componentOps(*t)) out.push_back(t);
+    // By name, never by registration: which module registers a type, and when, cannot change a hash or a snapshot.
+    std::sort(out.begin(), out.end(), [](const reflect::TypeInfo* a, const reflect::TypeInfo* b) { return a->name < b->name; });
     if (const reflect::TypeInfo* t = types.find<PreservedComponents>()) out.push_back(t);
     if (const reflect::TypeInfo* t = types.find<BodyMotion>(); t && runtime) out.push_back(t);
     return out;

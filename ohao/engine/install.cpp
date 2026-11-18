@@ -12,11 +12,11 @@
 namespace ohao::engine {
 
 void installEngine(ecs::World& world, const EngineConfig& config) {
-    level::installLevels(world, config.assets, config.types);
-    ecs::installPhysics(world, config.assets);
     ecs::installAnimation(world, config.assets);
+    ecs::installPhysics(world, config.assets);
     ecs::installAudio(world, config.assets);
     ecs::installVfx(world, config.assets);
+    level::installLevels(world, config.assets, config.types);
 }
 
 void installRendering(ecs::World& world, render::RenderScene& scene, BindlessTextureManager* textures,
