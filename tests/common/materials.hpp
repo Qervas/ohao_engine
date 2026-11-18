@@ -2,6 +2,7 @@
 // A primitive's material for tests: colour, roughness, metalness and emission, everything else
 // OpenPBR's defaults (ecs::Material).
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 
 namespace ohao::test {
 

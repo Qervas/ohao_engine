@@ -6,7 +6,7 @@
 #include "ecs/physics_scene.hpp"
 
 #include "core/log.hpp"
-#include "ecs/primitive_mesh.hpp"
+#include "visual/primitive_mesh.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
 #include "asset/cooked.hpp"

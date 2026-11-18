@@ -2,6 +2,7 @@
 // bench10k / bench100k, the scenes every benchmark measures (scene_bench, serve_bench):
 // built in code from a fixed seed, so the same build always measures the same world.
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
 

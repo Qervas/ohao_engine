@@ -48,7 +48,7 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "engine/install.hpp"
-#include "ecs/scene_view.hpp"
+#include "visual/scene_view.hpp"
 #include "slice/module.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"

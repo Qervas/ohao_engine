@@ -10,12 +10,12 @@
 #include "core/log.hpp"               // OHAO_LOG
 #include "ecs/animation.hpp"          // AnimationSystem::setDriver: animation drivers
 #include "ecs/audio_schedule.hpp"     // requestMixSnapshot: the mix a game asks for
-#include "ecs/components.hpp"         // the engine's components (Transform, PlayerController, RigidBody, Spin, ...)
+#include "ecs/components.hpp"         // the World's components (Transform, Parent, Spin, ...) and, until each module
+                                      // has its own, PlayerController, RigidBody, ...
 #include "ecs/events.hpp"             // channels: EventLog::writer (with its cue), reader, Cue
 #include "ecs/physics_scene.hpp"      // raycasts, players (playerInfo, turnPlayer), setInputControl
 #include "ecs/player.hpp"             // playerOf: the player of an input stream
 #include "ecs/scene_types.hpp"        // makeComponentOps<T>(): a component's registration
-#include "ecs/scene_view.hpp"         // the camera a frame is drawn from
 #include "ecs/snapshot_hook.hpp"      // state a later step reads: save, restore, hash, layout
 #include "ecs/world.hpp"              // World: systems (SystemDecl, SystemContext, types<>), signals (onConstruct,
                                       // onUpdate, onDestroy with their SignalEffect), events, defer, the clock, input
@@ -25,4 +25,6 @@
 #include "reflect/json_writer.hpp"    // a method's result (JsonWriter), hex16
 #include "reflect/registry.hpp"       // TypeRegistry: components and payloads registered
 #include "render/hud/hud_list.hpp"    // a HUD's items
+#include "visual/components.hpp"      // what an entity looks like (MeshSource, Material, Light) and the Camera
+#include "visual/scene_view.hpp"      // the camera a frame is drawn from
 #include "world_render/present.hpp"   // addHud, addSpheres: what a game presents

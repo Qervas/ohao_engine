@@ -1,4 +1,4 @@
-#include "ecs/primitive_mesh.hpp"
+#include "visual/primitive_mesh.hpp"
 
 #include "asset/primitive_mesh_generator.hpp"
 

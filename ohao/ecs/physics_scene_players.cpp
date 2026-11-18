@@ -1,4 +1,5 @@
 #include "ecs/physics_scene_impl.hpp"
+#include "visual/components.hpp"
 
 namespace ohao::ecs {
 

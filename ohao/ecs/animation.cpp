@@ -4,6 +4,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 #include "asset/cooked.hpp"
 #include "core/jobs/graph.hpp"
 

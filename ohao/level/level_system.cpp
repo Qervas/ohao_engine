@@ -1,4 +1,5 @@
 #include "level/level_system.hpp"
+#include "visual/components.hpp"
 
 #include "core/log.hpp"
 #include "ecs/json_parse.hpp"

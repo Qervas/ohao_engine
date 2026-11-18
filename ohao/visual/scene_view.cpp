@@ -1,4 +1,4 @@
-#include "ecs/scene_view.hpp"
+#include "visual/scene_view.hpp"
 
 #include <algorithm>
 #include <cmath>

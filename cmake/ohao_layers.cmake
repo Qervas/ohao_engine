@@ -25,8 +25,10 @@ set(OHAO_LAYERS_ABOVE
     "ohao_api"
     "ohao_rpc ohao_runtime")
 
-# "from->to": allowed although it points sideways or up. Each has its end. None today.
-set(OHAO_LAYER_EXCEPTIONS)
+# "from->to": allowed although it points sideways or up. Each has its end.
+#   ohao_ecs->ohao_visual: physics, animation, the audio schedule and vfx, still in ohao_ecs, read the visual module's
+#   components and primitive meshes; it ends when vfx, the last of them, leaves ohao_ecs (step 4b-6b, commit 8).
+set(OHAO_LAYER_EXCEPTIONS ohao_ecs->ohao_visual)
 
 # Each module's level: OHAO_CORE_LEVEL without DEPENDS, else one above its highest dependency. A cycle never settles
 # (tools/check_layers.py prints it); the levels then stop after as many passes as there are modules.

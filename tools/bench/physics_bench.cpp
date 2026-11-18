@@ -39,6 +39,7 @@
 #include "slice/combat.hpp"
 #include "slice/module.hpp"
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"

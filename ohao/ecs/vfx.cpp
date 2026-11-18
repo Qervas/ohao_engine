@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 #include "ecs/player.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"

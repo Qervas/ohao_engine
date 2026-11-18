@@ -3,7 +3,7 @@
 // through its camera and environment setters. Shared by the examples, the headless
 // RenderHost and the window's LiveHost. Header-only.
 #include "ecs/asset_resolver.hpp"
-#include "ecs/scene_view.hpp"
+#include "visual/scene_view.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "render/camera/camera.hpp"
 

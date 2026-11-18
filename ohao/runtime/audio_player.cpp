@@ -1,7 +1,7 @@
 #include "runtime/audio_player.hpp"
 
 #include "core/log.hpp"
-#include "ecs/scene_view.hpp"
+#include "visual/scene_view.hpp"
 #include "ecs/world.hpp"
 
 #include <algorithm>

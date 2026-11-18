@@ -1,8 +1,8 @@
 #pragma once
 // The scene view: what a world says about how it is looked at (its Camera) and lit by
 // an image (its Environment), resolved into plain values a host applies to its
-// renderer (runtime/scene_view_apply.hpp). ohao_ecs knows nothing of the renderer camera.
-#include "ecs/components.hpp"
+// renderer (runtime/scene_view_apply.hpp). The visual module knows nothing of the renderer camera.
+#include "visual/components.hpp"
 #include "ecs/world.hpp"
 
 #include <optional>

@@ -138,7 +138,7 @@ def check(graph):
                                     f"(level {level[dst]}): a dependency points up a layer (rule 1)")
                     continue
                 theirs = module_of.get(dst)
-                if mine and theirs and theirs not in declared:
+                if mine and theirs and theirs not in declared and f"{name}->{dst}" not in exceptions:
                     problems.append(f"{at()} includes {path}: {mine} does not declare {theirs} (rule 2: "
                                     f"ohao_add_module({mine} DEPENDS ...))")
     return problems

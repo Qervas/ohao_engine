@@ -11,6 +11,7 @@
 #include "api/internal.hpp"
 
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "level/level_system.hpp"
 

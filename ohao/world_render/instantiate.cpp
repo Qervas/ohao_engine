@@ -1,6 +1,7 @@
 #include "world_render/instantiate.hpp"
+#include "visual/components.hpp"
 
-#include "ecs/primitive_mesh.hpp"
+#include "visual/primitive_mesh.hpp"
 
 #include "core/log.hpp"
 

@@ -36,6 +36,7 @@
 #include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
+#include "visual/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "engine/install.hpp"
