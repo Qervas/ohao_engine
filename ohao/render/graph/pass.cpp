@@ -12,41 +12,6 @@ constexpr VkPipelineStageFlags2 kTransfer = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT
 constexpr VkPipelineStageFlags2 kDepthTests =
     VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
 
-// The barrier between what last touched a resource and its next use, or nothing when none is needed; `s` becomes
-// the state after the use. A read joins the reads since the last write; a write waits for all of them.
-struct Need {
-    bool barrier{false};
-    VkPipelineStageFlags2 srcStage{0};
-    VkAccessFlags2 srcAccess{0};
-    VkImageLayout oldLayout{VK_IMAGE_LAYOUT_UNDEFINED};
-};
-
-Need advance(gpu::State& s, VkImageLayout layout, VkPipelineStageFlags2 stage, VkAccessFlags2 access, bool write,
-             bool discard) {
-    Need n{};
-    n.srcStage = s.writeStage | s.readStages;
-    n.srcAccess = s.writeAccess;
-    n.oldLayout = discard ? VK_IMAGE_LAYOUT_UNDEFINED : s.layout;
-    if (write || s.layout != layout) {
-        n.barrier = n.srcStage != 0 || s.layout != layout || discard;
-        if (write) {
-            s = gpu::State{layout, stage, access, 0, 0};
-        } else {   // a change of layout for a read: the readers so far were waited for; the write stays the write
-            s.layout = layout;
-            s.readStages = stage;
-            s.readAccess = access;
-        }
-        return n;
-    }
-    if ((stage & ~s.readStages) != 0 || (access & ~s.readAccess) != 0) {   // a reader the write is not visible to yet
-        n.barrier = s.writeStage != 0;
-        n.srcStage = s.writeStage;
-        s.readStages |= stage;
-        s.readAccess |= access;
-    }
-    return n;
-}
-
 } // namespace
 
 Timed::Timed(const Frame& frame, const char* name) : m_frame(frame) {
@@ -79,63 +44,14 @@ void Pass::image(gpu::Image& img, Sub sub, VkImageLayout layout, VkPipelineStage
     const uint32_t mipN = sub.mip == gpu::Image::kAll ? img.desc.mips : 1u;
     const uint32_t layer0 = sub.layer == gpu::Image::kAll ? 0u : sub.layer;
     const uint32_t layerN = sub.layer == gpu::Image::kAll ? img.desc.layers : 1u;
-    for (uint32_t layer = layer0; layer < layer0 + layerN; ++layer) {
-        for (uint32_t mip = mip0; mip < mip0 + mipN; ++mip) {
-            const Need n = advance(img.state(mip, layer), layout, stage, access, write, discard);
-            if (!n.barrier) continue;
-            // One barrier for a run of mips of a layer that need the same thing (the common case: all of them).
-            if (!m_imageBarriers.empty()) {
-                VkImageMemoryBarrier2& last = m_imageBarriers.back();
-                const auto& r = last.subresourceRange;
-                if (last.image == img.image && last.srcStageMask == n.srcStage && last.srcAccessMask == n.srcAccess &&
-                    last.oldLayout == n.oldLayout && last.newLayout == layout && last.dstStageMask == stage &&
-                    last.dstAccessMask == access && r.baseArrayLayer == layer && r.layerCount == 1 &&
-                    r.baseMipLevel + r.levelCount == mip) {
-                    ++last.subresourceRange.levelCount;
-                    continue;
-                }
-                // ... or the next layer of the same mips.
-                if (last.image == img.image && last.srcStageMask == n.srcStage && last.srcAccessMask == n.srcAccess &&
-                    last.oldLayout == n.oldLayout && last.newLayout == layout && last.dstStageMask == stage &&
-                    last.dstAccessMask == access && mipN == 1 && r.baseMipLevel == mip && r.levelCount == 1 &&
-                    r.baseArrayLayer + r.layerCount == layer) {
-                    ++last.subresourceRange.layerCount;
-                    continue;
-                }
-            }
-            VkImageMemoryBarrier2 b{};
-            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            b.srcStageMask = n.srcStage;
-            b.srcAccessMask = n.srcAccess;
-            b.dstStageMask = stage;
-            b.dstAccessMask = access;
-            b.oldLayout = n.oldLayout;
-            b.newLayout = layout;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image = img.image;
-            b.subresourceRange = {img.aspect(), mip, 1, layer, 1};
-            m_imageBarriers.push_back(b);
-        }
-    }
+    for (uint32_t layer = layer0; layer < layer0 + layerN; ++layer)
+        for (uint32_t mip = mip0; mip < mip0 + mipN; ++mip)
+            m_barriers.image(img.image, img.aspect(), img.state(mip, layer), mip, layer, layout, stage, access, write,
+                             discard);
 }
 
 void Pass::buffer(GpuBuffer& buf, VkPipelineStageFlags2 stage, VkAccessFlags2 access, bool write) {
-    if (buf.buffer == VK_NULL_HANDLE) return;
-    const Need n = advance(buf.state, VK_IMAGE_LAYOUT_UNDEFINED, stage, access, write, false);
-    if (!n.barrier || n.srcStage == 0) return;
-    VkBufferMemoryBarrier2 b{};
-    b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    b.srcStageMask = n.srcStage;
-    b.srcAccessMask = n.srcAccess;
-    b.dstStageMask = stage;
-    b.dstAccessMask = access;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.buffer = buf.buffer;
-    b.offset = 0;
-    b.size = VK_WHOLE_SIZE;
-    m_bufferBarriers.push_back(b);
+    if (buf.buffer != VK_NULL_HANDLE) m_barriers.buffer(buf.state, stage, access, write);
 }
 
 Pass& Pass::sampled(gpu::Image& img, Sub sub) {
@@ -300,15 +216,7 @@ Pass& Pass::leaves(gpu::Image& img, VkImageLayout layout) {
 void Pass::begin() {
     if (m_begun) return;
     m_begun = true;
-    if (!m_imageBarriers.empty() || !m_bufferBarriers.empty()) {
-        VkDependencyInfo dep{};
-        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.bufferMemoryBarrierCount = static_cast<uint32_t>(m_bufferBarriers.size());
-        dep.pBufferMemoryBarriers = m_bufferBarriers.data();
-        dep.imageMemoryBarrierCount = static_cast<uint32_t>(m_imageBarriers.size());
-        dep.pImageMemoryBarriers = m_imageBarriers.data();
-        vkCmdPipelineBarrier2(m_frame.cmd, &dep);
-    }
+    m_barriers.record(m_frame.cmd);
     if (m_name && m_frame.timer) m_frame.timer->begin(m_frame.cmd, m_name);
     if (m_colors.empty() && !m_hasDepth) return;
     VkRenderingInfo info{};

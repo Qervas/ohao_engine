@@ -201,6 +201,9 @@ public:
     // history does not (it reprojects through the motion vectors).
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
+    // While another renderer draws: the frame-sized images are retired (the accumulation with them); the next
+    // render() makes them again.
+    void releaseTargets();
     /// Base sample index after reset: the tracer's random streams are seeded by m_sampleIndex.
     // Takes effect at the next resetAccumulation, or now when nothing has accumulated since
     // the last one (a fresh tracer starts its sample index at the seed).

@@ -67,6 +67,12 @@ bool PathTracer::createImages() {
     return true;
 }
 
+void PathTracer::releaseTargets() {
+    if (!m_accum[0]) return;
+    destroyImages();
+    resetAccumulation();
+}
+
 void PathTracer::destroyImages() {
     for (gpu::Image& image : m_accum) m_allocator->retire(image);
     for (gpu::Image& image : m_targets) m_allocator->retire(image);

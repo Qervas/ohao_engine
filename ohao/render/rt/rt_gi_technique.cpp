@@ -369,6 +369,8 @@ void RTGITechnique::render(const render::Frame& frame, const GIInput& input) {
         pass.storageRead(m_guideDummy);   // bound where the realtime trace writes its guide: never accessed
     } else {
         m_refFrames = 0;   // a realtime frame breaks the reference run
+        m_allocator->retire(m_refMean);       // the reference run's means: made again by its next frame
+        m_allocator->retire(m_specRefMean);
         m_cur ^= 1u;
         m_traceExtent = {m_halfWidth, m_halfHeight};
         m_rays = m_realtimeRays;

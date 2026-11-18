@@ -1,7 +1,8 @@
 #pragma once
 // One pass of a frame (system design 4.6, step 4a). A pass says what it reads and writes; begin() derives every
-// barrier from what last touched each resource (gpu::State, kept on the resource across passes and frames),
-// records them in one call, opens the pass's timer and, when attachments were declared, begins the rendering.
+// barrier from what last touched each resource (gpu::State, kept on the resource across passes and frames;
+// gpu::Barriers derives them), records them in one call, opens the pass's timer and, when attachments were declared,
+// begins the rendering.
 // Nothing else in the renderer records a barrier, a render pass or a framebuffer: tools/check.py refuses one.
 //
 //     render::Pass pass(frame, "lighting", render::Pass::Raster);
@@ -13,6 +14,7 @@
 //
 // Passes run in the order the frame's code writes them: there is no reordering and no culling (a feature that is
 // off does not make its pass). An image whose old contents are not wanted says Discard.
+#include "gpu/vulkan/barriers.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 #include "gpu/vulkan/gpu_image.hpp"
 #include <vulkan/vulkan.h>
@@ -130,8 +132,7 @@ private:
     bool m_ended{false};
     bool m_rendering{false};
     VkExtent2D m_area{};
-    std::vector<VkImageMemoryBarrier2> m_imageBarriers;
-    std::vector<VkBufferMemoryBarrier2> m_bufferBarriers;
+    gpu::Barriers m_barriers;
     std::vector<VkRenderingAttachmentInfo> m_colors;
     VkRenderingAttachmentInfo m_depth{};
     bool m_hasDepth{false};

@@ -78,31 +78,79 @@ bool RTDirectTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, G
 }
 
 bool RTDirectTechnique::createScreenImages() {
-    const auto make = [&](Image& img, const char* name, VkFormat format, VkImageUsageFlags usage) {
-        img = m_allocator->createImage({name, format, m_width, m_height, usage});
-        return static_cast<bool>(img);
-    };
-    static constexpr const char* kPair[2][8] = {
-        {"di.reservoir.a0", "di.reservoir.b0", "di.history.diffuse0", "di.history.specular0", "di.surface.a0",
-         "di.surface.b0", "di.guide0", "di.moments0"},
-        {"di.reservoir.a1", "di.reservoir.b1", "di.history.diffuse1", "di.history.specular1", "di.surface.a1",
-         "di.surface.b1", "di.guide1", "di.moments1"}};
-    bool ok = make(m_midA, "di.reservoir.mid.a", kReservoirFormat, kStorage) &&
-              make(m_midB, "di.reservoir.mid.b", kReservoirFormat, kStorage) &&
-              make(m_noisyDiffuse, "di.noisy.diffuse", kLightFormat, kStorage) &&
-              make(m_noisySpecular, "di.noisy.specular", kLightFormat, kStorage) &&
-              make(m_tmpDiffuse, "di.tmp.diffuse", kLightFormat, kStorage) &&
-              make(m_tmpSpecular, "di.tmp.specular", kLightFormat, kStorage) &&
-              make(m_outDiffuse, "di.out.diffuse", kLightFormat, kStorageSampled) &&
-              make(m_outSpecular, "di.out.specular", kLightFormat, kStorageSampled);
-    for (uint32_t i = 0; i < 2 && ok; ++i)
-        ok = make(m_resA[i], kPair[i][0], kReservoirFormat, kStorage) && make(m_resB[i], kPair[i][1], kReservoirFormat, kStorage) &&
-             make(m_histDiffuse[i], kPair[i][2], kLightFormat, kStorage) &&
-             make(m_histSpecular[i], kPair[i][3], kLightFormat, kStorage) &&
-             make(m_surfA[i], kPair[i][4], kReservoirFormat, kStorage) && make(m_surfB[i], kPair[i][5], kReservoirFormat, kStorage) &&
-             make(m_guide[i], kPair[i][6], kGuideFormat, kStorage) && make(m_moments[i], kPair[i][7], kMeanFormat, kStorage);
+    // The frame's: the light shade() writes and the denoiser's guides, in either mode. The rest follow the mode
+    // (ensureModeImages).
+    m_noisyDiffuse = m_allocator->createImage({"di.noisy.diffuse", kLightFormat, m_width, m_height, kStorage});
+    m_noisySpecular = m_allocator->createImage({"di.noisy.specular", kLightFormat, m_width, m_height, kStorage});
+    m_guide[0] = m_allocator->createImage({"di.guide0", kGuideFormat, m_width, m_height, kStorage});
+    m_guide[1] = m_allocator->createImage({"di.guide1", kGuideFormat, m_width, m_height, kStorage});
+    m_imageShift = kNoImages;
     m_historyValid = false;
     m_refFrames = 0;
+    return m_noisyDiffuse && m_noisySpecular && m_guide[0] && m_guide[1];
+}
+
+bool RTDirectTechnique::ensureModeImages(bool reference, uint32_t shift) {
+    const auto make = [&](Image& img, const char* name, VkFormat format, uint32_t w, uint32_t h, VkImageUsageFlags usage) {
+        img = m_allocator->createImage({name, format, w, h, usage});
+        return static_cast<bool>(img);
+    };
+    bool ok = true;
+    // The trace image's reservoirs and surfaces, at the trace's size: made again when the size changes (a changed
+    // shift leaves the history anyway).
+    if (shift != m_imageShift) {
+        for (Image* img : {&m_midA, &m_midB, &m_resA[0], &m_resA[1], &m_resB[0], &m_resB[1], &m_surfA[0], &m_surfA[1],
+                           &m_surfB[0], &m_surfB[1]})
+            m_allocator->retire(*img);
+        const uint32_t w = (m_width + shift) >> shift, h = (m_height + shift) >> shift;
+        static constexpr const char* kPair[2][4] = {{"di.reservoir.a0", "di.reservoir.b0", "di.surface.a0", "di.surface.b0"},
+                                                    {"di.reservoir.a1", "di.reservoir.b1", "di.surface.a1", "di.surface.b1"}};
+        ok = make(m_midA, "di.reservoir.mid.a", kReservoirFormat, w, h, kStorage) &&
+             make(m_midB, "di.reservoir.mid.b", kReservoirFormat, w, h, kStorage);
+        for (uint32_t i = 0; i < 2 && ok; ++i)
+            ok = make(m_resA[i], kPair[i][0], kReservoirFormat, w, h, kStorage) &&
+                 make(m_resB[i], kPair[i][1], kReservoirFormat, w, h, kStorage) &&
+                 make(m_surfA[i], kPair[i][2], kReservoirFormat, w, h, kStorage) &&
+                 make(m_surfB[i], kPair[i][3], kReservoirFormat, w, h, kStorage);
+        m_imageShift = ok ? shift : kNoImages;
+        m_historyValid = false;
+    }
+    // Realtime: the denoiser's accumulations, moments and outputs; reference: the running means. The other mode's
+    // are given back.
+    const auto retireDenoiser = [&]() {
+        for (Image* img : {&m_histDiffuse[0], &m_histDiffuse[1], &m_histSpecular[0], &m_histSpecular[1], &m_moments[0],
+                           &m_moments[1], &m_tmpDiffuse, &m_tmpSpecular, &m_outDiffuse, &m_outSpecular})
+            m_allocator->retire(*img);
+    };
+    const auto retireMeans = [&]() {
+        m_allocator->retire(m_meanDiffuse);
+        m_allocator->retire(m_meanSpecular);
+    };
+    if (reference) {
+        retireDenoiser();
+        if (ok && !m_meanDiffuse) {
+            m_refFrames = 0;
+            ok = make(m_meanDiffuse, "di.mean.diffuse", kMeanFormat, m_width, m_height, kStorageSampled) &&
+                 make(m_meanSpecular, "di.mean.specular", kMeanFormat, m_width, m_height, kStorageSampled);
+            if (!ok) retireMeans();   // made again next frame
+        }
+    } else {
+        retireMeans();
+        if (ok && !m_outDiffuse) {
+            static constexpr const char* kPair[2][3] = {{"di.history.diffuse0", "di.history.specular0", "di.moments0"},
+                                                        {"di.history.diffuse1", "di.history.specular1", "di.moments1"}};
+            ok = make(m_tmpDiffuse, "di.tmp.diffuse", kLightFormat, m_width, m_height, kStorage) &&
+                 make(m_tmpSpecular, "di.tmp.specular", kLightFormat, m_width, m_height, kStorage) &&
+                 make(m_outDiffuse, "di.out.diffuse", kLightFormat, m_width, m_height, kStorageSampled) &&
+                 make(m_outSpecular, "di.out.specular", kLightFormat, m_width, m_height, kStorageSampled);
+            for (uint32_t i = 0; i < 2 && ok; ++i)
+                ok = make(m_histDiffuse[i], kPair[i][0], kLightFormat, m_width, m_height, kStorage) &&
+                     make(m_histSpecular[i], kPair[i][1], kLightFormat, m_width, m_height, kStorage) &&
+                     make(m_moments[i], kPair[i][2], kMeanFormat, m_width, m_height, kStorage);
+            m_historyValid = false;
+            if (!ok) retireDenoiser();   // made again next frame
+        }
+    }
     return ok;
 }
 
@@ -114,14 +162,7 @@ void RTDirectTechnique::destroyScreenImages() {
         for (Image* img : {&m_resA[i], &m_resB[i], &m_histDiffuse[i], &m_histSpecular[i], &m_surfA[i], &m_surfB[i],
                            &m_guide[i], &m_moments[i]})
             m_allocator->retire(*img);
-}
-
-bool RTDirectTechnique::ensureReferenceImages() {
-    if (m_meanDiffuse) return true;
-    m_refFrames = 0;
-    m_meanDiffuse = m_allocator->createImage({"di.mean.diffuse", kMeanFormat, m_width, m_height, kStorageSampled});
-    m_meanSpecular = m_allocator->createImage({"di.mean.specular", kMeanFormat, m_width, m_height, kStorageSampled});
-    return m_meanDiffuse && m_meanSpecular;
+    m_imageShift = kNoImages;
 }
 
 bool RTDirectTechnique::createDescriptorResources() {
@@ -311,7 +352,8 @@ void RTDirectTechnique::sample(const render::Frame& frame, const DirectInput& in
                                 input.openpbrBuffer, input.velocityBuffer, input.layersBuffer})
         if (!g || !*g) return;
     const bool reference = input.quality == RenderQuality::Reference;
-    if (reference && !ensureReferenceImages()) return;
+    const uint32_t shift = !reference && input.halfResolution ? 1u : 0u;
+    if (!ensureModeImages(reference, shift)) return;
     m_quality = input.quality;
     m_layers = input.layers;
     m_slot = input.frameSlot;
@@ -319,7 +361,6 @@ void RTDirectTechnique::sample(const render::Frame& frame, const DirectInput& in
     m_textures = input.textures;
     if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
     if (!reference) m_refFrames = 0;              // a realtime frame breaks the reference run
-    const uint32_t shift = !reference && input.halfResolution ? 1u : 0u;
     if (shift != m_shift) m_historyValid = false;   // last frame's reservoirs are another image's
     m_shift = shift;
     m_traceWidth = (m_width + shift) >> shift;

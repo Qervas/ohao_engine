@@ -40,11 +40,10 @@ bool EmissiveLights::initialize(VkDevice device, GpuAllocator& allocator, VkDesc
 
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9 * MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_FRAMES_IN_FLIGHT + 2 * kMaxLevels},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_FRAMES_IN_FLIGHT * (1 + 2 * (kMaxLevels - 1))},
     };
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    pi.maxSets = MAX_FRAMES_IN_FLIGHT + kMaxLevels;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT * kMaxLevels;
     pi.poolSizeCount = 2;
     pi.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device, &pi, nullptr, &m_pool) != VK_SUCCESS) return false;
@@ -55,6 +54,15 @@ bool EmissiveLights::initialize(VkDevice device, GpuAllocator& allocator, VkDesc
     ai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
     ai.pSetLayouts = layouts.data();
     if (vkAllocateDescriptorSets(device, &ai, m_collectSets.data()) != VK_SUCCESS) return false;
+    // Each slot's reduce sets, one a level above 0, written by the slot's frame when the power image changed.
+    const std::vector<VkDescriptorSetLayout> reduceLayouts(kMaxLevels - 1, m_reduceSetLayout);
+    for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
+        m_reduceSets[s].resize(kMaxLevels - 1);
+        ai.descriptorSetCount = kMaxLevels - 1;
+        ai.pSetLayouts = reduceLayouts.data();
+        if (vkAllocateDescriptorSets(device, &ai, m_reduceSets[s].data()) != VK_SUCCESS) return false;
+        m_reducePower[s] = 0;
+    }
 
     const VkDescriptorSetLayout collectSets[2] = {m_collectSetLayout, texturesLayout};
     if (!rtc::createComputePipeline(device, "rt_emissive_collect.slang.spv", "main", collectSets, 0, m_collectLayout,
@@ -91,10 +99,6 @@ bool EmissiveLights::createLights(uint32_t capacity) {
 }
 
 void EmissiveLights::destroyPower() {
-    if (!m_reduceSets.empty()) {
-        vkFreeDescriptorSets(m_device, m_pool, static_cast<uint32_t>(m_reduceSets.size()), m_reduceSets.data());
-        m_reduceSets.clear();
-    }
     m_allocator->retire(m_power);
     m_side = m_levels = 0;
 }
@@ -108,26 +112,7 @@ bool EmissiveLights::createPower(uint32_t side) {
     if (!m_power) return false;
     m_side = side;
     m_levels = levels;
-
-    // One reduce set a level above 0: level - 1 into level.
-    if (levels > 1) {
-        m_reduceSets.resize(levels - 1);
-        std::vector<VkDescriptorSetLayout> layouts(levels - 1, m_reduceSetLayout);
-        VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        sai.descriptorPool = m_pool;
-        sai.descriptorSetCount = levels - 1;
-        sai.pSetLayouts = layouts.data();
-        if (vkAllocateDescriptorSets(m_device, &sai, m_reduceSets.data()) != VK_SUCCESS) return false;
-        for (uint32_t l = 1; l < levels; ++l) {
-            const VkDescriptorImageInfo below{VK_NULL_HANDLE, m_power.subView(l - 1, 0), VK_IMAGE_LAYOUT_GENERAL};
-            const VkDescriptorImageInfo above{VK_NULL_HANDLE, m_power.subView(l, 0), VK_IMAGE_LAYOUT_GENERAL};
-            VkWriteDescriptorSet w[2] = {shader::write(shader::rt_emissive_reduce::below, m_reduceSets[l - 1]),
-                                         shader::write(shader::rt_emissive_reduce::above, m_reduceSets[l - 1])};
-            w[0].pImageInfo = &below;
-            w[1].pImageInfo = &above;
-            vkUpdateDescriptorSets(m_device, 2, w, 0, nullptr);
-        }
-    }
+    ++m_powerVersion;   // each slot's reduce sets are rewritten by its next frame
     return true;
 }
 
@@ -157,8 +142,9 @@ void EmissiveLights::prepare(uint32_t frameSlot, const std::vector<RenderScene::
     // Device resources only grow: the power image's side is the one every draw descends.
     uint32_t side = 1;
     while (uint64_t{side} * side < m_count) side *= 2;
+    // The old buffer and image are retired (frames in flight still read them); each slot's sets name the new ones
+    // from its next frame.
     if (m_count > m_lightCapacity || side > m_side) {
-        vkDeviceWaitIdle(m_device);   // frames in flight use the reduce sets createPower frees and rewrites
         if (m_count > m_lightCapacity && !createLights(std::max(m_count, m_lightCapacity * 2))) {
             OHAO_LOG(Error, render, "emissive lights: {} lights could not be allocated", m_count);
             m_count = 0;
@@ -262,13 +248,27 @@ void EmissiveLights::record(const Frame& frame, const RenderScene& scene, VkDesc
         vkCmdDispatch(cmd, (m_frameSide * m_frameSide + 63) / 64, 1, 1);
     }
 
-    // Each level above the sum of the one below.
+    // Each level above the sum of the one below. This slot's sets name this power image's levels (its fence was
+    // waited: no frame on the GPU reads them).
+    std::vector<VkDescriptorSet>& reduceSets = m_reduceSets[frameSlot];
+    if (m_reducePower[frameSlot] != m_powerVersion) {
+        for (uint32_t l = 1; l < m_levels; ++l) {
+            const VkDescriptorImageInfo below{VK_NULL_HANDLE, m_power.subView(l - 1, 0), VK_IMAGE_LAYOUT_GENERAL};
+            const VkDescriptorImageInfo above{VK_NULL_HANDLE, m_power.subView(l, 0), VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet rw[2] = {shader::write(shader::rt_emissive_reduce::below, reduceSets[l - 1]),
+                                          shader::write(shader::rt_emissive_reduce::above, reduceSets[l - 1])};
+            rw[0].pImageInfo = &below;
+            rw[1].pImageInfo = &above;
+            vkUpdateDescriptorSets(m_device, 2, rw, 0, nullptr);
+        }
+        m_reducePower[frameSlot] = m_powerVersion;
+    }
     for (uint32_t l = 1; l < m_frameLevels; ++l) {
         Pass pass(frame, nullptr, Pass::Compute);
         pass.storageRead(m_power, {l - 1, 0}).storageWrite(m_power, Old::Keep, {l, 0});
         pass.begin();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_reduce);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_reduceLayout, 0, 1, &m_reduceSets[l - 1], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_reduceLayout, 0, 1, &reduceSets[l - 1], 0, nullptr);
         const uint32_t side = std::max(m_frameSide >> l, 1u);
         vkCmdDispatch(cmd, (side + 7) / 8, (side + 7) / 8, 1);
     }
