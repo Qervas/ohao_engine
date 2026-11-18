@@ -393,6 +393,7 @@ struct PhysicsScene::Impl {
     // Transform, through its parent's world transform (the local scale is kept), and its motion
     // into BodyMotion (asleep at rest, once, as it falls asleep).
     void writeBack();
+    void writeBody(entt::entity e, BodyRecord& r, const pb::IPhysicsBackend::BodyRead& b);   // one body's
     std::vector<std::pair<entt::entity, BodyRecord*>> dynamics;   // writeBack's bodies, in the map's order
     std::vector<pb::IPhysicsBackend::BodyRead> reads;              // and what each read
 

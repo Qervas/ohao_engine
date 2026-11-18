@@ -897,7 +897,7 @@ IPhysicsBackend::BodyRead JoltPhysicsBackend::readBody(BodyHandle h) const {
     out.awake = body.IsActive();
     out.position = toGLM(body.GetPosition());
     out.rotation = toGLM(body.GetRotation());
-    if (!body.IsStatic()) {   // as BodyInterface's getters: a static body's velocities are zero
+    if (out.awake && !body.IsStatic()) {   // asleep, they are zero; static, BodyInterface's getters give zero
         out.linearVelocity = toGLM(body.GetLinearVelocity());
         out.angularVelocity = toGLM(body.GetAngularVelocity());
     }

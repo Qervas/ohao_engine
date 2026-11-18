@@ -464,8 +464,8 @@ public:
     virtual void setAngularVelocity(BodyHandle h, const glm::vec3& vel) = 0;
     virtual glm::vec3 getAngularVelocity(BodyHandle h) const = 0;
 
-    // A step's result for one body at once: its sleep, pose and velocities (Jolt: one lookup and one lock where the
-    // getters take five). Between steps it may run on several threads at once.
+    // A step's result for one body at once: its sleep, pose and velocities, the velocities zero while it sleeps (Jolt:
+    // one lookup and one lock where the getters take five). Between steps it may run on several threads at once.
     struct BodyRead {
         bool awake{false};
         glm::vec3 position{0.0f};
@@ -473,7 +473,9 @@ public:
         glm::vec3 linearVelocity{0.0f}, angularVelocity{0.0f};
     };
     [[nodiscard]] virtual BodyRead readBody(BodyHandle h) const {
-        return {isAwake(h), getPosition(h), getRotation(h), getLinearVelocity(h), getAngularVelocity(h)};
+        const bool awake = isAwake(h);
+        return {awake, getPosition(h), getRotation(h), awake ? getLinearVelocity(h) : glm::vec3(0.0f),
+                awake ? getAngularVelocity(h) : glm::vec3(0.0f)};
     }
 
     // === FORCES ===

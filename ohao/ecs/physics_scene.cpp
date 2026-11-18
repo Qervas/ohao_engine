@@ -492,11 +492,13 @@ void PhysicsScene::Impl::syncBodies() {
     movedEntities.clear();
     for (const entt::entity e : reg.view<PhysicsMoved>()) movedEntities.push_back(e);
     movedPlacements.resize(movedEntities.size());
-    const auto& worlds = reg.storage<WorldTransform>();
-    jobs::parallelFor(0, movedEntities.size(), kDecomposesPerChunk, [&](std::size_t lo, std::size_t hi) {
-        for (std::size_t i = lo; i < hi; ++i)
-            if (worlds.contains(movedEntities[i])) movedPlacements[i] = decompose(worlds.get(movedEntities[i]).world);
-    }, "physics.moved");
+    if (!movedEntities.empty()) {
+        const auto& worlds = reg.storage<WorldTransform>();
+        jobs::parallelFor(0, movedEntities.size(), kDecomposesPerChunk, [&](std::size_t lo, std::size_t hi) {
+            for (std::size_t i = lo; i < hi; ++i)
+                if (worlds.contains(movedEntities[i])) movedPlacements[i] = decompose(worlds.get(movedEntities[i]).world);
+        }, "physics.moved");
+    }
     std::vector<std::size_t> moved;   // into movedEntities
     for (std::size_t i = 0; i < movedEntities.size(); ++i) {
         const entt::entity e = movedEntities[i];

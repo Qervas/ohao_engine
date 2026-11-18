@@ -68,6 +68,7 @@ void recomputeDirty(entt::registry& reg, StepCaptured* step, const StepCaptured*
     std::vector<entt::entity> roots;
     for (auto e : reg.view<TransformDirty>())
         if (!hasDirtyAncestor(reg, e)) roots.push_back(e);
+    if (roots.empty()) return;
     std::vector<glm::mat4> local(roots.size());
     const auto& transforms = reg.storage<Transform>();
     jobs::parallelFor(0, roots.size(), kRootsPerChunk, [&](std::size_t lo, std::size_t hi) {

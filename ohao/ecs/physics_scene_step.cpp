@@ -92,11 +92,44 @@ auto PhysicsScene::Impl::idOf(entt::entity e) const -> uint64_t {
 // Every dynamic body awake now or at the end of the last step: its pose into its entity's
 // Transform, through its parent's world transform (the local scale is kept), and its motion
 // into BodyMotion (asleep at rest, once, as it falls asleep).
+void PhysicsScene::Impl::writeBody(entt::entity e, BodyRecord& r, const pb::IPhysicsBackend::BodyRead& b) {
+    if (!b.awake && !r.awake) return;
+    r.awake = b.awake;
+    writeMotion(e, b.awake ? BodyMotion{b.linearVelocity, b.angularVelocity, false}
+                           : BodyMotion{glm::vec3(0.0f), glm::vec3(0.0f), true});
+    const glm::vec3 pos = b.position;
+    const glm::quat rot = b.rotation;
+    recordMove(e, r.wpos, r.wrot, pos, rot);
+    r.wpos = pos;
+    r.wrot = rot;
+    glm::vec3 localPos = pos;
+    glm::quat localRot = rot;
+    if (const auto* parent = reg.try_get<Parent>(e); parent && reg.valid(parent->entity))
+        if (const auto* pw = reg.try_get<WorldTransform>(parent->entity)) {
+            const Placement pp = decompose(pw->world);
+            if (nonUniform(pp.scale))
+                warn(e, "W_PHYSICS_PARENT_SCALE",
+                     "a dynamic body under a parent scaled unevenly: its pose is written approximately");
+            localPos = glm::vec3(glm::inverse(pw->world) * glm::vec4(pos, 1.0f));
+            localRot = glm::normalize(glm::inverse(pp.rotation) * rot);
+        }
+    writePose(e, [&](Transform& t) {
+        t.position = localPos;
+        t.rotation = localRot;
+    });
+    ++timing.writes;
+}
+
 void PhysicsScene::Impl::writeBack() {
-    // The bodies' results read on the job pool, each into its own slot (a read touches nothing else), in chunks of
-    // kReadsPerChunk (step 4b-6: about 40 ns a body, so a chunk is about 10 us); then written in the map's order on
-    // this thread, as the writes raise the registry's signals.
+    // Many bodies: their results read on the job pool, each into its own slot (a read touches nothing else), in chunks
+    // of kReadsPerChunk (step 4b-6: about 40 ns a body, so a chunk is about 10 us); then written in the map's order on
+    // this thread, as the writes raise the registry's signals. A chunk's worth or fewer: each read as it is written.
     constexpr std::size_t kReadsPerChunk = 256;
+    if (bodies.size() <= kReadsPerChunk) {
+        for (auto& [e, r] : bodies)
+            if (r.motion == Motion::Dynamic) writeBody(e, r, backend->readBody(r.handle));
+        return;
+    }
     dynamics.clear();
     for (auto& [e, r] : bodies)
         if (r.motion == Motion::Dynamic) dynamics.emplace_back(e, &r);
@@ -104,36 +137,7 @@ void PhysicsScene::Impl::writeBack() {
     jobs::parallelFor(0, dynamics.size(), kReadsPerChunk, [&](std::size_t lo, std::size_t hi) {
         for (std::size_t i = lo; i < hi; ++i) reads[i] = backend->readBody(dynamics[i].second->handle);
     }, "physics.read");
-    for (std::size_t i = 0; i < dynamics.size(); ++i) {
-        const entt::entity e = dynamics[i].first;
-        BodyRecord& r = *dynamics[i].second;
-        const pb::IPhysicsBackend::BodyRead& b = reads[i];
-        if (!b.awake && !r.awake) continue;
-        r.awake = b.awake;
-        writeMotion(e, b.awake ? BodyMotion{b.linearVelocity, b.angularVelocity, false}
-                               : BodyMotion{glm::vec3(0.0f), glm::vec3(0.0f), true});
-        const glm::vec3 pos = b.position;
-        const glm::quat rot = b.rotation;
-        recordMove(e, r.wpos, r.wrot, pos, rot);
-        r.wpos = pos;
-        r.wrot = rot;
-        glm::vec3 localPos = pos;
-        glm::quat localRot = rot;
-        if (const auto* parent = reg.try_get<Parent>(e); parent && reg.valid(parent->entity))
-            if (const auto* pw = reg.try_get<WorldTransform>(parent->entity)) {
-                const Placement pp = decompose(pw->world);
-                if (nonUniform(pp.scale))
-                    warn(e, "W_PHYSICS_PARENT_SCALE",
-                         "a dynamic body under a parent scaled unevenly: its pose is written approximately");
-                localPos = glm::vec3(glm::inverse(pw->world) * glm::vec4(pos, 1.0f));
-                localRot = glm::normalize(glm::inverse(pp.rotation) * rot);
-            }
-        writePose(e, [&](Transform& t) {
-            t.position = localPos;
-            t.rotation = localRot;
-        });
-        ++timing.writes;
-    }
+    for (std::size_t i = 0; i < dynamics.size(); ++i) writeBody(dynamics[i].first, *dynamics[i].second, reads[i]);
 }
 
 void PhysicsScene::Impl::publish(std::vector<PhysicsEvent>& fresh) {
