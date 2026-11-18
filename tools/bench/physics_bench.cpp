@@ -2,7 +2,10 @@
 // "Performance budgets").
 //
 //   physics_bench [--check budgets.json] [--out build/physics_bench.json] [--rounds N]
-//                 [--reference build/serve_bench_reference.json]
+//                 [--reference build/serve_bench_reference.json] [--only SCENARIO,...]
+//
+// --only runs the named scenarios (the names in main, before the first; each measure's line names its
+// own) and nothing else.
 //
 // Step 1 measures, CPU, headless, through the World as every host steps it (World::simulate):
 //   blockout_step_ms       one step of the blockout while its two crates fall and land (CrateA
@@ -20,7 +23,7 @@
 // with Health; every round must damage it). Feel (sub-project 9, gated by `feelStep`): step 3
 // occlusion_ray_us (the window host's occlusion ray for an enemy's sound, per ray). VFX
 // (sub-project 12, gated by `vfxStep`): step 1 vfx_step_ms (the vfx system's step over the play
-// scene's scripted fight).
+// scene's scripted fight). Step 4b: crowd_step_ms (the crowd's whole step, reported) and its world.hash.
 //
 // The machine is recorded as level_bench records it (bench_env.hpp): a calibration loop before and
 // after against the reference, and every other process's CPU. A run >25% slower than the
@@ -45,10 +48,13 @@
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
 #include "ecs/audio_schedule.hpp"
+#include "ecs/world_hash.hpp"
+#include "engine/install.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include "bench_env.hpp"   // after the engine headers: it includes windows.h
+#include "bench_world.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -142,15 +148,17 @@ Verdict judge(const nlohmann::json& budgets, int currentStep, const std::string&
 
 int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/physics_bench.json", refPath = "build/serve_bench_reference.json";
+    std::string only;   // comma-separated scenarios (each block's name below); empty: all
     int rounds = 10;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
+        else if (a == "--only" && i + 1 < argc) only = argv[++i];
         else if (a == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (a == "--reference" && i + 1 < argc) refPath = argv[++i];
         else if (a == "--rounds" && i + 1 < argc) rounds = std::max(1, std::atoi(argv[++i]));
         else {
-            std::fprintf(stderr, "usage: physics_bench [--check budgets.json] [--out file] [--rounds N] [--reference file]\n");
+            std::fprintf(stderr, "usage: physics_bench [--check budgets.json] [--out file] [--rounds N] [--reference file] [--only a,b]\n");
             return 2;
         }
     }
@@ -186,6 +194,17 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The scenarios: blockout, blockout_rest, events_1k, player, boxes1k, combat_shot, combat_step, enemies16,
+    // round_restart, occlusion_ray, anim16, play_anim, vfx, joints, crowd.
+    const auto want = [&](std::string_view name) {
+        if (only.empty()) return true;
+        for (std::size_t at = 0; at <= only.size();) {
+            const std::size_t comma = std::min(only.find(',', at), only.size());
+            if (std::string_view(only).substr(at, comma - at) == name) return true;
+            at = comma + 1;
+        }
+        return false;
+    };
     const double cal0 = bench::calibrationMs();
     bench::LoadMonitor monitor;
     monitor.start();
@@ -195,7 +214,7 @@ int main(int argc, char** argv) {
     // 1. The drop.
     std::vector<double> fall;
     bool landed = true;
-    for (int r = 0; r < rounds + 1; ++r) {   // round 0 warms the caches and is not kept
+    for (int r = 0; want("blockout") && r < rounds + 1; ++r) {   // round 0 warms the caches and is not kept
         Blockout b;
         b.lift();
         for (int i = 0; i < 90; ++i) {
@@ -211,7 +230,7 @@ int main(int argc, char** argv) {
     // 2. At rest.
     std::vector<double> rest;
     uint64_t restWrites = 0;
-    {
+    if (want("blockout_rest")) {
         Blockout b;
         b.lift();
         for (int i = 0; i < 240; ++i) {
@@ -229,8 +248,8 @@ int main(int argc, char** argv) {
 
     // 3. 1,000 begins in one step.
     std::vector<double> events;
-    std::size_t begins = 0;
-    for (int r = 0; r < rounds + 1; ++r) {
+    std::size_t begins = want("events_1k") ? 0 : 1000;
+    for (int r = 0; want("events_1k") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(9);
@@ -255,7 +274,7 @@ int main(int argc, char** argv) {
     // the crates and the ramp), the player part of each step, 200 steps after 20, N rounds.
     std::vector<double> player;
     bool walked = true;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("player") && r < rounds + 1; ++r) {
         Blockout b;
         const entt::entity pl = b.world.createWithId(0xb1a7e2, "Player");
         b.world.registry().emplace<ecs::PlayerController>(pl);
@@ -283,7 +302,7 @@ int main(int argc, char** argv) {
     std::vector<double> boxes, snapshotMs;
     uint32_t boxesAwake = 0;
     bool contained = true;
-    for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
+    for (int r = 0; want("boxes1k") && r < std::max(1, rounds / 5) + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(11);
@@ -332,7 +351,7 @@ int main(int argc, char** argv) {
     // part of each step that fired (the ray, the hit, the damage, the events), 200 after 10.
     std::vector<double> shotMs;
     std::size_t damaged = 0;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("combat_shot") && r < rounds + 1; ++r) {
         Blockout b;
         slice::CombatSystem& combat = slice::installCombat(b.world);
         auto& reg = b.world.registry();
@@ -372,7 +391,7 @@ int main(int argc, char** argv) {
             if (r > 0 && i >= 10 && shot) shotMs.push_back(combat.lastStepMs());
         }
     }
-    const bool fought = !shotMs.empty() && damaged == shotMs.size();
+    const bool fought = !want("combat_shot") || (!shotMs.empty() && damaged == shotMs.size());
     if (!fought)
         failures.push_back("combat: " + std::to_string(damaged) + " of " + std::to_string(shotMs.size()) + " rounds damaged the target");
 
@@ -411,7 +430,7 @@ int main(int argc, char** argv) {
     std::vector<double> combatMs, enemies16Ms;
     std::size_t enemyRounds = 0;
     float chased = 0.0f;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("combat_step") && r < rounds + 1; ++r) {
         Blockout b;
         slice::CombatSystem& combat = slice::installCombat(b.world);
         (void)addPlayer(b.world, true);
@@ -432,7 +451,7 @@ int main(int argc, char** argv) {
                     if (e.shooter == 0xe1 || e.shooter == 0xe2) ++enemyRounds;
         }
     }
-    for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
+    for (int r = 0; want("enemies16") && r < std::max(1, rounds / 5) + 1; ++r) {
         Blockout b;
         slice::CombatSystem& combat = slice::installCombat(b.world);
         const entt::entity pl = addPlayer(b.world, false);
@@ -465,8 +484,8 @@ int main(int argc, char** argv) {
     // 30 steps of a fight, `restart` pressed: what restoring the round's start takes (the whole
     // world's snapshot through the WorldSnapshots), 50 restarts after 5, N rounds / 5.
     std::vector<double> restartMs;
-    uint32_t restarts = 0;
-    for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
+    uint32_t restarts = want("round_restart") ? 0 : 55;
+    for (int r = 0; want("round_restart") && r < std::max(1, rounds / 5) + 1; ++r) {
         Blockout b;
         slice::installCombat(b.world);
         slice::CombatSystem& combat = *slice::combatSystem(b.world);
@@ -509,7 +528,7 @@ int main(int argc, char** argv) {
     // room, 64 a batch, N rounds of 100 batches.
     std::vector<double> occlusionUs;
     std::size_t occludedRays = 0, totalRays = 0;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("occlusion_ray") && r < rounds + 1; ++r) {
         Blockout b;
         slice::installCombat(b.world);
         const entt::entity pl = addPlayer(b.world, false);
@@ -546,7 +565,7 @@ int main(int argc, char** argv) {
     // matrices, palettes and posed boxes), one sync a step, as a window's frame. The systems time
     // themselves (AnimationSystem::lastStepMs, lastPoseMs). N rounds of 300 steps.
     std::vector<double> animStepMs, poseSyncMs;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("anim16") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
@@ -579,7 +598,7 @@ int main(int argc, char** argv) {
     // anim_step_ms: the `animation` simulate system; pose_sync_ms: the `pose` sync system (both
     // enemies' poses, palettes, posed boxes, the rifles and muzzles they hold). N rounds of 300 steps.
     std::vector<double> playAnimMs, playPoseMs;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("play_anim") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
@@ -618,7 +637,7 @@ int main(int argc, char** argv) {
     std::vector<double> vfxMs, vfxSyncMs;
     std::size_t vfxWritten = 0, vfxDrawn = 0;
     bool vfxExploded = false;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("vfx") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
@@ -668,7 +687,7 @@ int main(int argc, char** argv) {
         }
         if (r > 0) vfxWritten += vfx.stats().written;
     }
-    const bool vfxFought = vfxWritten > 0 && vfxExploded;
+    const bool vfxFought = !want("vfx") || (vfxWritten > 0 && vfxExploded);
     if (!vfxFought)
         failures.push_back("vfx: " + std::to_string(vfxWritten) + " records written, explosion " +
                            (vfxExploded ? "seen" : "missing") + " (want records and the explosion)");
@@ -679,7 +698,7 @@ int main(int argc, char** argv) {
     // plank break.
     std::vector<double> jointsMs;
     bool jointsMoved = true;
-    for (int r = 0; r < rounds + 1; ++r) {
+    for (int r = 0; want("joints") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
@@ -711,84 +730,150 @@ int main(int argc, char** argv) {
     }
     if (!jointsMoved) failures.push_back("joints: the chain did not swing or the plank's two joints did not break");
 
-    const bool hunted = enemyRounds > 0 && chased > 0.5f;
+    const bool hunted = (!want("combat_step") || enemyRounds > 0) && (!want("enemies16") || chased > 0.5f);
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
                            std::to_string(chased) + " m on average (want rounds and > 0.5 m)");
+
+    // 14. The crowd (step 4b): the play scene with the 1,000-box pile and 64 enemies, the player firing
+    // (bench_world.hpp's crowdScene), installed as every host installs it (the engine, then the slice).
+    // crowd_step_ms: World::simulate's wall time over steps 60 to 260 (the pile falling and piling up awake,
+    // the enemies closing in and firing); crowd_sync_ms: the sync after each of those steps. 600 steps a
+    // round, rounds / 5 rounds after a warm-up; world.hash after the 600th must be the same every round.
+    std::vector<double> crowdMs, crowdSyncMs;
+    uint64_t crowdHash = 0;
+    bool crowdSame = true, crowdFought = !want("crowd");
+    std::size_t crowdShots = 0, crowdPlayerShots = 0;
+    if (want("crowd")) {
+        const std::filesystem::path path = std::filesystem::path(OHAO_SOURCE_DIR) / "build/render_bench/crowd.scene.json";
+        const bool written = bench::writeCrowd(OHAO_SOURCE_DIR);
+        if (!written) failures.push_back("crowd: build/render_bench/crowd.scene.json could not be written");
+        for (int r = 0; written && r < std::max(1, rounds / 5) + 1; ++r) {
+            ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+            ecs::World w;
+            w.seedIds(7);
+            engine::installEngine(w, {files, engineTypes()});
+            ecs::installWorldSnapshots(w, engineTypes());   // the Round's start, as the hosts give it
+            game::installGame(w, slice::module());
+            if (!ecs::loadSceneFile(w, path, engineTypes())) {
+                failures.push_back("crowd: crowd.scene.json did not load");
+                break;
+            }
+            w.sync();
+            InputEvent fire;
+            fire.type = InputEvent::Type::ActionDown;
+            fire.name = "fire";
+            std::size_t shots = 0, playerShots = 0;
+            for (int step = 0; step < 600; ++step) {
+                w.stepInput(step == 0 ? std::span<const InputEvent>(&fire, 1) : std::span<const InputEvent>());
+                const uint64_t before = w.events().nextSeq() - 1;
+                const auto t0 = std::chrono::steady_clock::now();
+                w.simulate(kDt);
+                const auto t1 = std::chrono::steady_clock::now();
+                w.sync();
+                const auto t2 = std::chrono::steady_clock::now();
+                if (const auto* fired = w.events().find<slice::ShotEvent>(slice::slice_events::kShot))
+                    for (const auto& [meta, e] : fired->since(before)) {
+                        ++shots;
+                        playerShots += e.shooter == 0x5c0b1a7e00000001ull;
+                    }
+                if (r > 0 && step >= 60 && step < 260) {
+                    crowdMs.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+                    crowdSyncMs.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+                }
+            }
+            ecs::Snapshot table;
+            const uint64_t h = ecs::hashWorld(w, engineTypes(), table);
+            if (r > 0 && h != crowdHash) {
+                std::printf("  crowd round %d: world.hash %016llx, round %d's %016llx\n", r, static_cast<unsigned long long>(h), r - 1,
+                            static_cast<unsigned long long>(crowdHash));
+                crowdSame = false;
+            }
+            crowdHash = h;
+            crowdShots = shots;
+            crowdPlayerShots = playerShots;
+        }
+        // The player fires 10 rounds a second (99 in 600 steps, the first on step 0), the enemies the rest.
+        crowdFought = crowdPlayerShots >= 99 && crowdShots > crowdPlayerShots && crowdSame;
+        if (!crowdFought)
+            failures.push_back("crowd: " + std::to_string(crowdPlayerShots) + " of " + std::to_string(crowdShots) +
+                               " rounds the player's in 600 steps (want 99 or more, and the enemies'), world.hash " +
+                               (crowdSame ? "the same" : "different") + " across rounds");
+    }
 
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
     const double cal1 = bench::calibrationMs();
 
-    const Stats sf = stats(fall), sr = stats(rest), se = stats(events), sp = stats(player), sb = stats(boxes);
+    // Every measure, in the order printed: its scenario, the step of the budgets' file it is gated from (-1:
+    // reported, never gated), its samples and what its line and its JSON add.
+    struct Row {
+        const char* scenario;
+        const char* name;
+        int gate;
+        std::vector<double> samples;
+        std::string note;
+        nlohmann::json extra;
+    };
+    char note[160];
+    const auto fmt = [&](const char* f, auto... v) {
+        std::snprintf(note, sizeof note, f, v...);
+        return std::string(note);
+    };
+    const std::vector<Row> rows = {
+        {"blockout", "blockout_step_ms", currentStep, fall, fmt("%zu steps", fall.size()), {{"steps", fall.size()}}},
+        {"blockout_rest", "blockout_rest_step_ms", currentStep, rest, fmt("writes %llu", static_cast<unsigned long long>(restWrites)),
+         {{"writes", restWrites}}},
+        {"events_1k", "events_1k_ms", currentStep, events, fmt("%zu begins", begins), {{"begins", begins}}},
+        {"player", "player_step_ms", currentStep, player, fmt("%zu steps", player.size()), {{"steps", player.size()}}},
+        {"boxes1k", "boxes1k_step_ms", currentStep, boxes, fmt("%zu steps; %u awake at the end", boxes.size(), boxesAwake),
+         {{"steps", boxes.size()}, {"awakeAtEnd", boxesAwake}}},
+        {"boxes1k", "boxes1k_snapshot_ms", -1, snapshotMs, "reported: the simulation a snapshot of that world carries", nlohmann::json::object()},
+        {"combat_shot", "combat_shot_ms", combatStep, shotMs, fmt("%zu rounds, %zu damaged", shotMs.size(), damaged),
+         {{"rounds", shotMs.size()}, {"damaged", damaged}}},
+        {"combat_step", "combat_step_ms", combatStep, combatMs, fmt("%zu steps, %zu enemy rounds", combatMs.size(), enemyRounds),
+         {{"steps", combatMs.size()}, {"enemyRounds", enemyRounds}}},
+        {"enemies16", "enemies16_step_ms", combatStep, enemies16Ms, fmt("%zu steps, closed in %.2f m on average", enemies16Ms.size(), chased),
+         {{"steps", enemies16Ms.size()}, {"closedInM", chased}}},
+        {"round_restart", "round_restart_ms", combatStep, restartMs, fmt("%zu restarts", restartMs.size()), {{"restarts", restartMs.size()}}},
+        {"occlusion_ray", "occlusion_ray_us", feelStep, occlusionUs, fmt("%zu rays, %zu blocked", totalRays, occludedRays),
+         {{"rays", totalRays}, {"blocked", occludedRays}}},
+        {"anim16", "anim16_step_ms", animStep, animStepMs, fmt("%zu steps", animStepMs.size()), {{"steps", animStepMs.size()}}},
+        {"anim16", "pose16_sync_ms", animStep, poseSyncMs, fmt("%zu syncs", poseSyncMs.size()), {{"syncs", poseSyncMs.size()}}},
+        {"play_anim", "anim_step_ms", animStep, playAnimMs, fmt("%zu steps, the play scene", playAnimMs.size()), {{"steps", playAnimMs.size()}}},
+        {"play_anim", "pose_sync_ms", animStep, playPoseMs, fmt("%zu syncs, the play scene", playPoseMs.size()), {{"syncs", playPoseMs.size()}}},
+        {"vfx", "vfx_step_ms", vfxStep, vfxMs, fmt("%zu steps, %zu records written", vfxMs.size(), vfxWritten),
+         {{"steps", vfxMs.size()}, {"written", vfxWritten}}},
+        {"vfx", "vfx_sync_ms", vfxStep, vfxSyncMs, fmt("%zu frames, up to %zu effects drawn", vfxSyncMs.size(), vfxDrawn),
+         {{"frames", vfxSyncMs.size()}, {"drawn", vfxDrawn}}},
+        {"joints", "joints_step_ms", ragdollStep, jointsMs, fmt("%zu steps", jointsMs.size()), {{"steps", jointsMs.size()}}},
+        {"crowd", "crowd_step_ms", -1, crowdMs, fmt("%zu steps, %zu rounds fired, world.hash %016llx", crowdMs.size(), crowdShots,
+                                                    static_cast<unsigned long long>(crowdHash)),
+         {{"steps", crowdMs.size()}, {"shots", crowdShots}, {"hash", fmt("%016llx", static_cast<unsigned long long>(crowdHash))}}},
+        {"crowd", "crowd_sync_ms", -1, crowdSyncMs, fmt("%zu syncs", crowdSyncMs.size()), {{"syncs", crowdSyncMs.size()}}},
+    };
     std::printf("physics_bench (%d rounds after a warm-up)\n", rounds);
-    std::printf("  blockout_step_ms        median %8.4f   p95 %8.4f   (%zu steps)\n", sf.median, sf.p95, fall.size());
-    const Verdict vf = judge(budgets, currentStep, "blockout_step_ms", sf.median, failures);
-    std::printf("  blockout_rest_step_ms   median %8.4f   p95 %8.4f   writes %llu\n", sr.median, sr.p95,
-                static_cast<unsigned long long>(restWrites));
-    const Verdict vr = judge(budgets, currentStep, "blockout_rest_step_ms", sr.median, failures);
-    std::printf("  events_1k_ms            median %8.4f   p95 %8.4f   (%zu begins)\n", se.median, se.p95, begins);
-    const Verdict ve = judge(budgets, currentStep, "events_1k_ms", se.median, failures);
-    std::printf("  player_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sp.median, sp.p95, player.size());
-    const Verdict vp = judge(budgets, currentStep, "player_step_ms", sp.median, failures);
-    std::printf("  boxes1k_step_ms         median %8.4f   p95 %8.4f   (%zu steps; %u awake at the end)\n", sb.median, sb.p95,
-                boxes.size(), boxesAwake);
-    const Verdict vb = judge(budgets, currentStep, "boxes1k_step_ms", sb.median, failures);
-    const Stats ss = stats(snapshotMs);
-    std::printf("  boxes1k_snapshot_ms     median %8.4f   (reported: the simulation a snapshot of that world carries)\n",
-                ss.median);
-    const Stats sc = stats(shotMs);
-    std::printf("  combat_shot_ms          median %8.4f   p95 %8.4f   (%zu rounds, %zu damaged)\n", sc.median, sc.p95, shotMs.size(),
-                damaged);
-    const Verdict vc = judge(budgets, combatStep, "combat_shot_ms", sc.median, failures);
-    const Stats sk = stats(combatMs), s16 = stats(enemies16Ms);
-    std::printf("  combat_step_ms          median %8.4f   p95 %8.4f   (%zu steps, %zu enemy rounds)\n", sk.median, sk.p95,
-                combatMs.size(), enemyRounds);
-    const Verdict vk = judge(budgets, combatStep, "combat_step_ms", sk.median, failures);
-    std::printf("  enemies16_step_ms       median %8.4f   p95 %8.4f   (%zu steps, closed in %.2f m on average)\n", s16.median,
-                s16.p95, enemies16Ms.size(), chased);
-    const Verdict v16 = judge(budgets, combatStep, "enemies16_step_ms", s16.median, failures);
-    const Stats srs = stats(restartMs);
-    std::printf("  round_restart_ms        median %8.4f   p95 %8.4f   (%zu restarts)\n", srs.median, srs.p95, restartMs.size());
-    const Verdict vrs = judge(budgets, combatStep, "round_restart_ms", srs.median, failures);
-    const Stats so = stats(occlusionUs);
-    std::printf("  occlusion_ray_us        median %8.4f   p95 %8.4f   (%zu rays, %zu blocked)\n", so.median, so.p95, totalRays,
-                occludedRays);
-    const Verdict vo = judge(budgets, feelStep, "occlusion_ray_us", so.median, failures);
-    const Stats sas = stats(animStepMs), sps = stats(poseSyncMs);
-    std::printf("  anim16_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sas.median, sas.p95, animStepMs.size());
-    const Verdict vas = judge(budgets, animStep, "anim16_step_ms", sas.median, failures);
-    std::printf("  pose16_sync_ms          median %8.4f   p95 %8.4f   (%zu syncs)\n", sps.median, sps.p95, poseSyncMs.size());
-    const Verdict vps = judge(budgets, animStep, "pose16_sync_ms", sps.median, failures);
-    const Stats spa = stats(playAnimMs), spp = stats(playPoseMs);
-    std::printf("  anim_step_ms            median %8.4f   p95 %8.4f   (%zu steps, the play scene)\n", spa.median, spa.p95,
-                playAnimMs.size());
-    const Verdict vpa = judge(budgets, animStep, "anim_step_ms", spa.median, failures);
-    std::printf("  pose_sync_ms            median %8.4f   p95 %8.4f   (%zu syncs, the play scene)\n", spp.median, spp.p95,
-                playPoseMs.size());
-    const Verdict vpp = judge(budgets, animStep, "pose_sync_ms", spp.median, failures);
-    const Stats svx = stats(vfxMs);
-    std::printf("  vfx_step_ms             median %8.4f   p95 %8.4f   (%zu steps, %zu records written)\n", svx.median, svx.p95,
-                vfxMs.size(), vfxWritten);
-    const Verdict vvx = judge(budgets, vfxStep, "vfx_step_ms", svx.median, failures);
-    const Stats svs = stats(vfxSyncMs);
-    std::printf("  vfx_sync_ms             median %8.4f   p95 %8.4f   (%zu frames, up to %zu effects drawn)\n", svs.median,
-                svs.p95, vfxSyncMs.size(), vfxDrawn);
-    const Verdict vvs = judge(budgets, vfxStep, "vfx_sync_ms", svs.median, failures);
-    const Stats sjn = stats(jointsMs);
-    std::printf("  joints_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sjn.median, sjn.p95, jointsMs.size());
-    const Verdict vjn = judge(budgets, ragdollStep, "joints_step_ms", sjn.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp, &vvx, &vvs, &vjn})
-        if (v->verdict != "reported")
-            std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
-                        v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
+    nlohmann::json out;
+    std::vector<Verdict> verdicts;
+    for (const Row& row : rows) {
+        if (!want(row.scenario)) continue;
+        const Stats st = stats(row.samples);
+        std::printf("  %-22s  median %8.4f   p95 %8.4f   (%s)\n", row.name, st.median, st.p95, row.note.c_str());
+        Verdict v;
+        v.name = row.name;
+        if (row.gate >= 0) v = judge(budgets, row.gate, row.name, st.median, failures);
+        nlohmann::json j = {{"median", st.median}, {"p95", st.p95}, {"min", st.min}, {"verdict", v.verdict}};
+        j.update(row.extra);
+        out[row.name] = j;
+        verdicts.push_back(v);
+    }
+    for (const Verdict& v : verdicts)
+        if (v.verdict != "reported")
+            std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v.name.c_str(), v.max,
+                        v.name.ends_with("_us") ? "us" : "ms", v.from, v.verdict.c_str());
     for (const auto& [name, b] : budgets.items())
-        if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
-            name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
-            name != "round_restart_ms" && name != "occlusion_ray_us" && name != "anim16_step_ms" &&
-            name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms" && name != "vfx_step_ms" &&
-            name != "vfx_sync_ms" && name != "joints_step_ms")
+        if (std::none_of(rows.begin(), rows.end(), [&](const Row& r) { return name == r.name; }))
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -800,38 +885,6 @@ int main(int argc, char** argv) {
                 cal0, cal1, ref, slow, external);
     for (const auto& p : busy) std::printf("        %-40s %6.1f%%\n", p.name.c_str(), p.corePct);
 
-    nlohmann::json out;
-    out["blockout_step_ms"] = {{"median", sf.median}, {"p95", sf.p95}, {"min", sf.min}, {"steps", fall.size()}, {"verdict", vf.verdict}};
-    out["blockout_rest_step_ms"] = {{"median", sr.median}, {"p95", sr.p95}, {"min", sr.min}, {"writes", restWrites}, {"verdict", vr.verdict}};
-    out["events_1k_ms"] = {{"median", se.median}, {"p95", se.p95}, {"min", se.min}, {"begins", begins}, {"verdict", ve.verdict}};
-    out["player_step_ms"] = {{"median", sp.median}, {"p95", sp.p95}, {"min", sp.min}, {"steps", player.size()}, {"verdict", vp.verdict}};
-    out["boxes1k_step_ms"] = {{"median", sb.median}, {"p95", sb.p95}, {"min", sb.min}, {"steps", boxes.size()},
-                              {"awakeAtEnd", boxesAwake}, {"verdict", vb.verdict}};
-    out["boxes1k_snapshot_ms"] = {{"median", ss.median}, {"min", ss.min}, {"verdict", "reported"}};
-    out["combat_shot_ms"] = {{"median", sc.median}, {"p95", sc.p95}, {"min", sc.min}, {"rounds", shotMs.size()},
-                             {"damaged", damaged}, {"verdict", vc.verdict}};
-    out["combat_step_ms"] = {{"median", sk.median}, {"p95", sk.p95}, {"min", sk.min}, {"steps", combatMs.size()},
-                             {"enemyRounds", enemyRounds}, {"verdict", vk.verdict}};
-    out["enemies16_step_ms"] = {{"median", s16.median}, {"p95", s16.p95}, {"min", s16.min}, {"steps", enemies16Ms.size()},
-                                {"closedInM", chased}, {"verdict", v16.verdict}};
-    out["round_restart_ms"] = {{"median", srs.median}, {"p95", srs.p95}, {"min", srs.min}, {"restarts", restartMs.size()},
-                               {"verdict", vrs.verdict}};
-    out["occlusion_ray_us"] = {{"median", so.median}, {"p95", so.p95}, {"min", so.min}, {"rays", totalRays},
-                               {"blocked", occludedRays}, {"verdict", vo.verdict}};
-    out["anim16_step_ms"] = {{"median", sas.median}, {"p95", sas.p95}, {"min", sas.min}, {"steps", animStepMs.size()},
-                             {"verdict", vas.verdict}};
-    out["pose16_sync_ms"] = {{"median", sps.median}, {"p95", sps.p95}, {"min", sps.min}, {"syncs", poseSyncMs.size()},
-                             {"verdict", vps.verdict}};
-    out["anim_step_ms"] = {{"median", spa.median}, {"p95", spa.p95}, {"min", spa.min}, {"steps", playAnimMs.size()},
-                           {"verdict", vpa.verdict}};
-    out["pose_sync_ms"] = {{"median", spp.median}, {"p95", spp.p95}, {"min", spp.min}, {"syncs", playPoseMs.size()},
-                           {"verdict", vpp.verdict}};
-    out["vfx_step_ms"] = {{"median", svx.median}, {"p95", svx.p95}, {"min", svx.min}, {"steps", vfxMs.size()},
-                          {"written", vfxWritten}, {"verdict", vvx.verdict}};
-    out["vfx_sync_ms"] = {{"median", svs.median}, {"p95", svs.p95}, {"min", svs.min}, {"frames", vfxSyncMs.size()},
-                          {"drawn", vfxDrawn}, {"verdict", vvs.verdict}};
-    out["joints_step_ms"] = {{"median", sjn.median}, {"p95", sjn.p95}, {"min", sjn.min}, {"steps", jointsMs.size()},
-                             {"verdict", vjn.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -848,7 +901,7 @@ int main(int argc, char** argv) {
 
     const bool wrong =
         !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought || !hunted ||
-        !restarted || !vfxFought || !jointsMoved;   // no machine excuses these
+        !restarted || !vfxFought || !jointsMoved || !crowdFought;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",

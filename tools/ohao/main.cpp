@@ -14,7 +14,10 @@
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
 //                  [--denoise X] [--size WxH] [--post bloom,taa] [--ev100 EV] [--tonemap agx|neutral]
 //                  [--quality realtime|reference] [--hud] [--guiding] [--no-caustics] [--hdr out.pfm]]
-//                 [--save out.scene.json]
+//                 [--save out.scene.json] [--frames K --uncapped [--size WxH] [--post bloom,taa]]
+//                 --uncapped: after the steps and the script, K frames as fast as they go (headless, deferred), each
+//                 a fixed step, a sync and a render; prints {frames, frameMs, simulateMs, syncMs, recordMs, gpuMs,
+//                 hash}, each time {median, p95} (recordMs and gpuMs over the last 110 frames, the renderer's own)
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
 //   ohao doctor  [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
@@ -67,11 +70,14 @@
 #include "ohao/doctor.hpp"
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
+#include "render/renderer/vulkan_renderer.hpp"
 #include "reflect/schema.hpp"
 #include "rpc/server.hpp"
 #include "rpc/transport.hpp"
 #include "runtime/live_host.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
@@ -602,6 +608,71 @@ int cmdLevel(const Args& a) {
     return replyExit(reply);
 }
 
+// ohao run --uncapped: `frames` frames back to back, each Session::step (a fixed step with the input due),
+// world.sync() and render(), after one capture that starts the renderer and sets the view up. A reply
+// ({"result": ...} or {"error": ...}) as a method's.
+std::string runUncapped(Context& c, int frames, uint32_t width, uint32_t height, const std::vector<std::string>& post) {
+    api::RenderRequest r;
+    r.frames = 1;
+    r.width = width;
+    r.height = height;
+    r.post = post;
+    const api::RenderOutcome o = c.render->capture(r);
+    if (!o.errors.empty()) return errorDoc(o.errors.front().code, o.errors.front().message);
+    VulkanRenderer* renderer = c.render->renderer();
+    if (!renderer) return errorDoc("E_GPU", "the renderer did not start");
+    std::vector<double> frame, simulate, sync;
+    using clock = std::chrono::steady_clock;
+    const auto ms = [](clock::time_point a, clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    for (int f = 0; f < frames; ++f) {
+        const auto t0 = clock::now();
+        c.session->step({}, c.world->stepDt());
+        const auto t1 = clock::now();
+        c.world->sync();
+        const auto t2 = clock::now();
+        renderer->render();
+        const auto t3 = clock::now();
+        frame.push_back(ms(t0, t3));
+        simulate.push_back(ms(t0, t1));
+        sync.push_back(ms(t1, t2));
+    }
+    renderer->waitForSubmitted(renderer->framesSubmitted());
+    std::vector<double> record, gpu;
+    for (const render::FrameTiming& t : renderer->frameTimings(static_cast<std::size_t>(std::min(frames, 110)))) {
+        record.push_back(t.cpuMs);
+        gpu.push_back(t.gpuMs);
+    }
+    const std::string hash = c.session->call("world.hash", "{}");
+    if (isError(hash)) return hash;
+    JsonWriter w;
+    w.beginObject();
+    w.key("result");
+    w.beginObject();
+    w.key("frames");
+    w.int64(frames);
+    const auto stat = [&](const char* name, std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        const auto at = [&](double q) { return v.empty() ? 0.0 : v[std::min(v.size() - 1, static_cast<std::size_t>(q * double(v.size() - 1) + 0.5))]; };
+        w.key(name);
+        w.beginObject();
+        w.key("median");
+        w.float32(static_cast<float>(at(0.5)));
+        w.key("p95");
+        w.float32(static_cast<float>(at(0.95)));
+        w.endObject();
+    };
+    stat("frameMs", frame);
+    stat("simulateMs", simulate);
+    stat("syncMs", sync);
+    stat("recordMs", record);
+    stat("gpuMs", gpu);
+    w.key("hash");
+    w.raw(resultOf(hash));
+    w.endObject();
+    w.endObject();
+    return w.take();
+}
+
 int cmdRun(const Args& a) {
     if (a.positional.size() != 1) return usage("run needs one scene file");
     // Everything is checked before the scene loads.
@@ -614,9 +685,13 @@ int cmdRun(const Args& a) {
         return usage(err);
     if (has(a, "--dt") && !has(a, "--steps")) return usage("--dt needs --steps");
     const bool render = has(a, "--render");
+    const bool uncapped = has(a, "--uncapped");
+    if (uncapped && (render || !has(a, "--frames"))) return usage("--uncapped needs --frames and no --render");
     for (const char* o : {"--mode", "--spp", "--bounces", "--frames", "--denoise", "--size", "--post", "--ev100",
                           "--tonemap", "--quality", "--hud", "--guiding", "--no-caustics", "--hdr"})
-        if (has(a, o) && !render) return usage(std::string(o) + " needs --render");
+        if (has(a, o) && !render && !(uncapped && (std::string_view(o) == "--frames" || std::string_view(o) == "--size" ||
+                                                   std::string_view(o) == "--post")))
+            return usage(std::string(o) + " needs --render");
     std::string width = "1920", height = "1080";
     if (has(a, "--size")) {
         const std::string s = opt(a, "--size");
@@ -697,6 +772,12 @@ int cmdRun(const Args& a) {
             }
             step(std::string(method->text), c.session->call(method->text, ptext));
         }
+    }
+    if (uncapped) {
+        const std::string reply = runUncapped(c, static_cast<int>(frames), static_cast<uint32_t>(std::stoul(width)),
+                                              static_cast<uint32_t>(std::stoul(height)),
+                                              has(a, "--post") ? splitList(opt(a, "--post")) : std::vector<std::string>{});
+        if (!step("frames", reply)) return worst;
     }
     if (render) {
         std::vector<std::pair<std::string, std::string>> p{{"path", jsonString(opt(a, "--render"))},
@@ -935,7 +1016,7 @@ int run(int argc, char** argv) {
         return a.error.empty() ? cmdSummary(a) : usage(a.error);
     }
     if (cmd == "run") {
-        const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding", "--no-caustics"},
+        const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding", "--no-caustics", "--uncapped"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
                                   "--frames", "--denoise", "--size", "--post", "--ev100", "--tonemap", "--quality", "--hdr", "--save",
                                   "--root"});

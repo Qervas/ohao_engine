@@ -104,6 +104,8 @@ struct SceneSpec {
     // The level, physics, combat and vfx systems installed as the CLI installs them, without the vfx
     // scene's script (the vfx scenes imply it): the blockout expanded, the player at its spawn.
     bool level{false};
+    // Step 4b: the crowd's trigger held from the first step (bench_world.hpp's kCrowdFire).
+    bool fire{false};
 };
 
 // anim16_1080p: the blockout room with 16 test rigs (tests/anim/fixtures/rig.glb) on a 4 x 4 grid,
@@ -154,6 +156,10 @@ const std::vector<SceneSpec>& sceneSpecs() {
          .mode = "rt_realtime", .level = true},
         {.name = "play_rt_dlss_1080p", .path = "assets/scenes/blockout_play.scene.json", .width = 1920, .height = 1080,
          .mode = "rt_realtime", .denoise = "dlss", .level = true},
+        // The crowd (step 4b, bench_world.hpp's crowdScene): the play scene with the 1,000-box pile and 64
+        // enemies closing in on the player, who fires; stepped before every frame, as a window runs it.
+        {.name = "crowd_1080p", .path = "build/render_bench/crowd.scene.json", .width = 1920, .height = 1080,
+         .post = {"taa", "bloom"}, .ev100 = 0.0f, .animate = true, .level = true, .fire = true},
     };
     return s;
 }
@@ -173,6 +179,9 @@ bool writeBenchScenes(const std::string& only) {
         if (!text) return false;
         std::ofstream(std::string("build/render_bench/") + name + ".scene.json", std::ios::binary | std::ios::trunc)
             << text.value();
+    }
+    if (only.empty() || only.rfind("crowd", 0) == 0) {
+        if (!bench::writeCrowd(".")) return false;
     }
     if (only.empty() || only.rfind("anim16", 0) == 0) {
         // The blockout room's scene with the rigs added to its entities (and their types to its header).
@@ -782,6 +791,13 @@ struct Gpu {
         const std::string loaded =
             session->call("scene.load", std::string(R"({"replace":true,"path":")") + spec.path + "\"}");
         if (loaded.rfind("{\"result\"", 0) != 0) return "scene.load failed: " + loaded.substr(0, 300);
+        if (spec.fire) {
+            const std::string held = session->call("input.inject", bench::kCrowdFire);
+            if (held.rfind("{\"result\"", 0) != 0) return "input.inject failed: " + held.substr(0, 300);
+            // One step takes the press; the trigger stays held through the frames' steps after it.
+            const std::string pressed = session->call("world.step", R"({"frames":1})");
+            if (pressed.rfind("{\"result\"", 0) != 0) return "world.step failed: " + pressed.substr(0, 300);
+        }
         if (spec.vfx) {
             // The player stands outside the south doorway (its feet at z 4.5, behind the wall the enemies look
             // through), facing north through the opening: the room's north wall and crates are in view, and
