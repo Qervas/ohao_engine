@@ -156,6 +156,9 @@ public:
     void execute(Thread* me, Task* t);
     void wait(Counter& c);
     [[nodiscard]] int threadCount() const noexcept { return static_cast<int>(m_threads.size()); }
+    [[nodiscard]] int frameThreadCount() const noexcept {
+        return 1 + m_groups[kP].members + (m_groups[kE].frame ? m_groups[kE].members : 0);
+    }
     [[nodiscard]] int sleeping() const noexcept {
         return static_cast<int>(m_groups[kP].sleepers.load() + m_groups[kE].sleepers.load());
     }
@@ -554,6 +557,7 @@ Config config() {
 }
 
 int threadCount() { return pool().threadCount(); }
+int frameThreadCount() { return pool().frameThreadCount(); }
 int sleeping() { return pool().sleeping(); }
 Stats stats() { return pool().stats(); }
 void resetStats() { pool().resetStats(); }

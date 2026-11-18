@@ -40,8 +40,6 @@ namespace backend {
 // What a backend starts with.
 struct BackendConfig {
     glm::vec3 gravity{0.0f, -9.81f, 0.0f};
-    bool enableMultithreading{true};   // false: no worker threads (the engine's: a step is the same on every machine)
-    int workerThreads{0};              // 0: none
     std::size_t maxBodies{10000};
 };
 
@@ -259,6 +257,10 @@ struct ContactEvent {
     glm::vec3 contactNormal{0.0f};
     float penetrationDepth = 0.0f;
     glm::vec3 relativeVelocity{0.0f};
+    // The manifold's sub-shapes (a compound's or a mesh's part; 0 for a whole convex shape): with the bodies and the
+    // type, what orders a step's events (Jolt calls back from any thread, in any order).
+    uint32_t subShape1 = 0;
+    uint32_t subShape2 = 0;
 };
 
 class IContactListener {

@@ -23,7 +23,8 @@
 // with Health; every round must damage it). Feel (sub-project 9, gated by `feelStep`): step 3
 // occlusion_ray_us (the window host's occlusion ray for an enemy's sound, per ray). VFX
 // (sub-project 12, gated by `vfxStep`): step 1 vfx_step_ms (the vfx system's step over the play
-// scene's scripted fight). Step 4b: crowd_step_ms (the crowd's whole step, reported) and its world.hash.
+// scene's scripted fight). Step 4b: crowd_step_ms (the crowd's whole step, reported) and its world.hash;
+// boxes1k's and events_1k's world.hash (the same at any --threads, and every round, or the run fails).
 //
 // The machine is recorded as level_bench records it (bench_env.hpp): a calibration loop before and
 // after against the reference, and every other process's CPU. A run >25% slower than the
@@ -253,6 +254,8 @@ int main(int argc, char** argv) {
     // 3. 1,000 begins in one step.
     std::vector<double> events;
     std::size_t begins = want("events_1k") ? 0 : 1000;
+    uint64_t eventsHash = 0;   // world.hash after the step: the begins, in their channel's order, with their points
+    bool eventsSame = true;
     for (int r = 0; want("events_1k") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
@@ -271,7 +274,12 @@ int main(int argc, char** argv) {
         const auto* began = w.events().find<ecs::ContactEvent>(ecs::physics_events::kContactBegin);
         begins = began ? began->since(before).size() : 0;
         if (r > 0) events.push_back(physics.lastStepTiming().eventsMs);
+        ecs::Snapshot table;
+        const uint64_t h = ecs::hashWorld(w, engineTypes(), table);
+        eventsSame &= r == 0 || h == eventsHash;
+        eventsHash = h;
     }
+    if (!eventsSame) failures.push_back("events_1k: world.hash differs across rounds");
     if (begins != 1000) failures.push_back("1,000 spheres on a floor began " + std::to_string(begins) + " contacts (want 1,000)");
 
     // 4. The player walking the blockout: from the spawn, forward and turning (so it meets walls,
@@ -305,6 +313,8 @@ int main(int argc, char** argv) {
     // warm-up, 200, while they fall and pile up awake. None may leave the pit.
     std::vector<double> boxes, snapshotMs;
     uint32_t boxesAwake = 0;
+    uint64_t boxesHash = 0;   // world.hash after the 260 steps
+    bool boxesSame = true;
     bool contained = true;
     for (int r = 0; want("boxes1k") && r < std::max(1, rounds / 5) + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
@@ -335,6 +345,12 @@ int main(int argc, char** argv) {
             if (r > 0 && i >= 60) boxes.push_back(physics.lastStepTiming().totalMs);
         }
         boxesAwake = physics.info().awake;
+        {
+            ecs::Snapshot table;
+            const uint64_t h = ecs::hashWorld(w, engineTypes(), table);
+            boxesSame &= r == 0 || h == boxesHash;
+            boxesHash = h;
+        }
         // What a snapshot of this world adds (the simulation it carries), reported, not budgeted.
         for (int i = 0; i < 5 && r > 0; ++i) {
             const auto t0 = std::chrono::steady_clock::now();
@@ -348,6 +364,7 @@ int main(int argc, char** argv) {
         }
     }
     if (!contained) failures.push_back("a box of the 1,000 left the pit");
+    if (!boxesSame) failures.push_back("boxes1k: world.hash differs across rounds");
 
     // 6. Combat (sub-project 7 step 1): the player fires one round a step (60 Hz, a 1,000-round
     // magazine, so no reload; no spread or kick, so every round lands) from (-2, 0, 2) into a box
@@ -829,10 +846,12 @@ int main(int argc, char** argv) {
         {"blockout", "blockout_step_ms", currentStep, fall, fmt("%zu steps", fall.size()), {{"steps", fall.size()}}},
         {"blockout_rest", "blockout_rest_step_ms", currentStep, rest, fmt("writes %llu", static_cast<unsigned long long>(restWrites)),
          {{"writes", restWrites}}},
-        {"events_1k", "events_1k_ms", currentStep, events, fmt("%zu begins", begins), {{"begins", begins}}},
+        {"events_1k", "events_1k_ms", currentStep, events, fmt("%zu begins, world.hash %016llx", begins, static_cast<unsigned long long>(eventsHash)),
+         {{"begins", begins}, {"hash", fmt("%016llx", static_cast<unsigned long long>(eventsHash))}}},
         {"player", "player_step_ms", currentStep, player, fmt("%zu steps", player.size()), {{"steps", player.size()}}},
-        {"boxes1k", "boxes1k_step_ms", currentStep, boxes, fmt("%zu steps; %u awake at the end", boxes.size(), boxesAwake),
-         {{"steps", boxes.size()}, {"awakeAtEnd", boxesAwake}}},
+        {"boxes1k", "boxes1k_step_ms", currentStep, boxes,
+         fmt("%zu steps; %u awake at the end, world.hash %016llx", boxes.size(), boxesAwake, static_cast<unsigned long long>(boxesHash)),
+         {{"steps", boxes.size()}, {"awakeAtEnd", boxesAwake}, {"hash", fmt("%016llx", static_cast<unsigned long long>(boxesHash))}}},
         {"boxes1k", "boxes1k_snapshot_ms", -1, snapshotMs, "reported: the simulation a snapshot of that world carries", nlohmann::json::object()},
         {"combat_shot", "combat_shot_ms", combatStep, shotMs, fmt("%zu rounds, %zu damaged", shotMs.size(), damaged),
          {{"rounds", shotMs.size()}, {"damaged", damaged}}},

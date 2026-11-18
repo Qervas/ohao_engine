@@ -22,6 +22,8 @@ target_link_libraries(ohao_physics PUBLIC
 if(TARGET Jolt)
     target_link_libraries(ohao_physics PUBLIC Jolt)
     target_compile_definitions(ohao_physics PUBLIC OHAO_HAS_JOLT=1)
+    # JoltJobs derives from a Jolt class, and Jolt is built without RTTI.
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/backend/jolt/jolt_jobs.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     message(STATUS "ohao_physics: Jolt Physics backend enabled")
 else()
     target_compile_definitions(ohao_physics PUBLIC OHAO_HAS_JOLT=0)

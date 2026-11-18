@@ -203,10 +203,7 @@ void PhysicsScene::Impl::onBodyGone(entt::registry&, entt::entity e) {
 
 auto PhysicsScene::Impl::ensureBackend() -> pb::IPhysicsBackend& {
     if (!backend) {
-        // Single-threaded: a level's bodies build and step the same way on every machine,
-        // and no worker threads start for a world that only ray-casts.
         pb::BackendConfig config;
-        config.enableMultithreading = false;
         config.maxBodies = 65536;
         backend = pb::createPhysicsBackend("jolt");
         if (!backend->initialize(config)) {

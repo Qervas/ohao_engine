@@ -95,6 +95,8 @@ struct Stats {
 
 // The game thread and the workers (starts the pool).
 [[nodiscard]] int threadCount();
+// The threads that run frame tasks: the game thread and the workers but the background-only ones (starts the pool).
+[[nodiscard]] int frameThreadCount();
 // The workers asleep now.
 [[nodiscard]] int sleeping();
 // What the workers and the game thread report, summed; reset by resetStats().

@@ -3,6 +3,7 @@
 #if !defined(OHAO_HAS_JOLT) || OHAO_HAS_JOLT
 
 #include "physics/backend/physics_backend.hpp"
+#include "physics/backend/jolt/jolt_jobs.hpp"
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -12,7 +13,6 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Core/TempAllocator.h>
-#include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Constraints/Constraint.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -180,7 +180,7 @@ private:
     // Jolt core systems
     std::unique_ptr<JPH::PhysicsSystem> m_physicsSystem;
     std::unique_ptr<JPH::TempAllocatorImplWithMallocFallback> m_tempAllocator;
-    std::unique_ptr<JPH::JobSystemThreadPool> m_jobSystem;
+    JoltJobsPtr m_jobs;   // Jolt's jobs on the engine's pool (jolt_jobs.hpp)
 
     // Collision filtering (must outlive physics system)
     struct BroadPhaseLayerInterfaceImpl;

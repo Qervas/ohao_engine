@@ -65,6 +65,12 @@ namespace ohao {
 namespace physics {
 namespace backend {
 
+// Active bodies from which a step's jobs go to the job pool; below, they run on the calling thread. Boxes landing
+// on a floor at 31 threads: 100 take 0.121 ms inline and 0.115 on the pool, 50 take 0.064 and 0.086, 200 take
+// 0.486 and 0.199 (the pool's handoffs cost about 0.03 ms a step). Bodies falling apart, with no contacts, gain
+// only from about 1,000.
+constexpr JPH::uint kPoolBodies = 100;
+
 // ============================================================================
 // Collision Layer System (16 layers → 2 broadphase layers)
 // ============================================================================
@@ -222,6 +228,8 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
         event.penetrationDepth = inManifold.mPenetrationDepth;
         // Compute relative velocity
         event.relativeVelocity = toGLM(inBody1.GetLinearVelocity() - inBody2.GetLinearVelocity());
+        event.subShape1 = inManifold.mSubShapeID1.GetValue();
+        event.subShape2 = inManifold.mSubShapeID2.GetValue();
         backend->pushContactEvent(event);
     }
 
@@ -241,6 +249,8 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
         event.contactNormal = toGLM(inManifold.mWorldSpaceNormal);
         event.penetrationDepth = inManifold.mPenetrationDepth;
         event.relativeVelocity = toGLM(inBody1.GetLinearVelocity() - inBody2.GetLinearVelocity());
+        event.subShape1 = inManifold.mSubShapeID1.GetValue();
+        event.subShape2 = inManifold.mSubShapeID2.GetValue();
         backend->pushContactEvent(event);
     }
 
@@ -249,6 +259,8 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
         event.type = ContactEvent::Type::END;
         event.body1 = backend->lookupHandle(inSubShapePair.GetBody1ID());
         event.body2 = backend->lookupHandle(inSubShapePair.GetBody2ID());
+        event.subShape1 = inSubShapePair.GetSubShapeID1().GetValue();
+        event.subShape2 = inSubShapePair.GetSubShapeID2().GetValue();
         backend->pushContactEvent(event);
     }
 };
@@ -310,12 +322,8 @@ bool JoltPhysicsBackend::initialize(const BackendConfig& config) {
         // for more than 10 MB and Jolt aborted the process on the first step.
         m_tempAllocator = std::make_unique<JPH::TempAllocatorImplWithMallocFallback>(10 * 1024 * 1024);
 
-        // Job system
-        const unsigned int numThreads =
-            config.enableMultithreading ? static_cast<unsigned int>(std::max(0, config.workerThreads)) : 0u;
-        m_jobSystem = std::make_unique<JPH::JobSystemThreadPool>(
-            JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, numThreads
-        );
+        // Jolt's jobs on the engine's job pool
+        m_jobs = makeJoltJobs();
 
         // Collision filtering (16-layer system)
         m_broadPhaseLayerInterface = std::make_unique<BroadPhaseLayerInterfaceImpl>();
@@ -351,8 +359,8 @@ bool JoltPhysicsBackend::initialize(const BackendConfig& config) {
         m_collisionSteps = 1;
         m_initialized = true;
 
-        OHAO_LOG(Info, physics, "Jolt: backend initialized ({} threads, {} max bodies, 16-layer collision)",
-                 numThreads, maxBodies);
+        OHAO_LOG(Info, physics, "Jolt: backend initialized (on the job pool, {} max bodies, 16-layer collision)",
+                 maxBodies);
         return true;
 
     } catch (const std::exception& e) {
@@ -410,7 +418,7 @@ void JoltPhysicsBackend::shutdown() {
     // Shutdown in reverse init order
     m_physicsSystem.reset();
     m_contactListener.reset();
-    m_jobSystem.reset();
+    m_jobs.reset();
     m_tempAllocator.reset();
     m_objectLayerPairFilter.reset();
     m_objectVsBroadPhaseFilter.reset();
@@ -431,7 +439,29 @@ void JoltPhysicsBackend::step(float deltaTime) {
         // Update characters before physics step
         // (done externally via updateCharacter calls)
 
-        m_physicsSystem->Update(deltaTime, m_collisionSteps, m_tempAllocator.get(), m_jobSystem.get());
+        // A small world steps on this thread alone: below kPoolBodies active bodies, the pool's handoffs cost more
+        // than the jobs (the same result either way).
+        setJoltJobsInline(*m_jobs, m_physicsSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody) < kPoolBodies);
+        std::size_t eventsBefore;
+        {
+            std::lock_guard<std::mutex> lock(m_contactEventsMutex);
+            eventsBefore = m_contactEvents.size();
+        }
+        m_physicsSystem->Update(deltaTime, m_collisionSteps, m_tempAllocator.get(), joltJobSystem(*m_jobs));
+        finishJoltJobs(*m_jobs);
+        // Jolt's callbacks arrive from any thread in any order; this step's, sorted by what they are about, are the
+        // same at any thread count (a pair's first manifold gives its begin point and normal).
+        {
+            std::lock_guard<std::mutex> lock(m_contactEventsMutex);
+            std::sort(m_contactEvents.begin() + static_cast<std::ptrdiff_t>(eventsBefore), m_contactEvents.end(),
+                      [](const ContactEvent& x, const ContactEvent& y) {
+                          if (x.body1 != y.body1) return x.body1 < y.body1;
+                          if (x.body2 != y.body2) return x.body2 < y.body2;
+                          if (x.subShape1 != y.subShape1) return x.subShape1 < y.subShape1;
+                          if (x.subShape2 != y.subShape2) return x.subShape2 < y.subShape2;
+                          return x.type < y.type;
+                      });
+        }
 
         // Constraint breaking: a step whose impulse passes a threshold disables the constraint (kept,
         // so the constraint list, which the solver and the saved state order by, stays the same).
