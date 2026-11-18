@@ -224,6 +224,12 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
         ~RestoreCaustics() { renderer.setCausticsOverride(before); }
     } restoreCaustics{renderer, renderer.causticsOverride()};
     if (mode != RenderMode::Deferred) renderer.setCausticsOverride(r.caustics);
+    // quality: the same, for this capture only (the host's render.settings read the renderer's).
+    struct RestoreQuality {
+        VulkanRenderer& renderer;
+        RenderQuality before;
+        ~RestoreQuality() { renderer.setRenderQuality(before); }
+    } restoreQuality{renderer, renderer.renderQuality()};
     renderer.setRenderQuality(r.quality == "reference" ? RenderQuality::Reference : RenderQuality::Realtime);
     if (mode == RenderMode::Deferred && renderer.getDeferredRenderer()) {
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {

@@ -138,7 +138,8 @@ public:
     [[nodiscard]] BindlessTextureHandle registerExternalTexture(VkImageView view, std::string_view name,
                                                     BindlessTextureType type = BindlessTextureType::Custom);
 
-    // Unload texture (marks slot as free)
+    // Takes a texture out of the table: its slot is free, and an image the table owns destroyed, kRetireFrames frames
+    // later (onFrameRetired), when no frame in flight can still sample it. No device wait.
     void unloadTexture(BindlessTextureHandle handle);
 
     // Query texture info
@@ -219,9 +220,6 @@ private:
                                       std::string name);
     void recordUpload(VkCommandBuffer cmd, VkBuffer staging, VkDeviceSize offset, const BindlessTextureInfo& tex,
                       bool everyLevel);
-
-    void generateMipmaps(VkCommandBuffer cmd, VkImage image,
-                          uint32_t width, uint32_t height, uint32_t mipLevels);
 
     VkDevice m_device{VK_NULL_HANDLE};
     GpuAllocator* m_allocator{nullptr};   // the renderer's: the textures' images and the staging buffers

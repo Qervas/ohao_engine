@@ -102,7 +102,8 @@ private:
     using Image = gpu::Image;
     bool createScreenImages();
     void destroyScreenImages();
-    bool ensureReferenceImages();
+    // The images the mode reads and writes, made on its first frame; the other mode's are retired.
+    bool ensureModeImages(bool reference, uint32_t shift);
     bool createDescriptorResources();
     bool createPipelines();
     void writeSampleSet(const DirectInput& input);
@@ -115,9 +116,11 @@ private:
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     GpuAllocator* m_allocator = nullptr;
     uint32_t m_width = 0, m_height = 0;
-    // This frame's trace image: the frame's size >> m_shift (the images are the frame's size; half
-    // resolution uses their top-left quarter). A changed shift leaves the reservoirs' history.
+    // This frame's trace image: the frame's size >> m_shift, the size of the reservoirs and surfaces. A changed
+    // shift leaves the reservoirs' history.
     uint32_t m_shift = 1;
+    static constexpr uint32_t kNoImages = ~0u;
+    uint32_t m_imageShift = kNoImages;   // the shift the trace images were made for
     uint32_t m_traceWidth = 0, m_traceHeight = 0;
 
     // Reservoirs (A, B), the trace image's: the final ones ping-pong (this frame's, last frame's), the
@@ -133,7 +136,8 @@ private:
     std::array<Image, 2> m_moments{};   // the denoiser's: mean square luminances and frames (RGBA32F), ping-pong
     Image m_tmpDiffuse{}, m_tmpSpecular{};
     Image m_outDiffuse{}, m_outSpecular{};
-    // Reference: the running means (created on first use) and 1x1 stand-ins.
+    // Realtime: the denoiser's (above, from m_histDiffuse). Reference: the running means. Each made by the mode's
+    // first frame and retired by the other's; and 1x1 stand-ins.
     Image m_meanDiffuse{}, m_meanSpecular{}, m_meanDummy{};
     uint32_t m_cur = 0;
     bool m_historyValid = false;

@@ -126,6 +126,7 @@ void VulkanRenderer::renderDeferred() {
     if (m_textureManager) m_textureManager->onFrameRetired();
     m_allocator.collect();
     m_frameResources.resetFrame(m_currentFrame);
+    forEachRTRenderer([](IRTRendererProfile& r) { r.releaseTargets(); });   // idle while the deferred frame draws
 
     // Update camera data
     glm::mat4 view = m_camera->getViewMatrix();
@@ -318,6 +319,9 @@ void VulkanRenderer::renderRTPipeline(const RTRenderSettings& defaults) {
     if (m_textureManager) m_textureManager->onFrameRetired();
     m_allocator.collect();
     m_frameResources.resetFrame(m_currentFrame);
+    forEachRTRenderer([&](IRTRendererProfile& r) {   // the other profile's tracer is idle
+        if (&r != rtRenderer) r.releaseTargets();
+    });
 
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();

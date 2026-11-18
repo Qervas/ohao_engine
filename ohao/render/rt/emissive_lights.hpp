@@ -88,7 +88,10 @@ private:
     VkPipeline m_reduce{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_collectSets{};
-    std::vector<VkDescriptorSet> m_reduceSets;   // one a level above 0 (written at createPower)
+    // Per slot, one a level above 0; m_reducePower: the power image (m_powerVersion) each slot's sets name.
+    std::array<std::vector<VkDescriptorSet>, MAX_FRAMES_IN_FLIGHT> m_reduceSets{};
+    std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_reducePower{};
+    uint64_t m_powerVersion{0};
 };
 
 }  // namespace ohao::render

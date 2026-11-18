@@ -1,4 +1,5 @@
 #include "bindless_texture_manager.hpp"
+#include "gpu/vulkan/barriers.hpp"
 #include "gpu/vulkan/gpu_fault.hpp"
 #include "../../gpu/vulkan/gpu_allocator.hpp"
 #include <algorithm>
@@ -554,12 +555,6 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
     auto& tex = m_textures[handle.index];
     if (tex.persistent) return;  // Don't unload persistent textures
 
-    // The GPU must be done sampling an image before it is destroyed. A view registered from outside is not
-    // destroyed here: its owner keeps it past the frames in flight.
-    if (m_device != VK_NULL_HANDLE && tex.image != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(m_device);
-    }
-
     // Remove from maps (logical name may differ from tex.name for registerName aliases —
     // erase both memory_* and any key currently pointing at this handle).
     if (!tex.name.empty()) {
@@ -580,25 +575,11 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
     std::erase_if(m_retired, [&](const RetiredTexture& r) { return r.slot == handle.index; });
     std::erase_if(m_pending, [&](const PendingUpload& u) { return u.slot == handle.index; });
 
-    // A view registered from outside (the environment map) leaves the table after the frames in flight: its slot
-    // is not handed out again, and its descriptor not rewritten, while a frame on the GPU may still read it.
-    if (tex.image == VK_NULL_HANDLE) {
-        m_retired.push_back({m_frame + kRetireFrames, handle.index});
-        return;
-    }
-
-    // Destroy resources
-    if (tex.image != VK_NULL_HANDLE) {
-        vkDestroyImageView(m_device, tex.view, nullptr);
-        GpuImage image{tex.image, tex.allocation};
-        m_allocator->destroyImage(image);
-        m_totalMemoryUsage -= pixelBytes(tex);
-    }
-
-    tex = BindlessTextureInfo{};  // Reset
-
-    freeSlot(handle.index);
-    m_loadedCount--;
+    // The texture leaves the table after the frames in flight (onFrameRetired): its slot is not handed out again,
+    // its descriptor not rewritten and its image (one the table owns; a view registered from outside is its owner's)
+    // not destroyed while a frame on the GPU may still sample it.
+    if (tex.image != VK_NULL_HANDLE) m_loadedCount--;
+    m_retired.push_back({m_frame + kRetireFrames, handle.index});
 }
 
 const BindlessTextureInfo* BindlessTextureManager::getTextureInfo(BindlessTextureHandle handle) const {
@@ -710,40 +691,27 @@ bool BindlessTextureManager::loadTextureData(std::string_view path, BindlessText
     return true;
 }
 
-// Level 0 from `staging` at `offset`, then the mips by blits, the image left to be sampled.
+// Level 0 from `staging` at `offset`, then the mips by blits, the image left to be sampled. The barriers come from
+// the mips' states (gpu::Barriers, as a frame's passes' do); the states end here: a texture is immutable once
+// uploaded, and the frames that sample it (in any shader stage) are submitted after this.
 void BindlessTextureManager::recordUpload(VkCommandBuffer cmd, VkBuffer staging, VkDeviceSize offset,
                                           const BindlessTextureInfo& tex, bool everyLevel) {
-    // Transition to transfer dst
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = tex.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = tex.mipLevels;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = 0;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    constexpr VkPipelineStageFlags2 kTransfer = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+    constexpr VkImageAspectFlags kColor = VK_IMAGE_ASPECT_COLOR_BIT;
+    std::vector<gpu::State> mips(tex.mipLevels);
+    gpu::Barriers barriers;
+    const auto use = [&](uint32_t mip, VkImageLayout layout, VkPipelineStageFlags2 stage, VkAccessFlags2 access,
+                         bool write, bool discard = false) {
+        barriers.image(tex.image, kColor, mips[mip], mip, 0, layout, stage, access, write, discard);
+    };
+    for (uint32_t m = 0; m < tex.mipLevels; ++m)   // a new image: nothing to keep
+        use(m, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true, true);
+    barriers.record(cmd);
 
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-    // Copy buffer to image
     VkBufferImageCopy region{};
     region.bufferOffset = offset;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.mipLevel = 0;
-    region.imageSubresource.baseArrayLayer = 0;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = {0, 0, 0};
+    region.imageSubresource = {kColor, 0, 0, 1};
     region.imageExtent = {tex.width, tex.height, 1};
-
     vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     if (everyLevel) {   // the staging buffer holds the other levels after level 0
         VkDeviceSize at = offset + levelBytes(tex.format, tex.width, tex.height);
@@ -755,93 +723,27 @@ void BindlessTextureManager::recordUpload(VkCommandBuffer cmd, VkBuffer staging,
             vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             at += levelBytes(tex.format, w, h);
         }
+    } else {   // each mip a blit of the one above
+        for (uint32_t m = 1; m < tex.mipLevels; ++m) {
+            use(m - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT, false);
+            use(m, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+            barriers.record(cmd);
+            const int32_t w = static_cast<int32_t>(std::max(1u, tex.width >> (m - 1)));
+            const int32_t h = static_cast<int32_t>(std::max(1u, tex.height >> (m - 1)));
+            VkImageBlit blit{};
+            blit.srcSubresource = {kColor, m - 1, 0, 1};
+            blit.srcOffsets[1] = {w, h, 1};
+            blit.dstSubresource = {kColor, m, 0, 1};
+            blit.dstOffsets[1] = {std::max(w / 2, 1), std::max(h / 2, 1), 1};
+            vkCmdBlitImage(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        }
     }
-
-    // Generate mipmaps or transition to shader read
-    if (tex.mipLevels > 1 && !everyLevel) {
-        generateMipmaps(cmd, tex.image, tex.width, tex.height, tex.mipLevels);
-    } else {
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                              0, 0, nullptr, 0, nullptr, 1, &barrier);
-    }
-}
-
-void BindlessTextureManager::generateMipmaps(VkCommandBuffer cmd, VkImage image,
-                                               uint32_t width, uint32_t height, uint32_t mipLevels) {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.image = image;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.subresourceRange.levelCount = 1;
-
-    int32_t mipWidth = static_cast<int32_t>(width);
-    int32_t mipHeight = static_cast<int32_t>(height);
-
-    for (uint32_t i = 1; i < mipLevels; i++) {
-        // Transition previous mip to transfer src
-        barrier.subresourceRange.baseMipLevel = i - 1;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-        // Blit from previous mip to current
-        VkImageBlit blit{};
-        blit.srcOffsets[0] = {0, 0, 0};
-        blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
-        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.srcSubresource.mipLevel = i - 1;
-        blit.srcSubresource.baseArrayLayer = 0;
-        blit.srcSubresource.layerCount = 1;
-
-        int32_t nextWidth = mipWidth > 1 ? mipWidth / 2 : 1;
-        int32_t nextHeight = mipHeight > 1 ? mipHeight / 2 : 1;
-
-        blit.dstOffsets[0] = {0, 0, 0};
-        blit.dstOffsets[1] = {nextWidth, nextHeight, 1};
-        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.dstSubresource.mipLevel = i;
-        blit.dstSubresource.baseArrayLayer = 0;
-        blit.dstSubresource.layerCount = 1;
-
-        vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        1, &blit, VK_FILTER_LINEAR);
-
-        // Transition previous mip to shader read
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                              0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-        mipWidth = nextWidth;
-        mipHeight = nextHeight;
-    }
-
-    // Transition last mip to shader read
-    barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                          0, 0, nullptr, 0, nullptr, 1, &barrier);
+    // Sampled from now on, by every stage that reads the table.
+    for (uint32_t m = 0; m < tex.mipLevels; ++m)
+        use(m, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false);
+    barriers.record(cmd);
 }
 
 } // namespace ohao

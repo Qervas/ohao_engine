@@ -112,7 +112,9 @@ git config core.hooksPath .githooks      # the light CI, once per clone ("Gates"
   binding number, and a hand-written push struct carries `OHAO_CHECK_PUSH`. `tools/check.py` fails the build on a
   typed number. See ARCHITECTURE.md, "add a render pass".
 - **A pass declares what it touches** (`render::Pass`, `ohao/render/graph/pass.hpp`; step 4a): the barriers, layouts
-  and attachments follow from the declarations and the state each `gpu::Image` and `GpuBuffer` carries across frames.
+  and attachments follow from the declarations and the state each `gpu::Image` and `GpuBuffer` carries across frames,
+  derived in one place (`gpu::Barriers`, `ohao/gpu/vulkan/barriers.hpp`; the texture table's uploads use it too): a
+  dependency with no layout change joins one memory barrier a pass, an image barrier only where a layout changes.
   Its images and buffers come from the renderer's one `GpuAllocator`, named, and are retired, never destroyed under a
   frame in flight. `tools/check.py` fails the build on `vkCmdPipelineBarrier`, `vkCreateRenderPass`,
   `vkCreateFramebuffer`, `vkAllocateMemory` or `vkCreateImage` outside `render/graph` and `gpu/vulkan`.

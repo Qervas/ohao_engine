@@ -26,6 +26,8 @@ public:
                       const std::vector<const char*>& deviceExtensions = {}) = 0;
     virtual void destroy() = 0;
     virtual void resize(uint32_t width, uint32_t height) = 0;
+    // PathTracer::releaseTargets: the renderer that draws a frame releases the idle ones' images.
+    virtual void releaseTargets() = 0;
 
     // Lit by the scene's light table (setSceneBuffers), never by a light passed in.
     virtual void render(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj) = 0;
@@ -81,6 +83,7 @@ public:
 
     void destroy() override { m_pathTracer.destroy(); }
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
+    void releaseTargets() override { m_pathTracer.releaseTargets(); }
 
     void setDisplay(float exposure, render::DisplayCurve curve) override { m_pathTracer.setDisplay(exposure, curve); }
     void render(const render::Frame& frame, const glm::mat4& view, const glm::mat4& proj) override {

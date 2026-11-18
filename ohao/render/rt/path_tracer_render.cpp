@@ -59,6 +59,7 @@ void PathTracer::render(const render::Frame& frame, const glm::mat4& view, const
     const uint32_t frameSlot = frame.slot;
     if (!m_rtPipeline || m_tlas == VK_NULL_HANDLE) return;
     if (frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
+    if (!m_accum[0] && !createImages()) return;   // released while another renderer drew (releaseTargets)
     // This frame slot's fence was waited: its set is no longer read by the GPU.
     const VkDescriptorSet set = m_descriptorSets[frameSlot];
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
