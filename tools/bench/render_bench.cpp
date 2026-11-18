@@ -51,7 +51,7 @@
 #include "game/install.hpp"
 #include "slice/combat.hpp"
 #include "physics/physics_scene.hpp"
-#include "ecs/vfx.hpp"
+#include "vfx/vfx.hpp"
 #include "slice/module.hpp"
 #include "level/level_system.hpp"
 #include "asset/meshlets.hpp"

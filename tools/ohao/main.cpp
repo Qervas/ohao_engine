@@ -63,7 +63,7 @@
 #include "ecs/json_parse.hpp"
 #include "animation/animation.hpp"
 #include "audio/audio_schedule.hpp"
-#include "ecs/vfx.hpp"
+#include "vfx/vfx.hpp"
 #include "physics/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/world.hpp"

@@ -2,6 +2,7 @@
 #include "visual/components.hpp"
 #include "physics/components.hpp"
 #include "audio/components.hpp"
+#include "vfx/components.hpp"
 
 #include "core/log.hpp"
 #include "ecs/json_parse.hpp"

@@ -1,4 +1,4 @@
-#include "vfx/vfx_set.hpp"
+#include "vfx/effects/vfx_set.hpp"
 
 #include <simdjson.h>
 

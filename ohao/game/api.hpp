@@ -12,7 +12,7 @@
 #include "core/log.hpp"               // OHAO_LOG
 #include "audio/audio_schedule.hpp"     // requestMixSnapshot: the mix a game asks for
 #include "ecs/components.hpp"         // the World's components (Transform, Parent, Spin, ...) and, until each module
-                                      // has its own, VfxSet, ...
+                                      // has its own, Level, MeshRenderer, ...
 #include "ecs/events.hpp"             // channels: EventLog::writer (with its cue), reader, Cue
 #include "ecs/scene_types.hpp"        // makeComponentOps<T>(): a component's registration
 #include "ecs/snapshot_hook.hpp"      // state a later step reads: save, restore, hash, layout

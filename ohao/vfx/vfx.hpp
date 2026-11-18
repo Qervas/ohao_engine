@@ -1,7 +1,6 @@
 #pragma once
 // Effects from the step (sub-project 12, docs/specs/2026-10-28-vfx-design.md, "The step: spawn
-// records"): the `vfx` simulate system, after combat and the animation step, before
-// audio_schedule. Each step it:
+// records"): the vfx module's `vfx` simulate system (vfx/module.hpp), after combat and the animation step. Each step it:
 //   1. loads the world's set (its VfxSet's .vfx.json, else the default set);
 //   2. reads the step's events of the channels its set binds (`events`, by name: a game's, through their cues,
 //      ecs/events.hpp), in the order they happened: the slice's shot spawns its muzzle effect ahead of the eye
@@ -11,12 +10,12 @@
 //   4. drops records past their life, and the oldest of a kind over its cap (counted).
 // Records are plain data, runtime only: carried by snapshots and covered by world.hash (the World's snapshot
 // hooks), never saved to a file. The same steps give the same records in
-// every host. A record's look is a closed form of its seed and age (vfx/particle_math.hpp), drawn by
+// every host. A record's look is a closed form of its seed and age (vfx/effects/particle_math.hpp), drawn by
 // the renderer; nothing here is drawn.
 
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/asset_resolver.hpp"
-#include "vfx/vfx_set.hpp"
+#include "vfx/effects/vfx_set.hpp"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -97,7 +96,7 @@ public:
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;
 
-    // The state a snapshot carries (installVfx's snapshot hook).
+    // The state a snapshot carries (the module's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
     void hashState(StateHash& h) const;   // what saveState keeps (world.hash)
@@ -109,9 +108,7 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `vfx` simulate system (after animation and the writers of what it binds) and its snapshot hook.
-// Returns the installed system if there is one.
-VfxSystem& installVfx(World& world, AssetResolver& assets);
+// The World's effects system (null where the vfx module is not installed).
 [[nodiscard]] VfxSystem* vfxSystem(World& world);
 [[nodiscard]] const VfxSystem* vfxSystem(const World& world);
 // The live records (empty without the system).

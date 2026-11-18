@@ -133,10 +133,11 @@ def check(graph):
                 if "/private/" in "/" + path:
                     problems.append(f"{at()} includes {path}: private to {dst} (rule 3)")
                     continue
-                # Between two modules, the declaration is the rule (a declared module is always below: levels
-                # follow DEPENDS), so an undeclared one is named as such, whatever its level.
+                # Between two modules, a sideways or downward include is refused by the declaration (a declared module
+                # is always below: levels follow DEPENDS), so it is named as such; an upward one by its level.
                 theirs = module_of.get(dst)
-                if mine and theirs and theirs not in declared and f"{name}->{dst}" not in exceptions:
+                if (mine and theirs and theirs not in declared and f"{name}->{dst}" not in exceptions
+                        and level[dst] <= level[name]):
                     problems.append(f"{at()} includes {path}: {mine} does not declare {theirs} (rule 2: "
                                     f"ohao_add_module({mine} DEPENDS ...))")
                     continue

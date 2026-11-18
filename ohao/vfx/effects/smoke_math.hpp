@@ -12,8 +12,8 @@
 //   radius(age)        = R_i * (0.5 + 0.5 t)                       t = age / life
 //   density(age)      = density * min(age / 0.25 s, 1) * (1 - t)   (zero from `life` on)
 // A record past its life has no spheres.
-#include "vfx/particle_math.hpp"
-#include "vfx/vfx_set.hpp"
+#include "vfx/effects/particle_math.hpp"
+#include "vfx/effects/vfx_set.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>

@@ -5,14 +5,14 @@
 #include "render/shader_bindings/vfx_particle.hpp"
 #include "render/shader_bindings/vfx_transparent_mesh.hpp"
 
-#include "vfx/tracer_math.hpp"
+#include "vfx/effects/tracer_math.hpp"
 
 #include "render/deferred/gbuffer_pass.hpp"
 #include "render/graph/pipeline.hpp"
 #include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
 #include "asset/vertex.hpp"
-#include "vfx/particle_math.hpp"
+#include "vfx/effects/particle_math.hpp"
 #include "core/log.hpp"
 
 #include <algorithm>

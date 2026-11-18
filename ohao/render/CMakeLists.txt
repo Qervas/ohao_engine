@@ -30,7 +30,7 @@ target_link_libraries(ohao_renderer PUBLIC
     ohao_gpu_vulkan
     ohao_asset
     ohao_core
-    ohao_vfx   # the effect set the transparent pass draws (render/scene/vfx_frame.hpp)
+    ohao_vfx_effects   # the effect set the transparent pass draws (render/scene/vfx_frame.hpp)
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}

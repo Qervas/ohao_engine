@@ -10,7 +10,7 @@
 // Position under gravity g (m/s^2 along -Y) and drag k (1/s), from x0 with velocity v0:
 //   x(t) = x0 + v0 (1 - e^-kt) / k + G (t/k - (1 - e^-kt) / k^2),  G = (0, -g, 0)
 //   x(t) = x0 + v0 t + G t^2 / 2                                   (k = 0)
-#include "vfx/vfx_set.hpp"
+#include "vfx/effects/vfx_set.hpp"
 
 #include <glm/glm.hpp>
 

@@ -1,9 +1,9 @@
 #pragma once
 // What the frame draws of the world's effects (sub-project 12, "The frame"): plain data the ECS's
-// `vfx_draw` sync system (ecs/vfx_draw) writes into the RenderScene from the step's spawn records,
+// `vfx_draw` sync system (world_render/vfx_draw.hpp) writes into the RenderScene from the step's spawn records,
 // and the deferred renderer's VfxRenderer reads. No ECS type: the renderer never sees a World.
-#include "vfx/smoke_math.hpp"
-#include "vfx/vfx_set.hpp"
+#include "vfx/effects/smoke_math.hpp"
+#include "vfx/effects/vfx_set.hpp"
 
 #include <glm/glm.hpp>
 

@@ -8,7 +8,7 @@
 #include "core/log.hpp"
 #include "animation/animation.hpp"
 #include "audio/audio_schedule.hpp"
-#include "ecs/vfx.hpp"
+#include "vfx/vfx.hpp"
 #include "world_render/present.hpp"
 #include "world_render/instantiate.hpp"
 #include "physics/physics_scene.hpp"

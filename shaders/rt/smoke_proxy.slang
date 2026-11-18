@@ -1,5 +1,5 @@
 // Smoke's proxy spheres for RT shadows and RT GI (sub-project 12, step 4; spec "Smoke in RT GI and
-// shadows", OPEN ruling 18). The renderer writes the frame's spheres (ohao/vfx/smoke_math.hpp, through
+// shadows", OPEN ruling 18). The renderer writes the frame's spheres (ohao/vfx/effects/smoke_math.hpp, through
 // rtc::AlphaTables) into a byte buffer in set 1, binding 7: the header (x the count, y 1 when the
 // traces attenuate through them) at byte 0, SmokeSphereGpu i at kSmokeSpheresOffset + i * stride.
 //

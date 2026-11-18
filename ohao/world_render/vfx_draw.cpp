@@ -3,7 +3,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "world_render/present.hpp"
 #include "ecs/components.hpp"
-#include "ecs/vfx.hpp"
+#include "vfx/vfx.hpp"
 #include "ecs/world.hpp"
 #include "gpu/shared_layout.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"

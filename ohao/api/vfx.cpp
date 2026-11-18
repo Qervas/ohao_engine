@@ -1,12 +1,12 @@
 // vfx.info (sub-project 12; docs/specs/2026-10-28-vfx-design.md, "The agent-facing surface").
 //
-// The session reaches the effects through what installVfx left on the World (ecs::vfxSystem); a World
+// The session reaches the effects through what the vfx module's install left on the World (ecs::vfxSystem); a World
 // without it answers E_STATE. Task 1 answers the step half: the set, the caps, the live records by
 // kind and the records after a cursor. The frame half (particles live) comes with the renderer's
 // effects; until then `particles` is null.
 #include "api/internal.hpp"
 
-#include "ecs/vfx.hpp"
+#include "vfx/vfx.hpp"
 
 #include <glm/glm.hpp>
 

@@ -5,7 +5,7 @@
 // proxy), the decals, the tracers, which combat events spawn what, and the caps. Parsed and validated
 // here (every error with its JSON pointer); no ECS, no Vulkan.
 //
-// An effect is drawn from spawn records the step writes (ecs/vfx.hpp): every particle is a closed
+// An effect is drawn from spawn records the step writes (vfx/vfx.hpp): every particle is a closed
 // form of its record's seed and its age (vfx/particle_math.hpp), so nothing here is simulated.
 #include "core/result.hpp"
 
