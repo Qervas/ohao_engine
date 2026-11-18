@@ -39,6 +39,12 @@ RULES: list[tuple[str, list[str]]] = [
 ]
 
 
+def modules_touched(paths: list[str], graph: dict) -> list[str]:
+    """The engine modules (build/check/modules.json's) whose directory, ohao/<module>/, holds a changed path: a feature's
+    change touches its own module and the module list only (the design's R5), so a second module here is seen."""
+    return sorted({m for m in graph.get("modules", {}) for p in paths if p.startswith(f"ohao/{m}/")})
+
+
 def changed_paths(root: Path, ref: str) -> list[str]:
     """Tracked files that differ from `ref` (staged or not), and untracked ones not ignored."""
     def git(*args: str) -> list[str]:

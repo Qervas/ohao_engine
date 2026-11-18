@@ -8,7 +8,8 @@
 staged or not, and untracked files) reach, by tools/check_changed.py's rules; a path no rule covers
 runs the default labels. For iterating; close a build step with the full run. --staged: the same for the
 files the next commit changes (the pre-commit hook, .githooks/). Either one builds nothing when the files
-reach no test (docs).
+reach no test (docs). Either one names the engine modules the change touches (a line, and the verdict's
+changed.modules): a feature's change touches its own module and the module list only.
 
 Two checks never run at once (<build>/check.lock): a build during another's tests breaks them, and GPU
 jobs run one at a time. A second waits for the first.
@@ -447,9 +448,14 @@ def main(argv=None):
         except RuntimeError as e:
             result["error"] = str(e)
             return finish(result, out, code=2)
+        graph = build_dir / "check" / "modules.json"
+        touched = check_changed.modules_touched(paths, json.loads(graph.read_text(encoding="utf-8"))) \
+            if graph.is_file() else []
+        print(f"check: modules touched: {', '.join(touched) or 'none'}", flush=True)
         before, why = check_changed.select(paths, test_labels(ctest, build_dir, args.config), DEFAULT_LABELS, ROOT)
         if not before:   # nothing a test reads (docs, the hooks): nothing to build either
-            result["changed"] = {"ref": "staged" if args.staged else args.changed, "paths": why, "tests": []}
+            result["changed"] = {"ref": "staged" if args.staged else args.changed, "modules": touched, "paths": why,
+                                 "tests": []}
             print(f"check: {len(paths)} changed file(s) reach no test: nothing to build or run", flush=True)
             result["ok"] = True
             return finish(result, out)
@@ -482,7 +488,8 @@ def main(argv=None):
     if paths is not None:   # chosen again after the build: a test the change registers exists now
         labels_of = test_labels(ctest, build_dir, args.config)
         selected, why = check_changed.select(paths, labels_of, DEFAULT_LABELS, ROOT)
-        result["changed"] = {"ref": "staged" if args.staged else args.changed, "paths": why, "tests": selected}
+        result["changed"] = {"ref": "staged" if args.staged else args.changed, "modules": touched, "paths": why,
+                             "tests": selected}
         for p, t in why.items():
             print(f"check: changed {p} -> {'every default test (no rule)' if t == 'unmapped' else ', '.join(t) or 'nothing'}",
                   flush=True)

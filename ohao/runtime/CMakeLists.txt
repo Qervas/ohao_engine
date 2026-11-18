@@ -4,5 +4,8 @@ add_library(ohao_runtime STATIC ${RUNTIME_SOURCES} ${RUNTIME_HEADERS})
 target_include_directories(ohao_runtime PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_runtime PUBLIC cxx_std_20)
 # ohao_api: the live host serves a Session; capture results are the API's. ohao_audio_mixer: the audio player's device.
-target_link_libraries(ohao_runtime PUBLIC ohao_engine ohao_api ohao_audio_mixer ohao_core ohao_ecs ohao_level ohao_renderer ohao_gpu_vulkan glm glfw ${Vulkan_LIBRARIES})
+# The modules it includes (tools/check_layers.py, rule 6): the window's view, sound, effects, players and levels.
+target_link_libraries(ohao_runtime PUBLIC ohao_engine ohao_api ohao_audio_mixer ohao_core ohao_ecs ohao_visual
+    ohao_animation ohao_physics ohao_audio ohao_vfx ohao_level ohao_world_render ohao_renderer ohao_gpu_vulkan glm glfw
+    ${Vulkan_LIBRARIES})
 target_include_directories(ohao_runtime PUBLIC ${Vulkan_INCLUDE_DIRS} PRIVATE ${stb_SOURCE_DIR})
