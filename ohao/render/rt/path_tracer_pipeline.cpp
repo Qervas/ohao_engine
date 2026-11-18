@@ -298,13 +298,12 @@ bool PathTracer::ensureCausticsPipeline() {
 bool PathTracer::ensureManifoldPipeline() {
     if (m_manifoldPipelineFailed) return false;
     if (m_manifoldPipeline) return true;
-    static constexpr const char* kRounds[8] = {"manifoldWalkRecords", "manifoldWalkGroups", "manifoldWalkClusters",
-                                               "manifoldWalkSubs",    "manifoldWalkPyramid", "manifoldSolveCells",
-                                               "manifoldSolvePlain",  "manifoldConnect"};
-    std::array<std::string, 8> spv;
-    std::array<Raygen, 8> rounds;
-    std::array<VkStridedDeviceAddressRegionKHR*, 8> regions;
-    for (uint32_t i = 0; i < 8; ++i) {
+    static constexpr const char* kRounds[6] = {"manifoldWalkRecords", "manifoldWalkGroups", "manifoldWalkClusters",
+                                               "manifoldWalkSubs",    "manifoldSolvePlain", "manifoldConnect"};
+    std::array<std::string, 6> spv;
+    std::array<Raygen, 6> rounds;
+    std::array<VkStridedDeviceAddressRegionKHR*, 6> regions;
+    for (uint32_t i = 0; i < 6; ++i) {
         spv[i] = std::string("bin/shaders/rt_path_tracer.slang.") + kRounds[i] + ".spv";
         rounds[i] = {spv[i].c_str(), kRounds[i]};
         regions[i] = &m_manifoldRoundRegions[i];
@@ -313,7 +312,7 @@ bool PathTracer::ensureManifoldPipeline() {
                                          "path_tracer_manifold");
     bool ok = m_manifoldPipeline && buildShaderBindingTable(m_manifoldPipeline, m_manifoldSbt, m_manifoldRgenRegion,
                                                             m_manifoldMissRegion, m_manifoldHitRegion, regions);
-    // The compute kernels on the tracer's layout: the resolve, step 2c's pyramid build, its cell statistics and dump.
+    // The resolve, as compute on the tracer's layout.
     const auto compute = [&](const char* entry, VkPipeline& pipe) {
         const std::string file = std::string("rt_path_tracer.slang.") + entry + ".spv";
         const VkShaderModule module = rtc::loadShaderModule(m_device, file.c_str());
@@ -328,9 +327,7 @@ bool PathTracer::ensureManifoldPipeline() {
         if (module) vkDestroyShaderModule(m_device, module, nullptr);
         return made;
     };
-    ok = ok && compute(m_shaderSet.manifoldResolveEntry, m_manifoldResolvePipe) &&
-         compute("manifoldPyramidBuild", m_manifoldPyramidPipe) && compute("manifoldCellStats", m_manifoldCellStatsPipe) &&
-         compute("manifoldDumpDraw", m_manifoldDumpDrawPipe) && compute("manifoldDumpMap", m_manifoldDumpMapPipe);
+    ok = ok && compute(m_shaderSet.manifoldResolveEntry, m_manifoldResolvePipe);
     if (!ok) {
         OHAO_LOG(Error, render, "PathTracer: the manifold pass's pipelines unavailable: caustics' step 2 stays off");
         m_manifoldPipelineFailed = true;

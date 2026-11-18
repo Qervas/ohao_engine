@@ -6,8 +6,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace ohao::render {
@@ -30,15 +28,13 @@ bool CausticPass::allocate(GpuBuffer& b, VkDeviceSize size, bool hostVisible) {
 bool CausticPass::create(VkDevice device, GpuAllocator& allocator) {
     m_device = device;
     m_allocator = &allocator;
-    m_dumping = std::getenv("OHAO_MANIFOLD_DUMP") != nullptr;
-    const VkDeviceSize statsBytes = m_dumping ? kDumpBytes : kStatsBytes;
     if (!allocate(m_table, kRows * sizeof(glm::vec4), false) || !allocate(m_splat, 16, false) ||
-        !allocate(m_stats, statsBytes, true)) {
+        !allocate(m_stats, kStatsBytes, true)) {
         OHAO_LOG(Error, render, "CausticPass: its buffers could not be created");
         destroy();
         return false;
     }
-    std::memset(m_stats.getMappedData(), 0, statsBytes);
+    std::memset(m_stats.getMappedData(), 0, kStatsBytes);
     m_allocator->flushBuffer(m_stats);
     m_clearSplat = true;
     m_clearCounts = true;
@@ -59,47 +55,8 @@ void CausticPass::destroy() {
                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]);
     if (const auto v = manifoldSolveCounts(); v[0] > 0)
         OHAO_LOG(Info, render, "caustics' manifold solve: {} tests, {} items open after the last pass, {} boxes "
-                 "undecided, {} roots in cells, {} roots past those kept, {} items started over; peak a batch and pass "
-                 "{} states",
-                 v[0], v[1], v[2], v[3], v[4], v[5], manifoldMappedCounts()[8]);
-    if (const auto c = manifoldMappedCounts(); c[5] > 0) {
-        OHAO_LOG(Info, render, "caustics' manifold pass, normal-mapped: {} requests, {} triangles into the pyramid ({} with "
-                 "degenerate uvs), {} pyramid tests, {} cells; peak a batch and pass {} pyramid nodes a round ({} a "
-                 "pass), {} cells",
-                 c[5], c[4], c[6], c[3], c[2], c[0], c[7], c[1]);
-        // The cell statistics' histograms (maps of 2048 texels or more, the smaller): cells a request.
-        for (uint32_t k = 0; k < 2; ++k) {
-            std::array<uint32_t, 1040> h{};
-            readStats(h.data(), (32 + 1040 * k) * 4, sizeof h);
-            if (h[1025] == 0) continue;
-            const uint32_t n = h[1025];
-            // The bins: a count below 512 its own, then 64 counts a bin (rt/path_tracer.slang, manifoldHistBin).
-            uint32_t acc = 0, median = 0;
-            for (uint32_t b = 0; b < 1024; ++b) {
-                acc += h[b];
-                if (2 * acc >= n) {
-                    median = b < 512 ? b : 512 + (b - 512) * 64;
-                    break;
-                }
-            }
-            OHAO_LOG(Info, render, "caustics' cell statistics ({} maps): {} requests, cells a request mean {:.2f}, median "
-                     "{}{}, max {}, zero {}; pyramid tests a request mean {:.1f}, max {}",
-                     k == 0 ? ">= 2048" : "< 2048", n, double(h[1027]) / n, median, median >= 512 ? " (to 64)" : "",
-                     h[1024], h[0], double(h[1028]) / n, h[1026]);
-        }
-    }
-    if (m_dumping) {
-        // Step 2c's dump, for the CPU brute force (rt/path_tracer.slang, kManifoldDump).
-        const char* path = std::getenv("OHAO_MANIFOLD_DUMP_FILE");
-        if (FILE* f = path ? std::fopen(path, "wb") : nullptr) {
-            GpuBuffer stats = m_stats;
-            m_allocator->invalidateBuffer(stats);
-            std::fwrite(m_stats.getMappedData(), 1, kDumpBytes, f);
-            std::fclose(f);
-            OHAO_LOG(Info, render, "caustics: the manifold dump written to {}", path);
-        } else
-            OHAO_LOG(Error, render, "caustics: the manifold dump could not be written (OHAO_MANIFOLD_DUMP_FILE)");
-    }
+                 "undecided, {} roots past those kept, {} items started over; peak a batch and pass {} states",
+                 v[0], v[1], v[2], v[3], v[4], v[5]);
     for (GpuBuffer* b : {&m_table, &m_splat, &m_stats}) m_allocator->retire(*b);
     m_splatFull = false;
     m_pixels = 0;
@@ -239,15 +196,9 @@ std::array<uint32_t, 11> CausticPass::manifoldRoundCounts() const {
     return v;
 }
 
-std::array<uint32_t, 9> CausticPass::manifoldMappedCounts() const {
-    std::array<uint32_t, 9> v{};
-    readStats(v.data(), 23 * 4, sizeof v);
-    return v;
-}
-
 std::array<uint32_t, 6> CausticPass::manifoldSolveCounts() const {
     std::array<uint32_t, 6> v{};
-    readStats(v.data(), 2112 * 4, sizeof v);
+    readStats(v.data(), 23 * 4, sizeof v);
     return v;
 }
 

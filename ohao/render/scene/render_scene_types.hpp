@@ -136,8 +136,6 @@ struct MaterialDesc {
     // upload: caustics' casters (render/rt/caustic_casters.hpp) ask whether a lobe can be smooth.
     float roughTexMin{1.0f};
     float coatRoughTexMin{1.0f};
-    // normalTex's size, set at upload (0: unknown): caustics step 2c builds a pyramid over the map's cells.
-    uint32_t normalWidth{0}, normalHeight{0};
 };
 
 struct InstanceDesc {

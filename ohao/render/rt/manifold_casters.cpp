@@ -6,12 +6,11 @@
 #include "render/rt/rt_compute.hpp"
 #include "render/scene/render_scene.hpp"
 
+#include <algorithm>
 #include <bit>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <utility>
 #include <unordered_set>
+#include <vector>
 
 namespace ohao::render {
 
@@ -20,10 +19,7 @@ namespace {
 constexpr uint32_t kRequestBytes = 3 * 16;
 constexpr uint32_t kSlots = 128;   // a cluster's triangle slots (rt/manifold_gather.slang; kMeshletMaxTriangles 124)
 constexpr uint32_t kTriBytes = 9 * 16;    // a triangle slot: 9 float4
-constexpr uint32_t kNodeBytes = 4 * 16;   // a node (group, cluster, a draw's record): 4 float4 (and as many mapped)
-constexpr VkDeviceSize kDirectoryBytes = VkDeviceSize{ManifoldCasters::kMapIndices} * ManifoldCasters::kMapRows * 16;
-
-uint32_t ceilPow2(uint32_t v) { return v <= 1 ? 1u : 1u << (32 - std::countl_zero(v - 1)); }
+constexpr uint32_t kNodeBytes = 4 * 16;   // a node (group, cluster, a draw's record): 4 float4
 
 } // namespace
 
@@ -73,102 +69,12 @@ bool ManifoldCasters::create(VkDevice device, GpuAllocator& allocator) {
     }
     m_trisBytes = kTriBytes;
     m_nodesBytes = kNodeBytes;
-    // The pyramid: its directory zero (no map), grown when a map is laid out.
-    m_pyramidBytes = kDirectoryBytes;
-    m_maps.clear();
-    m_pyramidFailed = false;
-    m_pyramidZero = true;
-    return allocate(m_tris, kTriBytes) && allocate(m_nodes, kNodeBytes) && allocate(m_requests, kRequestBytes) &&
-           allocate(m_pyramid, kDirectoryBytes);
-}
-
-bool ManifoldCasters::pyramidsPending() const noexcept {
-    for (const PyramidMap& m : m_maps)
-        if (!m.built) return true;
-    return false;
-}
-
-bool ManifoldCasters::ensurePyramid(uint32_t tex, uint32_t width, uint32_t height, VkImageView view) {
-    if (m_pyramidFailed || tex >= kMapIndices || width == 0 || height == 0 || view == VK_NULL_HANDLE) return false;
-    for (const PyramidMap& m : m_maps)
-        if (m.tex == tex && m.width == width && m.height == height && m.view == view) return true;
-    // A new map (or another in this index: its pyramid replaced), laid out after the others.
-    std::erase_if(m_maps, [&](const PyramidMap& m) { return m.tex == tex; });
-    PyramidMap m;
-    m.tex = tex;
-    m.width = width;
-    m.height = height;
-    m.view = view;
-    const uint32_t leaf = gpu::shared::kManifoldPyramidLeaf;
-    m.pw = ceilPow2((width + leaf - 1) / leaf);
-    m.ph = ceilPow2((height + leaf - 1) / leaf);
-    m.lx = static_cast<uint32_t>(std::countr_zero(m.pw));
-    m.ly = static_cast<uint32_t>(std::countr_zero(m.ph));
-    m.lmax = std::max(m.lx, m.ly);
-    if (m.lmax >= kMaxLevels) return false;
-    m_maps.push_back(m);
-    // Every map's levels after the directory, in order; the buffer grown (every pyramid rebuilt) when they pass it.
-    VkDeviceSize rows = kDirectoryBytes / 16;
-    for (PyramidMap& p : m_maps) {
-        if (p.offsets[0] != rows) p.built = false;   // moved by a replaced map: built again where it now lies
-        p.nodes = 0;
-        for (uint32_t l = 0; l <= p.lmax; ++l) {
-            p.offsets[l] = static_cast<uint32_t>(rows + p.nodes);
-            p.nodes += std::max(p.pw >> l, 1u) * std::max(p.ph >> l, 1u);
-        }
-        rows += p.nodes;
-    }
-    const VkDeviceSize bytes = rows * 16;
-    if (bytes > m_pyramidBytes) {
-        const VkDeviceSize cap = std::max(bytes, kDirectoryBytes + (m_pyramidBytes - kDirectoryBytes) * 2);
-        if (!allocate(m_pyramid, cap)) {
-            OHAO_LOG(Error, render, "manifold casters: normal maps' pyramids of {} MB could not be allocated; mapped "
-                     "materials stay with the camera side", cap >> 20);
-            m_pyramidFailed = true;
-            m_maps.clear();
-            allocate(m_pyramid, kDirectoryBytes);
-            m_pyramidBytes = kDirectoryBytes;
-            return false;
-        }
-        m_pyramidBytes = cap;
-        for (PyramidMap& p : m_maps) p.built = false;   // a new buffer: its directory must be written again too
-        m_pyramidZero = true;
-    }
-    OHAO_LOG(Info, render, "manifold casters: a pyramid for the {}x{} normal map {} ({} levels, {} nodes, {:.2f} MB); "
-             "{} maps, {:.2f} MB with the directory", width, height, tex, m.lmax + 1, m_maps.back().nodes,
-             m_maps.back().nodes * 16.0 / 1048576.0, m_maps.size(), bytes / 1048576.0);
-    return true;
-}
-
-void ManifoldCasters::recordPyramidDirectory(const Frame& frame) {
-    if (m_pyramidZero) {
-        Pass clear(frame, nullptr, Pass::Transfer);
-        clear.write(m_pyramid, BufferUse::CopyDst);
-        clear.begin();
-        vkCmdFillBuffer(frame.cmd, m_pyramid.buffer, 0, kDirectoryBytes, 0u);
-        m_pyramidZero = false;
-    }
-    // The rows after the clear (a pass of their own: a barrier between).
-    Pass pass(frame, nullptr, Pass::Transfer);
-    pass.write(m_pyramid, BufferUse::CopyDst);
-    pass.begin();
-    for (const PyramidMap& m : m_maps) {
-        if (m.built) continue;
-        std::array<uint32_t, kMapRows * 4> w{};
-        w[0] = m.width;
-        w[1] = m.height;
-        w[2] = m.pw;
-        w[3] = m.ph;
-        w[4] = m.lx | m.ly << 8 | m.lmax << 16;
-        for (uint32_t l = 0; l <= m.lmax; ++l) w[5 + l] = m.offsets[l];
-        vkCmdUpdateBuffer(frame.cmd, m_pyramid.buffer, VkDeviceSize{m.tex} * kMapRows * 16, sizeof w, w.data());
-    }
+    return allocate(m_tris, kTriBytes) && allocate(m_nodes, kNodeBytes) && allocate(m_requests, kRequestBytes);
 }
 
 void ManifoldCasters::destroy() {
     if (m_device == VK_NULL_HANDLE) return;
-    for (GpuBuffer* b : {&m_tris, &m_nodes, &m_requests, &m_pyramid}) m_allocator->retire(*b);
-    m_maps.clear();
+    for (GpuBuffer* b : {&m_tris, &m_nodes, &m_requests}) m_allocator->retire(*b);
     for (GpuBuffer& b : m_draws) m_allocator->retire(b);
     for (VkPipeline* p : {&m_clusterPipe, &m_groupPipe})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
@@ -181,7 +87,7 @@ void ManifoldCasters::destroy() {
     m_device = VK_NULL_HANDLE;
 }
 
-void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, float cut, std::span<const VkImageView> views) {
+void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, float cut) {
     if (!m_device || frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     std::vector<ManifoldDrawInput> inputs;
     std::vector<glm::vec4> spheres;   // each draw's world bounding sphere (its mesh's box through its transform)
@@ -209,28 +115,13 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
         in.hasMeshlets = d.meshletCount > 0;
         inputs.push_back(in);
     }
-    // Step 2c, stage 2: a normal-mapped material is walked (gathered, its cells counted) only for measurement,
-    // OHAO_MANIFOLD_MAPS=lo,hi for the maps lo to hi texels wide; without it every one stays with the camera side, not
-    // gathered. Measured on the showcase (docs/plans/2026-11-08-caustics-step2c.md): about 16,500 cells and 285,000
-    // pyramid tests a request on the helmet, a frame's walk far past the pass's queues and a second.
-    static const std::pair<uint32_t, uint32_t> mapWidths = [] {
-        std::pair<uint32_t, uint32_t> r{1u, 0u};
-        if (const char* v = std::getenv("OHAO_MANIFOLD_MAPS")) std::sscanf(v, "%u,%u", &r.first, &r.second);
-        return r;
-    }();
-    const ManifoldSelection sel = selectManifoldDraws(
-        inputs, [&](uint32_t m) { return scene.materialSmoothness(m); },
-        [&](uint32_t material) {
-            const MaterialSmoothness m = scene.materialSmoothness(material);
-            return m.normalTex < views.size() && m.normalWidth >= mapWidths.first && m.normalWidth <= mapWidths.second &&
-                   ensurePyramid(m.normalTex, m.normalWidth, m.normalHeight, views[m.normalTex]);
-        },
-        cut);
+    const ManifoldSelection sel =
+        selectManifoldDraws(inputs, [&](uint32_t m) { return scene.materialSmoothness(m); }, cut);
 
     uint32_t D = static_cast<uint32_t>(sel.draws.size());
     const uint32_t K = gpu::shared::kManifoldCluster;
     std::vector<uint32_t> words(4 + 12 * D + ((sel.materialBits.size() + 3) / 4) * 4, 0u);
-    uint32_t T = 0, C = 0, G = 0, M = 0;   // M: the mapped draws' clusters (the side table's, 128 slots each)
+    uint32_t T = 0, C = 0, G = 0;
     // Step 2b walks a whole instance, so only the first draw of each (instance, material) runs it (word 7): a merged
     // model's runs of one glass are several draws of one instance, and each would add the instance's light again.
     std::unordered_set<uint64_t> glassOwners;
@@ -246,10 +137,6 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
         r[5] = G;
         r[6] = d.material;
         r[7] = glassOwners.insert((uint64_t{d.slot} << 32) | d.material).second ? 1u : 0u;
-        if ((sel.materialBits[d.material] & kManifoldMapped) != 0) {
-            r[7] |= M << 1;
-            M += clusters;
-        }
         const glm::vec4& sp = spheres[sel.draws[k]];
         for (int i = 0; i < 4; ++i) r[8 + i] = std::bit_cast<uint32_t>(sp[i]);
         C += clusters;
@@ -263,16 +150,9 @@ void ManifoldCasters::prepare(uint32_t frameSlot, const RenderScene& scene, floa
     std::copy(sel.materialBits.begin(), sel.materialBits.end(), words.begin() + 4 + 12 * D);
 
     // Device buffers only grow (frames in flight read the old ones, which are retired).
-    // The triangles and the mapped side table after them; the nodes (8 sub-clusters a cluster) and their mapped rows.
-    const VkDeviceSize trisBytes = std::max<VkDeviceSize>(VkDeviceSize{T + M * kSlots} * kTriBytes, kTriBytes);
-    const VkDeviceSize nodesBytes = std::max<VkDeviceSize>(2 * VkDeviceSize{C * 9 + G + D} * kNodeBytes, kNodeBytes);
-    if (M * kSlots != m_mappedSlots) {
-        OHAO_LOG(Info, render, "manifold casters: {} triangle slots ({:.2f} MB), {} of mapped draws with a side table "
-                 "of {:.2f} MB; nodes {:.2f} MB with their mapped rows",
-                 T, T * double(kTriBytes) / 1048576.0, M * kSlots, M * kSlots * double(kTriBytes) / 1048576.0,
-                 nodesBytes / 1048576.0);
-        m_mappedSlots = M * kSlots;
-    }
+    // The triangles; the nodes (8 sub-clusters a cluster).
+    const VkDeviceSize trisBytes = std::max<VkDeviceSize>(VkDeviceSize{T} * kTriBytes, kTriBytes);
+    const VkDeviceSize nodesBytes = std::max<VkDeviceSize>(VkDeviceSize{C * 9 + G + D} * kNodeBytes, kNodeBytes);
     // A failed growth keeps the pass off from then on (no retry every frame).
     if (m_growthFailed) T = 0;
     else if (trisBytes > m_trisBytes || nodesBytes > m_nodesBytes) {
@@ -403,7 +283,6 @@ void ManifoldCasters::manifoldPass(Pass& pass, uint32_t frameSlot) {
 
 void ManifoldCasters::roundPass(Pass& pass, uint32_t frameSlot) {
     pass.read(m_tris, BufferUse::Storage).read(m_nodes, BufferUse::Storage).read(m_draws[frameSlot], BufferUse::Storage);
-    pass.read(m_pyramid, BufferUse::Storage);
 }
 
 } // namespace ohao::render

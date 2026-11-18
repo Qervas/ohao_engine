@@ -291,10 +291,17 @@ a `[shader]` attribute's place) are stated in `AGENTS.md`.
   Measured on the showcase at equal time: the whole image's error 190x lower, the sun's glints off the helmet 33x their
   neighbours to 1.8x, the glass ball's 1,283x to 1x, typical pixels unchanged.
   **Step 2a** (`docs/specs/2026-11-04-caustics-step2-design.md`, `docs/changes/2026-11-05-caustics-step2a.md`): the sun
-  through the core of a smooth reflection onto a rough reflection at camera depth 1-2 is solved for (`manifoldConnect`, its
-  own program; `rt/manifold.slang`; casters gathered a meshlet a cluster by `pt.manifold.gather`), and `raygenCaustics`
-  drops it (`chainOne`). Owned only at materials without a normal map whose every draw is gathered (ruling M7).
-  `OHAO_MANIFOLD_OFF=1`, `OHAO_MANIFOLD_SPLIT_ONLY=1`; `OHAO_MANIFOLD_STAGE` for profiling. Gotchas: a slope's frame is
+  through the core of a smooth reflection onto a rough reflection at camera depth 1-2 is solved for (its own program;
+  `rt/manifold.slang`; casters gathered a meshlet a cluster by `pt.manifold.gather`), and `raygenCaustics` drops it
+  (`chainOne`). Owned only at materials without a normal map whose every draw is gathered (ruling M7; step 2c measured
+  owning mapped draws at about 49,000x the light pass's cost for the same image, `docs/changes/2026-11-18-caustics-step2c.md`).
+  The pass runs as rounds of bounded items (`render/rt/manifold_rounds.*`; setup, walk, `manifoldSolvePlain`,
+  `manifoldConnect`, resolve), dispatched indirectly from queue counts in bands of rows, an item that does not fit carried
+  into the next of 12 passes, the sum in fixed point by integer atomics (two captures identical). A triangle's roots come
+  from Bernstein subdivision and Krawczyk on degree-3 grids (`rt/manifold_poly.slang`), each proven, at most 96 tests an
+  item a dispatch, the rest carried. `OHAO_MANIFOLD_OFF=1`, `OHAO_MANIFOLD_SPLIT_ONLY=1`; `OHAO_MANIFOLD_STAGE` and
+  `OHAO_MANIFOLD_TIMING=stages` for profiling. Gotchas: a root near an edge is lost to cancellation unless `y - p` is
+  formed as `(p0 - p) + e1 u + e2 v`; the rounds are raygens, since the driver lowers `dot` differently in compute; a slope's frame is
   fixed per cluster (`ManifoldTri.c`), or pruning tests a ring round a sphere; the pass's cost is its pruning, not its
   tests (time `pt.manifold` with `render.capture {timings}`, never wall time: a cold compile hides in it).
   **Step 2b** (same spec, "Step 2b as designed", M12): the sun through an owned solid (two refractions) onto X, which the

@@ -1,19 +1,18 @@
-// Step 2c's cell solver (docs/specs/2026-11-04-caustics-step2-design.md, "Step 2c", T2; rulings M11b, M13; the plan
-// docs/plans/2026-11-08-caustics-step2c.md, tasks 1 and 2): on one cell of a normal map (the square between four texel
-// centres, (s, t) in [0, 1]^2) of one triangle, the reflection constraint as two polynomials in tensor Bernstein form,
+// The manifold pass's solver (docs/specs/2026-11-04-caustics-step2-design.md, "Step 2c", T2; the plan
+// docs/plans/2026-11-08-caustics-step2c.md, tasks 1 and 2 and stage 3): on one cell ((s, t) in [0, 1]^2, the square of a
+// candidate triangle's (u, v), polyTriangleSource) the reflection constraint as two polynomials in tensor Bernstein form,
 // and every root of them by subdivision and Krawczyk's test. A module (no entry point).
 //
-// The polynomials. MikkTSpace's mapped normal (ruling M13) from the interpolated vectors as they are, vB the
-// interpolation of each vertex's w N x T, and the map's four texels blended bilinearly:
-//   m = tn.x vT + tn.y vB + tn.z vN          bidegree (2, 2)
-//   h = m - sigma.x vT - sigma.y vB           the drawn slope's microfacet normal (the vertex tangent frame), (2, 2)
+// The polynomials, from the frame at each vertex interpolated as it is (vN, vT, vB) and the cell's texels tn (a plain
+// triangle's all (0, 0, 1)) blended bilinearly:
+//   h = tn.x vT + tn.y vB + tn.z vN - sigma.x vT - sigma.y vB   the drawn slope's microfacet normal, (1, 1)
 //   d = y - p                                 y the surface point, p the receiver (X), (1, 1)
-//   r = d (h . h) - 2 (d . h) h               |h|^2 times d reflected about h's plane: |h|^2 |d| L at a path, (5, 5)
+//   r = d (h . h) - 2 (d . h) h               |h|^2 times d reflected about h's plane: |h|^2 |d| L at a path, (3, 3)
 //   F1 = r . a, F2 = r . b                    a, b perpendicular to L (toward the sun)
 // A root of F is a path only where r . L > 0 (else d reflects to -L) and h . H > 0, H = normalize(p - y) + L (h's sign
 // turned reflects the same, but is no microfacet the slope drew).
 //
-// Bernstein form: f(s, t) = sum c_ij B_i^ns(s) B_j^nt(t). Products, degree elevation and de Casteljau's subdivision
+// Bernstein form: f(s, t) = sum c_ij B_i^ns(s) B_j^nt(t). Products and de Casteljau's subdivision
 // are convex combinations, so the grids are built in fp32 from the cell's corner values with no cancellation of their
 // own; a grid's hull encloses its polynomial over its box (no dependency problem: T1's interval enclosures overestimated
 // F many times over). The resultant was refused (T2: its determinant underflows fp32 and a fifth of the roots are lost).
@@ -32,29 +31,27 @@ import rt.manifold;
 import rt.manifold_cert;
 
 static const float kPolyUlp = 5.9604645e-8;   // 2^-24: fp32's unit roundoff
-// Roundings of a box's extraction from the cell's grid (two de Casteljau passes of N <= 5 levels a direction), in units
-// of kPolyUlp times the cell grid's largest coefficient.
+// Roundings of a box's extraction from the cell's grid (two de Casteljau passes of N levels a direction; a bound for N <=
+// 5, so loose at 3), in units of kPolyUlp times the cell grid's largest coefficient.
 static const float kPolyExtractRoundings = 24.0;
 static const uint kPolyMaxRoots = 8u;
 static const uint kPolyStack = 64u;
 static const float kPolyMinWidth = 1.0e-6;   // a box narrower than this a side is undecided
 static const float kPolyGrow = 0.1;          // each box is tested grown by this a side (epsilon inflation)
 
-// Binomial coefficients to degree 5, row n at n (n + 1) / 2.
-static const float kPolyBinom[21] = { 1.0,
+// Binomial coefficients to degree 3, row n at n (n + 1) / 2.
+static const float kPolyBinom[10] = { 1.0,
                                       1.0, 1.0,
                                       1.0, 2.0, 1.0,
-                                      1.0, 3.0, 3.0, 1.0,
-                                      1.0, 4.0, 6.0, 4.0, 1.0,
-                                      1.0, 5.0, 10.0, 10.0, 5.0, 1.0 };
+                                      1.0, 3.0, 3.0, 1.0 };
 float polyBinom(int n, int k) { return kPolyBinom[n * (n + 1) / 2 + k]; }
 
-// A tensor Bernstein grid of degree (ns, nt) <= (5, 5): c[i * 6 + j], i along s, j along t. Every loop runs to the
+// A tensor Bernstein grid of degree (ns, nt) <= (3, 3): c[i * 4 + j], i along s, j along t. Every loop runs to the
 // largest degree with the grid's own as a guard, so unrolled its indices are constants (an array indexed at run time
 // lives in local memory).
 struct BPoly
 {
-    float c[36];
+    float c[16];
     int ns, nt;
 }
 
@@ -63,7 +60,7 @@ BPoly bZero(int ns, int nt)
     BPoly r;
     r.ns = ns;
     r.nt = nt;
-    for (int k = 0; k < 36; ++k) r.c[k] = 0.0;
+    for (int k = 0; k < 16; ++k) r.c[k] = 0.0;
     return r;
 }
 
@@ -73,12 +70,12 @@ BPoly bBilinear(float f00, float f10, float f01, float f11)
     BPoly r = bZero(1, 1);
     r.c[0] = f00;
     r.c[1] = f01;
-    r.c[6] = f10;
-    r.c[7] = f11;
+    r.c[4] = f10;
+    r.c[5] = f11;
     return r;
 }
 
-// The product of a degree (A, A) grid and a (B, B) one, A + B <= 5: each coefficient a convex combination of products
+// The product of a degree (A, A) grid and a (B, B) one, A + B <= 3: each coefficient a convex combination of products
 // (the degrees compile-time constants, so the weights are too).
 BPoly bMul<let A : int, let B : int>(BPoly a, BPoly b)
 {
@@ -91,7 +88,7 @@ BPoly bMul<let A : int, let B : int>(BPoly a, BPoly b)
                 [unroll] for (int l = 0; l <= B; ++l)
                 {
                     const float w = ws * polyBinom(A, j) * polyBinom(B, l) / polyBinom(A + B, j + l);
-                    r.c[(i + k) * 6 + j + l] += w * a.c[i * 6 + j] * b.c[k * 6 + l];
+                    r.c[(i + k) * 4 + j + l] += w * a.c[i * 4 + j] * b.c[k * 4 + l];
                 }
         }
     return r;
@@ -101,24 +98,16 @@ BPoly bMul<let A : int, let B : int>(BPoly a, BPoly b)
 BPoly bAxpy(BPoly a, float x, BPoly b)
 {
     BPoly r = a;
-    for (int k = 0; k < 36; ++k) r.c[k] = a.c[k] + x * b.c[k];
+    for (int k = 0; k < 16; ++k) r.c[k] = a.c[k] + x * b.c[k];
     return r;
-}
-
-// A degree (1, 1) grid raised to (2, 2): the product with the constant 1.
-BPoly bElevate(BPoly a)
-{
-    BPoly one = bZero(1, 1);
-    for (int k = 0; k < 36; ++k) one.c[k] = 1.0;
-    return bMul<1, 1>(a, one);
 }
 
 float bMaxAbs(BPoly a)
 {
     float m = 0.0;
-    [unroll] for (int i = 0; i < 6; ++i)
-        [unroll] for (int j = 0; j < 6; ++j)
-            if (i <= a.ns && j <= a.nt) m = max(m, abs(a.c[i * 6 + j]));
+    [unroll] for (int i = 0; i < 4; ++i)
+        [unroll] for (int j = 0; j < 4; ++j)
+            if (i <= a.ns && j <= a.nt) m = max(m, abs(a.c[i * 4 + j]));
     return m;
 }
 
@@ -126,23 +115,23 @@ void bHull(BPoly a, out float lo, out float hi)
 {
     lo = a.c[0];
     hi = a.c[0];
-    [unroll] for (int i = 0; i < 6; ++i)
-        [unroll] for (int j = 0; j < 6; ++j)
+    [unroll] for (int i = 0; i < 4; ++i)
+        [unroll] for (int j = 0; j < 4; ++j)
             if (i <= a.ns && j <= a.nt)
             {
-                lo = min(lo, a.c[i * 6 + j]);
-                hi = max(hi, a.c[i * 6 + j]);
+                lo = min(lo, a.c[i * 4 + j]);
+                hi = max(hi, a.c[i * 4 + j]);
             }
 }
 
 // The value at (s, t) of a degree (NS, NT) grid by de Casteljau (convex combinations inside [0, 1]^2).
 float bEval<let NS : int, let NT : int>(BPoly a, float s, float t)
 {
-    float col[6];
+    float col[4];
     [unroll] for (int i = 0; i <= NS; ++i)
     {
-        float w[6];
-        [unroll] for (int j = 0; j <= NT; ++j) w[j] = a.c[i * 6 + j];
+        float w[4];
+        [unroll] for (int j = 0; j <= NT; ++j) w[j] = a.c[i * 4 + j];
         [unroll] for (int q = 1; q <= NT; ++q)
             [unroll] for (int j = 0; j <= NT - q; ++j) w[j] = (1.0 - t) * w[j] + t * w[j + 1];
         col[i] = w[0];
@@ -154,11 +143,11 @@ float bEval<let NS : int, let NT : int>(BPoly a, float s, float t)
 
 // One row's Bernstein coefficients (degree N) on [0, 1] to those of the same polynomial on [a0, a1]: de Casteljau at a0
 // keeping the right part, then at (a1 - a0) / (1 - a0) keeping the left.
-void bRange1<let N : int>(inout float w[6], float a0, float a1)
+void bRange1<let N : int>(inout float w[4], float a0, float a1)
 {
-    float t[6];
-    float right[6];
-    [unroll] for (int k = 0; k < 6; ++k)
+    float t[4];
+    float right[4];
+    [unroll] for (int k = 0; k < 4; ++k)
     {
         t[k] = w[k];
         right[k] = w[k];
@@ -169,8 +158,8 @@ void bRange1<let N : int>(inout float w[6], float a0, float a1)
         right[N - q] = t[N - q];
     }
     const float tau = (a1 - a0) / (1.0 - a0);
-    float u[6];
-    [unroll] for (int k = 0; k < 6; ++k) u[k] = right[k];
+    float u[4];
+    [unroll] for (int k = 0; k < 4; ++k) u[k] = right[k];
     w[0] = right[0];
     [unroll] for (int q = 1; q <= N; ++q)
     {
@@ -185,17 +174,17 @@ BPoly bBox<let NS : int, let NT : int>(BPoly a, float4 box)
     BPoly r = a;
     [unroll] for (int j = 0; j <= NT; ++j)
     {
-        float w[6];
-        [unroll] for (int i = 0; i < 6; ++i) w[i] = i <= NS ? r.c[i * 6 + j] : 0.0;
+        float w[4];
+        [unroll] for (int i = 0; i < 4; ++i) w[i] = i <= NS ? r.c[i * 4 + j] : 0.0;
         bRange1<NS>(w, box.x, box.z);
-        [unroll] for (int i = 0; i <= NS; ++i) r.c[i * 6 + j] = w[i];
+        [unroll] for (int i = 0; i <= NS; ++i) r.c[i * 4 + j] = w[i];
     }
     [unroll] for (int i = 0; i <= NS; ++i)
     {
-        float w[6];
-        [unroll] for (int j = 0; j < 6; ++j) w[j] = j <= NT ? r.c[i * 6 + j] : 0.0;
+        float w[4];
+        [unroll] for (int j = 0; j < 4; ++j) w[j] = j <= NT ? r.c[i * 4 + j] : 0.0;
         bRange1<NT>(w, box.y, box.w);
-        [unroll] for (int j = 0; j <= NT; ++j) r.c[i * 6 + j] = w[j];
+        [unroll] for (int j = 0; j <= NT; ++j) r.c[i * 4 + j] = w[j];
     }
     return r;
 }
@@ -204,12 +193,12 @@ BPoly bBox<let NS : int, let NT : int>(BPoly a, float4 box)
 BPoly bDerivative(BPoly a, int axis)
 {
     BPoly r = bZero(axis == 0 ? a.ns - 1 : a.ns, axis == 0 ? a.nt : a.nt - 1);
-    [unroll] for (int i = 0; i < 6; ++i)
-        [unroll] for (int j = 0; j < 6; ++j)
+    [unroll] for (int i = 0; i < 4; ++i)
+        [unroll] for (int j = 0; j < 4; ++j)
             if (i <= r.ns && j <= r.nt)
             {
-                const float hi = axis == 0 ? a.c[min(i + 1, 5) * 6 + j] : a.c[i * 6 + min(j + 1, 5)];
-                r.c[i * 6 + j] = float(axis == 0 ? a.ns : a.nt) * (hi - a.c[i * 6 + j]);
+                const float hi = axis == 0 ? a.c[min(i + 1, 3) * 4 + j] : a.c[i * 4 + min(j + 1, 3)];
+                r.c[i * 4 + j] = float(axis == 0 ? a.ns : a.nt) * (hi - a.c[i * 4 + j]);
             }
     return r;
 }
@@ -235,9 +224,9 @@ float3 polyCorner(float3 c[4], float2 st)
     return lerp(lerp(c[0], c[1], st.x), lerp(c[2], c[3], st.x), st.y);
 }
 
-// A normal-mapped triangle: MikkTSpace's frame as the renderers build it (material/material_layers.slang,
-// mikkTSpaceNormal): per vertex the unit world normal, the unit world tangent and w n x t, interpolated as they are.
-// tri.n0, a1, a2 hold the normals (the vertices' unit normals, not 2a's unnormalised ones).
+// A triangle with a frame at each vertex (a plain triangle's: polyTriangleSource), interpolated as it is: tri.n0, a1, a2
+// hold the unit normals (not 2a's unnormalised ones), and the tangents and bitangents beside them, and its texture
+// coordinates.
 struct ManifoldMappedTri
 {
     ManifoldTri tri;
@@ -246,7 +235,7 @@ struct ManifoldMappedTri
     float2 uv0, uvA, uvB;  // texture coordinates: uv0 + uvA u + uvB v
 };
 
-// MikkTSpace's frame at the triangle's (u, v).
+// The frame at the triangle's (u, v).
 void polyFrameAt(ManifoldMappedTri m, float2 uv, out float3 n, out float3 t, out float3 b)
 {
     const ManifoldTri tri = m.tri;
@@ -291,7 +280,7 @@ bool polyCellAffine(ManifoldMappedTri m, float2 origin, float2 size, out float2 
 bool cellPolyOf<let N : int>(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 c11, float2 origin,
                              float2 size, float3 p, float3 L, float2 sigma, out CellPoly cp)
 {
-    cp.F1 = bZero(5, 5);
+    cp.F1 = bZero(3, 3);
     cp.F2 = cp.F1;
     cp.D1s = cp.F1;
     cp.D1t = cp.F1;
@@ -340,11 +329,8 @@ bool cellPolyOf<let N : int>(ManifoldMappedTri m, float3 c00, float3 c10, float3
 }
 
 // F1 = (d . a)(h . h) - 2 (d . h)(h . a) and F2 (with b) over the cell, from the corner values, at one call site (each is
-// compiled whole), of degree N = 2 H + 1 a side, H h's. N = 5: a cell of a map, h = tn . (vT, vB, vN) - sigma . (vT,
-// vB) the product of two bilinear blends. N = 3: a cell whose four texels are equal (a plain triangle's, all (0, 0, 1)),
-// where h is the bilinear blend of its corner values, so F is of degree 3: its grids are its true degree, not degree
-// 5's elevation of it (about a third of the products and a quarter of a box's extraction: the showcase's plain solve at
-// 320x180 6.9 -> 2.4 ms).
+// compiled whole), of degree N = 2 H + 1 a side, H h's. The cell's four texels are equal (a plain triangle's, all (0, 0,
+// 1)), so h is the bilinear blend of its corner values (H = 1) and F is of degree 3: N = 3 only.
 void cellPolyGrids<let N : int>(CellPoly cp, out BPoly F1, out BPoly F2)
 {
     static const int H = (N - 1) / 2;
@@ -352,27 +338,14 @@ void cellPolyGrids<let N : int>(CellPoly cp, out BPoly F1, out BPoly F2)
     BPoly db = bZero(1, 1);
     for (int c = 0; c < 3; ++c)
     {
-        const BPoly T = bBilinear(cp.vT[0][c], cp.vT[1][c], cp.vT[2][c], cp.vT[3][c]);
-        const BPoly B = bBilinear(cp.vB[0][c], cp.vB[1][c], cp.vB[2][c], cp.vB[3][c]);
-        const BPoly Nm = bBilinear(cp.vN[0][c], cp.vN[1][c], cp.vN[2][c], cp.vN[3][c]);
-        const BPoly tx = bBilinear(cp.tn[0].x, cp.tn[1].x, cp.tn[2].x, cp.tn[3].x);
-        const BPoly ty = bBilinear(cp.tn[0].y, cp.tn[1].y, cp.tn[2].y, cp.tn[3].y);
-        const BPoly tz = bBilinear(cp.tn[0].z, cp.tn[1].z, cp.tn[2].z, cp.tn[3].z);
         const BPoly d = bBilinear(cp.d[0][c], cp.d[1][c], cp.d[2][c], cp.d[3][c]);
         const float2 sg = -cp.sigma;
         const float ac = cp.a[c], bc = cp.b[c];
-        BPoly h;
-        if (H == 2)
-            h = bAxpy(bAxpy(bAxpy(bMul<1, 1>(tx, T), 1.0, bMul<1, 1>(ty, B)), 1.0, bMul<1, 1>(tz, Nm)), 1.0,
-                      bElevate(bAxpy(bAxpy(bZero(1, 1), sg.x, T), sg.y, B)));
-        else
-        {
-            float hc[4];
-            for (int k = 0; k < 4; ++k)
-                hc[k] = cp.tn[k].x * cp.vT[k][c] + cp.tn[k].y * cp.vB[k][c] + cp.tn[k].z * cp.vN[k][c] +
-                        sg.x * cp.vT[k][c] + sg.y * cp.vB[k][c];
-            h = bBilinear(hc[0], hc[1], hc[2], hc[3]);
-        }
+        float hc[4];
+        for (int k = 0; k < 4; ++k)
+            hc[k] = cp.tn[k].x * cp.vT[k][c] + cp.tn[k].y * cp.vB[k][c] + cp.tn[k].z * cp.vN[k][c] +
+                    sg.x * cp.vT[k][c] + sg.y * cp.vB[k][c];
+        const BPoly h = bBilinear(hc[0], hc[1], hc[2], hc[3]);
         hh = bAxpy(hh, 1.0, bMul<H, H>(h, h));
         dh = bAxpy(dh, 1.0, bMul<1, H>(d, h));
         ha = bAxpy(ha, ac, h);
@@ -396,7 +369,6 @@ struct PolyCellSource
     float2 sigma;
 }
 
-// A normal-mapped triangle's cell.
 PolyCellSource polyCellSource(ManifoldMappedTri m, float3 c00, float3 c10, float3 c01, float3 c11, float2 origin,
                               float2 size, float3 p, float3 L, float2 sigma)
 {
@@ -552,7 +524,7 @@ int polyKrawczyk<let N : int>(CellPoly cp, float4 box, out float2 root, out floa
     centre = 0.5 * (box.xy + box.zw);
     const float2 w = box.zw - box.xy;
     // A box's extraction rounds by m in its coefficients (past [0, 1], a grown box's extrapolation, by up to
-    // (1 + 2 kPolyGrow)^5 < 3 times that). The Jacobian's grids are extracted from the cell's derivatives, so their
+    // (1 + 2 kPolyGrow)^N < 3 times that). The Jacobian's grids are extracted from the cell's derivatives, so their
     // rounding is absolute too: differenced from the box's own grid it was 2 n m over the box's width, which grew as
     // boxes shrank until no box near a root could contract (m12, 45 degrees).
     const float ex = 3.0 * kPolyExtractRoundings * kPolyUlp;

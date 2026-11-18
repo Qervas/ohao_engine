@@ -148,12 +148,6 @@ MeshMaterials meshMaterials(BindlessTextureManager* textures, const cooked::Mesh
             // Roughness in G: its smallest texel, for caustics' casters.
             if (use.slot == cooked::TextureSlot::RoughMetal) d.roughTexMin = static_cast<float>(tex.channelMin[1]) / 255.0f;
             else if (use.slot == cooked::TextureSlot::CoatRoughness) d.coatRoughTexMin = static_cast<float>(tex.channelMin[1]) / 255.0f;
-            // The normal map's size, for caustics step 2c's pyramid over its cells.
-            else if (use.slot == cooked::TextureSlot::Normal)
-                if (const BindlessTextureInfo* info = textures->getTextureInfo(tex.handle)) {
-                    d.normalWidth = info->width;
-                    d.normalHeight = info->height;
-                }
         }
         // Occlusion (AO in R) in the roughness/metal image (a packed ORM): that texture, sampled for both.
         if (in.occlusionIsRoughMetal) d.occlusionTex = d.roughMetalTex;

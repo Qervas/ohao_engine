@@ -302,6 +302,13 @@ plain triangles; 2a's Newton (`manifoldSolve`, `manifoldMap`, its tolerance) is 
 - The showcase at 640x360, maps off, 4,096 spp: `build/manifold_task7/showcase/` (the gold ball's caustic a clean warm
   patch on Sponza's floor, the glass ball's refraction; the helmet mostly in shadow, its glints faint).
 
+*Closed (2026-11-18):* what served only mapped draws is deleted (the pyramid and its build, the gather's side table, the
+mapped owned bit, the pyramid and cell rounds, `manifoldSolveCells`, the degree-5 grids, the measurement switches
+`OHAO_MANIFOLD_MAPS`, `_SPARSE`, `_CELL_STATS`, `_DUMP`, `_ORIENTED`): 2,001 lines, the manifold pipeline's cold compile
+3.5 -> 1.8 s, 72.6 MB of device memory on the showcase; the PFMs of both scenes byte-identical and the plain counters
+equal. Kept: the rounds, the carry, the plain triangles' exact solver (`manifoldSolvePlain`), MikkTSpace and the fp32
+map read. The code of stages 2-3b and task 7 is at `7a693075`. Record: `docs/changes/2026-11-18-caustics-step2c.md`.
+
 ### Task 6: the pass on the GPU, bounded
 
 Requests -> candidate cells -> cell solves as work items of bounded cost (a box budget an item), spread across threads
