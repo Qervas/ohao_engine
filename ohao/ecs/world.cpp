@@ -1,7 +1,4 @@
 #include "ecs/world.hpp"
-#include "ecs/fly_controller_system.hpp"
-#include "ecs/spin_system.hpp"
-#include "ecs/transform_system.hpp"
 #include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 
@@ -71,17 +68,7 @@ World::World()
     onConstruct<InputActions, &World::onInputActionsChanged>(this, bindings);
     onUpdate<InputActions, &World::onInputActionsChanged>(this, bindings);
     onDestroy<InputActions, &World::onInputActionsChanged>(this, bindings);
-    // Engine-provided behaviour, once per fixed step: they move entities, before the physics and the gameplay that
-    // read where entities are. The flying camera turns first, then what spins.
-    addSimulate("spin", [](SystemContext& c, float dt) { updateSpin(c, dt); },
-                {.after = {"fly_controller"}, .before = {"physics"}, .reads = types<Spin>(), .writes = types<Transform>()});
-    addSimulate("fly_controller", [](SystemContext& c, float dt) { updateFlyControllers(c, std::as_const(c.world()).input(), dt); },
-                {.before = {"physics"}, .reads = types<FlyController>(), .writes = types<Transform>()});
-    // Structural: transforms are propagated (the other systems declare themselves around it; a module's move rule
-    // adds its own access, ecs::tagMoves).
-    addSync("transform", [](SystemContext& c) { updateTransforms(c.registry()); },
-            {.reads = types<Transform, Parent, Children>(),
-             .writes = types<WorldTransform, MovedLastFrame, RenderDirty, TransformDirty>(), .exclusive = true});
+    // No system: the core module installs the World's own (ecs/core.cpp), every other module its.
 }
 
 void World::onTransformChanged(entt::registry& r, entt::entity e) {

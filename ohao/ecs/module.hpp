@@ -144,7 +144,7 @@ void installModules(World& world, std::span<const Module* const> modules, const 
 [[nodiscard]] const Services* worldServices(const World& world);
 
 // The core module, "ecs" (ecs/core.cpp): the World's own types (ids, names, the hierarchy, transforms, input, spawn
-// points, spin and fly).
+// points, spin and fly) and systems (transform; spin and fly_controller). A World installs no system itself.
 [[nodiscard]] const Module& coreModule();
 // The core's registrations (ecs/types.cpp): its components and the World's event payload.
 void registerCoreTypes(reflect::TypeRegistry& types);

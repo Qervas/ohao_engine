@@ -3,7 +3,7 @@
 
 namespace ohao::ecs {
 
-// The spin system (engine-provided; every World runs it, right before the transform
+// The spin system (the core module's, ecs/core.cpp; a simulate system, before the physics and the transform
 // system). Each entity with Spin turns about its normalized local axis by
 // degreesPerSecond * dt:
 //   rotation = normalize(rotation * angleAxis(radians(degreesPerSecond * dt), axis))

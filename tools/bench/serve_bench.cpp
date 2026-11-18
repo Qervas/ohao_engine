@@ -49,7 +49,9 @@
 #include "bench_world.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
+#include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
+#include "ecs/module.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "engine/install.hpp"
@@ -445,6 +447,8 @@ int main(int argc, char** argv) {
         std::ofstream(dir / "bench10k.scene.json", std::ios::binary | std::ios::trunc) << text.value();
     }
     ecs::World world;
+    ecs::FileAssetResolver files{root.string()};
+    engine::install(world, {files, engineTypes()}, {"ecs"});   // the World's own systems: world.step moves its spinners
     api::Session session(world, engineTypes());
     session.setHostKind(api::HostKind::Headless);
     const std::string sceneParams = R"({"path":"build/serve_bench/bench10k.scene.json"})";

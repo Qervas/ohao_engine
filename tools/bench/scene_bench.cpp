@@ -31,7 +31,9 @@
 #include "bench_env.hpp"
 #include "bench_world.hpp"
 #include "common/harness.hpp"
+#include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
+#include "ecs/module.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -171,6 +173,7 @@ void runRounds(const std::vector<Op*>& ops, int warmups, int rounds, std::vector
 class Scene {
 public:
     Scene(std::string name, int n) : m_name(std::move(name)), m_n(n) {
+        engine::install(m_world, {m_files, engineTypes()}, {"ecs"});   // the World's own systems: world.apply syncs
         buildBenchWorld(m_world, n, 2026);
         m_pretty = save(m_world);
         m_compact = save(m_world, JsonLayout::Compact);
@@ -267,6 +270,7 @@ private:
 
     std::string m_name;
     int m_n;
+    ecs::FileAssetResolver m_files{"."};
     World m_world;
     std::string m_pretty, m_compact, m_text, m_batch, m_query, m_reply;
     Snapshot m_snap, m_tmp;

@@ -65,6 +65,8 @@ public:
     using SimulateSystem = std::function<void(SystemContext&, float dt)>;
     using SyncSystem = std::function<void(SystemContext&)>;
 
+    // Consistent from the start (the id index, the hierarchy and the input bindings follow their components), with no
+    // system: the modules install them (ecs/module.hpp; the core's transform, spin and fly_controller too).
     World();
     World(const World&) = delete;
     World& operator=(const World&) = delete;

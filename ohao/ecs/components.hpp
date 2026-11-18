@@ -7,9 +7,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
-#include <optional>
 #include <string>
-#include <variant>
 #include <vector>
 
 namespace ohao::ecs {
@@ -67,7 +65,7 @@ struct MovedLastFrame {};
 // A file a component names (each such field marked .asset(kind) in its registration).
 using AssetRef = reflect::AssetRef;   // {path (project-relative, '/'), guid (empty until the asset DB)}
 
-// ---- engine-provided behaviour (ecs/spin_system.hpp; run by every World) -------------------
+// ---- engine-provided behaviour (ecs/spin_system.hpp; the core module installs it) ----------
 
 // Turns the entity about an axis of its own local frame at a constant rate. The spin
 // system writes Transform::rotation each update, before the transform system.
