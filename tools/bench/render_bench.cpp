@@ -38,7 +38,7 @@
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
-#include "ecs/scene_types.hpp"
+#include "engine/install.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "gpu_calibration.hpp"
 #include "ohao/render_host.hpp"
@@ -746,7 +746,7 @@ int report(const Measurement& m, std::vector<Budget>& budgets, bool haveBudgets,
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), game::registerGameTypes(r, slice::module()), true);
+    static const bool once = (engine::registerTypes(r), game::registerGameTypes(r, slice::module()), true);
     (void)once;
     return r;
 }

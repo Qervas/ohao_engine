@@ -1,107 +1,13 @@
+// The registrations of the modules not yet in their own directories (each moves to its module's types.cpp), by
+// module; engine/install.cpp's module list calls them.
 #include "ecs/scene_types.hpp"
 #include "ecs/components.hpp"
 
 namespace ohao::ecs {
 
-void registerKeyEnum(reflect::TypeRegistry& r) {
-    auto keys = r.enumeration<Key>("Key").doc("A keyboard key or mouse button an action or axis is bound to");
-    for (const KeyName& k : keyNames()) {
-        const std::string name(k.name);
-        const std::string doc = k.key == Key::None             ? "Nothing (an unbound side of an axis)"
-                                : name.rfind("Mouse", 0) == 0 ? "The " + name.substr(5) + " mouse button"
-                                                              : "The " + name + " key";
-        keys.value(k.name, k.key, doc);
-    }
-}
+// ---- visual -------------------------------------------------------------------------------------------------
 
-void registerSceneTypes(reflect::TypeRegistry& r) {
-    using render::MaterialHandle;
-    using render::MeshHandle;
-
-    // ---- ecs: the World: ids, names, the hierarchy, transforms, input, spawn points, spin and fly -----------
-    r.setModule("ecs");
-    registerKeyEnum(r);
-    r.type<Name>("Name").component().alwaysPresent().host(makeComponentOps<Name>())
-        .doc("Display name for people and agents. Not unique; entities are identified by id.")
-        .field("value", &Name::value).doc("The name");
-    r.type<Transform>("Transform").component().alwaysPresent().host(makeComponentOps<Transform>())
-        .doc("Local transform relative to the parent (or the world for a root entity). "
-             "World matrix = parent world * T * R * S.")
-        .field("position", &Transform::position).doc("Local translation").unit("m")
-        .field("rotation", &Transform::rotation).doc("Local rotation as a unit quaternion, written [x, y, z, w]").unitless()
-        .field("scale", &Transform::scale).doc("Local scale per axis; a negative value mirrors").unitless();
-    r.type<Parent>("Parent").component().host(makeComponentOps<Parent>())
-        .doc("Attaches the entity to a parent; its Transform is then relative to the parent. "
-             "Cycles are rejected.")
-        .field("entity", &Parent::entity).doc("The parent entity's id; null makes the entity a root");
-    r.type<Spin>("Spin").component().host(makeComponentOps<Spin>())
-        .doc("Turns the entity about an axis of its own frame at a constant rate (the spin system, which runs "
-             "before the transform system on every world update).")
-        .field("axis", &Spin::axis).doc("Rotation axis in the entity's local frame; any length (normalized), "
-                                        "zero for no rotation").unitless()
-        .field("degreesPerSecond", &Spin::degreesPerSecond).doc("Turn rate; negative turns the other way")
-            .unit("deg/s").uiRange(-720.0, 720.0);
-    r.type<ActionBinding>("ActionBinding")
-        .doc("An action name bound to a key: held while the key is down.")
-        .field("action", &ActionBinding::action).doc("The action's name, as systems and input.inject use it")
-        .field("key", &ActionBinding::key).doc("The key or mouse button");
-    r.type<AxisBinding>("AxisBinding")
-        .doc("An axis name bound to two keys: +1 while positive is down, -1 while negative is, 0 for both or neither.")
-        .field("axis", &AxisBinding::axis).doc("The axis's name, as systems and input.inject use it")
-        .field("positive", &AxisBinding::positive).doc("The key for +1 (None: no key)")
-        .field("negative", &AxisBinding::negative).doc("The key for -1 (None: no key)");
-    r.type<InputActions>("InputActions").component().singleton().host(makeComponentOps<InputActions>())
-        .doc("The world's controls (one per world): action and axis names over keys. The world's input map is rebuilt "
-             "from it whenever it is set, changed or removed.")
-        .field("actions", &InputActions::actions).doc("Action bindings; an action with several keys is held while any is")
-        .field("axes", &InputActions::axes).doc("Axis bindings");
-    r.type<FlyController>("FlyController").component().host(makeComponentOps<FlyController>())
-        .doc("Flies the entity from named axes and actions, once per fixed step: forward along its -Z, right along its "
-             "+X, up along world +Y; while `look` is held the mouse turns it (yaw about world +Y, pitch about its +X). "
-             "On the Camera entity it is a fly camera.")
-        .field("moveSpeed", &FlyController::moveSpeed).doc("Speed at an axis value of 1").unit("m/s").min(0.0)
-            .uiRange(0.0, 50.0)
-        .field("fastMultiplier", &FlyController::fastMultiplier).doc("Speed multiplier while `fast` is held")
-            .unitless().min(0.0).uiRange(1.0, 10.0)
-        .field("lookDegPerUnit", &FlyController::lookDegPerUnit).doc("Turn per unit of mouse movement while `look` is held")
-            .unit("deg").min(0.0).uiRange(0.0, 1.0)
-        .field("moveForward", &FlyController::moveForward).doc("Axis moving along the entity's -Z")
-        .field("moveRight", &FlyController::moveRight).doc("Axis moving along the entity's +X")
-        .field("moveUp", &FlyController::moveUp).doc("Axis moving along world +Y")
-        .field("look", &FlyController::look).doc("Action that, while held, lets the mouse turn the entity")
-        .field("fast", &FlyController::fast).doc("Action that, while held, multiplies the speed");
-    r.type<SpawnPoint>("SpawnPoint").component().host(makeComponentOps<SpawnPoint>())
-        .doc("A named place to spawn something, at the entity's world position, facing its -Z. Spawns are taken in "
-             "creation order (a level's node order).")
-        .field("tag", &SpawnPoint::tag).doc("What spawns here: player, enemy, ...").maxLength(32);
-    r.type<Children>("Children").component().runtime().host(makeComponentOps<Children>())
-        .doc("The entity's children in attach order. Derived: rebuilt from Parent.")
-        .field("entities", &Children::entities).doc("Child entities");
-    r.type<WorldTransform>("WorldTransform").component().runtime().host(makeComponentOps<WorldTransform>())
-        .doc("World matrices computed by the transform system from Transform and Parent.")
-        .field("world", &WorldTransform::world).doc("Object-to-world matrix this frame, column-major").unitless()
-        .field("prevWorld", &WorldTransform::prevWorld).doc("Last frame's object-to-world matrix (motion vectors)").unitless();
-    r.type<CreationOrder>("CreationOrder").component().runtime().host(makeComponentOps<CreationOrder>())
-        .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
-        .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");
-    r.type<PreservedComponent>("PreservedComponent").runtime()
-        .doc("One unknown component kept from a scene file.")
-        .field("name", &PreservedComponent::name).doc("Component name as written in the file")
-        .field("version", &PreservedComponent::version).doc("Its version from the file header (1 if absent)").unitless()
-        .field("json", &PreservedComponent::json).doc("Its value as canonical compact JSON");
-    r.type<PreservedComponents>("PreservedComponents").component().runtime().host(makeComponentOps<PreservedComponents>())
-        .doc("Components a scene file carried that this build does not know; written back on save.")
-        .field("entries", &PreservedComponents::entries).doc("The kept components, in file order");
-    r.type<TransformDirty>("TransformDirty").component().runtime()
-        .doc("Tag: the local transform changed; world matrices are recomputed this frame.");
-    r.type<RenderDirty>("RenderDirty").component().runtime()
-        .doc("Tag: the entity's render instance is re-uploaded this frame.");
-    r.type<MovedLastFrame>("MovedLastFrame").component().runtime()
-        .doc("Tag: moved last frame; uploaded once more so prevWorld catches up.");
-    registerWorldEvents(r);
-
-    // ---- visual: what an entity looks like and where it is seen from ----------------------------------------
-    r.setModule("visual");
+void registerVisualTypes(reflect::TypeRegistry& r) {
     r.enumeration<LightType>("LightType")
         .doc("Light shape. Position and direction come from the entity's world transform; "
              "the direction is the entity's -Z axis.")
@@ -289,9 +195,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("Why instantiate could not build the entity's mesh. The entity then has no MeshRenderer.")
         .field("code", &InstantiateError::code).doc("E_ASSET_NOT_FOUND, E_ASSET_INVALID or E_MESH_INVALID")
         .field("message", &InstantiateError::message).doc("What went wrong, for people and agents");
+}
 
-    // ---- animation: skins, animators, attachments -----------------------------------------------------------
-    r.setModule("animation");
+// ---- animation ----------------------------------------------------------------------------------------------
+
+void registerAnimationTypes(reflect::TypeRegistry& r) {
     r.type<SkinnedMesh>("SkinnedMesh").component().host(makeComponentOps<SkinnedMesh>())
         .doc("A skinned mesh: the entity's MeshSource (a ModelAsset with `mesh`) is deformed by a skin of a glTF file, "
              "posed by the entity's Animator. The instance gets its own deformed copy of the mesh.")
@@ -317,9 +225,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
              "Transform, and what the step sees, do not follow the joint.")
         .field("joint", &JointAttach::joint).doc("The joint's name in the parent's skeleton").maxLength(256);
     registerAnimationEvents(r);
+}
 
-    // ---- physics: colliders, bodies, joints, players --------------------------------------------------------
-    r.setModule("physics");
+// ---- physics ------------------------------------------------------------------------------------------------
+
+void registerPhysicsTypes(reflect::TypeRegistry& r) {
     r.enumeration<ColliderShape>("ColliderShape")
         .doc("A collider's shape, fitted to the entity's mesh unless a size is given.")
         .value("Box", ColliderShape::Box, "The mesh's bounding box")
@@ -467,9 +377,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("angular", &BodyMotion::angular).doc("Angular velocity, world").unit("rad/s")
         .field("asleep", &BodyMotion::asleep).doc("The body sleeps; its velocities are zero");
     registerPhysicsEvents(r);
+}
 
-    // ---- audio: the bank and the reverb zones ---------------------------------------------------------------
-    r.setModule("audio");
+// ---- audio --------------------------------------------------------------------------------------------------
+
+void registerAudioTypes(reflect::TypeRegistry& r) {
     r.type<AudioMix>("AudioMix").component().singleton().host(makeComponentOps<AudioMix>())
         .doc("The world's sound bank and mix (one per world): an .audio.json declaring the buses and their voice caps, "
              "the sounds (files, bus, priority, distance shape, how long each holds its voice), the ducks, the "
@@ -485,9 +397,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("priority", &ReverbZone::priority).doc("Higher wins where zones overlap").unitless()
         .field("size", &ReverbZone::size).doc("The box's half extents; zero fits it to the entity's mesh").unit("m").min(0.0);
     registerAudioEvents(r);
+}
 
-    // ---- vfx: the effect set and placed emitters ------------------------------------------------------------
-    r.setModule("vfx");
+// ---- vfx ----------------------------------------------------------------------------------------------------
+
+void registerVfxTypes(reflect::TypeRegistry& r) {
     r.type<VfxSet>("VfxSet").component().singleton().host(makeComponentOps<VfxSet>())
         .doc("The world's effect set (one per world): a .vfx.json declaring the effects (emitters of closed-form "
              "particles), decals, tracers and which events' cues spawn them. Without one, the default set.")
@@ -501,9 +415,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .min(0.0).max(1000.0)
         .field("seed", &VfxEmitter::seed).doc("Varies its particles' random draws").unitless()
         .field("active", &VfxEmitter::active).doc("Spawning; turning it on starts the count again");
+}
 
-    // ---- level: level files and their nodes -----------------------------------------------------------------
-    r.setModule("level");
+// ---- level --------------------------------------------------------------------------------------------------
+
+void registerLevelTypes(reflect::TypeRegistry& r) {
     r.type<Level>("Level").component().host(makeComponentOps<Level>())
         .doc("A level file (glTF) placed in the world. The level system expands it into one child entity per node of "
              "the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those "
@@ -524,9 +440,14 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("index", &LevelNode::index).doc("The node's index in the default scene, depth first").unitless();
     r.type<LevelDirty>("LevelDirty").component().runtime()
         .doc("Tag: the Level changed; the level system re-expands it this frame.");
+}
 
-    // ---- world_render: the GPU side of an entity ------------------------------------------------------------
-    r.setModule("world_render");
+// ---- world_render -------------------------------------------------------------------------------------------
+
+void registerWorldRenderTypes(reflect::TypeRegistry& r) {
+    using render::MaterialHandle;
+    using render::MeshHandle;
+
     r.type<MeshHandle>("MeshHandle").runtime()
         .doc("A mesh slot in the GPU render scene. Runtime only: files refer to meshes by source.")
         .field("index", &MeshHandle::index).doc("Slot index; 4294967295 means none").unitless()
@@ -545,8 +466,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("slot", &RenderSlot::slot).doc("Instance slot index").unitless();
     r.type<InstantiateDirty>("InstantiateDirty").component().runtime()
         .doc("Tag: MeshSource or Material changed; instantiate rebuilds the mesh renderer this frame.");
-
-    r.setModule({});
 }
 
 } // namespace ohao::ecs

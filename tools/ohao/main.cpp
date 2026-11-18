@@ -54,6 +54,7 @@
 #include "game/install.hpp"
 #include "game/loader.hpp"
 #include "game/module.hpp"
+#include "ecs/module.hpp"
 #include "engine/install.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/jobs/pool.hpp"
@@ -65,7 +66,6 @@
 #include "ecs/vfx.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
-#include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
 #include "level/level_hints.hpp"
 #include "level/level_system.hpp"
@@ -112,7 +112,7 @@ const game::Module* g_game = nullptr;
 // written).
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), g_game ? game::registerGameTypes(r, *g_game) : void(), true);
+    static const bool once = (engine::registerTypes(r), g_game ? game::registerGameTypes(r, *g_game) : void(), true);
     (void)once;
     return r;
 }
@@ -333,7 +333,7 @@ struct Context {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
-        engine::installEngine(*world, {*assets, engineTypes()});
+        engine::install(*world, {*assets, engineTypes()});
         if (game) game::installGame(*world, *game->module);
         session = std::make_unique<api::Session>(*world, engineTypes(), game);
         session->setAssetResolver(assets.get());
@@ -408,7 +408,7 @@ int cmdSchema(const Args& a) {
     // The channels and methods a world with the engine and the game (--game's) installed has.
     ecs::FileAssetResolver resolver{"."};
     ecs::World world;
-    engine::installEngine(world, {resolver, engineTypes()});
+    engine::install(world, {resolver, engineTypes()});
     if (g_game) game::installGame(world, *g_game);
     const api::Session session(world, engineTypes(), g_module);
     const std::vector<reflect::ChannelDoc> channels = api::channelDocs(world, engineTypes());

@@ -108,6 +108,7 @@ set_target_properties(ohao_bc7enc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(external)
 add_subdirectory(shaders)
+include(cmake/ohao_modules.cmake)   # ohao_add_module: the engine's modules
 add_subdirectory(ohao)
 # The games (steps 3i to 3k): each a game::Module (cmake/ohao_games.cmake), loaded by the hosts at run time.
 include(cmake/ohao_games.cmake)

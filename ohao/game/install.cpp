@@ -3,8 +3,8 @@
 #include "game/module.hpp"
 
 #include "ecs/animation.hpp"
+#include "ecs/module.hpp"
 #include "ecs/physics_scene.hpp"
-#include "ecs/scene_types.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
@@ -106,9 +106,11 @@ void registerGameTypes(reflect::TypeRegistry& types, const Module& module) {
 
 void installGame(ecs::World& world, const Module& module) {
     if (world.context().contains<InstalledGame>()) throw std::logic_error("a game is installed already");
+    const ecs::Services* services = ecs::worldServices(world);
+    if (!services) throw std::logic_error("game " + std::string(module.name()) + ": no engine module is installed");
     const Inventory before = inventory(world);
     try {
-        module.install(world);
+        module.install(world, *services);
     } catch (...) {
         remove(world, diff(module, before, inventory(world)));
         module.uninstall(world);
@@ -132,8 +134,8 @@ const Module* installedGame(const ecs::World& world) {
     return g ? g->module : nullptr;
 }
 
-bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, const Module& next, ReloadReport& report,
-                std::string& error) {
+bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, std::span<const Module* const> engine,
+                const Module& next, ReloadReport& report, std::string& error) {
     const auto* g = world.context().find<InstalledGame>();
     if (!g) {
         error = "no game is installed";
@@ -146,7 +148,7 @@ bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, const Mod
     // The types: the new build's, beside the engine's, against the registry the world's data was made with.
     {
         reflect::TypeRegistry scratch;
-        ecs::registerSceneTypes(scratch);
+        ecs::registerModuleTypes(scratch, engine);
         registerGameTypes(scratch, next);
         if (!scratch.errors().empty()) {
             error = "the new build's types do not register: " + scratch.errors().front();

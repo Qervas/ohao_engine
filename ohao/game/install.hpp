@@ -9,27 +9,30 @@
 // refused, the old build left installed: such an edit needs a new session. Reflected docs and limits keep the old
 // build's until then. The old build stays loaded (game/loader.hpp).
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace ohao::ecs {
 class World;
-}
+class Module;
+} // namespace ohao::ecs
 namespace ohao::reflect {
 class TypeRegistry;
 }
 
 namespace ohao::game {
 
-class Module;
+using Module = ecs::Module;
 
-// The module's types into `types`, after the engine's (ecs::registerSceneTypes), each recording the module's name
+// The module's types into `types`, after the engine's (engine::registerTypes), each recording the module's name
 // (TypeInfo::module: the catalogue says whose it is). Every host registers a game's types this way.
 void registerGameTypes(reflect::TypeRegistry& types, const Module& module);
 
-// Installs `module` on `world` (after engine::installEngine), recording what it added: simulate and sync systems,
-// snapshot hooks, animation drivers, presenters (world_render/present.hpp) and the physics control rule. If install
-// throws, what it added so far is removed before the exception goes on.
+// Installs `module` on `world` (after engine::install, with the services the engine's modules were given), recording
+// what it added: simulate and sync systems, snapshot hooks, animation drivers, presenters (world_render/present.hpp)
+// and the physics control rule. If install throws, what it added so far is removed before the exception goes on; a
+// world with no engine module installed throws std::logic_error.
 void installGame(ecs::World& world, const Module& module);
 // Removes what installGame recorded, then calls the module's uninstall for its own. Between steps.
 void uninstallGame(ecs::World& world);
@@ -42,10 +45,10 @@ struct ReloadReport {
 };
 
 // Swaps the world's game for `next`, a newer build of the installed one, between steps. `types` is the registry the
-// world's data was made with (the engine's and the old build's). False with `error` and the old build installed
-// again (its state restored) when a type's layout or a hook's state layout differs, a hook declares no layout, or
-// next's install throws.
-bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, const Module& next, ReloadReport& report,
-                std::string& error);
+// world's data was made with (`engine`'s types, engine::modules(), and the old build's). False with `error` and the
+// old build installed again (its state restored) when a type's layout or a hook's state layout differs, a hook
+// declares no layout, or next's install throws.
+bool reloadGame(ecs::World& world, const reflect::TypeRegistry& types, std::span<const Module* const> engine,
+                const Module& next, ReloadReport& report, std::string& error);
 
 } // namespace ohao::game

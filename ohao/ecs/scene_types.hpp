@@ -81,18 +81,22 @@ template <class T>
     return static_cast<const ComponentOps*>(t.host.get());
 }
 
-// Registers every ECS component and event payload, grouped by the module that owns it (ecs, visual, animation,
-// physics, audio, vfx, level, world_render), each group under TypeRegistry::setModule. The order is the catalogue's;
-// hashes, snapshots and saved files walk the types by name (ecs::snapshotTypes), so it changes none of them.
-// EntityId is not registered: it is the entity's key ("id" in scene files).
-void registerSceneTypes(reflect::TypeRegistry& r);
-// The Key enum (core/input.hpp's table), for any registry whose types name keys.
-void registerKeyEnum(reflect::TypeRegistry& r);
-// The engine's event payloads by module (ecs/event_types.cpp; registerSceneTypes calls each in its module's group).
-void registerWorldEvents(reflect::TypeRegistry& r);
+// The registrations of the modules not yet in their own directories (ecs/scene_types.cpp, ecs/event_types.cpp),
+// each its module's types; engine::registerTypes registers them in module order under each module's name. The order
+// is the catalogue's; hashes, snapshots and saved files walk the types by name (ecs::snapshotTypes). EntityId is not
+// registered: it is the entity's key ("id" in scene files).
+void registerVisualTypes(reflect::TypeRegistry& r);
+void registerAnimationTypes(reflect::TypeRegistry& r);   // with registerAnimationEvents
+void registerPhysicsTypes(reflect::TypeRegistry& r);     // with registerPhysicsEvents
+void registerAudioTypes(reflect::TypeRegistry& r);       // with registerAudioEvents
+void registerVfxTypes(reflect::TypeRegistry& r);
+void registerLevelTypes(reflect::TypeRegistry& r);
+void registerWorldRenderTypes(reflect::TypeRegistry& r);
 void registerAnimationEvents(reflect::TypeRegistry& r);
 void registerPhysicsEvents(reflect::TypeRegistry& r);
 void registerAudioEvents(reflect::TypeRegistry& r);
+// The Key enum (core/input.hpp's table; ecs/types.cpp), for any registry whose types name keys.
+void registerKeyEnum(reflect::TypeRegistry& r);
 
 // Writes entity references as the target's EntityId; dead or id-less targets as null.
 class WorldEntityIds final : public reflect::EntityIdMapper {

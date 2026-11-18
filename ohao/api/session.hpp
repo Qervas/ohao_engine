@@ -24,8 +24,11 @@
 #include <string_view>
 #include <vector>
 
-namespace ohao::game {
+namespace ohao::ecs {
 class Module;
+}
+namespace ohao::game {
+using Module = ecs::Module;
 struct LoadedModule;
 }
 

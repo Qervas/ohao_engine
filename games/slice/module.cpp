@@ -16,7 +16,7 @@ class SliceModule final : public game::Module {
 public:
     [[nodiscard]] std::string_view name() const override { return "slice"; }
     void registerTypes(reflect::TypeRegistry& types) const override { registerSliceTypes(types); }
-    void install(World& world) const override {
+    void install(World& world, const Services&) const override {
         auto& ctx = world.context();
         if (ctx.contains<SliceInstalled>()) return;
         ctx.emplace<SliceInstalled>();

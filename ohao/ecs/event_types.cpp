@@ -40,13 +40,6 @@ void registerPhysicsEvents(reflect::TypeRegistry& r) {
         .field("point", &JointBreakEvent::point).doc("Its anchor, world").unit("m");
 }
 
-void registerWorldEvents(reflect::TypeRegistry& r) {
-    r.type<RestoreEvent>("RestoreEvent").event()
-        .doc("world.restore: a restore (world.restore, a round's restart) put the world back to another moment; in "
-             "the history only, before the restored next-step events")
-        .field("step", &RestoreEvent::step).doc("The World's step the world went back to");
-}
-
 void registerAnimationEvents(reflect::TypeRegistry& r) {
     r.type<ClipEvent>("ClipEvent").event()
         .doc("anim.clip_event: an event a layer's clip fired in the step (mag_out, mag_in, bolt, body_fall, foot_l, ...)")

@@ -123,7 +123,7 @@ class SampleModule final : public game::Module {
 public:
     [[nodiscard]] std::string_view name() const override { return "sample"; }
     void registerTypes(reflect::TypeRegistry& types) const override { registerSampleTypes(types); }
-    void install(World& world) const override {
+    void install(World& world, const Services&) const override {
         const auto installed = world.simulateNames();
         if (std::find(installed.begin(), installed.end(), "shoot") != installed.end()) return;
         auto shooting = std::make_shared<Shooting>(world);

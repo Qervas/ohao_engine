@@ -21,7 +21,9 @@ Steps (sub-project 4 spec, "One entry point"):
      Then the API's methods against docs/agents/ohao-cli.md's Methods table, no binding number typed in C++
      (tools/gen_bindings.py --check), and no barrier, render pass, framebuffer or raw allocation outside the
      frame's two owners (FRAME_RULE), and no thread started outside the job pool and the two threads that block
-     (THREAD_RULE), and no EnTT signal connected outside the World (SIGNAL_RULE): any fails the build.
+     (THREAD_RULE), and no EnTT signal connected outside the World (SIGNAL_RULE), and the layers and modules
+     (tools/check_layers.py, over the graph configure wrote: an include added without a reconfigure too): any fails
+     the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
@@ -282,6 +284,17 @@ def check_signal_rule():
     return problems
 
 
+def check_layer_rule(build_dir):
+    """[problem]: tools/check_layers.py over <build>/check/modules.json (cmake/ohao_layers.cmake writes it at configure),
+    reading the sources as they are now."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import check_layers
+    graph = build_dir / "check" / "modules.json"
+    if not graph.is_file():
+        return [f"{graph} is missing: configure writes it (cmake/ohao_layers.cmake)"]
+    return check_layers.check(json.loads(graph.read_text(encoding="utf-8")))
+
+
 def check_method_docs(build_dir, config, out):
     """The API's methods (the catalogue, from the one method table) against the Methods table of
     docs/agents/ohao-cli.md: two places that must agree (system design 4.2). -> a list of problems."""
@@ -454,7 +467,8 @@ def main(argv=None):
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
-        problems = check_method_docs(build_dir, args.config, out) + check_frame_rule() + check_thread_rule() + check_signal_rule()
+        problems = (check_method_docs(build_dir, args.config, out) + check_frame_rule() + check_thread_rule() +
+                    check_signal_rule() + check_layer_rule(build_dir))
         gen = subprocess.run([sys.executable, str(ROOT / "tools/gen_bindings.py"), "--check"], capture_output=True, text=True)
         if gen.returncode != 0:
             problems += [l for l in gen.stdout.splitlines() if l] or [f"gen_bindings --check failed: {gen.stderr[-400:]}"]

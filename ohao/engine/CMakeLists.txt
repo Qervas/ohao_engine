@@ -1,5 +1,5 @@
-# The one install of a World's systems (system design 4.2, step 2b): every host calls installEngine, and
-# installRendering once it has a renderer.
+# The engine's module list and their one install (system design 4.2; engine/install.hpp): every host registers the
+# modules' types and installs them (engine::install), and installRendering once it has a renderer.
 add_library(ohao_engine STATIC install.cpp install.hpp)
 target_include_directories(ohao_engine PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_engine PUBLIC cxx_std_20)

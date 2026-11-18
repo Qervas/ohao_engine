@@ -1,8 +1,12 @@
 #pragma once
-// The one install of a World's systems (system design 4.2, step 2b). Every host (the window, the CLI, ohao serve,
-// the benches) calls installEngine, and installRendering once a renderer exists (at once in a window, at the first
-// capture headless). Where each system runs is computed from what the systems declare (ecs::SystemDecl), not the
-// call order, so hosts differ only by what they install.
+// The engine's modules (step 4b-6b; ecs/module.hpp) and their one install (system design 4.2): every host registers
+// the modules' types (registerTypes) and installs them on each World (install), then its game's. Where each system
+// runs is computed from what the systems declare (ecs::SystemDecl), not the call order, so hosts differ only by which
+// modules they install. installRendering adds what a renderer needs once a host has one (at once in a window, at the
+// first capture headless).
+#include <span>
+#include <string_view>
+
 namespace ohao {
 class BindlessTextureManager;
 namespace reflect { class TypeRegistry; }
@@ -10,19 +14,24 @@ namespace render { class RenderScene; }
 namespace ecs {
 class World;
 class AssetResolver;
+class Module;
+class Services;
 } // namespace ecs
 } // namespace ohao
 
 namespace ohao::engine {
 
-struct EngineConfig {
-    ecs::AssetResolver& assets;
-    const reflect::TypeRegistry& types;
-};
+// Every engine module: ecs, visual, animation, physics, audio, vfx, level, world_render.
+[[nodiscard]] std::span<const ecs::Module* const> modules();
 
-// Animation, physics, the audio schedule, vfx, levels (module order): the engine's simulation and its snapshot hooks.
-// No game system: a host that plays a game installs it after (game::Module::install; the slice: slice/module.hpp).
-void installEngine(ecs::World& world, const EngineConfig& config);
+// Every engine module's types, in module order, each under its name (TypeInfo::module). A game's follow
+// (game::registerGameTypes).
+void registerTypes(reflect::TypeRegistry& types);
+
+// Installs the engine's modules on `world`, in module order: every one, or the ones `only` names and their
+// dependencies (a bench's). A second call installs only what the first did not. No game system: a host that plays a
+// game installs it after (game::installGame).
+void install(ecs::World& world, const ecs::Services& services, std::span<const std::string_view> only = {});
 
 // Instantiate (MeshSources into meshes), the render extract, the effects' draw: what a renderer needs.
 void installRendering(ecs::World& world, render::RenderScene& scene, BindlessTextureManager* textures,

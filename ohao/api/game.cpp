@@ -2,6 +2,7 @@
 // steps. The module's rows of the method table change after the call (Session::Impl::pendingGame), never while one runs.
 #include "api/internal.hpp"
 
+#include "engine/install.hpp"
 #include "game/install.hpp"
 #include "game/loader.hpp"
 #include "game/module.hpp"
@@ -29,7 +30,7 @@ bool methodGameReload(Session::Impl& s, const JsonDocument&, const JsonNode& par
     }
     const auto t1 = std::chrono::steady_clock::now();
     game::ReloadReport report;
-    if (!game::reloadGame(s.world, s.types, *next->module, report, error)) {
+    if (!game::reloadGame(s.world, s.types, engine::modules(), *next->module, report, error)) {
         ctx.error("E_RELOAD", params, error, "a build whose types and state keep their layout");
         return false;
     }

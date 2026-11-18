@@ -24,6 +24,7 @@
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_types.hpp"
+#include "engine/install.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
@@ -46,7 +47,7 @@ namespace {
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (engine::registerTypes(r), true);
     (void)once;
     return r;
 }

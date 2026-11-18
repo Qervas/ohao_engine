@@ -5,5 +5,6 @@ target_include_directories(ohao_api PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_api PUBLIC cxx_std_20)
 # ohao_level_world: level.info and level.reload read the level system's summary and reload it
 # (level/level_system.hpp). It links level, ecs and reflect only: no cycle back to the API.
-# ohao_game_api: a session serves its game's methods (game::Module) after the engine's.
-target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_level_world ohao_reflect ohao_game_api ohao_unordered_dense)
+# ohao_game_api: a session serves its game's methods (game::Module) after the engine's. ohao_engine: game.reload
+# registers the engine's modules' types beside the new build's.
+target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_level_world ohao_reflect ohao_game_api ohao_engine ohao_unordered_dense)

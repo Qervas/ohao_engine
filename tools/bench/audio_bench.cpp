@@ -47,6 +47,7 @@
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "engine/install.hpp"
 #include "ecs/scene_view.hpp"
 #include "slice/module.hpp"
 #include "ecs/snapshot.hpp"
@@ -229,7 +230,7 @@ constexpr float kDt = 1.0f / 60.0f;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), game::registerGameTypes(r, slice::module()), true);
+    static const bool once = (engine::registerTypes(r), game::registerGameTypes(r, slice::module()), true);
     (void)once;
     return r;
 }
@@ -286,7 +287,7 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     ecs::installWorldSnapshots(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
-    slice::module().install(w);   // combat, the animation drivers, its presentation
+    slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) return out;
     for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
     entt::entity player = entt::null;
@@ -440,7 +441,7 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     ecs::installWorldSnapshots(w, engineTypes());
     (void)ecs::installAnimation(w, files);
     ecs::AudioSchedule& audio = ecs::installAudio(w, files);
-    slice::module().install(w);   // combat, the animation drivers, its presentation
+    slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) {
         error = "grenade-spatial: the play scene did not load";
         return false;

@@ -52,7 +52,7 @@
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
-#include "ecs/scene_types.hpp"
+#include "engine/install.hpp"
 #include "reflect/json_writer.hpp"
 
 #ifdef _WIN32
@@ -82,7 +82,7 @@ namespace {
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), true);
+    static const bool once = (engine::registerTypes(r), true);
     (void)once;
     return r;
 }

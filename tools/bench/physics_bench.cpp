@@ -50,6 +50,7 @@
 #include "reflect/registry.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/world_hash.hpp"
+#include "ecs/module.hpp"
 #include "engine/install.hpp"
 #include "core/jobs/pool.hpp"
 
@@ -76,7 +77,7 @@ constexpr float kDt = 1.0f / 60.0f;
 
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), game::registerGameTypes(r, slice::module()), true);
+    static const bool once = (engine::registerTypes(r), game::registerGameTypes(r, slice::module()), true);
     (void)once;
     return r;
 }
@@ -627,7 +628,7 @@ int main(int argc, char** argv) {
         ecs::installPhysics(w, files);
         ecs::installWorldSnapshots(w, engineTypes());
         ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
-        slice::module().install(w);   // combat, the animation drivers, its presentation
+        slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("play scene: blockout_play.scene.json did not load");
@@ -668,7 +669,7 @@ int main(int argc, char** argv) {
         ecs::installAnimation(w, files);
         ecs::installAudio(w, files);
         ecs::VfxSystem& vfx = ecs::installVfx(w, files);
-        slice::module().install(w);   // combat, the animation drivers, its presentation
+        slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("vfx: blockout_play.scene.json did not load");
@@ -773,7 +774,7 @@ int main(int argc, char** argv) {
             ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
             ecs::World w;
             w.seedIds(7);
-            engine::installEngine(w, {files, engineTypes()});
+            engine::install(w, {files, engineTypes()});
             ecs::installWorldSnapshots(w, engineTypes());   // the Round's start, as the hosts give it
             game::installGame(w, slice::module());
             if (!ecs::loadSceneFile(w, path, engineTypes())) {

@@ -36,7 +36,7 @@
 #include "game/loader.hpp"
 #include "core/log.hpp"
 #include "ecs/components.hpp"
-#include "ecs/scene_types.hpp"
+#include "engine/install.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/live_host.hpp"
 
@@ -80,7 +80,7 @@ std::shared_ptr<const ohao::game::LoadedModule> g_slice;
 // The engine's types and the game's.
 const reflect::TypeRegistry& engineTypes() {
     static reflect::TypeRegistry r;
-    static const bool once = (ecs::registerSceneTypes(r), ohao::game::registerGameTypes(r, *g_slice->module), true);
+    static const bool once = (ohao::engine::registerTypes(r), ohao::game::registerGameTypes(r, *g_slice->module), true);
     (void)once;
     return r;
 }

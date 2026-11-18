@@ -3,7 +3,7 @@
 #include "api/session.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
-#include "ecs/scene_types.hpp"
+#include "engine/install.hpp"
 #include "ecs/world.hpp"
 #include "game/install.hpp"
 #include "game/module.hpp"
@@ -273,14 +273,14 @@ void shaderChecks(const Options& o, std::vector<Check>& out) {
 // registry records them and nothing else reads them, and a game's reload refuses a build whose types do not register.
 void typesCheck(const Options& o, std::vector<Check>& out) {
     reflect::TypeRegistry types;
-    ecs::registerSceneTypes(types);
+    engine::registerTypes(types);
     if (o.game) game::registerGameTypes(types, *o.game);
     const std::string which = o.game ? "the engine's and " + std::string(o.game->name()) + "'s" : "the engine's";
     if (types.errors().empty())
         out.push_back(pass("types.register", "error", std::to_string(types.types().size()) + " types (" + which + ")"));
     else
         out.push_back(fail("types.register", "error", listCapped(types.errors()),
-                           "fix the registration (ecs/scene_types.cpp, ecs/event_types.cpp, a game's registerTypes)"));
+                           "fix the registration (a module's registerTypes: its types.cpp; a game's registerTypes)"));
 }
 
 void assetCheck(const Options& o, std::vector<Check>& out) {
@@ -297,7 +297,7 @@ void assetCheck(const Options& o, std::vector<Check>& out) {
         return;
     }
     reflect::TypeRegistry types;
-    ecs::registerSceneTypes(types);
+    engine::registerTypes(types);
     ecs::FileAssetResolver assets(o.root.string());
     std::vector<std::string> missing;
     for (const fs::path& f : files) {
