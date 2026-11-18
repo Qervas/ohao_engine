@@ -43,7 +43,7 @@ void runRange(const ForLoop& loop, Counter& counter, uint32_t first, uint32_t la
     while (last - first > 1) {
         const uint32_t mid = first + (last - first) / 2;
         counter.value.fetch_add(1, std::memory_order_relaxed);
-        Task* t = makeTask(loop.name, Priority::Frame, [&loop, &counter, mid, last] { runRange(loop, counter, mid, last); });
+        Task* t = makeTask(loop.name, loop.priority, [&loop, &counter, mid, last] { runRange(loop, counter, mid, last); });
         t->counter = &counter;
         submit(t);
         last = mid;

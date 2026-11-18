@@ -41,7 +41,7 @@ namespace backend {
 struct BackendConfig {
     glm::vec3 gravity{0.0f, -9.81f, 0.0f};
     bool enableMultithreading{true};   // false: no worker threads (the engine's: a step is the same on every machine)
-    int workerThreads{0};              // 0: one fewer than the hardware's
+    int workerThreads{0};              // 0: none
     std::size_t maxBodies{10000};
 };
 

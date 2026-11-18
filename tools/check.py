@@ -20,7 +20,8 @@ Steps (sub-project 4 spec, "One entry point"):
      load has crashed the reference machine);
      Then the API's methods against docs/agents/ohao-cli.md's Methods table, no binding number typed in C++
      (tools/gen_bindings.py --check), and no barrier, render pass, framebuffer or raw allocation outside the
-     frame's two owners (FRAME_RULE): any fails the build.
+     frame's two owners (FRAME_RULE), and no thread started outside the job pool and the two threads that block
+     (THREAD_RULE): any fails the build.
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
@@ -233,6 +234,31 @@ def check_frame_rule():
     return problems
 
 
+# Step 4b: one job pool shaped to the CPU (ohao/core/jobs); a helper that starts threads of its own oversubscribes it.
+# Only the pool, the RPC reader (a blocking stdin read) and the present waiter (a blocking vkWaitForPresentKHR) start
+# threads.
+THREAD_RULE = re.compile(r"\bstd::(thread|jthread|async)\b")
+THREAD_OWNERS = ("ohao/core/jobs/", "ohao/rpc/server.cpp", "ohao/gpu/vulkan/present_waiter.cpp",
+                 "ohao/gpu/vulkan/present_waiter.hpp")
+
+
+def check_thread_rule():
+    """[problem]: each line outside THREAD_OWNERS (engine, games, tools, tests, examples) that names std::thread,
+    std::jthread or std::async."""
+    problems = []
+    for top in ("ohao", "games", "tools", "tests", "examples"):
+        for path in sorted((ROOT / top).rglob("*")):
+            rel = path.relative_to(ROOT).as_posix()
+            if path.suffix not in (".cpp", ".hpp", ".h") or rel.startswith(THREAD_OWNERS):
+                continue
+            for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                m = THREAD_RULE.search(line)
+                if m:
+                    problems.append(f"{rel}:{n}: std::{m.group(1)} outside the job pool: use jobs::parallelFor, "
+                                    f"jobs::Graph or jobs::background (ohao/core/jobs/graph.hpp)")
+    return problems
+
+
 def check_method_docs(build_dir, config, out):
     """The API's methods (the catalogue, from the one method table) against the Methods table of
     docs/agents/ohao-cli.md: two places that must agree (system design 4.2). -> a list of problems."""
@@ -405,7 +431,7 @@ def main(argv=None):
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
-        problems = check_method_docs(build_dir, args.config, out) + check_frame_rule()
+        problems = check_method_docs(build_dir, args.config, out) + check_frame_rule() + check_thread_rule()
         gen = subprocess.run([sys.executable, str(ROOT / "tools/gen_bindings.py"), "--check"], capture_output=True, text=True)
         if gen.returncode != 0:
             problems += [l for l in gen.stdout.splitlines() if l] or [f"gen_bindings --check failed: {gen.stderr[-400:]}"]

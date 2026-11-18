@@ -93,6 +93,7 @@ constexpr int kP = 0, kE = 1;
 
 thread_local Thread* tlsThread = nullptr;
 thread_local Slab* tlsSlab = nullptr;
+thread_local Priority tlsPriority = Priority::Frame;   // the running task's
 
 std::mutex& slabsMutex() {
     static std::mutex m;
@@ -368,7 +369,10 @@ Task* Pool::find(Thread* me) {
 }
 
 void Pool::execute(Thread* me, Task* t) {
+    const Priority outer = tlsPriority;
+    tlsPriority = t->priority;
     t->run(*t);
+    tlsPriority = outer;
     if (me) me->run.fetch_add(1, std::memory_order_relaxed);
     for (int i = 0; i < t->successorCount; ++i)
         if (t->successors[i]->prerequisites.fetch_sub(1, std::memory_order_acq_rel) == 1) push(t->successors[i]);
@@ -595,5 +599,7 @@ void precede(Task* before, Task* after) {
 void submit(Task* task) { pool().push(task); }
 
 void wait(Counter& counter) { pool().wait(counter); }
+
+Priority currentPriority() noexcept { return tlsPriority; }
 
 } // namespace ohao::jobs

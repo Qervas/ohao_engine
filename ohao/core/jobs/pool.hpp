@@ -122,5 +122,7 @@ void submit(Task* task);
 // Returns when `counter` reaches 0: the game thread and the workers run frame tasks meanwhile, any other thread
 // sleeps.
 void wait(Counter& counter);
+// The priority of the task this thread runs now (Frame outside any task): what work it forks takes by default.
+[[nodiscard]] Priority currentPriority() noexcept;
 
 } // namespace ohao::jobs

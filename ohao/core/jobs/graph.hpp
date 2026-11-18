@@ -9,7 +9,9 @@
 //
 //   jobs::parallelFor(0, n, 64, [&](std::size_t lo, std::size_t hi) { ... });   // returns when all ran
 //
-// parallelFor's chunks are [begin + k * grain, begin + (k + 1) * grain), cut by the range and the grain alone, so a
+// parallelFor's chunks run at the priority of the task that calls it (frame outside any task), or the one given: a
+// cook's chunks at background priority run on workers only, and a cook's own nested loops stay background.
+// Its chunks are [begin + k * grain, begin + (k + 1) * grain), cut by the range and the grain alone, so a
 // body that writes per index gives the same result at any thread count; reductions are the caller's, in index order.
 // At one thread it runs the same tasks on the calling thread.
 #include "core/jobs/pool.hpp"
@@ -53,19 +55,22 @@ struct ForLoop {
     std::size_t begin, end, grain;
     uint32_t chunks;
     const char* name;
+    Priority priority;
 };
 void parallelFor(const ForLoop& loop);
 } // namespace detail
 
 // fn(lo, hi) for each chunk of [begin, end); returns when every chunk ran.
-template <class F> void parallelFor(std::size_t begin, std::size_t end, std::size_t grain, F&& fn, const char* name = "parallelFor") {
+template <class F>
+void parallelFor(std::size_t begin, std::size_t end, std::size_t grain, F&& fn, const char* name = "parallelFor",
+                 Priority priority = currentPriority()) {
     if (end <= begin) return;
     grain = std::max<std::size_t>(grain, 1);
     using Body = std::remove_reference_t<F>;
     const std::size_t chunks = (end - begin + grain - 1) / grain;
     const detail::ForLoop loop{const_cast<void*>(static_cast<const void*>(&fn)),
                                [](void* f, std::size_t lo, std::size_t hi) { (*static_cast<Body*>(f))(lo, hi); },
-                               begin, end, grain, static_cast<uint32_t>(chunks), name};
+                               begin, end, grain, static_cast<uint32_t>(chunks), name, priority};
     detail::parallelFor(loop);
 }
 

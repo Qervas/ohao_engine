@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 
 namespace ohao {
@@ -74,10 +75,11 @@ VkResult createRtPipelineJoined(PFN_vkCreateRayTracingPipelinesKHR createPipelin
         };
         const uint32_t useful = concurrency(device, op);
         const uint32_t extra = std::min(workers, useful > 1u ? useful - 1u : 0u);
-        std::vector<std::thread> pool;
-        for (uint32_t i = 0; i < extra; ++i) pool.emplace_back(work);
+        // The extra joins are background tasks on the job pool's workers (at one thread, each runs at once here).
+        jobs::Counter joined;
+        for (uint32_t i = 0; i < extra; ++i) jobs::background("rt.compile", [&work] { work(); }, &joined);
         work();
-        for (auto& t : pool) t.join();
+        jobs::wait(joined);
         threadsUsed = 1u + extra;
         r = result(device, op);
     } else if (r == VK_OPERATION_NOT_DEFERRED_KHR) {

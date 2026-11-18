@@ -311,12 +311,8 @@ bool JoltPhysicsBackend::initialize(const BackendConfig& config) {
         m_tempAllocator = std::make_unique<JPH::TempAllocatorImplWithMallocFallback>(10 * 1024 * 1024);
 
         // Job system
-        unsigned int numThreads = std::max(1u, std::thread::hardware_concurrency() - 1);
-        if (!config.enableMultithreading) {
-            numThreads = 0;
-        } else if (config.workerThreads > 0) {
-            numThreads = static_cast<unsigned int>(config.workerThreads);
-        }
+        const unsigned int numThreads =
+            config.enableMultithreading ? static_cast<unsigned int>(std::max(0, config.workerThreads)) : 0u;
         m_jobSystem = std::make_unique<JPH::JobSystemThreadPool>(
             JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, numThreads
         );

@@ -20,7 +20,7 @@ public:
     // Writes one whole message line (ending in '\n') and flushes it. The server never
     // calls it from two threads at once.
     virtual void write(std::string_view line) = 0;
-    // Makes a read() blocked on `readerThread` (a std::thread native handle) return 0, so a
+    // Makes a read() blocked on `readerThread` (the reader thread's native handle) return 0, so a
     // host can stop serving while the client still holds the input open (a window closed
     // by its user). Best effort: the server calls it until the reader has returned.
     virtual void interruptRead(void* readerThread) { (void)readerThread; }

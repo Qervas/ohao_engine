@@ -6,6 +6,7 @@
 
 #include "runtime/image.hpp"
 
+#include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 #include "render/frame/preview_extent.hpp"
 
@@ -15,7 +16,6 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
-#include <thread>
 
 namespace ohao::runtime {
 
@@ -276,16 +276,14 @@ std::string pngOf(std::span<const uint8_t> pixels, uint32_t width, uint32_t heig
     // image alone.
     const uint32_t bands = std::max<uint32_t>(1, std::min<uint32_t>(4, height / 64));
     std::vector<Band> parts(bands);
-    std::vector<std::thread> workers;
-    for (uint32_t k = 0; k < bands; ++k) {
-        const uint32_t y0 = height * k / bands, y1 = height * (k + 1) / bands;
-        const bool last = k + 1 == bands;
-        if (k + 1 < bands)
-            workers.emplace_back([&, k, y0, y1, last] { encodeBand(parts[k], pixels, row, y0, y1, last); });
-        else
-            encodeBand(parts[k], pixels, row, y0, y1, last);
-    }
-    for (auto& t : workers) t.join();
+    // A band per task, at the caller's priority: its caller waits for the file, and at background priority the
+    // bands went to the E-cores, 1 ms slower at 1080p. The caller encodes the first.
+    jobs::parallelFor(0, bands, 1, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t k = lo; k < hi; ++k) {
+            const uint32_t y0 = height * static_cast<uint32_t>(k) / bands, y1 = height * static_cast<uint32_t>(k + 1) / bands;
+            encodeBand(parts[k], pixels, row, y0, y1, k + 1 == bands);
+        }
+    }, "png.band");
 
     // zlib: header, the bands' blocks, then the Adler-32 of the whole filtered stream.
     std::size_t total = 2 + 4;

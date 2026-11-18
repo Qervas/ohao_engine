@@ -1,6 +1,7 @@
 #include "cook/cook.hpp"
 
 #include "cook/model_loader.hpp"
+#include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 
 #include <simdjson.h>
@@ -10,11 +11,9 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <mutex>
-#include <thread>
 #include <cstring>
 
 namespace ohao::cook {
@@ -80,20 +79,12 @@ ContentHash textureKey(cooked::TextureKind kind, uint32_t width, uint32_t height
     return h.finish();
 }
 
-// fn(i) for i in [0, count), on every core.
+// fn(i) for i in [0, count), one task per index, at background priority on the job pool: on the workers, never
+// inside a frame's wait.
 template <class F> void parallelFor(uint32_t count, F&& fn) {
-    const uint32_t workers = std::min(count, std::max(1u, std::thread::hardware_concurrency()));
-    if (workers <= 1) {
-        for (uint32_t i = 0; i < count; ++i) fn(i);
-        return;
-    }
-    std::atomic<uint32_t> next{0};
-    std::vector<std::thread> threads;
-    for (uint32_t t = 0; t < workers; ++t)
-        threads.emplace_back([&] {
-            for (uint32_t i = next.fetch_add(1); i < count; i = next.fetch_add(1)) fn(i);
-        });
-    for (std::thread& t : threads) t.join();
+    jobs::parallelFor(0, count, 1, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i) fn(static_cast<uint32_t>(i));
+    }, "cook", jobs::Priority::Background);
 }
 
 struct Level {

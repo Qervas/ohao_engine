@@ -1,11 +1,11 @@
 #include "asset/meshlets.hpp"
+#include "core/jobs/graph.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
-#include <thread>
 
 namespace ohao {
 
@@ -17,9 +17,8 @@ constexpr uint32_t kNone = 0xFFFFFFFFu;
 // A triangle joins a meshlet only while its normal is within ~53 degrees of the meshlet's mean
 // normal so far: meshlets stay flat enough for their normal cones to cull.
 constexpr float kConeLimit = 0.6f;
-// Face normals go over threads from this many triangles, on at most this many.
-constexpr uint32_t kParallelTriangles = 65536;
-constexpr uint32_t kMaxWorkers = 8;
+// Face normals go over the job pool in chunks of this many triangles (a mesh with fewer runs in one, inline).
+constexpr uint32_t kNormalGrain = 16384;
 
 // The meshlet's sphere (its vertices' box centre, the farthest vertex) and normal cone (the
 // triangles' mean unit normal; the cutoff is sin of the widest angle to it, as
@@ -76,9 +75,9 @@ void buildMeshlets(std::span<const Vertex> vertices, std::span<const uint32_t> i
     out.vertices.reserve(out.vertices.size() + triCount);   // a closed mesh has about half as many
 
     // Unit face normals (zero for a degenerate triangle: it fits any meshlet). Each is its own
-    // triangle's alone, so a large mesh splits them over threads (a million triangles: ~11 ms
-    // on one); the values do not depend on the split.
-    // Default-initialised (glm::vec3 is trivial: no zeroing pass), so the workers' first writes
+    // triangle's alone, so a large mesh splits them over the pool (a million triangles: ~11 ms
+    // on one thread); the values do not depend on the split.
+    // Default-initialised (glm::vec3 is trivial: no zeroing pass), so the chunks' first writes
     // fault its pages in, in parallel.
     const std::unique_ptr<glm::vec3[]> faceNormalStore = std::make_unique_for_overwrite<glm::vec3[]>(triCount);
     glm::vec3* const faceNormal = faceNormalStore.get();
@@ -90,18 +89,9 @@ void buildMeshlets(std::span<const Vertex> vertices, std::span<const uint32_t> i
             faceNormal[t] = len > 1e-12f ? n / len : glm::vec3(0.0f);
         }
     };
-    const uint32_t workers =
-        triCount < kParallelTriangles ? 1u : std::clamp(std::thread::hardware_concurrency(), 1u, kMaxWorkers);
-    if (workers == 1) {
-        normalsOf(0, triCount);
-    } else {
-        std::vector<std::thread> pool;
-        const uint32_t chunk = (triCount + workers - 1) / workers;
-        for (uint32_t w = 1; w < workers; ++w)
-            pool.emplace_back(normalsOf, std::min(triCount, w * chunk), std::min(triCount, (w + 1) * chunk));
-        normalsOf(0, std::min(triCount, chunk));
-        for (std::thread& th : pool) th.join();
-    }
+    jobs::parallelFor(0, triCount, kNormalGrain, [&](std::size_t lo, std::size_t hi) {
+        normalsOf(static_cast<uint32_t>(lo), static_cast<uint32_t>(hi));
+    }, "meshlets.normals");
 
     std::vector<uint8_t> used(triCount, 0);
     std::vector<uint8_t> score(triCount, 0);       // the triangle's vertices already in the meshlet
