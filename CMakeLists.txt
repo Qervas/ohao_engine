@@ -108,6 +108,7 @@ set_target_properties(ohao_bc7enc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(external)
 add_subdirectory(shaders)
+include(cmake/ohao_pch.cmake)       # ohao_precompile: the stable headers, parsed once a target
 include(cmake/ohao_modules.cmake)   # ohao_add_module: the engine's modules
 add_subdirectory(ohao)
 # The games (steps 3i to 3k): each a game::Module (cmake/ohao_games.cmake), loaded by the hosts at run time.
@@ -124,6 +125,13 @@ if(BUILD_SCENE_BENCH)
 endif()
 # The ohao CLI (validate, fmt, apply, query, summary, run, schema) and its render host.
 add_subdirectory(tools/ohao)
+
+# The engine's libraries above the modules, the hosts and the tools a component edit recompiles, precompiled as
+# the modules are (cmake/ohao_pch.cmake).
+ohao_precompile_directories(ohao/api ohao/runtime ohao/rpc ohao/game tools/ohao examples)
+if(BUILD_SCENE_BENCH)
+    ohao_precompile_directories(tools/bench)
+endif()
 
 # The harnesses and gates that are not one suite's executable (needs every target above).
 ohao_register_harness_tests()

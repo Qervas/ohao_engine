@@ -25,6 +25,7 @@ function(ohao_add_module name)
     if(M_LINKS)
         target_link_libraries(ohao_${name} PUBLIC ${M_LINKS})
     endif()
+    ohao_precompile(ohao_${name})
 
     # k<Name>Dependencies: "physics" -> kPhysicsDependencies, "world_render" -> kWorldRenderDependencies.
     string(REPLACE "_" ";" words "${name}")
