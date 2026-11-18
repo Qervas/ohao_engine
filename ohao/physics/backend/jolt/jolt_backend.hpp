@@ -4,6 +4,8 @@
 
 #include "physics/backend/physics_backend.hpp"
 #include "physics/backend/jolt/jolt_jobs.hpp"
+#include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +22,41 @@
 namespace ohao {
 namespace physics {
 namespace backend {
+
+// Jolt's scratch for a step (and a character's move): a stack over one block, reserved for what a step asks for.
+// A step takes its contact buffer at the contact cap (maxContactConstraints x 864 bytes: 57 MB at 65,536 bodies); a
+// smaller block sent it to the heap every step, an mmap and a munmap whose touched pages faulted in again each step,
+// on every thread (the crowd: 2.7 M page faults in 1,800 steps, a sixth of its step). What does not fit is taken from
+// the heap and counted; grow(), between steps, makes the block that much larger, so a short block is short once.
+class StepTempAllocator final : public JPH::TempAllocator {
+public:
+    explicit StepTempAllocator(JPH::uint size) : m_block(std::make_unique<JPH::TempAllocatorImpl>(size)) {}
+    void* Allocate(JPH::uint size) override {
+        if (m_block->CanAllocate(size)) return m_block->Allocate(size);
+        m_overflow += JPH::AlignUp(size, JPH_RVECTOR_ALIGNMENT);
+        m_peak = std::max(m_peak, m_overflow);
+        return size > 0 ? JPH::AlignedAllocate(size, JPH_RVECTOR_ALIGNMENT) : nullptr;
+    }
+    void Free(void* address, JPH::uint size) override {
+        if (!address) return;
+        if (m_block->OwnsMemory(address)) return m_block->Free(address, size);
+        m_overflow -= JPH::AlignUp(size, JPH_RVECTOR_ALIGNMENT);
+        JPH::AlignedFree(address);
+    }
+    // Between steps (nothing allocated): the block grows by the most that was ever on the heap at once. Returns its
+    // new size, 0 when it stays.
+    std::size_t grow() {
+        if (m_peak == 0 || !m_block->IsEmpty()) return 0;
+        const std::size_t size = m_block->GetSize() + m_peak;
+        m_block = std::make_unique<JPH::TempAllocatorImpl>(static_cast<JPH::uint>(size));
+        m_peak = 0;
+        return size;
+    }
+
+private:
+    std::unique_ptr<JPH::TempAllocatorImpl> m_block;
+    std::size_t m_overflow{0}, m_peak{0};
+};
 
 /**
  * Jolt Physics backend - production-grade physics.
@@ -179,7 +216,7 @@ private:
 
     // Jolt core systems
     std::unique_ptr<JPH::PhysicsSystem> m_physicsSystem;
-    std::unique_ptr<JPH::TempAllocatorImplWithMallocFallback> m_tempAllocator;
+    std::unique_ptr<StepTempAllocator> m_tempAllocator;
     JoltJobsPtr m_jobs;   // Jolt's jobs on the engine's pool (jolt_jobs.hpp)
 
     // Collision filtering (must outlive physics system)

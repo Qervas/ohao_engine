@@ -317,11 +317,6 @@ bool JoltPhysicsBackend::initialize(const BackendConfig& config) {
     try {
         ensureJoltGlobalInit();
 
-        // Temp allocator: 10 MB, then the heap. A step takes its contact buffer from it, sized by
-        // the body cap (maxContactConstraints below): with a fixed block, a cap of 65,536 asked
-        // for more than 10 MB and Jolt aborted the process on the first step.
-        m_tempAllocator = std::make_unique<JPH::TempAllocatorImplWithMallocFallback>(10 * 1024 * 1024);
-
         // Jolt's jobs on the engine's job pool
         m_jobs = makeJoltJobs();
 
@@ -340,6 +335,12 @@ bool JoltPhysicsBackend::initialize(const BackendConfig& config) {
         const JPH::uint numBodyMutexes = 0;
         const JPH::uint maxBodyPairs = maxBodies * 2;
         const JPH::uint maxContactConstraints = maxBodies;
+
+        // Temp allocator: 10 MB, and 1 KB a contact constraint for the step's contact buffer (Jolt 5.1's is 864
+        // bytes), reserved, not touched: a page is backed once a step first writes it. Grown after a step to what
+        // the step took, should a step ever take more (StepTempAllocator).
+        m_tempAllocator = std::make_unique<StepTempAllocator>(
+            static_cast<JPH::uint>(10 * 1024 * 1024 + std::size_t(maxContactConstraints) * 1024));
 
         m_physicsSystem->Init(
             maxBodies, numBodyMutexes, maxBodyPairs, maxContactConstraints,
@@ -449,6 +450,8 @@ void JoltPhysicsBackend::step(float deltaTime) {
         }
         m_physicsSystem->Update(deltaTime, m_collisionSteps, m_tempAllocator.get(), joltJobSystem(*m_jobs));
         finishJoltJobs(*m_jobs);
+        if (const std::size_t grown = m_tempAllocator->grow())
+            OHAO_LOG(Debug, physics, "Jolt: temp block grown to {} MB", grown >> 20);
         // Jolt's callbacks arrive from any thread in any order; this step's, sorted by what they are about, are the
         // same at any thread count (a pair's first manifold gives its begin point and normal).
         {
