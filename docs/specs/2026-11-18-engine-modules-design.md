@@ -21,6 +21,32 @@
 - **R3. The build stops after commit 5 and reports** (one agent's context holds five of these commits); the rest is a
   second build.
 
+- **R4. One feature, one module: the engine is additive** (Frank, 2026-11-18: "1 feature 1 mod. so that it makes
+  sure the system is additive"). A module is a feature, not a subsystem's whole: a feature that spans subsystems is
+  its own small module depending on them (footsteps, today inside the audio schedule's `footFromClips`, depends on
+  audio, animation and physics; the player controller depends on physics' characters), never code added to one of
+  them. Every module has one shape: its data (components, events and its files' schema), a pure core below where it
+  has one (no World: the math, the backend), its systems with their declarations, its methods.
+- **R5. Additive by proof, not by intention.**
+  - *Static, every `check.py`:* `check_layers.py` proves each module deletable: nothing outside it and the modules
+    that declare it includes it, links it or names its install. A module's removal is then a directory and a line.
+  - *Dynamic, at a step's close:* the engine built and its gates run with each leaf module removed (the dependency
+    closure), so "deletable" is a build, not a claim.
+  - *Additive commits:* a feature's commit touches its module's directory and the module list only; `check.py
+    --changed` says which modules a change touches, so a feature that edits a second module is seen.
+- **R6. The engine describes itself to agents** (the project's requirement: games built with AI, through `ohao serve`).
+  `engine.modules` over the API and MCP: each module, its dependencies, its components, its event channels with their
+  writers and typed readers, its systems with their access sets, phase and wave, its methods; and live, each module's
+  cost (CPU a step and a sync from the waves' timings, its memory) beside `render.stats`. An agent asks the running
+  engine who writes `Health` or what a module costs, instead of reading the tree. Built after 4b-6b's last commit, from
+  what the World already records (the declarations, the channels, the reflection), with no second source.
+- **R7. Measured first, then decided: engine modules reloaded live in development.** The game `.so` already reloads
+  with its state across builds (`game.reload`, layout keys); every module's state is in components or snapshot hooks,
+  so a module could reload the same way (snapshot its state, unload, load the new build, restore) and an edit to
+  physics would not restart a session. Before any build: what a restart of `ohao serve` costs on the play scene
+  against a game reload, and what reloading a module's state would need (Jolt's bodies rebuilt from components).
+  Built only if the measurement shows it is the edit loop's largest cost.
+
 ## 0. What must be true (the requirement)
 
 Frank, 2026-11-18: subsystems must be modules, or the engine is "difficult to maintain and hard to impl across all
