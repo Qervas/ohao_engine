@@ -13,7 +13,7 @@
 // the fade's length and progress. A pose (evaluatePose) is a function of that state, the
 // parameters and alpha, sampled at (steps - 1 + alpha) steps of the World's dt: alpha 1 is the
 // newest step's pose, alpha 0 the one before.
-#include "anim/skeleton.hpp"
+#include "animation/skeleton.hpp"
 #include "core/result.hpp"
 
 #include <cstdint>

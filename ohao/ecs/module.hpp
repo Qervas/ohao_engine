@@ -110,7 +110,7 @@ public:
     virtual void uninstall(World& world) const { (void)world; }
     // Its API methods, the session's catalogue rows.
     [[nodiscard]] virtual std::span<const Method> methods() const { return {}; }
-    // What other modules (a game) added to this one on `world`, by name (physics: the control rule), and their
+    // What other modules (a game) added to this one on `world`, by name (animation: drivers; physics: the control rule), and their
     // removal: what game::uninstallGame takes back.
     [[nodiscard]] virtual std::vector<std::string> contributions(const World& world) const {
         (void)world;

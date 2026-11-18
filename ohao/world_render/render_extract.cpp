@@ -1,5 +1,6 @@
 #include "world_render/render_extract.hpp"
-#include "ecs/animation.hpp"
+#include "animation/animation.hpp"
+#include "animation/components.hpp"
 #include "ecs/components.hpp"
 #include "visual/components.hpp"
 #include "render/scene/render_scene.hpp"

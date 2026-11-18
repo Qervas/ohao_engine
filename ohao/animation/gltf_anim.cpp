@@ -1,4 +1,4 @@
-#include "anim/gltf_anim.hpp"
+#include "animation/gltf_anim.hpp"
 
 #include <simdjson.h>
 

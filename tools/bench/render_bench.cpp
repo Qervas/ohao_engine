@@ -33,7 +33,7 @@
 #include "bench_world.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
-#include "ecs/animation.hpp"
+#include "animation/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "visual/components.hpp"

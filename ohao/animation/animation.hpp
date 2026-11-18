@@ -1,8 +1,8 @@
 #pragma once
 // Animation in the world (sub-project 10, docs/specs/2026-10-28-animation-design.md, "The step"
-// and "The frame").
+// and "The frame"): the animation module's systems (animation/module.hpp).
 //
-// installAnimation adds:
+// The module's install adds:
 //   - the `animation` simulate system (after the systems installed before it: physics, combat):
 //     for each Animator in id order, its driver (if its graph names one) writes AnimParams from
 //     saved state; then each layer in order takes the first transition that holds, advances one
@@ -13,7 +13,9 @@
 //     the previous drawn frame's kept for motion vectors) and writes each JointAttach child's
 //     RenderPose. Presentation: never saved, hashed or seen by a step. A placement (a restore, a
 //     first pose) resets the previous palette to the current one.
-#include "anim/anim_cache.hpp"
+#include "animation/anim_cache.hpp"
+#include "animation/components.hpp"
+#include "animation/events.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 
@@ -54,21 +56,12 @@ struct AnimPose {
     uint64_t frame{0};                      // pose syncs run so far for this entity
 };
 
-// A clip event a layer's clip fired in the step (`anim.clip_event`): mag_out, foot_l, body_fall, ...
-inline constexpr const char* kClipEventChannel = "anim.clip_event";
-struct ClipEvent {
-    uint64_t entity{0};     // the animated entity's id
-    uint32_t layer{0};      // the graph layer
-    std::string clip;       // the clip that fired it
-    std::string name;       // the event's name in the clip
-};
-
 using AnimDriver = std::function<void(const World&, entt::entity, AnimParams&)>;
 
 class AnimationSystem {
 public:
     explicit AnimationSystem(AssetResolver& assets);
-    void setEvents(EventLog& log);   // the channel it emits into (installAnimation: the World's)
+    void setEvents(EventLog& log);   // the channel it emits into (the module's install: the World's)
 
     // The graph a path names (cached); nullptr with the error logged once per path.
     [[nodiscard]] std::shared_ptr<const anim::BoundGraph> graph(const std::string& path);
@@ -123,10 +116,13 @@ private:
     std::vector<entt::entity> m_seen;
 };
 
-// Installs the systems once per World (a second call returns the first); the AssetResolver must
-// outlive the World. A game registers its drivers when it installs (the slice: slice/arms_anim.hpp, enemy_anim.hpp).
-AnimationSystem& installAnimation(World& world, AssetResolver& assets);
+// The World's animation system (null where the module is not installed). A game registers its drivers on it when it
+// installs (the slice: slice/arms_anim.hpp, enemy_anim.hpp); the module reports them as its contributions.
 [[nodiscard]] AnimationSystem* animationSystem(World& world);
 [[nodiscard]] const AnimationSystem* animationSystem(const World& world);
+
+// Whether the graph at `path` has a clip that fires an event named one of `names` (false without the animation
+// module, or for a graph that fails to load): footsteps ask whether a character's graph plays its own feet.
+[[nodiscard]] bool graphFires(World& world, const std::string& path, std::span<const std::string_view> names);
 
 } // namespace ohao::ecs

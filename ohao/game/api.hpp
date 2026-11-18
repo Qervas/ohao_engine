@@ -5,13 +5,14 @@
 // The guide: docs/games/README.md.
 #include "game/module.hpp"            // Module (registerTypes, install, uninstall, methods), Method, Call
 
+#include "animation/animation.hpp"    // AnimationSystem::setDriver: animation drivers
+#include "animation/components.hpp"   // Animator, SkinnedMesh, JointAttach
 #include "core/jobs/graph.hpp"         // jobs::parallelFor: a system's loop on the job pool
 #include "core/layout_key.hpp"        // layoutKey<T>(): a snapshot hook's state layout
 #include "core/log.hpp"               // OHAO_LOG
-#include "ecs/animation.hpp"          // AnimationSystem::setDriver: animation drivers
 #include "ecs/audio_schedule.hpp"     // requestMixSnapshot: the mix a game asks for
 #include "ecs/components.hpp"         // the World's components (Transform, Parent, Spin, ...) and, until each module
-                                      // has its own, Animator, AudioMix, ...
+                                      // has its own, AudioMix, ...
 #include "ecs/events.hpp"             // channels: EventLog::writer (with its cue), reader, Cue
 #include "ecs/scene_types.hpp"        // makeComponentOps<T>(): a component's registration
 #include "ecs/snapshot_hook.hpp"      // state a later step reads: save, restore, hash, layout

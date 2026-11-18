@@ -8,7 +8,7 @@
 // unbound (by node name). Accessors are decoded from a .glb's binary chunk or a base64 data
 // URI; an external .bin is refused (export .glb). Morph-target channels (path "weights") are
 // dropped with a warning: no faces in sub-project 10.
-#include "anim/skeleton.hpp"
+#include "animation/skeleton.hpp"
 #include "core/result.hpp"
 
 #include <cstdint>

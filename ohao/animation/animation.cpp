@@ -1,4 +1,4 @@
-#include "ecs/animation.hpp"
+#include "animation/animation.hpp"
 
 #include "ecs/snapshot_hook.hpp"
 
@@ -387,6 +387,17 @@ AnimationSystem* animationSystem(World& world) {
 const AnimationSystem* animationSystem(const World& world) {
     const auto* installed = world.context().find<AnimationInstalled>();
     return installed ? installed->system : nullptr;
+}
+
+bool graphFires(World& world, const std::string& path, std::span<const std::string_view> names) {
+    AnimationSystem* anim = animationSystem(world);
+    if (!anim) return false;
+    const auto g = anim->graph(path);
+    if (!g) return false;
+    for (const auto& c : g->clips)
+        for (const auto& ev : c.clip.events)
+            if (std::find(names.begin(), names.end(), ev.name) != names.end()) return true;
+    return false;
 }
 
 } // namespace ohao::ecs

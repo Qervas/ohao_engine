@@ -33,7 +33,7 @@
 // count) is a failure whatever the machine.
 #include "common/harness.hpp"
 #include "core/log.hpp"
-#include "ecs/animation.hpp"
+#include "animation/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "game/install.hpp"
 #include "slice/combat.hpp"

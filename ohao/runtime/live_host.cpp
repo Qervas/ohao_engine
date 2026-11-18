@@ -6,7 +6,7 @@
 #include "runtime/sleep_until.hpp"
 
 #include "core/log.hpp"
-#include "ecs/animation.hpp"
+#include "animation/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/vfx.hpp"
 #include "world_render/present.hpp"

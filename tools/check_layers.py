@@ -133,14 +133,16 @@ def check(graph):
                 if "/private/" in "/" + path:
                     problems.append(f"{at()} includes {path}: private to {dst} (rule 3)")
                     continue
-                if not edge_ok(name, dst):
-                    problems.append(f"{at()} includes {path}: {name} (level {level[name]}) cannot include {dst} "
-                                    f"(level {level[dst]}): a dependency points up a layer (rule 1)")
-                    continue
+                # Between two modules, the declaration is the rule (a declared module is always below: levels
+                # follow DEPENDS), so an undeclared one is named as such, whatever its level.
                 theirs = module_of.get(dst)
                 if mine and theirs and theirs not in declared and f"{name}->{dst}" not in exceptions:
                     problems.append(f"{at()} includes {path}: {mine} does not declare {theirs} (rule 2: "
                                     f"ohao_add_module({mine} DEPENDS ...))")
+                    continue
+                if not edge_ok(name, dst):
+                    problems.append(f"{at()} includes {path}: {name} (level {level[name]}) cannot include {dst} "
+                                    f"(level {level[dst]}): a dependency points up a layer (rule 1)")
     return problems
 
 

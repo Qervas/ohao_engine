@@ -1,9 +1,10 @@
 #include "ecs/audio_schedule.hpp"
 
-#include "anim/anim_graph.hpp"
+#include "animation/animation.hpp"
+#include "animation/components.hpp"
+#include "animation/events.hpp"
 #include "audio/audio_bank.hpp"
 #include "core/log.hpp"
-#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "physics/events.hpp"
@@ -455,11 +456,8 @@ struct AudioSchedule::Impl {
         if (!animator || animator->graph.path.empty()) return false;
         const auto it = footGraphs.find(animator->graph.path);
         if (it != footGraphs.end()) return it->second;
-        bool has = false;
-        if (AnimationSystem* anim = animationSystem(world))
-            if (const auto g = anim->graph(animator->graph.path))
-                for (const auto& c : g->clips)
-                    for (const auto& ev : c.clip.events) has = has || ev.name == "foot_l" || ev.name == "foot_r";
+        static constexpr std::string_view kFeet[] = {"foot_l", "foot_r"};
+        const bool has = graphFires(world, animator->graph.path, kFeet);
         footGraphs[animator->graph.path] = has;
         return has;
     }

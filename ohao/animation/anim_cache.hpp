@@ -1,8 +1,8 @@
 #pragma once
 // Graphs, skeletons and clips loaded once and shared (sub-project 10). A file reader is passed
 // in (the ECS gives its asset resolver's paths), so ohao_anim stays free of the ECS.
-#include "anim/anim_graph.hpp"
-#include "anim/gltf_anim.hpp"
+#include "animation/anim_graph.hpp"
+#include "animation/gltf_anim.hpp"
 #include "core/result.hpp"
 
 #include <functional>

@@ -1,6 +1,6 @@
 #pragma once
 // Skeletons, clips and local poses (sub-project 10, docs/specs/2026-10-28-animation-design.md,
-// "The data model"). No ECS and no Vulkan: ohao_anim depends on core, glm and simdjson only.
+// "The data model"): the animation module's pure core, with no World and no Vulkan.
 //
 // A Skeleton is a glTF skin's joints, parents before children, each with its rest TRS (the
 // node's) and inverse bind matrix; a root joint carries its non-joint ancestors' transform

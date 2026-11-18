@@ -280,8 +280,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("names", &EventsReadParams::names)
             .doc("Channels to read, exact (physics.footstep) or a prefix (physics.*); absent: every channel").maxItems(32);
 
-    r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
-        .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator");
     r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params");
     r.type<VfxInfoParams>("VfxInfoParams").doc("vfx.info params")
         .field("since", &VfxInfoParams::since).doc("Records after this seq (the previous next)").unitless().min(0)

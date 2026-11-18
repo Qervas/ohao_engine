@@ -939,10 +939,6 @@ const std::vector<Method>& methodTable() {
            "Forgets a model file (or every one) and rebuilds the meshes and colliders of the entities that use it: a "
            "file edited since is cooked again, an unchanged one costs its naming. A Level's file is level.reload's."},
          methodAssetReload, true},
-        {{"animation.info", p.find<AnimationInfoParams>(),
-           "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?}",
-           "Each Animator's layers (state, clip time in s, the fade); its clip events are events.read's "
-           "anim.clip_event. Force a state with component.set on Animator."}, methodAnimationInfo},
         {{"audio.info", p.find<AudioInfoParams>(),
            "{device, sampleRate?, horizonMs, snapshot: {name, blend}, zone, listener?, buses: [{name, db, cap?, voices?, "
            "mix?}], voices: {playing, dropped, stolen, device?}, rays: {cast, capped}, late?, mixMs?}",

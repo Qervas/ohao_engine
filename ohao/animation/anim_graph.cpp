@@ -1,4 +1,4 @@
-#include "anim/anim_graph.hpp"
+#include "animation/anim_graph.hpp"
 
 #include <simdjson.h>
 

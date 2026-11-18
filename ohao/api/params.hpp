@@ -242,9 +242,6 @@ struct AudioMixParams {
     std::optional<std::string> snapshot;   // forced in place of the schedule's; "" lets the schedule's back
     bool clear{false};                     // every override dropped first
 };
-struct AnimationInfoParams {
-    std::optional<uint64_t> entity;   // one animator; absent: every animator (the first 16)
-};
 
 // The registry of every params struct and its enums, built once.
 [[nodiscard]] const reflect::TypeRegistry& paramsRegistry();

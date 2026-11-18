@@ -1,20 +1,10 @@
 // The engine's event payloads, reflected (TypeRole::Event): the API writes them (events.read), world.hash hashes the
 // next step's, and the catalogue lists them. Each is the payload of the channels its doc names (ecs/events.hpp).
-#include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
 
 namespace ohao::ecs {
-
-void registerAnimationEvents(reflect::TypeRegistry& r) {
-    r.type<ClipEvent>("ClipEvent").event()
-        .doc("anim.clip_event: an event a layer's clip fired in the step (mag_out, mag_in, bolt, body_fall, foot_l, ...)")
-        .field("entity", &ClipEvent::entity).entity().doc("The animated entity")
-        .field("layer", &ClipEvent::layer).doc("The graph layer").unitless()
-        .field("clip", &ClipEvent::clip).doc("The clip that fired it")
-        .field("name", &ClipEvent::name).doc("The event's name in the clip");
-}
 
 void registerAudioEvents(reflect::TypeRegistry& r) {
     r.enumeration<AudioOutcome>("AudioOutcome")

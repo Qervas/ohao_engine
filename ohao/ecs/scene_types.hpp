@@ -85,12 +85,10 @@ template <class T>
 // each its module's types; engine::registerTypes registers them in module order under each module's name. The order
 // is the catalogue's; hashes, snapshots and saved files walk the types by name (ecs::snapshotTypes). EntityId is not
 // registered: it is the entity's key ("id" in scene files).
-void registerAnimationTypes(reflect::TypeRegistry& r);   // with registerAnimationEvents
 void registerAudioTypes(reflect::TypeRegistry& r);       // with registerAudioEvents
 void registerVfxTypes(reflect::TypeRegistry& r);
 void registerLevelTypes(reflect::TypeRegistry& r);
 void registerWorldRenderTypes(reflect::TypeRegistry& r);
-void registerAnimationEvents(reflect::TypeRegistry& r);
 void registerAudioEvents(reflect::TypeRegistry& r);
 // The Key enum (core/input.hpp's table; ecs/types.cpp), for any registry whose types name keys.
 void registerKeyEnum(reflect::TypeRegistry& r);

@@ -1,4 +1,4 @@
-#include "anim/skeleton.hpp"
+#include "animation/skeleton.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 

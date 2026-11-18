@@ -38,7 +38,7 @@
 #include "audio/reverb_node.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
-#include "ecs/animation.hpp"
+#include "animation/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "game/install.hpp"

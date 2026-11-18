@@ -590,7 +590,7 @@ std::shared_ptr<Model> ModelLoader::emitModel(const aiScene* scene, const std::s
     }
 
     // The bone order the vertices index (sub-project 10): skeletons and clips are read from the
-    // glTF by ohao/anim; the skinning palette is built in this order by joint name.
+    // glTF by ohao/animation; the skinning palette is built in this order by joint name.
     (void)inverseBindMatrices;
     model->boneNames.resize(static_cast<std::size_t>(nextJointIdx));
     for (const auto& [name, idx] : boneNameToIdx) model->boneNames[static_cast<std::size_t>(idx)] = name;

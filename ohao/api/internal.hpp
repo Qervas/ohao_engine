@@ -141,9 +141,6 @@ bool methodAssetReload(Session::Impl& s, const JsonDocument& doc, const JsonNode
 // The game module (step 3j; game.cpp).
 bool methodGameReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                       JsonWriter& out);
-// Animation (sub-project 10, step 1; animation.cpp).
-bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                         JsonWriter& out);
 // The World's event log (step 3c; events.cpp).
 bool methodEventsRead(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                       JsonWriter& out);

@@ -2,7 +2,6 @@
 
 #include "game/module.hpp"
 
-#include "ecs/animation.hpp"
 #include "ecs/module.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
@@ -24,14 +23,14 @@ using Contributions = std::vector<std::pair<const Module*, std::vector<std::stri
 // What a game's install added (installGame), in the World's context.
 struct InstalledGame {
     const Module* module{nullptr};
-    std::vector<std::string> simulate, sync, hooks, drivers;
+    std::vector<std::string> simulate, sync, hooks;
     std::vector<uint32_t> presenters;
     Contributions contributions;
 };
 
 // Everything installGame watches, as it is now.
 struct Inventory {
-    std::vector<std::string> simulate, sync, hooks, drivers;
+    std::vector<std::string> simulate, sync, hooks;
     std::vector<uint32_t> presenters;
     Contributions contributions;
 };
@@ -41,7 +40,6 @@ Inventory inventory(ecs::World& world) {
     v.simulate = world.simulateNames();
     v.sync = world.syncNames();
     for (const std::string_view h : ecs::snapshotHookNames(world.registry())) v.hooks.emplace_back(h);
-    if (const ecs::AnimationSystem* a = ecs::animationSystem(world)) v.drivers = a->driverNames();
     v.presenters = ecs::presenterIds(world);
     for (const Module* m : ecs::installedModules(world)) v.contributions.emplace_back(m, m->contributions(world));
     return v;
@@ -61,7 +59,6 @@ InstalledGame diff(const Module& module, const Inventory& before, const Inventor
     g.simulate = added(before.simulate, after.simulate);
     g.sync = added(before.sync, after.sync);
     g.hooks = added(before.hooks, after.hooks);
-    g.drivers = added(before.drivers, after.drivers);
     g.presenters = added(before.presenters, after.presenters);
     for (const auto& [m, now] : after.contributions) {
         const auto was = std::find_if(before.contributions.begin(), before.contributions.end(),
@@ -76,8 +73,6 @@ void remove(ecs::World& world, const InstalledGame& g) {
     for (const std::string& s : g.simulate) world.removeSimulate(s);
     for (const std::string& s : g.sync) world.removeSync(s);
     for (const std::string& h : g.hooks) ecs::removeSnapshotHook(world.registry(), h);
-    if (ecs::AnimationSystem* a = ecs::animationSystem(world))
-        for (const std::string& d : g.drivers) a->removeDriver(d);
     for (const uint32_t id : g.presenters) ecs::removePresenter(world, id);
     for (const auto& [m, names] : g.contributions) m->removeContributions(world, names);
 }
