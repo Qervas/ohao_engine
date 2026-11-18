@@ -135,7 +135,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<ModelAsset>("ModelAsset")
         .doc("A model file (glb, gltf) loaded through the asset resolver; its own "
              "materials are used.")
-        .field("asset", &ModelAsset::asset).doc("Project-relative path of the model file, '/' separators")
+        .field("asset", &ModelAsset::asset).doc("Project-relative path of the model file, '/' separators").asset("model")
         .field("mesh", &ModelAsset::mesh)
             .doc("One mesh of a glTF file, by name or '#<index>', at its own origin with only its own materials; "
                  "empty: the whole file, every node's meshes merged in place")
@@ -279,6 +279,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("What lights and backs the scene from afar (one per world): an equirectangular HDR image, else the "
              "physical sky (Hillaire) lit by the scene's first directional light. A world without one has the sky.")
         .field("hdri", &Environment::hdri).doc("Project-relative path of the .hdr image; null for the sky")
+            .asset("environment image")
         .field("intensity", &Environment::intensity).doc("Multiplier on the environment's radiance").unitless().min(0.0)
             .uiRange(0.0, 10.0)
         .field("sky", &Environment::sky)
@@ -294,7 +295,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<SkinnedMesh>("SkinnedMesh").component().host(makeComponentOps<SkinnedMesh>())
         .doc("A skinned mesh: the entity's MeshSource (a ModelAsset with `mesh`) is deformed by a skin of a glTF file, "
              "posed by the entity's Animator. The instance gets its own deformed copy of the mesh.")
-        .field("file", &SkinnedMesh::file).doc("The glTF (.glb) holding the skin")
+        .field("file", &SkinnedMesh::file).doc("The glTF (.glb) holding the skin").asset("skin")
         .field("skin", &SkinnedMesh::skin).doc("The skin's name or \"#<index>\"; empty: the file's first skin")
             .maxLength(256);
     r.type<AnimLayerState>("AnimLayerState")
@@ -309,7 +310,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("Poses an entity by an animation graph (.animgraph.json): each layer's state machine advances one step a "
              "simulation step (integers only, so a snapshot holds it exactly). The pose is presentation: never saved or "
              "hashed.")
-        .field("graph", &Animator::graph).doc("The animation graph file")
+        .field("graph", &Animator::graph).doc("The animation graph file").asset("animation graph")
         .field("layers", &Animator::layers).doc("One a graph layer, in order; empty: filled at the first step");
     r.type<JointAttach>("JointAttach").component().host(makeComponentOps<JointAttach>())
         .doc("Drawn at a joint of its parent's pose (times its own Transform): a rifle in a hand. Presentation: its "
@@ -446,7 +447,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<CollisionMesh>("CollisionMesh").component().runtime().host(makeComponentOps<CollisionMesh>())
         .doc("The mesh a level node's collider is fitted to when the node is not drawn (vis 0, UCX_ hulls) and so has "
              "no MeshSource. Set by the level system.")
-        .field("source", &CollisionMesh::source).doc("The glTF mesh");
+        .field("source", &CollisionMesh::source).doc("The glTF mesh").asset("collision model");
     r.type<PhysicsBody>("PhysicsBody").component().runtime().host(makeComponentOps<PhysicsBody>())
         .doc("The entity's body in the physics backend. Owned by the physics system.")
         .field("handle", &PhysicsBody::handle).doc("Body handle; 4294967295 means none").unitless();
@@ -459,7 +460,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("yawDeg", &PlayerState::yawDeg).doc("Facing about +Y from -Z, counter-clockwise seen from above").unit("deg")
         .field("pitchDeg", &PlayerState::pitchDeg).doc("Looking up (positive) or down, within 89 degrees").unit("deg")
         .field("character", &PlayerState::character).doc("Character handle; 4294967295 means none").unitless();
-    r.type<BodyMotion>("BodyMotion").component().runtime().host(makeComponentOps<BodyMotion>())
+    r.type<BodyMotion>("BodyMotion").component().runtime().snapshotted().host(makeComponentOps<BodyMotion>())
         .doc("The motion a dynamic body or a player carries into the next step. Written by the physics system; "
              "never saved or hashed, but held by snapshots (a restore whose bodies were rebuilt since puts it back).")
         .field("linear", &BodyMotion::linear).doc("Linear velocity, world (a player's velocity)").unit("m/s")
@@ -473,7 +474,8 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("The world's sound bank and mix (one per world): an .audio.json declaring the buses and their voice caps, "
              "the sounds (files, bus, priority, distance shape, how long each holds its voice), the ducks, the "
              "snapshots and the reverb presets. Without one, the default bank (master over sfx, music, ambient).")
-        .field("asset", &AudioMix::asset).doc("Project-relative path of the .audio.json file, '/' separators");
+        .field("asset", &AudioMix::asset).doc("Project-relative path of the .audio.json file, '/' separators")
+            .asset("audio bank");
     r.type<ReverbZone>("ReverbZone").component().host(makeComponentOps<ReverbZone>())
         .doc("A volume whose reverb preset the listener hears while inside it: a box about the entity, in its frame. "
              "Of the zones holding the listener the highest priority wins, then the lowest id; outside them all, the "
@@ -489,7 +491,8 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<VfxSet>("VfxSet").component().singleton().host(makeComponentOps<VfxSet>())
         .doc("The world's effect set (one per world): a .vfx.json declaring the effects (emitters of closed-form "
              "particles), decals, tracers and which events' cues spawn them. Without one, the default set.")
-        .field("asset", &VfxSet::asset).doc("Project-relative path of the .vfx.json file, '/' separators");
+        .field("asset", &VfxSet::asset).doc("Project-relative path of the .vfx.json file, '/' separators")
+            .asset("effect set");
     r.type<VfxEmitter>("VfxEmitter").component().host(makeComponentOps<VfxEmitter>())
         .doc("A placed effect at the entity's pose: while active, rate spawns a second by step count from the step "
              "it became active, or one spawn when it becomes active with rate 0.")
@@ -507,13 +510,14 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
              "entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, trig, "
              "surf, vis, spawn, socket, verb) and components by name.")
         .field("asset", &Level::asset).doc("Project-relative path of the .glb or .gltf file, '/' separators")
+            .asset("level")
         .field("lightScale", &Level::lightScale).doc("Multiplier on the file's KHR_lights_punctual intensities")
             .unitless().min(0.0).uiRange(0.0, 10.0)
         .field("collision", &Level::collision).doc("Whether the level's nodes get colliders; false: render only");
     r.type<Socket>("Socket").component().host(makeComponentOps<Socket>())
         .doc("An attach point at the entity's transform (a level's SOCKET_ empties).")
         .field("name", &Socket::name).doc("The socket's name, as attachments refer to it").maxLength(64);
-    r.type<LevelNode>("LevelNode").component().runtime().host(makeComponentOps<LevelNode>())
+    r.type<LevelNode>("LevelNode").component().runtime().entityNotSaved().host(makeComponentOps<LevelNode>())
         .doc("This entity is a node of a level: made by the level system from the file, never saved, rebuilt from "
              "the file when its Level changes.")
         .field("level", &LevelNode::level).doc("The entity with the Level")

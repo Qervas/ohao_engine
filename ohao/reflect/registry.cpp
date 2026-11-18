@@ -100,6 +100,65 @@ bool equalStruct(const void* a, const void* b, const TypeInfo& t) {
 
 namespace {
 
+// A field's value (`d`, at `v`), under `kind` (the nearest .asset above it; empty: none yet).
+void collectValue(const void* v, const TypeDesc& d, std::string_view kind, std::vector<std::string_view>& path,
+                  std::vector<AssetUse>& out);
+
+void collectFields(const void* object, const TypeInfo& t, std::string_view kind, std::vector<std::string_view>& path,
+                   std::vector<AssetUse>& out) {
+    for (const FieldInfo& f : t.fields) {
+        const std::string_view k = kind.empty() ? std::string_view(f.attrs.asset) : kind;
+        const Kind fk = f.type->kind;
+        if (fk != Kind::AssetRef && fk != Kind::Struct && fk != Kind::Optional && fk != Kind::Variant) continue;
+        std::size_t alt = 0;
+        const void* v = f.ops->held(object, alt);
+        if (!v) continue;   // an empty optional
+        path.push_back(f.name);
+        if (fk == Kind::Variant) {
+            path.push_back(f.type->alternatives[alt]->name);
+            collectFields(v, *f.type->alternatives[alt], k, path, out);
+            path.pop_back();
+        } else {
+            collectValue(v, fk == Kind::Optional ? *f.type->element : *f.type, k, path, out);
+        }
+        path.pop_back();
+    }
+}
+
+void collectValue(const void* v, const TypeDesc& d, std::string_view kind, std::vector<std::string_view>& path,
+                  std::vector<AssetUse>& out) {
+    if (d.kind == Kind::AssetRef) {
+        if (kind.empty()) return;
+        std::vector<std::string_view> at = path;
+        at.push_back("path");
+        out.push_back({static_cast<const AssetRef*>(v), kind, std::move(at)});
+    } else if (d.kind == Kind::Struct) {
+        collectFields(v, *d.structType, kind, path, out);
+    }
+}
+
+bool holdsAssetsIn(const TypeDesc& d, bool marked);
+
+bool holdsAssetsIn(const TypeInfo& t, bool marked) {
+    for (const FieldInfo& f : t.fields)
+        if (holdsAssetsIn(*f.type, marked || !f.attrs.asset.empty())) return true;
+    return false;
+}
+
+bool holdsAssetsIn(const TypeDesc& d, bool marked) {
+    switch (d.kind) {
+    case Kind::AssetRef: return marked;
+    case Kind::Struct: return holdsAssetsIn(*d.structType, marked);
+    case Kind::Optional:   // as collectFields walks it: an optional AssetRef or struct
+        return (d.element->kind == Kind::AssetRef || d.element->kind == Kind::Struct) && holdsAssetsIn(*d.element, marked);
+    case Kind::Variant:
+        for (const TypeInfo* a : d.alternatives)
+            if (holdsAssetsIn(*a, marked)) return true;
+        return false;
+    default: return false;
+    }
+}
+
 // The bytes a plain value occupies (numbers, vectors, quaternions, matrices and structs of
 // them), or 0 when the kind can hold padding, pointers or entity handles.
 std::size_t plainSize(const TypeDesc& d);
@@ -130,6 +189,14 @@ std::size_t plainSize(const TypeDesc& d) {
 }
 
 } // namespace
+
+void collectAssets(const void* object, const TypeInfo& t, std::vector<AssetUse>& out) {
+    out.clear();
+    std::vector<std::string_view> path;
+    collectFields(object, t, {}, path, out);
+}
+
+bool holdsAssets(const TypeInfo& t) { return holdsAssetsIn(t, false); }
 
 void hashStruct(const void* object, Hasher& h, const TypeInfo& t) {
     int8_t plain = t.plainBytes.value.load(std::memory_order_relaxed);

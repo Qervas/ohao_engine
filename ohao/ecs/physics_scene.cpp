@@ -926,6 +926,8 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     addSnapshotHook(reg, SnapshotHook{"physics", [raw] { return raw->saveSimulation(); },
                                       [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); },
                                       [raw](StateHash& h) { raw->hashSimulation(h); }});
+    // A body follows its entity: the transform system tags what it moves for the sync below.
+    tagMoves<PhysicsMoved, PhysicsBody, ColliderPart>(world);
     // Players spawn, from the entities a level expanded, before the transform system: a play scene's first frame
     // is the spawn's.
     // All four are exclusive: the scene reads and writes the registry itself.

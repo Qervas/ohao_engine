@@ -270,40 +270,18 @@ void reportMissingAsset(const AssetRef& ref, std::string_view what, const std::v
     while (depth-- > 0) ctx.pop();
 }
 
-// Every file a component names (each AssetRef a component type holds), with what it is and where its path sits
-// in the component's JSON: what scene.validate's checkAssets and `ohao doctor` hold to exist.
-struct AssetUse {
-    const AssetRef* ref;
-    std::string_view what;
-    std::vector<std::string_view> path;
-};
+// The component types that name files (fields marked .asset(kind), reflect::holdsAssets): what scene.validate's
+// checkAssets and `ohao doctor` hold to exist, each with what it is and where its path sits in the component's JSON.
+using reflect::AssetUse;
 struct AssetTypes {
-    const TypeInfo *meshSource, *environment, *level, *collisionMesh, *skinnedMesh, *animator, *audioMix, *vfxSet;
-    explicit AssetTypes(const TypeRegistry& r)
-        : meshSource(r.find<MeshSource>()), environment(r.find<Environment>()), level(r.find<Level>()),
-          collisionMesh(r.find<CollisionMesh>()), skinnedMesh(r.find<SkinnedMesh>()), animator(r.find<Animator>()),
-          audioMix(r.find<AudioMix>()), vfxSet(r.find<VfxSet>()) {}
+    ankerl::unordered_dense::set<const TypeInfo*> holding;
+    explicit AssetTypes(const TypeRegistry& r) {
+        for (const TypeInfo* t : r.types())
+            if (t->role == reflect::TypeRole::Component && reflect::holdsAssets(*t)) holding.insert(t);
+    }
     void uses(const TypeInfo* t, const void* v, std::vector<AssetUse>& out) const {
-        out.clear();
-        if (t == meshSource) {
-            if (const auto* m = std::get_if<ModelAsset>(&static_cast<const MeshSource*>(v)->source))
-                out.push_back({&m->asset, "model", {"source", "ModelAsset", "asset", "path"}});
-        } else if (t == environment) {
-            if (const auto& env = *static_cast<const Environment*>(v); env.hdri)
-                out.push_back({&*env.hdri, "environment image", {"hdri", "path"}});
-        } else if (t == level) {
-            out.push_back({&static_cast<const Level*>(v)->asset, "level", {"asset", "path"}});
-        } else if (t == collisionMesh) {
-            out.push_back({&static_cast<const CollisionMesh*>(v)->source.asset, "collision model", {"source", "asset", "path"}});
-        } else if (t == skinnedMesh) {
-            out.push_back({&static_cast<const SkinnedMesh*>(v)->file, "skin", {"file", "path"}});
-        } else if (t == animator) {
-            out.push_back({&static_cast<const Animator*>(v)->graph, "animation graph", {"graph", "path"}});
-        } else if (t == audioMix) {
-            out.push_back({&static_cast<const AudioMix*>(v)->asset, "audio bank", {"asset", "path"}});
-        } else if (t == vfxSet) {
-            out.push_back({&static_cast<const VfxSet*>(v)->asset, "effect set", {"asset", "path"}});
-        }
+        if (holding.contains(t)) reflect::collectAssets(v, *t, out);
+        else out.clear();
     }
 };
 
@@ -311,25 +289,6 @@ std::string hexId(uint64_t id) {
     JsonWriter w;
     w.hex64(id);
     return w.str().substr(1, 16);
-}
-
-// W_UNSAVEABLE_MESH: a MeshRenderer put on an entity in code has no MeshSource, so the file
-// cannot rebuild it. `order` is the saved entities in file order.
-void unsaveableMeshes(const World& world, const std::vector<std::pair<uint64_t, entt::entity>>& order,
-                      SaveReport& report) {
-    const entt::registry& reg = world.registry();
-    report.warnings.clear();
-    for (std::size_t n = 0; n < order.size(); ++n) {
-        const entt::entity e = order[n].second;
-        if (!reg.all_of<MeshRenderer>(e) || reg.all_of<MeshSource>(e)) continue;
-        Diagnostic d;
-        d.code = "W_UNSAVEABLE_MESH";
-        d.path = "/entities/" + std::to_string(n);
-        d.entity = world.idOf(e);
-        d.message = "entity " + hexId(d.entity) + " renders a mesh made in code; the file has no MeshSource for it";
-        d.suggestion = "MeshSource";
-        report.warnings.push_back(std::move(d));
-    }
 }
 
 void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeRegistry& r,
@@ -431,7 +390,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                     if (out.assets) {
                         assetTypes.uses(t, v, assetUses);
                         for (const AssetUse& use : assetUses)
-                            if (!out.assets->exists(*use.ref)) reportMissingAsset(*use.ref, use.what, use.path, doc, c, ctx);
+                            if (!out.assets->exists(*use.ref)) reportMissingAsset(*use.ref, use.kind, use.path, doc, c, ctx);
                     }
                 }
             } else if (t) {
@@ -818,15 +777,25 @@ void decodeTree(std::string_view text, const TypeRegistry& r, Decoded& out) {
 
 // ---- public API ------------------------------------------------------------------------------
 
-Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry& types, SaveOptions options,
-                                          SaveReport* report) {
+Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry& types, SaveOptions options) {
     using R = Result<std::string, Diagnostic>;
     const entt::registry& reg = world.registry();
 
-    // A level's node entities are the level file's: only their Level entity is saved.
+    // An entity holding a type marked entityNotSaved is another file's (a level's nodes: only their Level entity is
+    // saved).
+    std::vector<std::pair<const ComponentOps*, const void*>> notSaved;   // those types' operations and pools
+    for (const TypeInfo* t : types.types())
+        if (t->entityNotSaved)
+            if (const ComponentOps* ops = componentOps(*t))
+                if (const void* pool = ops->pool(reg)) notSaved.emplace_back(ops, pool);
+    const auto saves = [&](entt::entity e) {
+        for (const auto& [ops, pool] : notSaved)
+            if (ops->tryGetIn(pool, e)) return false;
+        return true;
+    };
     std::vector<std::pair<uint64_t, entt::entity>> order;
-    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>(entt::exclude<LevelNode>).each())
-        order.emplace_back(co.seq, e);
+    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>().each())
+        if (saves(e)) order.emplace_back(co.seq, e);
     std::sort(order.begin(), order.end());
 
     const std::vector<SavedType> saved = savedTypes(types);
@@ -903,7 +872,6 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     }
     w.endArray();
     w.endObject();
-    if (report) unsaveableMeshes(world, order, *report);
     std::string out = w.take();
     if (options.layout == reflect::JsonLayout::Pretty) out.push_back('\n');
     return R::ok(std::move(out));
@@ -1013,9 +981,9 @@ Result<LoadReport, std::vector<Diagnostic>> load(World& dst, std::string_view te
 } // namespace
 
 Result<bool, Diagnostic> saveSceneFile(const World& world, const TypeRegistry& types,
-                                       const std::filesystem::path& path, SaveOptions options, SaveReport* report) {
+                                       const std::filesystem::path& path, SaveOptions options) {
     using R = Result<bool, Diagnostic>;
-    auto text = saveScene(world, types, options, report);
+    auto text = saveScene(world, types, options);
     if (!text) return R::err(std::move(text.error()));
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     f.write(text.value().data(), static_cast<std::streamsize>(text.value().size()));

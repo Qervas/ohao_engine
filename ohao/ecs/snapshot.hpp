@@ -6,9 +6,10 @@
 //   - the entity table, in creation order: id, CreationOrder, parent row, child rows
 //     (so Children order comes back exactly);
 //   - one column per saved component (Parent excepted: it is the parent row), plus the
-//     preserved unknown components, plus BodyMotion: runtime, but physics state the saved
-//     components do not hold (velocities, sleep), so a restore mid-motion replays exactly
-//     (world.hash and world.diff leave it out: they are about the saved state);
+//     preserved unknown components, plus each runtime type marked snapshotted (physics'
+//     BodyMotion: velocities and sleep, which the saved components do not hold, so a restore
+//     mid-motion replays exactly; world.hash and world.diff leave them out: they are about
+//     the saved state);
 //   - the id generator, the next creation sequence and the caller's frame counter;
 //   - what the World's snapshot hooks keep (ecs/snapshot_hook.hpp: physics, the audio schedule, vfx);
 //   - the World's step and the events the next step reads (ecs/events.hpp; none for a snapshot taken during a step).
@@ -50,7 +51,7 @@ struct Snapshot {
     std::vector<SnapshotColumn> columns;
     int nameColumn{-1};        // the Name and Transform columns (entities are created with them)
     int transformColumn{-1};
-    int motionColumn{-1};      // BodyMotion's: restored, never diffed
+    std::size_t savedColumns{0};   // columns [savedColumns, end) are the snapshotted runtime types': restored, never diffed
     World::IdGenState idGen{};
     uint64_t nextSeq{0};
     uint64_t frame{0};
@@ -89,7 +90,8 @@ void installWorldSnapshots(World& world, const reflect::TypeRegistry& types);
 // its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;
 // no columns, the frame untouched) with `rowOf` mapping an entity index to its row
 // (kNoRow: none), and the component types a snapshot has a column for, in column order: the saved components by
-// name, then PreservedComponents, then BodyMotion (`runtime` false: without it, the saved state alone).
+// name, then PreservedComponents, then the snapshotted runtime types by name (`runtime` false: without them, the
+// saved state alone).
 void captureEntityTable(const World& world, Snapshot& into, std::vector<uint32_t>& rowOf);
 [[nodiscard]] std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types, bool runtime = true);
 

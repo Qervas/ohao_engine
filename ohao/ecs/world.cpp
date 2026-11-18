@@ -77,11 +77,11 @@ World::World()
                 {.after = {"fly_controller"}, .before = {"physics"}, .reads = types<Spin>(), .writes = types<Transform>()});
     addSimulate("fly_controller", [](SystemContext& c, float dt) { updateFlyControllers(c, std::as_const(c.world()).input(), dt); },
                 {.before = {"physics"}, .reads = types<FlyController>(), .writes = types<Transform>()});
-    // Structural: transforms are propagated (the other systems declare themselves around it).
+    // Structural: transforms are propagated (the other systems declare themselves around it; a module's move rule
+    // adds its own access, ecs::tagMoves).
     addSync("transform", [](SystemContext& c) { updateTransforms(c.registry()); },
-            {.reads = types<Transform, Parent, Children, PhysicsBody, ColliderPart>(),
-             .writes = types<WorldTransform, MovedLastFrame, RenderDirty, PhysicsMoved, TransformDirty>(),
-             .exclusive = true});
+            {.reads = types<Transform, Parent, Children>(),
+             .writes = types<WorldTransform, MovedLastFrame, RenderDirty, TransformDirty>(), .exclusive = true});
 }
 
 void World::onTransformChanged(entt::registry& r, entt::entity e) {
@@ -411,6 +411,12 @@ void World::addEffect(ComponentType trigger, const void* owner, SignalEffect eff
     m_simulateDirty = m_syncDirty = true;
 }
 
+void World::addAccess(std::string_view system, std::vector<ComponentType> reads, std::vector<ComponentType> writes) {
+    if (m_events.inStep()) throw std::logic_error("access added to system '" + std::string(system) + "' inside a step");
+    m_added.push_back({std::string(system), std::move(reads), std::move(writes)});
+    m_simulateDirty = m_syncDirty = true;
+}
+
 void World::removeEffects(TypeKey trigger, const void* owner) {
     std::erase_if(m_effects, [&](const Effect& e) { return e.trigger.key == trigger && e.owner == owner; });
     m_simulateDirty = m_syncDirty = true;
@@ -464,16 +470,20 @@ void World::schedule(std::vector<S>& systems, std::vector<Wave>& waves, const ch
             throw std::logic_error(std::string(kind) + " system '" + systems[i].name +
                                    "' declares no access: SystemDecl's reads, writes, resources or exclusive");
         Access& a = access[i];
-        for (const ComponentType& t : d.writes) {
-            insertSorted(a.writes, t.key);
-            names.try_emplace(t.key, t.name);
-            t.assure(m_registry);
-        }
-        for (const ComponentType& t : d.reads) {
-            insertSorted(a.reads, t.key);
-            names.try_emplace(t.key, t.name);
-            t.assure(m_registry);
-        }
+        const auto add = [&](std::vector<TypeKey>& into, const std::vector<ComponentType>& from) {
+            for (const ComponentType& t : from) {
+                insertSorted(into, t.key);
+                names.try_emplace(t.key, t.name);
+                t.assure(m_registry);
+            }
+        };
+        add(a.writes, d.writes);
+        add(a.reads, d.reads);
+        for (const AddedAccess& x : m_added)
+            if (x.system == systems[i].name) {
+                add(a.writes, x.writes);
+                add(a.reads, x.reads);
+            }
         for (const std::string& r : d.writesResources) insertName(a.writesRes, r);
         for (const std::string& r : d.readsResources) insertName(a.readsRes, r);
         for (bool grew = true; grew;) {

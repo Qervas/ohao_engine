@@ -1,8 +1,8 @@
 #pragma once
 // Scene files (*.scene.json): canonical save, two-phase load, validation without a World.
 //
-// Save writes every live entity in creation order: "id" first, then each saved component
-// in registration order (defaults left out, see SaveOptions), then preserved unknown
+// Save writes every live entity in creation order (but those holding a type marked entityNotSaved: another file's):
+// "id" first, then each saved component by name (defaults left out, see SaveOptions), then preserved unknown
 // components by name. The same world always gives the same bytes.
 //
 // Load is two-phase. Phase 1 parses and decodes the whole document and collects every
@@ -33,10 +33,6 @@ struct SaveOptions {
     bool includeDefaults{false};
 };
 
-struct SaveReport {
-    std::vector<Diagnostic> warnings;   // W_UNSAVEABLE_MESH: a mesh made in code, with no MeshSource
-};
-
 // One component type migrated on load: `count` blocks went from version `from` to `to`.
 struct UpgradeApplied {
     std::string component;
@@ -63,13 +59,13 @@ struct ValidationReport {
 // written canonically. Every component is written by the generic reflection writer
 // (reflect::writeStruct): its registration is the only definition of its file form.
 [[nodiscard]] Result<std::string, Diagnostic> saveScene(const World& world, const reflect::TypeRegistry& types,
-                                                        SaveOptions options = {}, SaveReport* report = nullptr);
+                                                        SaveOptions options = {});
 
 class AssetResolver;
 
 // Phase 1 only: every error and warning a load would report, without a World. With
-// `assets` (checkAssets), a ModelAsset or Environment hdri whose file the resolver lacks
-// is E_ASSET_NOT_FOUND.
+// `assets` (checkAssets), a file a component names (a field marked .asset) that the resolver
+// lacks is E_ASSET_NOT_FOUND.
 [[nodiscard]] ValidationReport validateScene(std::string_view text, const reflect::TypeRegistry& types,
                                              const AssetResolver* assets = nullptr);
 
@@ -95,8 +91,7 @@ struct DecodeCounters {
 
 // UTF-8, LF, trailing newline (Pretty). E_IO when the file cannot be written or read.
 [[nodiscard]] Result<bool, Diagnostic> saveSceneFile(const World& world, const reflect::TypeRegistry& types,
-                                                     const std::filesystem::path& path, SaveOptions options = {},
-                                                     SaveReport* report = nullptr);
+                                                     const std::filesystem::path& path, SaveOptions options = {});
 [[nodiscard]] Result<LoadReport, std::vector<Diagnostic>> loadSceneFile(World& dst, const std::filesystem::path& path,
                                                                         const reflect::TypeRegistry& types);
 

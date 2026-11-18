@@ -571,6 +571,17 @@ public:
     }
     void* address(void* o) const override { return &(static_cast<C*>(o)->*m_member); }
     const void* address(const void* o) const override { return &(static_cast<const C*>(o)->*m_member); }
+    const void* held(const void* o, std::size_t& alternative) const override {
+        const M& m = static_cast<const C*>(o)->*m_member;
+        if constexpr (detail::IsOptional<M>::value) {
+            return m ? &*m : nullptr;
+        } else if constexpr (detail::IsVariant<M>::value) {
+            alternative = m.index();
+            return std::visit([](const auto& a) -> const void* { return &a; }, m);
+        } else {
+            return &m;
+        }
+    }
 
 private:
     M C::*m_member;

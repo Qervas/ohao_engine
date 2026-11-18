@@ -48,6 +48,8 @@ public:
     TypeBuilder& runtime();      // listed in the catalogue, never serialized
     TypeBuilder& singleton();    // at most one per world
     TypeBuilder& alwaysPresent() { m_t.alwaysPresent = true; return *this; }   // on every entity
+    TypeBuilder& entityNotSaved() { m_t.entityNotSaved = true; return *this; }  // TypeInfo::entityNotSaved
+    TypeBuilder& snapshotted() { m_t.snapshotted = true; return *this; }        // TypeInfo::snapshotted
     TypeBuilder& host(std::shared_ptr<const void> data) { m_t.host = std::move(data); return *this; }
     // Registers the migration from version `from` to `from + 1` (1 <= from < version).
     TypeBuilder& upgrade(uint32_t from, Upgrade fn);
@@ -74,6 +76,8 @@ public:
     TypeBuilder& maxItems(uint32_t n);   // an array (vector, optional vector or JSON): at most n elements
     TypeBuilder& maxLength(uint32_t n);  // a string: at most n characters (code points)
     TypeBuilder& alias(std::string_view oldName);
+    // The files this field names are a `kind` (FieldAttrs::asset): an AssetRef, an optional one, or a field of structs.
+    TypeBuilder& asset(std::string_view kind);
 
 private:
     FieldInfo* last(std::string_view attr);
@@ -439,6 +443,18 @@ TypeBuilder<T>& TypeBuilder<T>::maxLength(uint32_t n) {
             m_r.error("field " + m_t.name + "." + f->name + ": maxLength needs a string field");
         else
             f->attrs.maxLength = n;
+    }
+    return *this;
+}
+
+template <class T>
+TypeBuilder<T>& TypeBuilder<T>::asset(std::string_view kind) {
+    if (auto* f = last("asset")) {
+        const TypeDesc* d = f->type->kind == Kind::Optional ? f->type->element : f->type;
+        if (kind.empty() || (d->kind != Kind::AssetRef && d->kind != Kind::Struct && d->kind != Kind::Variant))
+            m_r.error("field " + m_t.name + "." + f->name + ": asset needs a kind and an AssetRef or struct field");
+        else
+            f->attrs.asset = kind;
     }
     return *this;
 }

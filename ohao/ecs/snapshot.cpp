@@ -70,11 +70,12 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
         if (c.type != t) c = SnapshotColumn{t, {}, {}, 0};
         componentOps(*t)->capture(reg, rowOf, c);
     };
-    s.nameColumn = s.transformColumn = s.motionColumn = -1;
+    s.nameColumn = s.transformColumn = -1;
+    s.savedColumns = 0;
     for (const reflect::TypeInfo* t : snapshotTypes(types)) {
         if (t == types.find<Name>()) s.nameColumn = static_cast<int>(used);
         if (t == types.find<Transform>()) s.transformColumn = static_cast<int>(used);
-        if (t == types.find<BodyMotion>()) s.motionColumn = static_cast<int>(used);
+        if (!t->snapshotted) s.savedColumns = used + 1;
         capture(t);
     }
     s.columns.resize(used);
@@ -93,7 +94,12 @@ std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry&
     // By name, never by registration: which module registers a type, and when, cannot change a hash or a snapshot.
     std::sort(out.begin(), out.end(), [](const reflect::TypeInfo* a, const reflect::TypeInfo* b) { return a->name < b->name; });
     if (const reflect::TypeInfo* t = types.find<PreservedComponents>()) out.push_back(t);
-    if (const reflect::TypeInfo* t = types.find<BodyMotion>(); t && runtime) out.push_back(t);
+    if (!runtime) return out;
+    const std::size_t saved = out.size();
+    for (const reflect::TypeInfo* t : types.types())
+        if (t->snapshotted && t->role == reflect::TypeRole::Component && !t->serialized && componentOps(*t)) out.push_back(t);
+    std::sort(out.begin() + static_cast<std::ptrdiff_t>(saved), out.end(),
+              [](const reflect::TypeInfo* a, const reflect::TypeInfo* b) { return a->name < b->name; });
     return out;
 }
 

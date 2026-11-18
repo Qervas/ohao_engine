@@ -1,10 +1,12 @@
 #include "ecs/transform_system.hpp"
 #include "ecs/components.hpp"
+#include "ecs/world.hpp"
 #include "core/jobs/graph.hpp"
 
 #include <ankerl/unordered_dense.h>
 
 #include <cmath>
+#include <span>
 #include <vector>
 
 namespace ohao::ecs {
@@ -17,6 +19,11 @@ struct StepCaptured {
     ankerl::unordered_dense::set<entt::entity> entities;
 };
 
+// The World's move rules (tagMoves), in the order added.
+struct MoveRules {
+    std::vector<MoveRule> rules;
+};
+
 glm::mat4 parentWorld(const entt::registry& reg, entt::entity e) {
     if (const auto* p = reg.try_get<Parent>(e))
         if (reg.valid(p->entity))
@@ -27,7 +34,7 @@ glm::mat4 parentWorld(const entt::registry& reg, entt::entity e) {
 // captured: null for a render's update; inside a step, the set of entities whose prevWorld
 // is already the frame's start. rootLocal: the root's local matrix, already computed.
 void recompute(entt::registry& reg, entt::entity root, const glm::mat4& rootLocal, StepCaptured* step,
-               const StepCaptured* kept, std::vector<entt::entity>& stack) {
+               const StepCaptured* kept, std::span<const MoveRule> rules, std::vector<entt::entity>& stack) {
     stack.assign(1, root);
     while (!stack.empty()) {
         const entt::entity e = stack.back();
@@ -45,7 +52,8 @@ void recompute(entt::registry& reg, entt::entity root, const glm::mat4& rootLoca
             reg.emplace<WorldTransform>(e, WorldTransform{world, world});
         }
         reg.emplace_or_replace<RenderDirty>(e);
-        if (reg.any_of<PhysicsBody, ColliderPart>(e)) reg.emplace_or_replace<PhysicsMoved>(e);   // the physics system follows
+        for (const MoveRule& r : rules)
+            if (r.holds(reg, e)) r.tag(reg, e);   // the owning module follows the move
         reg.remove<TransformDirty>(e);
         if (const auto* ch = reg.try_get<Children>(e))
             stack.insert(stack.end(), ch->entities.begin(), ch->entities.end());
@@ -75,9 +83,11 @@ void recomputeDirty(entt::registry& reg, StepCaptured* step, const StepCaptured*
         for (std::size_t i = lo; i < hi; ++i)
             if (transforms.contains(roots[i])) local[i] = transforms.get(roots[i]).matrix();
     }, "transform.local");
+    const MoveRules* m = reg.ctx().find<MoveRules>();
+    const std::span<const MoveRule> rules = m ? std::span<const MoveRule>(m->rules) : std::span<const MoveRule>();
     std::vector<entt::entity> stack;
     for (std::size_t i = 0; i < roots.size(); ++i)
-        if (reg.valid(roots[i])) recompute(reg, roots[i], local[i], step, kept, stack);
+        if (reg.valid(roots[i])) recompute(reg, roots[i], local[i], step, kept, rules, stack);
 }
 
 } // namespace
@@ -106,6 +116,13 @@ void propagateTransforms(entt::registry& reg) {
     auto* captured = reg.ctx().find<StepCaptured>();
     if (!captured) captured = &reg.ctx().emplace<StepCaptured>();
     recomputeDirty(reg, captured, nullptr);
+}
+
+void addMoveRule(World& world, MoveRule rule, std::vector<ComponentType> reads, std::vector<ComponentType> writes) {
+    auto& ctx = world.context();
+    MoveRules& m = ctx.contains<MoveRules>() ? ctx.get<MoveRules>() : ctx.emplace<MoveRules>();
+    m.rules.push_back(rule);
+    world.addAccess("transform", std::move(reads), std::move(writes));
 }
 
 std::size_t verifyTransforms(const entt::registry& reg) {

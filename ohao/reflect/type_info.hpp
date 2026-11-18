@@ -11,6 +11,7 @@
 
 namespace ohao::reflect {
 
+struct AssetRef;
 class JsonWriter;
 class Hasher;
 class DecodeContext;
@@ -79,6 +80,10 @@ struct FieldAttrs {
     // maxLength counts them), E_RANGE otherwise; given as the schema's and catalogue's maxLength.
     std::optional<uint32_t> maxLength;
     std::vector<std::string> aliases;  // older names accepted on load
+    // .asset(kind): the files this field names are a `kind` ("model", "level", ...), which checkAssets holds to exist
+    // (collectAssets). On an AssetRef it names its file; on a field holding structs it names every file inside them,
+    // over their own fields' kinds (a CollisionMesh's ModelAsset is a "collision model").
+    std::string asset;
 };
 
 // Typed operations for one member, generated at registration from its member pointer.
@@ -99,6 +104,9 @@ public:
     [[nodiscard]] virtual bool inRange(const void* object, const NumericLimits& l) const = 0;
     [[nodiscard]] virtual void* address(void* object) const = 0;
     [[nodiscard]] virtual const void* address(const void* object) const = 0;
+    // What the member holds: an optional's value (null: none), a variant's alternative (its index in `alternative`),
+    // else the member itself.
+    [[nodiscard]] virtual const void* held(const void* object, std::size_t& alternative) const = 0;
 };
 
 struct FieldInfo {
@@ -140,6 +148,9 @@ struct TypeInfo {
     bool serialized{true};    // false: runtime-only, listed in the catalogue, never saved
     bool singleton{false};    // at most one per world
     bool alwaysPresent{false};   // every entity has it; omitted from files when fully default
+    bool entityNotSaved{false};  // an entity holding it belongs to another file (a level's node): never saved
+    // Runtime state a snapshot holds and a restore puts back, never saved, hashed or diffed (physics' BodyMotion).
+    bool snapshotted{false};
     std::vector<FieldInfo> fields;          // registration order = file order
     std::vector<SkippedField> skipped;      // members deliberately not serialized
     // One upgrade per older version, from -> from + 1; version N needs 1 .. N-1.
@@ -193,6 +204,18 @@ void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t, const voi
 // Every registered field, in order (reflect/hash.hpp); a type whose bytes are exactly its
 // fields (TypeInfo::plainBytes) as its bytes, which is the same information, faster.
 void hashStruct(const void* object, Hasher& h, const TypeInfo& t);
+// An asset a value names: a file under a field marked .asset(kind), and where its path sits in the value's JSON (the
+// fields' names, a variant's alternative, then "path").
+struct AssetUse {
+    const AssetRef* ref;
+    std::string_view kind;
+    std::vector<std::string_view> path;
+};
+// Every asset `object`, a `t`, names, in field order, into `out` (cleared first).
+void collectAssets(const void* object, const TypeInfo& t, std::vector<AssetUse>& out);
+// Whether a `t` can name an asset (some field, or a field nested in one, is marked .asset): checkAssets walks only these.
+[[nodiscard]] bool holdsAssets(const TypeInfo& t);
+
 // Decodes an object into `object` (already holding defaults): unknown members, duplicate
 // members, type errors and limit violations are reported to ctx; missing members keep
 // their defaults. A member named `ignoredKey` (if given) is skipped, not reported.
