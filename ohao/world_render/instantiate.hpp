@@ -27,11 +27,6 @@ namespace ohao::render { class RenderScene; }
 
 namespace ohao::ecs {
 
-// Adds the "instantiate" system before "transform" (so a new mesh renders in the frame
-// its MeshSource appears). Install once per World, after installRenderExtract; the
-// scene, texture manager and resolver must outlive the World.
-void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
-                        AssetResolver& assets);
 
 // Entities whose mesh could not be built (they carry InstantiateError), in creation order.
 [[nodiscard]] std::vector<entt::entity> instantiateErrors(const World& world);

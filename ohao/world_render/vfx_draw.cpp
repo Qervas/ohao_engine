@@ -1,4 +1,5 @@
 #include "world_render/vfx_draw.hpp"
+#include "world_render/private/systems.hpp"
 
 #include "ecs/asset_resolver.hpp"
 #include "world_render/present.hpp"

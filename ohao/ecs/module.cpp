@@ -14,6 +14,7 @@ namespace {
 // What installModules put on a World.
 struct InstalledModules {
     std::vector<const Module*> modules;   // in the order installed
+    std::vector<const Module*> waiting;   // for their needs, in module order
     std::optional<Services> services;     // the last call's
 };
 
@@ -70,17 +71,33 @@ void registerModuleTypes(reflect::TypeRegistry& types, std::span<const Module* c
 
 void installModules(World& world, std::span<const Module* const> modules, const Services& services) {
     auto& ctx = world.context();
-    InstalledModules& rec = ctx.contains<InstalledModules>() ? ctx.get<InstalledModules>() : ctx.emplace<InstalledModules>();
+    const InstalledModules* was = ctx.find<InstalledModules>();
+    const auto known = [&](std::string_view name) {
+        return byName(modules, name) || (was && (byName(was->modules, name) || byName(was->waiting, name)));
+    };
+    std::string missing;
+    for (const Module* m : modules)
+        for (const std::string_view d : m->dependencies())
+            if (!known(d)) missing += (missing.empty() ? "" : "; ") + std::string(m->name()) + " needs " + std::string(d);
+    if (!missing.empty())
+        throw std::logic_error("installModules: a dependency is neither installed nor given (" + missing + ")");
+    InstalledModules& rec = was ? ctx.get<InstalledModules>() : ctx.emplace<InstalledModules>();
     rec.services.emplace(services);
     const auto installed = [&](std::string_view name) { return byName(rec.modules, name) != nullptr; };
-    for (const Module* m : orderOf(modules, false)) {
+    std::vector<const Module*> candidates(rec.waiting);
+    for (const Module* m : modules)
+        if (!byName(candidates, m->name())) candidates.push_back(m);
+    rec.waiting.clear();
+    for (const Module* m : orderOf(candidates, false)) {
         if (installed(m->name())) continue;
         const auto needs = m->needs();
         const auto deps = m->dependencies();
-        // It waits for its needs, and for a dependency given here that waits for its own.
+        // It waits for its needs, and for a dependency that waits for its own.
         if (!std::all_of(needs.begin(), needs.end(), [&](TypeKey k) { return services.has(k); }) ||
-            !std::all_of(deps.begin(), deps.end(), [&](std::string_view d) { return installed(d) || !byName(modules, d); }))
+            !std::all_of(deps.begin(), deps.end(), [&](std::string_view d) { return installed(d); })) {
+            rec.waiting.push_back(m);
             continue;
+        }
         m->install(world, *rec.services);
         rec.modules.push_back(m);
     }
@@ -89,6 +106,18 @@ void installModules(World& world, std::span<const Module* const> modules, const 
 std::span<const Module* const> installedModules(const World& world) {
     const auto* rec = world.context().find<InstalledModules>();
     return rec ? std::span<const Module* const>(rec->modules) : std::span<const Module* const>();
+}
+
+std::span<const Module* const> waitingModules(const World& world) {
+    const auto* rec = world.context().find<InstalledModules>();
+    return rec ? std::span<const Module* const>(rec->waiting) : std::span<const Module* const>();
+}
+
+std::vector<std::string> missingModules(const World& world, std::span<const std::string_view> names) {
+    std::vector<std::string> out;
+    for (const std::string_view n : names)
+        if (!byName(installedModules(world), n) && !byName(waitingModules(world), n)) out.emplace_back(n);
+    return out;
 }
 
 const Services* worldServices(const World& world) {

@@ -1,11 +1,11 @@
-// The registrations of the modules not yet in their own directories (each moves to its module's types.cpp), by
-// module; engine/install.cpp's module list calls them.
+// The world_render module's registrations (world_render/module.hpp): the renderer's handles and its components.
+#include "world_render/components.hpp"
+#include "world_render/module.hpp"
+#include "world_render/private/components.hpp"
+
 #include "ecs/scene_types.hpp"
-#include "ecs/components.hpp"
 
 namespace ohao::ecs {
-
-// ---- world_render -------------------------------------------------------------------------------------------
 
 void registerWorldRenderTypes(reflect::TypeRegistry& r) {
     using render::MaterialHandle;

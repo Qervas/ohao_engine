@@ -1,4 +1,7 @@
 #include "world_render/instantiate.hpp"
+#include "world_render/private/systems.hpp"
+#include "world_render/components.hpp"
+#include "world_render/private/components.hpp"
 #include "visual/components.hpp"
 
 #include "visual/primitive_mesh.hpp"

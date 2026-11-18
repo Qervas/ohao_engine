@@ -1,6 +1,8 @@
 #include "sample/sample.hpp"
 
 #include <algorithm>
+#include <array>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -122,6 +124,11 @@ bool targets(game::Call& c, const reflect::JsonNode& params, reflect::DecodeCont
 class SampleModule final : public game::Module {
 public:
     [[nodiscard]] std::string_view name() const override { return "sample"; }
+    // Its player's shots and its targets' bodies.
+    [[nodiscard]] std::span<const std::string_view> dependencies() const override {
+        static constexpr std::array<std::string_view, 1> kDeps{"physics"};
+        return kDeps;
+    }
     void registerTypes(reflect::TypeRegistry& types) const override { registerSampleTypes(types); }
     void install(World& world, const Services&) const override {
         const auto installed = world.simulateNames();

@@ -92,11 +92,13 @@ constexpr uint32_t SHADOW_MAP_SIZE = 2048;
  * VulkanRenderer - Renders OHAO scenes headless into a pixel buffer, or to a window
  * when initialized with a PresentTarget (see ohao/runtime/LiveHost).
  *
- * The scene is renderScene(): an ecs::World with installRenderExtract feeds it
- * (examples/cornell_box.cpp). Headless usage:
+ * The scene is renderScene(): an ecs::World with the world_render module installed feeds it
+ * (engine/install.hpp). Headless usage:
  *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
- *   ecs::installRenderExtract(world, renderer.renderScene());
+ *   ecs::Services services{assets, types};
+ *   services.put(renderer.renderScene());
+ *   engine::install(world, services);
  *   world.sync();
  *   renderer.requestReadback(); renderer.render();
  *   std::span<const uint8_t> pixels = renderer.readback();   // that frame, RGBA8

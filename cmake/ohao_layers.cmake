@@ -17,10 +17,9 @@ set(OHAO_LAYERS_BELOW
 # The modules (cmake/ohao_modules.cmake): the core, ecs, at 4 beside the renderer (neither reaches the other; world_render
 # joins them), each other one above its highest dependency. Never typed: computed from DEPENDS.
 set(OHAO_CORE_LEVEL 4)
-# Above the modules, each tier one above the last: the libraries not yet modules, the module list and the game API,
-# the agents' API, the hosts. The games (cmake/ohao_games.cmake) sit above them all.
+# Above the modules, each tier one above the last: the module list and the game API, the agents' API, the hosts. The
+# games (cmake/ohao_games.cmake) sit above them all.
 set(OHAO_LAYERS_ABOVE
-    "ohao_world_render"
     "ohao_engine ohao_game_api"
     "ohao_api"
     "ohao_rpc ohao_runtime")

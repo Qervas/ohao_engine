@@ -128,12 +128,18 @@ public:
 // Every module's types, in module order, each under TypeRegistry::setModule(its name).
 void registerModuleTypes(reflect::TypeRegistry& types, std::span<const Module* const> modules);
 // Installs, in module order, each module not yet installed on `world` whose needs `services` meets, and records it
-// and the services in the World (a game installed later gets them: game::installGame). A dependency outside
-// `modules` is taken as met: a module's systems never need another's to be installed (its types are registered by
-// every host), so a bench installs only what it measures. Between steps.
+// and the services in the World (a game installed later gets them: game::installGame). A module whose needs are not
+// met yet waits, recorded on the World, for a later call that has them (world_render, for a host's renderer); so does
+// one whose dependency waits. Every dependency of each module is installed, waiting, or among `modules`: else it
+// throws std::logic_error naming the missing ones, and installs nothing (engine::install closes `only` over the
+// dependencies). Between steps.
 void installModules(World& world, std::span<const Module* const> modules, const Services& services);
 // The modules installed on `world`, in the order installed.
 [[nodiscard]] std::span<const Module* const> installedModules(const World& world);
+// The modules waiting on `world` for their needs (installModules), in module order.
+[[nodiscard]] std::span<const Module* const> waitingModules(const World& world);
+// Of `names`, the modules neither installed nor waiting on `world`, in the order given.
+[[nodiscard]] std::vector<std::string> missingModules(const World& world, std::span<const std::string_view> names);
 // The services the World's modules were installed with (the last installModules call's), or null.
 [[nodiscard]] const Services* worldServices(const World& world);
 

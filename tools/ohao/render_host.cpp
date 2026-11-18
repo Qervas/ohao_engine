@@ -1,9 +1,7 @@
 #include "ohao/render_host.hpp"
 #include "engine/install.hpp"
 
-#include "world_render/instantiate.hpp"
-#include "world_render/render_extract.hpp"
-#include "world_render/vfx_draw.hpp"
+#include "ecs/module.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"
@@ -57,6 +55,10 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
         return out;
     }
     const uint32_t width = r.width.value_or(1920), height = r.height.value_or(1080);
+    if (!m_renderer && !ecs::worldServices(*m_world)) {
+        out.errors.push_back(renderError("the render host's world has no engine module installed (engine::install)"));
+        return out;
+    }
     if (!m_renderer) {
         if (m_failed) {
             out.errors.push_back(renderError("the renderer could not be started (see the log)"));
@@ -74,7 +76,11 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
                 m_defaultEv100 = pp->ev100();
                 m_defaultCurve = pp->displayCurve();
             }
-        engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
+        // world_render waited for the renderer (and what it depends on, if the world lacks it).
+        ecs::Services services = *ecs::worldServices(*m_world);
+        services.put(m_renderer->renderScene());
+        if (BindlessTextureManager* textures = m_renderer->getTextureManager()) services.put(*textures);
+        engine::install(*m_world, services, {"world_render"});
         if (m_settingsSet) m_renderer->setRenderSettings(m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size

@@ -6,7 +6,6 @@
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
-#include "world_render/present.hpp"
 
 #include <algorithm>
 #include <map>
@@ -24,14 +23,12 @@ using Contributions = std::vector<std::pair<const Module*, std::vector<std::stri
 struct InstalledGame {
     const Module* module{nullptr};
     std::vector<std::string> simulate, sync, hooks;
-    std::vector<uint32_t> presenters;
     Contributions contributions;
 };
 
 // Everything installGame watches, as it is now.
 struct Inventory {
     std::vector<std::string> simulate, sync, hooks;
-    std::vector<uint32_t> presenters;
     Contributions contributions;
 };
 
@@ -40,8 +37,9 @@ Inventory inventory(ecs::World& world) {
     v.simulate = world.simulateNames();
     v.sync = world.syncNames();
     for (const std::string_view h : ecs::snapshotHookNames(world.registry())) v.hooks.emplace_back(h);
-    v.presenters = ecs::presenterIds(world);
-    for (const Module* m : ecs::installedModules(world)) v.contributions.emplace_back(m, m->contributions(world));
+    // A module waiting for its services (world_render, headless before the first capture) takes contributions too.
+    for (const auto modules : {ecs::installedModules(world), ecs::waitingModules(world)})
+        for (const Module* m : modules) v.contributions.emplace_back(m, m->contributions(world));
     return v;
 }
 
@@ -59,7 +57,6 @@ InstalledGame diff(const Module& module, const Inventory& before, const Inventor
     g.simulate = added(before.simulate, after.simulate);
     g.sync = added(before.sync, after.sync);
     g.hooks = added(before.hooks, after.hooks);
-    g.presenters = added(before.presenters, after.presenters);
     for (const auto& [m, now] : after.contributions) {
         const auto was = std::find_if(before.contributions.begin(), before.contributions.end(),
                                       [&](const auto& c) { return c.first == m; });
@@ -73,7 +70,6 @@ void remove(ecs::World& world, const InstalledGame& g) {
     for (const std::string& s : g.simulate) world.removeSimulate(s);
     for (const std::string& s : g.sync) world.removeSync(s);
     for (const std::string& h : g.hooks) ecs::removeSnapshotHook(world.registry(), h);
-    for (const uint32_t id : g.presenters) ecs::removePresenter(world, id);
     for (const auto& [m, names] : g.contributions) m->removeContributions(world, names);
 }
 
@@ -109,6 +105,12 @@ void installGame(ecs::World& world, const Module& module) {
     if (world.context().contains<InstalledGame>()) throw std::logic_error("a game is installed already");
     const ecs::Services* services = ecs::worldServices(world);
     if (!services) throw std::logic_error("game " + std::string(module.name()) + ": no engine module is installed");
+    if (const std::vector<std::string> missing = ecs::missingModules(world, module.dependencies()); !missing.empty()) {
+        std::string names;
+        for (const std::string& m : missing) names += (names.empty() ? "" : ", ") + m;
+        throw std::logic_error("game " + std::string(module.name()) + " depends on modules this world does not install: " +
+                               names);
+    }
     const Inventory before = inventory(world);
     try {
         module.install(world, *services);

@@ -10,10 +10,7 @@
 #include "audio/audio_schedule.hpp"
 #include "vfx/vfx.hpp"
 #include "world_render/present.hpp"
-#include "world_render/instantiate.hpp"
 #include "physics/physics_scene.hpp"
-#include "world_render/render_extract.hpp"
-#include "world_render/vfx_draw.hpp"
 #include "visual/scene_view.hpp"
 #include "level/level_system.hpp"
 #include "render/deferred/deferred_renderer.hpp"
@@ -90,9 +87,11 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_liveMode = m_renderer->getRenderMode();
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
-    engine::install(*m_world, {*m_assets, types});
+    ecs::Services services{*m_assets, types};
+    services.put(m_renderer->renderScene());   // world_render's: the window draws from the first frame
+    if (BindlessTextureManager* textures = m_renderer->getTextureManager()) services.put(*textures);
+    engine::install(*m_world, services);
     if (cfg.game) game::installGame(*m_world, *cfg.game->module);
-    engine::installRendering(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types, cfg.game);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);

@@ -17,9 +17,6 @@ namespace ohao::ecs {
 class World;
 class AssetResolver;
 
-// Installs `vfx_draw` (after render_extract, else last). `textures` may be null (no flipbooks: a
-// textured emitter draws a soft dot).
-void installVfxDraw(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets);
 
 // The frame `world` draws at its render alpha (the set left null when the world has no vfx system).
 // `textures` and `normals` as the set's bindless indices (empty: none loaded). Tests and benches.

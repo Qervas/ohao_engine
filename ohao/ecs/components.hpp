@@ -1,7 +1,6 @@
 #pragma once
 #include "core/input.hpp"          // Key
 #include "reflect/asset_ref.hpp"   // a plain struct; no reflection machinery
-#include "core/render_handles.hpp"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -42,22 +41,10 @@ struct WorldTransform {
 struct Parent { entt::entity entity{entt::null}; };
 struct Children { std::vector<entt::entity> entities; };
 
-// Change tracking: Transform, MeshRenderer and Light
+// Change tracking: Transform, MeshRenderer (world_render/components.hpp) and Light (visual/components.hpp)
 // are picked up by the render extract only when written through
 // registry.patch<T>() or registry.replace<T>() (or emplaced/removed). A plain
 // get<T>() write fires no signal and never reaches the renderer.
-
-// One material per submesh, in submesh order. Fewer entries than submeshes is legal:
-// the missing submeshes render with the default material.
-struct MeshRenderer {
-    render::MeshHandle mesh{};
-    std::vector<render::MaterialHandle> materials;
-    bool visible{true};
-};
-
-// The RenderScene instance slot of a renderable entity. Owned by the render extract (world_render/render_extract.hpp):
-// it emplaces and removes it; nothing else should write it.
-struct RenderSlot { uint32_t slot; };
 
 // Monotonic creation sequence, set by World::create. Unlike entity ids it is never
 // recycled, so it orders lights (and new instances) deterministically.
@@ -79,9 +66,6 @@ struct MovedLastFrame {};
 
 // A file a component names (each such field marked .asset(kind) in its registration).
 using AssetRef = reflect::AssetRef;   // {path (project-relative, '/'), guid (empty until the asset DB)}
-
-// Instantiate's bookkeeping (world_render/instantiate.hpp): tagged when MeshSource or Material change.
-struct InstantiateDirty {};
 
 // ---- engine-provided behaviour (ecs/spin_system.hpp; run by every World) -------------------
 

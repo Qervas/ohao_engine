@@ -1,4 +1,6 @@
-#include "world_render/render_extract.hpp"
+#include "world_render/private/systems.hpp"
+#include "world_render/components.hpp"
+#include "world_render/private/components.hpp"
 #include "animation/animation.hpp"
 #include "animation/components.hpp"
 #include "ecs/components.hpp"

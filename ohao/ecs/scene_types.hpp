@@ -81,11 +81,9 @@ template <class T>
     return static_cast<const ComponentOps*>(t.host.get());
 }
 
-// The registrations of the modules not yet in their own directories (ecs/scene_types.cpp),
-// each its module's types; engine::registerTypes registers them in module order under each module's name. The order
-// is the catalogue's; hashes, snapshots and saved files walk the types by name (ecs::snapshotTypes). EntityId is not
-// registered: it is the entity's key ("id" in scene files).
-void registerWorldRenderTypes(reflect::TypeRegistry& r);
+// Each module registers its own types (its types.cpp, Module::registerTypes); engine::registerTypes registers them in
+// module order under each module's name. The order is the catalogue's; hashes, snapshots and saved files walk the
+// types by name (ecs::snapshotTypes). EntityId is not registered: it is the entity's key ("id" in scene files).
 // The Key enum (core/input.hpp's table; ecs/types.cpp), for any registry whose types name keys.
 void registerKeyEnum(reflect::TypeRegistry& r);
 
