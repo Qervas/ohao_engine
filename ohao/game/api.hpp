@@ -5,6 +5,7 @@
 // The guide: docs/games/README.md.
 #include "game/module.hpp"            // Module (registerTypes, install, uninstall, methods), Method, Call
 
+#include "core/jobs/graph.hpp"         // jobs::parallelFor: a system's loop on the job pool
 #include "core/layout_key.hpp"        // layoutKey<T>(): a snapshot hook's state layout
 #include "core/log.hpp"               // OHAO_LOG
 #include "ecs/animation.hpp"          // AnimationSystem::setDriver: animation drivers

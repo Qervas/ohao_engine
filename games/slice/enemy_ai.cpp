@@ -64,8 +64,36 @@ void die(const SystemContext& reg, entt::entity e, EnemyState& s) {
     reg.remove<PlayerController>(e);
 }
 
+// An enemy's step past its sight ray: what the first pass saw, for the second.
+struct Sighted {
+    entt::entity e{entt::null};
+    PlayerInfo me;
+    glm::vec3 eye{0.0f}, to{0.0f};
+    float dist{0.0f};
+    bool woke{false}, cast{false}, seen{false};
+    uint32_t shotsNow{0};
+};
+
+// The sight rays of `pending` (from `first` on), each into its own entry, on the job pool: a ray reads the physics
+// world and writes nothing else, so they run in any order. Chunks of kRaysPerChunk (step 4b-6, measured on the crowd
+// and enemies16; a ray takes about 1 us).
+constexpr std::size_t kRaysPerChunk = 4;
+void castSights(const PhysicsScene& physics, Target target, std::vector<Sighted>& sighted, std::size_t first) {
+    jobs::parallelFor(first, sighted.size(), kRaysPerChunk, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i) {
+            Sighted& x = sighted[i];
+            if (!x.cast) continue;
+            const auto hit = physics.raycastFrom(x.eye, x.to, x.dist + 0.5f, x.e);
+            x.seen = hit && hit->entity == target.e;
+        }
+    }, "enemy.sight");
+}
+
 } // namespace
 
+// In two passes over the enemies in id order. The first updates what came before sight (its state, a death) and says
+// where each looks; the rays then run together; the second decides. A death removes its character, which later rays
+// pass: the rays before it are cast first, so each ray sees the world it saw when one enemy ran after another.
 void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt) {
     const auto view = reg.view<const Enemy>();
     if (view.empty()) return;
@@ -75,9 +103,12 @@ void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt) {
     std::sort(order.begin(), order.end());
     const Target target = findTarget(reg, physics);
 
+    std::vector<Sighted> sighted;
+    sighted.reserve(order.size());
+    std::size_t cast = 0;   // sighted[cast..] have no ray yet
     for (const auto& [id, e] : order) {
         if (!reg.valid(e) || !reg.all_of<Enemy>(e)) continue;
-        const Enemy ai = reg.get<Enemy>(e);
+        const Enemy& ai = reg.get<Enemy>(e);
         const auto* health = reg.try_get<Health>(e);
         if (!reg.all_of<EnemyState>(e)) {
             EnemyState st;
@@ -88,6 +119,8 @@ void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt) {
         EnemyState& s = reg.get_mut<EnemyState>(e);
         if (s.mode == EnemyMode::Dead) continue;
         if (health && !(health->current > 0.0f)) {
+            castSights(physics, target, sighted, cast);
+            cast = sighted.size();
             die(reg, e, s);
             continue;
         }
@@ -96,45 +129,55 @@ void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt) {
         const PlayerController& pc = reg.get<PlayerController>(e);
         if (!reg.all_of<MoveIntent>(e)) reg.emplace<MoveIntent>(e, MoveIntent{{0.0f, 0.0f}, me->yawDeg, me->pitchDeg});
         if (!reg.all_of<WeaponTrigger>(e)) reg.emplace<WeaponTrigger>(e);
-        MoveIntent& mi = reg.get_mut<MoveIntent>(e);
-        WeaponTrigger& trigger = reg.get_mut<WeaponTrigger>(e);
-        trigger.pull = false;
-        mi.move = glm::vec2(0.0f);
+        Sighted x;
+        x.e = e;
+        x.me = *me;
 
         // Hit since the last step: it turns on the player, wherever it was looking.
-        const bool woke = health && s.lastHealth >= 0.0f && health->current < s.lastHealth;
+        x.woke = health && s.lastHealth >= 0.0f && health->current < s.lastHealth;
         s.lastHealth = health ? health->current : -1.0f;
         // Rounds its weapon fired since the last step count down the burst.
         const auto* ws = reg.try_get<WeaponState>(e);
-        const uint32_t shotsNow = ws ? ws->shots : s.shotsSeen;
-        const uint32_t fired = shotsNow - s.shotsSeen;
-        s.shotsSeen = shotsNow;
+        x.shotsNow = ws ? ws->shots : s.shotsSeen;
+        const uint32_t fired = x.shotsNow - s.shotsSeen;
+        s.shotsSeen = x.shotsNow;
         if (s.burstLeft > 0 && fired > 0) {
             s.burstLeft -= std::min(fired, s.burstLeft);
             if (s.burstLeft == 0) s.pause = ai.burstPause;
         }
 
         // Sight: in range, in its cone while idle (anywhere once alert), and a clear line.
-        const glm::vec3 eye = me->pos + glm::vec3(0.0f, pc.eyeHeight, 0.0f);
-        bool seen = false;
-        float dist = 0.0f;
+        x.eye = me->pos + glm::vec3(0.0f, pc.eyeHeight, 0.0f);
         if (target.e != entt::null) {
-            const glm::vec3 to = target.chest - eye;
-            dist = glm::length(to);
-            const bool alert = s.mode != EnemyMode::Idle || woke;
+            x.to = target.chest - x.eye;
+            x.dist = glm::length(x.to);
+            const bool alert = s.mode != EnemyMode::Idle || x.woke;
             bool inCone = true;
             if (!alert) {
                 const glm::vec3 facing = yawQuat(me->yawDeg) * glm::vec3(0.0f, 0.0f, -1.0f);
-                const glm::vec3 flat(to.x, 0.0f, to.z);
+                const glm::vec3 flat(x.to.x, 0.0f, x.to.z);
                 const float len = glm::length(flat);
                 inCone = len < 1e-4f || glm::dot(facing, flat / len) >= std::cos(glm::radians(0.5f * ai.fovDeg));
             }
-            if (dist <= ai.sightRange && inCone && dist > 1e-4f) {
-                const auto hit = physics.raycastFrom(eye, to, dist + 0.5f, e);
-                seen = hit && hit->entity == target.e;
-            }
+            x.cast = x.dist <= ai.sightRange && inCone && x.dist > 1e-4f;
         }
-        if (woke && target.e != entt::null && s.mode == EnemyMode::Idle) {
+        sighted.push_back(x);
+    }
+    castSights(physics, target, sighted, cast);
+
+    for (const Sighted& x : sighted) {
+        const entt::entity e = x.e;
+        const Enemy& ai = reg.get<Enemy>(e);
+        EnemyState& s = reg.get_mut<EnemyState>(e);
+        MoveIntent& mi = reg.get_mut<MoveIntent>(e);
+        WeaponTrigger& trigger = reg.get_mut<WeaponTrigger>(e);
+        trigger.pull = false;
+        mi.move = glm::vec2(0.0f);
+        const bool seen = x.seen;
+        const float dist = x.dist;
+        const glm::vec3 eye = x.eye;
+        const auto* me = &x.me;
+        if (x.woke && target.e != entt::null && s.mode == EnemyMode::Idle) {
             s.mode = EnemyMode::Chase;
             s.lastSeen = target.feet;
             s.lostFor = 0.0f;
@@ -183,9 +226,9 @@ void stepEnemies(const SystemContext& reg, PhysicsScene& physics, float dt) {
                     break;
                 }
                 // Turned to the player's chest, off by a seeded error drawn per round.
-                const uint32_t seed = (ws ? reg.get<Weapon>(e).seed : 1u) ^ 0x5eedU;
-                const float errYaw = (2.0f * combat::unitRandom(seed, shotsNow, 5) - 1.0f) * ai.aimErrorDeg;
-                const float errPitch = (2.0f * combat::unitRandom(seed, shotsNow, 6) - 1.0f) * ai.aimErrorDeg;
+                const uint32_t seed = (reg.all_of<WeaponState>(e) ? reg.get<Weapon>(e).seed : 1u) ^ 0x5eedU;
+                const float errYaw = (2.0f * combat::unitRandom(seed, x.shotsNow, 5) - 1.0f) * ai.aimErrorDeg;
+                const float errPitch = (2.0f * combat::unitRandom(seed, x.shotsNow, 6) - 1.0f) * ai.aimErrorDeg;
                 const glm::vec3 to = target.chest - eye;
                 const float pitch = glm::degrees(std::atan2(to.y, glm::length(glm::vec2(to.x, to.z))));
                 mi.yawDeg = turn(mi.yawDeg, yawToward(to) + errYaw, maxTurn);

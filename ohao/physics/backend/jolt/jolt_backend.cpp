@@ -887,6 +887,23 @@ void JoltPhysicsBackend::setAwake(BodyHandle h, bool awake) {
         m_physicsSystem->GetBodyInterface().DeactivateBody(id);
 }
 
+IPhysicsBackend::BodyRead JoltPhysicsBackend::readBody(BodyHandle h) const {
+    BodyRead out;
+    const JPH::BodyID id = lookupBodyID(h);
+    if (id.IsInvalid() || !m_physicsSystem) return out;
+    JPH::BodyLockRead lock(m_physicsSystem->GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return out;
+    const JPH::Body& body = lock.GetBody();
+    out.awake = body.IsActive();
+    out.position = toGLM(body.GetPosition());
+    out.rotation = toGLM(body.GetRotation());
+    if (!body.IsStatic()) {   // as BodyInterface's getters: a static body's velocities are zero
+        out.linearVelocity = toGLM(body.GetLinearVelocity());
+        out.angularVelocity = toGLM(body.GetAngularVelocity());
+    }
+    return out;
+}
+
 bool JoltPhysicsBackend::isAwake(BodyHandle h) const {
     JPH::BodyID id = lookupBodyID(h);
     if (id.IsInvalid() || !m_physicsSystem) return false;

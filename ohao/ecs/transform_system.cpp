@@ -1,5 +1,6 @@
 #include "ecs/transform_system.hpp"
 #include "ecs/components.hpp"
+#include "core/jobs/graph.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -24,13 +25,14 @@ glm::mat4 parentWorld(const entt::registry& reg, entt::entity e) {
 }
 
 // captured: null for a render's update; inside a step, the set of entities whose prevWorld
-// is already the frame's start.
-void recompute(entt::registry& reg, entt::entity root, StepCaptured* step, const StepCaptured* kept) {
-    std::vector<entt::entity> stack{root};
+// is already the frame's start. rootLocal: the root's local matrix, already computed.
+void recompute(entt::registry& reg, entt::entity root, const glm::mat4& rootLocal, StepCaptured* step,
+               const StepCaptured* kept, std::vector<entt::entity>& stack) {
+    stack.assign(1, root);
     while (!stack.empty()) {
         const entt::entity e = stack.back();
         stack.pop_back();
-        const glm::mat4 world = parentWorld(reg, e) * reg.get<Transform>(e).matrix();
+        const glm::mat4 world = parentWorld(reg, e) * (e == root ? rootLocal : reg.get<Transform>(e).matrix());
         if (auto* wt = reg.try_get<WorldTransform>(e)) {
             if (step) {
                 if (step->entities.insert(e).second) wt->prevWorld = wt->world;
@@ -57,12 +59,24 @@ bool hasDirtyAncestor(const entt::registry& reg, entt::entity e) {
     return false;
 }
 
+// The roots' local matrices in parallel (each into its own slot, from its own Transform), chunks of
+// kRootsPerChunk (step 4b-6: about 40 ns a matrix, so a chunk is about 10 us); then each subtree in
+// root order on this thread, as the tags it writes are the registry's.
+constexpr std::size_t kRootsPerChunk = 256;
+
 void recomputeDirty(entt::registry& reg, StepCaptured* step, const StepCaptured* kept) {
     std::vector<entt::entity> roots;
     for (auto e : reg.view<TransformDirty>())
         if (!hasDirtyAncestor(reg, e)) roots.push_back(e);
-    for (auto e : roots)
-        if (reg.valid(e)) recompute(reg, e, step, kept);
+    std::vector<glm::mat4> local(roots.size());
+    const auto& transforms = reg.storage<Transform>();
+    jobs::parallelFor(0, roots.size(), kRootsPerChunk, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i)
+            if (transforms.contains(roots[i])) local[i] = transforms.get(roots[i]).matrix();
+    }, "transform.local");
+    std::vector<entt::entity> stack;
+    for (std::size_t i = 0; i < roots.size(); ++i)
+        if (reg.valid(roots[i])) recompute(reg, roots[i], local[i], step, kept, stack);
 }
 
 } // namespace

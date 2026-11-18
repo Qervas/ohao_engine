@@ -149,6 +149,8 @@ struct PhysicsScene::Impl {
     ankerl::unordered_dense::map<pb::BodyHandle, entt::entity> entityOf;
     ankerl::unordered_dense::map<entt::entity, entt::entity> partOf;   // part -> the body it was built into
     std::vector<entt::entity> touched;
+    std::vector<entt::entity> movedEntities;   // syncBodies' PhysicsMoved entities
+    std::vector<Placement> movedPlacements;    // and their world placements
     std::vector<PhysicsWarning> warnings;
     std::set<std::pair<entt::entity, std::string>> warned;
     double buildMs{0.0};
@@ -391,6 +393,8 @@ struct PhysicsScene::Impl {
     // Transform, through its parent's world transform (the local scale is kept), and its motion
     // into BodyMotion (asleep at rest, once, as it falls asleep).
     void writeBack();
+    std::vector<std::pair<entt::entity, BodyRecord*>> dynamics;   // writeBack's bodies, in the map's order
+    std::vector<pb::IPhysicsBackend::BodyRead> reads;              // and what each read
 
     void publish(std::vector<PhysicsEvent>& fresh);   // sorted, then emitted
 

@@ -88,8 +88,25 @@ public:
     // placement (no motion from the previous one).
     void markPlaced(entt::entity e) { m_placed.push_back(e); }
 
+    // A chunk of the pose's parallel loop holds about this many joints, about 6 us of work, twice a worker's wake
+    // (step 4b-6, measured on the crowd and anim16).
+    static constexpr std::size_t kPoseJointsPerChunk = 64;
+
 private:
-    void poseEntity(World& world, entt::entity e, bool placed);
+    struct PoseJob {
+        entt::entity e{entt::null};
+        bool placed{false};    // a placement: the previous palette is the current one
+        bool skinned{false};   // it has a skinned mesh: a palette and a posed box
+    };
+    struct PoseWork {   // one chunk's scratch
+        std::vector<anim::LayerState> layers;
+        anim::Params params;
+        anim::LocalPose local;
+        anim::PoseScratch scratch;
+    };
+    bool preparePose(World& world, entt::entity e, bool& placed, bool& skinned);
+    static void evaluatePose(const PoseJob& job, const Animator& a, const AnimParams* p, AnimPose& pose, float alpha,
+                             float dt, PoseWork& work);
     void attach(World& world);
 
     AssetResolver& m_assets;
@@ -98,8 +115,8 @@ private:
     std::vector<std::string> m_failed;   // graph paths whose error was logged
     EventWriter<ClipEvent> m_clipEvents;
     double m_lastStepMs{0.0}, m_lastPoseMs{0.0};
-    anim::PoseScratch m_scratch;
-    anim::LocalPose m_local;
+    std::vector<PoseJob> m_jobs;
+    std::vector<PoseWork> m_work;
     std::vector<entt::entity> m_placed;
     std::vector<std::pair<uint64_t, entt::entity>> m_order;
     std::unordered_map<entt::entity, glm::mat4> m_drawn;   // JointAttach children drawn last frame

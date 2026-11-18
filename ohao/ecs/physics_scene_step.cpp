@@ -1,5 +1,7 @@
 #include "ecs/physics_scene_impl.hpp"
 
+#include "core/jobs/graph.hpp"
+
 namespace ohao::ecs {
 
 // The step's contact and trigger events, from the backend's queue (filled by Jolt's callbacks
@@ -91,15 +93,27 @@ auto PhysicsScene::Impl::idOf(entt::entity e) const -> uint64_t {
 // Transform, through its parent's world transform (the local scale is kept), and its motion
 // into BodyMotion (asleep at rest, once, as it falls asleep).
 void PhysicsScene::Impl::writeBack() {
-    for (auto& [e, r] : bodies) {
-        if (r.motion != Motion::Dynamic) continue;
-        const bool awake = backend->isAwake(r.handle);
-        if (!awake && !r.awake) continue;
-        r.awake = awake;
-        writeMotion(e, awake ? BodyMotion{backend->getLinearVelocity(r.handle), backend->getAngularVelocity(r.handle), false}
-                             : BodyMotion{glm::vec3(0.0f), glm::vec3(0.0f), true});
-        const glm::vec3 pos = backend->getPosition(r.handle);
-        const glm::quat rot = backend->getRotation(r.handle);
+    // The bodies' results read on the job pool, each into its own slot (a read touches nothing else), in chunks of
+    // kReadsPerChunk (step 4b-6: about 40 ns a body, so a chunk is about 10 us); then written in the map's order on
+    // this thread, as the writes raise the registry's signals.
+    constexpr std::size_t kReadsPerChunk = 256;
+    dynamics.clear();
+    for (auto& [e, r] : bodies)
+        if (r.motion == Motion::Dynamic) dynamics.emplace_back(e, &r);
+    reads.resize(dynamics.size());
+    jobs::parallelFor(0, dynamics.size(), kReadsPerChunk, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i) reads[i] = backend->readBody(dynamics[i].second->handle);
+    }, "physics.read");
+    for (std::size_t i = 0; i < dynamics.size(); ++i) {
+        const entt::entity e = dynamics[i].first;
+        BodyRecord& r = *dynamics[i].second;
+        const pb::IPhysicsBackend::BodyRead& b = reads[i];
+        if (!b.awake && !r.awake) continue;
+        r.awake = b.awake;
+        writeMotion(e, b.awake ? BodyMotion{b.linearVelocity, b.angularVelocity, false}
+                               : BodyMotion{glm::vec3(0.0f), glm::vec3(0.0f), true});
+        const glm::vec3 pos = b.position;
+        const glm::quat rot = b.rotation;
         recordMove(e, r.wpos, r.wrot, pos, rot);
         r.wpos = pos;
         r.wrot = rot;

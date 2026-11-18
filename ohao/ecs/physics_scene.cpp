@@ -1,5 +1,7 @@
 #include "ecs/physics_scene_impl.hpp"
 
+#include "core/jobs/graph.hpp"
+
 #include <algorithm>
 
 namespace ohao::ecs {
@@ -483,17 +485,29 @@ void PhysicsScene::Impl::syncBodies() {
     };
     for (const entt::entity e : touched) addBodyOf(e);
     touched.clear();
-    std::vector<entt::entity> moved;
-    for (const entt::entity e : reg.view<PhysicsMoved>()) {
+    // The moved entities' world placements, decomposed on the job pool, each into its own slot (chunks of
+    // kDecomposesPerChunk, step 4b-6: about 30 ns one, so a chunk is about 8 us); physics writes no WorldTransform,
+    // so they hold to the end.
+    constexpr std::size_t kDecomposesPerChunk = 256;
+    movedEntities.clear();
+    for (const entt::entity e : reg.view<PhysicsMoved>()) movedEntities.push_back(e);
+    movedPlacements.resize(movedEntities.size());
+    const auto& worlds = reg.storage<WorldTransform>();
+    jobs::parallelFor(0, movedEntities.size(), kDecomposesPerChunk, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i)
+            if (worlds.contains(movedEntities[i])) movedPlacements[i] = decompose(worlds.get(movedEntities[i]).world);
+    }, "physics.moved");
+    std::vector<std::size_t> moved;   // into movedEntities
+    for (std::size_t i = 0; i < movedEntities.size(); ++i) {
+        const entt::entity e = movedEntities[i];
         if (reg.all_of<ColliderPart>(e)) {
             addBodyOf(e);
             continue;
         }
         const auto it = bodies.find(e);
         if (it == bodies.end()) continue;
-        const auto& wt = reg.get<WorldTransform>(e);
-        if (it->second.hasParts || differs(decompose(wt.world).scale, it->second.scale, 1e-6f)) rebuild.push_back(e);
-        else moved.push_back(e);
+        if (it->second.hasParts || differs(movedPlacements[i].scale, it->second.scale, 1e-6f)) rebuild.push_back(e);
+        else moved.push_back(i);
     }
     reg.clear<PhysicsMoved>();
     if (rebuild.empty() && moved.empty() && !savedPending && jointsTouched.empty() && jointsBroken.empty()) return;
@@ -540,11 +554,12 @@ void PhysicsScene::Impl::syncBodies() {
     // 3. Moved bodies follow their entities. A dynamic body's entity moved by the write-back
     // (its world pose is the one written) stays; moved by anything else, the body jumps
     // there, at rest.
-    for (const entt::entity e : moved) {
+    for (const std::size_t i : moved) {
+        const entt::entity e = movedEntities[i];
         const auto it = bodies.find(e);
         if (it == bodies.end() || !backend) continue;
         BodyRecord& r = it->second;
-        const Placement p = decompose(reg.get<WorldTransform>(e).world);
+        const Placement& p = movedPlacements[i];
         if (restored && !differs(p.position, r.wpos, 1e-4f) && sameRotation(p.rotation, r.wrot, 1e-4f)) {
             posedExternally.erase(e);
             continue;

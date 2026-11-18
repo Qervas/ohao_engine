@@ -102,6 +102,7 @@ public:
     glm::vec3 getLinearVelocity(BodyHandle h) const override;
     void setAngularVelocity(BodyHandle h, const glm::vec3& vel) override;
     glm::vec3 getAngularVelocity(BodyHandle h) const override;
+    [[nodiscard]] BodyRead readBody(BodyHandle h) const override;
 
     // === Forces ===
     void applyForce(BodyHandle h, const glm::vec3& force, const glm::vec3& relPos) override;
