@@ -485,6 +485,9 @@ measured and set on this machine's 4060, and the file says so.
 
 ## 8. Needs Frank
 
+**Ruled (Frank, 2026-11-18):** the downloads 1, 3 and 4 approved (Recast/Detour v1.6.0, Inter, CC0 textures from
+ambientCG / Poly Haven); 2, the name and premise, kept; 5-7 (animation clips, generative tools, voice lines): later.
+
 1. **Recast/Detour:** `recastnavigation` **v1.6.0** (the latest release, 21 May 2023, on its releases page; zlib licence, C++98,
    CMake), fetched as Jolt is (`external/cmake/jolt.cmake:36-41`: a tag zip,
    `https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.zip`), with its demo and tests off,
