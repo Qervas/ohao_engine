@@ -22,7 +22,7 @@ public:
     /// Every mesh of a glTF file (.glb or .gltf) from one import, in the file's order: each untransformed (no
     /// node's transform), with only the materials its primitives use (renumbered from 0). A mesh that could not
     /// be made is null, with its error. The primitives of a mesh are found by the counts in the file's JSON
-    /// (level/gltf_structure): Assimp makes one mesh per primitive, in glTF order.
+    /// (cook/gltf_structure): Assimp makes one mesh per primitive, in glTF order.
     struct FileMeshes {
         std::vector<std::string> names;
         std::vector<std::shared_ptr<Model>> meshes;

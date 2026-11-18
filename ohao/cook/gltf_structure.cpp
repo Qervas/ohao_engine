@@ -1,4 +1,4 @@
-#include "level/gltf_structure.hpp"
+#include "cook/gltf_structure.hpp"
 
 #include <algorithm>
 #include <simdjson.h>

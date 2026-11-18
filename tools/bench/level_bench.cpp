@@ -28,6 +28,7 @@
 #include "engine/install.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
+#include "level/components.hpp"
 #include "reflect/registry.hpp"
 
 #include <nlohmann/json.hpp>

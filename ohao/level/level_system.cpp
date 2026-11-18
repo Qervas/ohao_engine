@@ -1,4 +1,5 @@
 #include "level/level_system.hpp"
+#include "level/components.hpp"
 #include "visual/components.hpp"
 #include "physics/components.hpp"
 #include "audio/components.hpp"
@@ -7,7 +8,7 @@
 #include "core/log.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
-#include "level/gltf_structure.hpp"
+#include "cook/gltf_structure.hpp"
 #include "level/level_hints.hpp"
 #include "reflect/registry.hpp"
 
@@ -463,11 +464,6 @@ std::vector<Diagnostic> levelDiagnostics(const World& world, entt::entity level)
     if (!installed) return {};
     const auto state = installed->state.lock();
     return state ? state->diagnostics(level) : std::vector<Diagnostic>{};
-}
-
-bool levelsInstalled(const World& world) {
-    const auto* installed = world.context().find<LevelInstalled>();
-    return installed && !installed->state.expired();
 }
 
 std::optional<LevelSummary> levelSummary(const World& world, entt::entity level) {

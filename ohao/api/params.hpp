@@ -207,14 +207,6 @@ struct LogReadParams {
     int32_t limit{50};
 };
 
-// Levels (sub-project 5, step 5).
-
-struct LevelInfoParams {
-    std::optional<uint64_t> entity;   // absent: the world's only level
-};
-struct LevelReloadParams {
-    std::optional<uint64_t> entity;
-};
 // Assets (system design step 5h).
 struct AssetInfoParams {};
 struct AssetReloadParams {

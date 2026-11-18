@@ -265,10 +265,6 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("channel", &LogReadParams::channel).doc("Only this channel")
         .field("limit", &LogReadParams::limit).doc("Lines returned").unitless().min(1).max(1000);
 
-    r.type<LevelInfoParams>("LevelInfoParams").doc("level.info params")
-        .field("entity", &LevelInfoParams::entity).doc("The Level entity's id, 16 hex digits; absent: the only level");
-    r.type<LevelReloadParams>("LevelReloadParams").doc("level.reload params")
-        .field("entity", &LevelReloadParams::entity).doc("The Level entity's id, 16 hex digits; absent: the only level");
     r.type<AssetInfoParams>("AssetInfoParams").doc("asset.info params");
     r.type<AssetReloadParams>("AssetReloadParams").doc("asset.reload params")
         .field("path", &AssetReloadParams::path).doc("A model file's project-relative path; absent: every file");

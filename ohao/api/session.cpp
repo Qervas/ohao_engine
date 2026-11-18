@@ -923,13 +923,6 @@ const std::vector<Method>& methodTable() {
            "the history (the last 8,192) no longer holds."}, methodEventsRead},
         {{"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
            "Engine log records after since (pass the last read's next), filtered by level and channel."}, logRead},
-        {{"level.info", p.find<LevelInfoParams>(),
-           "{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders, bodies, spawns: [{tag, entity, pos, yawDeg}], "
-           "lights, cameras, warnings, errors?, loadMs}",
-           "A Level's summary: counts, colliders by shape, bodies by motion, spawns in node order (first 8). "
-           "E_NOT_FOUND for no level or a non-level entity."}, methodLevelInfo},
-        {{"level.reload", p.find<LevelReloadParams>(), "as level.info",
-           "Re-reads the level's file and rebuilds its entities and bodies in place; an unchanged file keeps world.hash."}, methodLevelReload, true},
         {{"asset.info", p.find<AssetInfoParams>(),
            "{models: [{path, entities, meshes, cookedBytes}], more?, cache}",
            "The model files loaded now: the entities whose mesh or collision mesh each one is, its meshes and its "

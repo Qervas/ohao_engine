@@ -44,17 +44,9 @@ namespace ohao::level {
 // splitmix64 of the pair: deterministic, never 0.
 [[nodiscard]] uint64_t levelNodeId(uint64_t levelId, uint32_t index) noexcept;
 
-// Adds the "level" sync system right before "instantiate" (or "transform" when instantiate is
-// not installed; installInstantiate, called later, still lands after it). Once per World; the
-// resolver and registry must outlive it.
-void installLevels(ecs::World& world, ecs::AssetResolver& assets, const reflect::TypeRegistry& types);
-
 // The warnings and errors of the level entity's last expansion (empty for none, or for a
 // world without the level system).
 [[nodiscard]] std::vector<reflect::Diagnostic> levelDiagnostics(const ecs::World& world, entt::entity level);
-
-// Whether installLevels ran on this World.
-[[nodiscard]] bool levelsInstalled(const ecs::World& world);
 
 // What level.info reports from the level's file and its last expansion (spawns, colliders and
 // bodies the caller reads from the world). Counts are of the default scene's nodes: meshes is

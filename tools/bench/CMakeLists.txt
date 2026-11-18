@@ -24,7 +24,7 @@ add_dependencies(serve_bench ohao)   # the server it drives
 # with step 6). CPU, headless. Exit 2 = a noisy run (outside load): no verdict.
 add_executable(level_bench level_bench.cpp bench_env.hpp)
 target_compile_features(level_bench PRIVATE cxx_std_20)
-target_link_libraries(level_bench PRIVATE ohao_api ohao_level_world ohao_ecs ohao_physics ohao_test_harness)
+target_link_libraries(level_bench PRIVATE ohao_api ohao_level ohao_ecs ohao_physics ohao_test_harness)
 target_compile_definitions(level_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(MSVC)
     target_link_options(level_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
@@ -35,7 +35,7 @@ endif()
 # in a step. CPU, headless. Exit 2 = a noisy run (outside load): no verdict.
 add_executable(physics_bench physics_bench.cpp bench_env.hpp)
 target_compile_features(physics_bench PRIVATE cxx_std_20)
-target_link_libraries(physics_bench PRIVATE ohao_level_world ohao_ecs ohao_physics ohao_runtime ohao_test_harness ohao_slice_static)
+target_link_libraries(physics_bench PRIVATE ohao_level ohao_ecs ohao_physics ohao_runtime ohao_test_harness ohao_slice_static)
 target_compile_definitions(physics_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(MSVC)
     target_link_options(physics_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
@@ -46,7 +46,7 @@ endif()
 # player's submission, the bank's load). CPU, headless. Exit 2 = a noisy run (outside load): no verdict.
 add_executable(audio_bench audio_bench.cpp bench_env.hpp)
 target_compile_features(audio_bench PRIVATE cxx_std_20)
-target_link_libraries(audio_bench PRIVATE ohao_runtime ohao_level_world ohao_ecs ohao_physics ohao_audio ohao_audio_mixer ohao_core
+target_link_libraries(audio_bench PRIVATE ohao_runtime ohao_level ohao_ecs ohao_physics ohao_audio ohao_audio_mixer ohao_core
                       ohao_test_harness nlohmann_json::nlohmann_json ohao_slice_static)
 target_compile_definitions(audio_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(MSVC)

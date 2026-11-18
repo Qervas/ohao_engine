@@ -5,7 +5,7 @@
 #include "ecs/module.hpp"
 #include "ecs/scene_types.hpp"
 #include "footsteps/module.hpp"
-#include "level/level_system.hpp"
+#include "level/module.hpp"
 #include "physics/module.hpp"
 #include "vfx/module.hpp"
 #include "visual/module.hpp"
@@ -45,11 +45,8 @@ private:
     Install m_install;
 };
 
-constexpr std::array<std::string_view, 5> kLevelDeps{"ecs", "visual", "physics", "audio", "vfx"};
 constexpr std::array<std::string_view, 4> kWorldRenderDeps{"ecs", "visual", "animation", "vfx"};
 
-const StagedModule kLevel{"level", kLevelDeps, &ecs::registerLevelTypes,
-                          [](ecs::World& w, const ecs::Services& s) { level::installLevels(w, s.assets, s.types); }};
 // Its systems are installRendering's.
 const StagedModule kWorldRender{"world_render", kWorldRenderDeps, &ecs::registerWorldRenderTypes, nullptr};
 
@@ -58,7 +55,7 @@ const StagedModule kWorldRender{"world_render", kWorldRenderDeps, &ecs::register
 std::span<const ecs::Module* const> modules() {
     static const std::array<const ecs::Module*, 9> all{&ecs::coreModule(),    &ecs::visualModule(),    &ecs::animationModule(),
                                                        &ecs::physicsModule(), &ecs::audioModule(),     &ecs::footstepsModule(),
-                                                       &ecs::vfxModule(),     &kLevel,                 &kWorldRender};
+                                                       &ecs::vfxModule(),     &ecs::levelModule(),                 &kWorldRender};
     return all;
 }
 

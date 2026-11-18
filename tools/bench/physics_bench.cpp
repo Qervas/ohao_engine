@@ -50,6 +50,7 @@
 #include "world_render/vfx_draw.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
+#include "level/components.hpp"
 #include "reflect/registry.hpp"
 #include "audio/audio_schedule.hpp"
 #include "ecs/world_hash.hpp"

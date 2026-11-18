@@ -128,12 +128,7 @@ bool methodInputRecord(Session::Impl& s, const JsonDocument& doc, const JsonNode
                        JsonWriter& out);
 bool methodInputReplay(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
-// Levels (level.cpp).
-bool methodLevelInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                     JsonWriter& out);
-bool methodLevelReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                       JsonWriter& out);
-// Assets (level.cpp).
+// Assets (assets.cpp).
 bool methodAssetInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                      JsonWriter& out);
 bool methodAssetReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,

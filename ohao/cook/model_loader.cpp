@@ -13,7 +13,7 @@
 #include "stb_image.h"
 
 #include "core/log.hpp"
-#include "level/gltf_structure.hpp"
+#include "cook/gltf_structure.hpp"
 
 #include <charconv>
 #include <cmath>

@@ -55,6 +55,7 @@
 #include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
+#include "level/components.hpp"
 #include "reflect/registry.hpp"
 #include "runtime/audio_player.hpp"
 

@@ -10,7 +10,7 @@
 # The libraries below the modules, by level.
 set(OHAO_LAYERS_BELOW
     ohao_core=0
-    ohao_gpu_vulkan=1 ohao_reflect=1 ohao_level=1 ohao_audio_bank=1 ohao_vfx_effects=1
+    ohao_gpu_vulkan=1 ohao_reflect=1 ohao_audio_bank=1 ohao_vfx_effects=1
     ohao_asset=2 ohao_audio_mixer=2
     ohao_cook=3
     ohao_renderer=4)
@@ -20,7 +20,7 @@ set(OHAO_CORE_LEVEL 4)
 # Above the modules, each tier one above the last: the libraries not yet modules, the module list and the game API,
 # the agents' API, the hosts. The games (cmake/ohao_games.cmake) sit above them all.
 set(OHAO_LAYERS_ABOVE
-    "ohao_level_world ohao_world_render"
+    "ohao_world_render"
     "ohao_engine ohao_game_api"
     "ohao_api"
     "ohao_rpc ohao_runtime")
