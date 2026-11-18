@@ -4,10 +4,10 @@
 // core's SpawnPoint (ecs/components.hpp): physics and the games read them too.
 #include "reflect/asset_ref.hpp"
 
-#include <entt/entity/entity.hpp>
 
 #include <cstdint>
 #include <string>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -36,3 +36,9 @@ struct Socket { std::string name; };      // at most 64 characters
 struct LevelDirty {};
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (level/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::Level);
+OHAO_EXTERN_STORAGE(ohao::ecs::LevelDirty);
+OHAO_EXTERN_STORAGE(ohao::ecs::LevelNode);
+OHAO_EXTERN_STORAGE(ohao::ecs::Socket);

@@ -19,7 +19,6 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 
-#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -30,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -126,3 +126,7 @@ private:
 [[nodiscard]] bool graphFires(World& world, const std::string& path, std::span<const std::string_view> names);
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (animation/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::AnimParams);
+OHAO_EXTERN_STORAGE(ohao::ecs::AnimPose);

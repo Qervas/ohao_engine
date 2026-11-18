@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -27,3 +28,7 @@ struct VfxEmitter {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (vfx/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::VfxEmitter);
+OHAO_EXTERN_STORAGE(ohao::ecs::VfxSet);

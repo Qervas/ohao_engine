@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -145,3 +146,13 @@ struct DrawnFov {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (visual/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::Camera);
+OHAO_EXTERN_STORAGE(ohao::ecs::DrawnFov);
+OHAO_EXTERN_STORAGE(ohao::ecs::Environment);
+OHAO_EXTERN_STORAGE(ohao::ecs::FirstPerson);
+OHAO_EXTERN_STORAGE(ohao::ecs::InstantiateError);
+OHAO_EXTERN_STORAGE(ohao::ecs::Light);
+OHAO_EXTERN_STORAGE(ohao::ecs::Material);
+OHAO_EXTERN_STORAGE(ohao::ecs::MeshSource);

@@ -4,6 +4,7 @@
 #include "core/render_handles.hpp"
 
 #include <vector>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -16,3 +17,6 @@ struct MeshRenderer {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (world_render/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::MeshRenderer);

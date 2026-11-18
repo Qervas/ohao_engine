@@ -2,13 +2,13 @@
 #include "core/input.hpp"          // Key
 #include "reflect/asset_ref.hpp"   // a plain struct; no reflection machinery
 
-#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -124,3 +124,21 @@ struct FlyController {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (ecs/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::Children);
+OHAO_EXTERN_STORAGE(ohao::ecs::CreationOrder);
+OHAO_EXTERN_STORAGE(ohao::ecs::EntityId);
+OHAO_EXTERN_STORAGE(ohao::ecs::FlyController);
+OHAO_EXTERN_STORAGE(ohao::ecs::InputActions);
+OHAO_EXTERN_STORAGE(ohao::ecs::MovedLastFrame);
+OHAO_EXTERN_STORAGE(ohao::ecs::Name);
+OHAO_EXTERN_STORAGE(ohao::ecs::Parent);
+OHAO_EXTERN_STORAGE(ohao::ecs::PreservedComponents);
+OHAO_EXTERN_STORAGE(ohao::ecs::RenderDirty);
+OHAO_EXTERN_STORAGE(ohao::ecs::RenderPose);
+OHAO_EXTERN_STORAGE(ohao::ecs::SpawnPoint);
+OHAO_EXTERN_STORAGE(ohao::ecs::Spin);
+OHAO_EXTERN_STORAGE(ohao::ecs::Transform);
+OHAO_EXTERN_STORAGE(ohao::ecs::TransformDirty);
+OHAO_EXTERN_STORAGE(ohao::ecs::WorldTransform);

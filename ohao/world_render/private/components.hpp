@@ -1,6 +1,7 @@
 #pragma once
 // The world_render module's own bookkeeping components: never written outside it.
 #include <cstdint>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -11,3 +12,7 @@ struct RenderSlot { uint32_t slot; };
 struct InstantiateDirty {};
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (world_render/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::InstantiateDirty);
+OHAO_EXTERN_STORAGE(ohao::ecs::RenderSlot);

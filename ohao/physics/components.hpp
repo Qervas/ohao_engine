@@ -3,11 +3,11 @@
 // system moves (physics/physics_scene.hpp).
 #include "visual/components.hpp"   // ModelAsset: a CollisionMesh's
 
-#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>
 #include <string>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -148,3 +148,17 @@ struct BodyMotion {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (physics/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::BodyMotion);
+OHAO_EXTERN_STORAGE(ohao::ecs::Collider);
+OHAO_EXTERN_STORAGE(ohao::ecs::ColliderPart);
+OHAO_EXTERN_STORAGE(ohao::ecs::CollisionMesh);
+OHAO_EXTERN_STORAGE(ohao::ecs::Joint);
+OHAO_EXTERN_STORAGE(ohao::ecs::JointState);
+OHAO_EXTERN_STORAGE(ohao::ecs::MoveIntent);
+OHAO_EXTERN_STORAGE(ohao::ecs::PhysicsBody);
+OHAO_EXTERN_STORAGE(ohao::ecs::PhysicsMoved);
+OHAO_EXTERN_STORAGE(ohao::ecs::PlayerController);
+OHAO_EXTERN_STORAGE(ohao::ecs::PlayerState);
+OHAO_EXTERN_STORAGE(ohao::ecs::RigidBody);

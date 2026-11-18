@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -45,3 +46,8 @@ struct JointAttach {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (animation/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::Animator);
+OHAO_EXTERN_STORAGE(ohao::ecs::JointAttach);
+OHAO_EXTERN_STORAGE(ohao::ecs::SkinnedMesh);

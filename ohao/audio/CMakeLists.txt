@@ -15,4 +15,5 @@ find_package(Threads REQUIRED)
 target_link_libraries(ohao_audio_mixer PUBLIC Threads::Threads dl m)
 
 ohao_add_module(audio DEPENDS ecs visual animation physics LINKS ohao_audio_bank
-    SOURCES audio_schedule.cpp audio_schedule.hpp components.hpp events.hpp module.cpp module.hpp types.cpp types_events.cpp)
+    SOURCES audio_schedule.cpp audio_schedule.hpp components.hpp events.hpp module.cpp module.hpp storage.cpp types.cpp
+            types_events.cpp)

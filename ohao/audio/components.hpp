@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <string>
+#include "ecs/storage.hpp"   // OHAO_EXTERN_STORAGE: the storages below are compiled once
 
 namespace ohao::ecs {
 
@@ -31,3 +32,7 @@ struct ReverbZone {
 };
 
 } // namespace ohao::ecs
+
+// The storages of these components, compiled once (audio/storage.cpp).
+OHAO_EXTERN_STORAGE(ohao::ecs::AudioMix);
+OHAO_EXTERN_STORAGE(ohao::ecs::ReverbZone);
