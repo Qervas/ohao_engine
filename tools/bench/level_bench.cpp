@@ -22,8 +22,9 @@
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
-#include "ecs/physics_scene.hpp"
+#include "physics/physics_scene.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/module.hpp"
 #include "engine/install.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
@@ -74,8 +75,8 @@ LoadResult loadBlockout() {
     const auto t0 = std::chrono::steady_clock::now();
     ecs::World world;
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
-    level::installLevels(world, files, engineTypes());
-    ecs::PhysicsScene& physics = ecs::installPhysics(world, files);
+    engine::install(world, {files, engineTypes()}, {"level", "physics"});
+    ecs::PhysicsScene& physics = *ecs::physicsScene(world);
     const entt::entity lv = world.createWithId(0x1e7e1, "Level");
     world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/levels/blockout_room.glb", {}}});
     world.sync();
@@ -101,8 +102,8 @@ KitResult measureKit() {
     const auto t0 = std::chrono::steady_clock::now();
     ecs::World world;
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
-    level::installLevels(world, files, engineTypes());
-    ecs::PhysicsScene& physics = ecs::installPhysics(world, files);
+    engine::install(world, {files, engineTypes()}, {"level", "physics"});
+    ecs::PhysicsScene& physics = *ecs::physicsScene(world);
     const entt::entity lv = world.createWithId(0x1e7e1, "Level");
     world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"build/kit2k/kit2k.glb", {}}});
     world.sync();
@@ -193,8 +194,7 @@ int runKit(const nlohmann::json& budgets, int currentStep, const std::string& ou
 std::size_t levelInfoBytes(std::string& result) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World world;
-    level::installLevels(world, files, engineTypes());
-    (void)ecs::installPhysics(world, files);
+    engine::install(world, {files, engineTypes()}, {"level", "physics"});
     api::Session session(world, engineTypes());
     const entt::entity lv = world.createWithId(0x1e7e1, "Level");
     world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/levels/blockout_room.glb", {}}});

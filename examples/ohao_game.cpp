@@ -36,6 +36,7 @@
 #include "game/loader.hpp"
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "physics/components.hpp"
 #include "engine/install.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/live_host.hpp"

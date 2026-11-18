@@ -2,6 +2,7 @@
 // simulation step goes through stepOnce, so world.step, input.replay and a window host's
 // realtime steps feed the world's input map and a recording the same way.
 #include "api/internal.hpp"
+#include "physics/components.hpp"
 
 #include "ecs/json_parse.hpp"
 #include "ecs/world_hash.hpp"

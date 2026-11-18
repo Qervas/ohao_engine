@@ -3,16 +3,19 @@
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/module.hpp"
-#include "ecs/physics_scene.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/vfx.hpp"
 #include "level/level_system.hpp"
+#include "physics/module.hpp"
 #include "visual/module.hpp"
 #include "world_render/instantiate.hpp"
 #include "world_render/render_extract.hpp"
 #include "world_render/vfx_draw.hpp"
 
+#include <algorithm>
 #include <array>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace ohao::engine {
@@ -42,7 +45,6 @@ private:
 };
 
 constexpr std::array<std::string_view, 2> kAnimationDeps{"ecs", "visual"};
-constexpr std::array<std::string_view, 2> kPhysicsDeps{"ecs", "visual"};
 constexpr std::array<std::string_view, 4> kAudioDeps{"ecs", "visual", "physics", "animation"};
 constexpr std::array<std::string_view, 3> kVfxDeps{"ecs", "visual", "physics"};
 constexpr std::array<std::string_view, 5> kLevelDeps{"ecs", "visual", "physics", "audio", "vfx"};
@@ -50,8 +52,6 @@ constexpr std::array<std::string_view, 4> kWorldRenderDeps{"ecs", "visual", "ani
 
 const StagedModule kAnimation{"animation", kAnimationDeps, &ecs::registerAnimationTypes,
                               [](ecs::World& w, const ecs::Services& s) { ecs::installAnimation(w, s.assets); }};
-const StagedModule kPhysics{"physics", kPhysicsDeps, &ecs::registerPhysicsTypes,
-                            [](ecs::World& w, const ecs::Services& s) { ecs::installPhysics(w, s.assets); }};
 const StagedModule kAudio{"audio", kAudioDeps, &ecs::registerAudioTypes,
                           [](ecs::World& w, const ecs::Services& s) { ecs::installAudio(w, s.assets); }};
 const StagedModule kVfx{"vfx", kVfxDeps, &ecs::registerVfxTypes,
@@ -64,16 +64,22 @@ const StagedModule kWorldRender{"world_render", kWorldRenderDeps, &ecs::register
 } // namespace
 
 std::span<const ecs::Module* const> modules() {
-    static const std::array<const ecs::Module*, 8> all{&ecs::coreModule(), &ecs::visualModule(), &kAnimation, &kPhysics,
-                                                       &kAudio,            &kVfx,                 &kLevel,     &kWorldRender};
+    static const std::array<const ecs::Module*, 8> all{&ecs::coreModule(), &ecs::visualModule(), &kAnimation,
+                                                       &ecs::physicsModule(), &kAudio, &kVfx, &kLevel, &kWorldRender};
     return all;
 }
 
 void registerTypes(reflect::TypeRegistry& types) { ecs::registerModuleTypes(types, modules()); }
 
-void install(ecs::World& world, const ecs::Services& services, std::span<const std::string_view> only) {
-    if (only.empty()) return ecs::installModules(world, modules(), services);
-    const std::vector<const ecs::Module*> chosen = ecs::withDependencies(modules(), only);
+void install(ecs::World& world, const ecs::Services& services, std::initializer_list<std::string_view> only) {
+    if (only.size() == 0) return ecs::installModules(world, modules(), services);
+    std::vector<const ecs::Module*> chosen{&ecs::coreModule()};
+    for (const std::string_view name : only) {
+        const auto all = modules();
+        const auto m = std::find_if(all.begin(), all.end(), [&](const ecs::Module* x) { return x->name() == name; });
+        if (m == all.end()) throw std::logic_error("engine::install: no engine module is named '" + std::string(name) + "'");
+        if (std::find(chosen.begin(), chosen.end(), *m) == chosen.end()) chosen.push_back(*m);
+    }
     ecs::installModules(world, chosen, services);
 }
 

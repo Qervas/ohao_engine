@@ -20,8 +20,8 @@
 //     each step writes it for every dynamic body awake in the step, once more as it falls
 //     asleep, and for each player whose velocity changed) goes into the bodies after their
 //     teleports, and into the players.
-//   - Events (ecs/events.hpp, the World's log): contact begin/end per body pair (sub-shape contacts
-//     collapsed) and trigger enter/exit (a Collider with trigger is a sensor), drained from the backend's
+//   - Events (physics/events.hpp; channels of the World's log, ecs/events.hpp): contact begin/end per body pair
+//     (sub-shape contacts collapsed) and trigger enter/exit (a Collider with trigger is a sensor), drained from the backend's
 //     queue on the simulating thread after the step, sorted (begins and enters, ends and exits, a player's
 //     footsteps and landings, joint breaks; then by the ids) and emitted, with the players' footsteps and
 //     landings and the joints' breaks. Removing a body ends its pairs at once: emitted then, so a removal
@@ -34,12 +34,13 @@
 //     collider in one compound shape.
 //   - The backend is created at the first body, so a world without colliders pays nothing.
 //
-// No reflection: only components and the backend.
+// No reflection: only components and the backend (physics/private/backend, the module's own).
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/world.hpp"
-#include "physics/backend/physics_backend.hpp"
+#include "physics/components.hpp"
+#include "physics/events.hpp"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -93,48 +94,6 @@ struct PhysicsWarning {
                         // W_JOINT_NO_BODY, W_JOINT_SELF, W_JOINT_STATIC, W_JOINT_FAILED
     entt::entity entity{entt::null};
     std::string message;
-};
-
-// Physics' events (spec "Events" and "Footsteps"), each a channel of the World's log. Entities are held by
-// EntityId: they may be gone by the time an event is read.
-namespace physics_events {
-inline constexpr const char* kContactBegin = "physics.contact_begin";   // ContactEvent
-inline constexpr const char* kContactEnd = "physics.contact_end";       // ContactEvent
-inline constexpr const char* kTriggerEnter = "physics.trigger_enter";   // TriggerEvent
-inline constexpr const char* kTriggerExit = "physics.trigger_exit";     // TriggerEvent
-inline constexpr const char* kFootstep = "physics.footstep";            // FootEvent
-inline constexpr const char* kLand = "physics.land";                    // FootEvent
-inline constexpr const char* kJointBreak = "physics.joint_break";       // JointBreakEvent
-} // namespace physics_events
-
-// A body pair began or ended touching.
-struct ContactEvent {
-    uint64_t a{0}, b{0};        // a has the lower id
-    glm::vec3 point{0.0f};      // world; an end repeats its begin's
-    glm::vec3 normal{0.0f};     // world, from a toward b
-    float speed{0.0f};          // the relative normal speed at a begin (m/s); 0 at an end
-};
-// A body entered or left a trigger (a Collider with trigger).
-struct TriggerEvent {
-    uint64_t trigger{0}, body{0};
-    glm::vec3 point{0.0f}, normal{0.0f};   // as a contact's; the normal from the trigger toward the body
-    float speed{0.0f};                     // at an enter (m/s); 0 at an exit
-};
-// A player's footstep (every 0.75 m walked, 0.95 m sprinted, on the ground) or landing (touching the ground
-// after a fall of more than 0.3 m).
-struct FootEvent {
-    uint64_t player{0};
-    uint64_t ground{0};          // the ground's entity (0: none)
-    glm::vec3 point{0.0f};       // the feet
-    glm::vec3 normal{0.0f};      // the ground's
-    float speed{0.0f};           // a footstep: the horizontal speed; a landing: the downward speed (m/s)
-    std::string surface;         // the ground's Collider.surface ("default" if none)
-};
-// A joint broke.
-struct JointBreakEvent {
-    uint64_t joint{0};           // the Joint's entity
-    uint64_t other{0};           // the other body's entity (0: the world)
-    glm::vec3 point{0.0f};       // its anchor, world
 };
 
 // A body pair in contact now, or a body inside a trigger (physics.contacts; spec "Events"): from
@@ -216,7 +175,7 @@ public:
     // Whether the last interpolate saw stream 0's input-driven players all out of control (the slice's dead
     // player): no frame shows a look then, so a window measures none.
     [[nodiscard]] bool ignoresLook() const noexcept;
-    // The channels physics emits into (installPhysics: the World's); without them it emits nothing.
+    // The channels physics emits into (the physics module's install: the World's); without them it emits nothing.
     void setEvents(EventLog& log);
     // Whether an input-driven character takes its stream's input this step: it walks, turns and jumps, and the
     // window's look lead turns it; out of control it stands, or falls, where it is. A game's rule (the slice's: not
@@ -257,7 +216,7 @@ public:
     // ground found there at once: its Transform, head, PlayerState and BodyMotion are written now.
     // False for an entity without a character.
     bool teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<float> yawDeg);
-    // The simulation a snapshot carries (installPhysics puts these in the World's SnapshotHook):
+    // The simulation a snapshot carries (the physics module's install puts these in the World's SnapshotHook):
     // the backend's bodies, contact cache and characters, the players, the contact bookkeeping.
     // A restore takes effect at the next sync, if the bodies are the snapshot's (the same
     // entities' bodies); else the components' path (teleports at rest, BodyMotion) applies.
@@ -266,10 +225,8 @@ public:
     // What saveSimulation keeps, fed to world.hash: a restore not yet put in place (it waits for the next sync) is
     // hashed as the state it puts back.
     void hashSimulation(StateHash& h) const;
-    // The backend, created on first use; tests step it.
-    [[nodiscard]] physics::backend::IPhysicsBackend& backend();
-    // The entity's body, or INVALID_BODY.
-    [[nodiscard]] physics::backend::BodyHandle bodyOf(entt::entity e) const;
+    // Whether the entity has a body (a Collider's, or a ColliderPart's compound).
+    [[nodiscard]] bool hasBody(entt::entity e) const;
     [[nodiscard]] const std::vector<PhysicsWarning>& warnings() const noexcept;
     // Bodies built so far (each rebuild counts): a still world adds none.
     [[nodiscard]] std::size_t bodyBuilds() const noexcept;
@@ -279,12 +236,7 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Adds the sync systems "player_spawn" right before "transform", "physics" right after it and
-// "interpolate" after that (before "render_extract"), the "physics" simulate system after those
-// added so far, and returns the scene (once per World; a second call returns the first). The
-// resolver must outlive the World.
-PhysicsScene& installPhysics(World& world, AssetResolver& assets);
-// The World's physics scene, or null without installPhysics.
+// The World's physics scene, or null where the physics module is not installed (physics/module.hpp).
 [[nodiscard]] PhysicsScene* physicsScene(World& world);
 [[nodiscard]] const PhysicsScene* physicsScene(const World& world);
 

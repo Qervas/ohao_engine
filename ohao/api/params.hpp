@@ -207,8 +207,7 @@ struct LogReadParams {
     int32_t limit{50};
 };
 
-// Levels and physics (sub-project 5, step 5).
-inline constexpr float kMaxRayLength = 100'000.0f;   // physics.raycast's max: (0, 1e5] m
+// Levels (sub-project 5, step 5).
 
 struct LevelInfoParams {
     std::optional<uint64_t> entity;   // absent: the world's only level
@@ -221,32 +220,12 @@ struct AssetInfoParams {};
 struct AssetReloadParams {
     std::optional<std::string> path;   // absent: every file
 };
-struct PhysicsRaycastParams {
-    glm::vec3 from{0.0f};
-    glm::vec3 dir{0.0f};
-    float max{1000.0f};
-};
-struct PhysicsInfoParams {};
 // Sub-project 6, step 1.
 // Step 3c: the World's event log.
 struct EventsReadParams {
     int64_t since{0};                 // the seq of the last event already read (the previous reply's next)
     int32_t max{32};                  // 0..64
     std::vector<std::string> names;   // channels, exact or "prefix.*"; empty: every channel
-};
-// Sub-project 6, step 5.
-inline constexpr float kMaxTeleport = 100'000.0f;   // player.teleport's pos: each axis within ±1e5 m
-struct PhysicsContactsParams {
-    std::optional<uint64_t> entity;   // only the pairs this entity is in
-    int32_t max{32};                  // 1..64
-};
-struct PlayerInfoParams {
-    std::optional<uint64_t> entity;   // absent: the world's only player
-};
-struct PlayerTeleportParams {
-    std::optional<uint64_t> entity;
-    glm::vec3 pos{0.0f};
-    std::optional<float> yawDeg;      // absent: it keeps its facing
 };
 // Sub-project 11, step 4.
 struct AudioInfoParams {};

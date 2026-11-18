@@ -4,6 +4,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "ecs/module.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/world_hash.hpp"
 #include "reflect/schema.hpp"
@@ -938,20 +939,6 @@ const std::vector<Method>& methodTable() {
            "Forgets a model file (or every one) and rebuilds the meshes and colliders of the entities that use it: a "
            "file edited since is cooked again, an unchanged one costs its naming. A Level's file is level.reload's."},
          methodAssetReload, true},
-        {{"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
-           "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."}, methodPhysicsRaycast},
-        {{"physics.info", p.find<PhysicsInfoParams>(),
-           "{bodies, shapes, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}]}",
-           "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."}, methodPhysicsInfo},
-        {{"physics.contacts", p.find<PhysicsContactsParams>(),
-           "{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}",
-           "Body pairs touching now (resting included) and bodies in triggers, by id; since: the step they began."}, methodPhysicsContacts},
-        {{"player.info", p.find<PlayerInfoParams>(),
-           "{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}",
-           "The player: feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
-           "input.inject and world.step."}, methodPlayerInfo},
-        {{"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
-           "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."}, methodPlayerTeleport, true},
         {{"animation.info", p.find<AnimationInfoParams>(),
            "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?}",
            "Each Animator's layers (state, clip time in s, the fade); its clip events are events.read's "
@@ -1175,27 +1162,38 @@ void Session::Impl::setGame(std::shared_ptr<const game::LoadedModule> loaded) {
     game = std::move(loaded);
     methods = methodTable();
     docs.clear();
-    const game::Module* module = game ? game->module : nullptr;
-    if (module)
-        for (const game::Method& g : module->methods()) {
+    // The session's own methods, then the rows of the World's engine modules (each exists only where its module is
+    // installed), then the game's.
+    const auto addRows = [&](const ecs::Module& module, const char* whose) {
+        for (const ecs::Method& g : module.methods()) {
             if (findMethod(*this, g.doc.name))
-                throw std::logic_error("game " + std::string(module->name()) + "'s method " + std::string(g.doc.name) +
-                                       " has an engine method's name");
+                throw std::logic_error(std::string(whose) + " " + std::string(module.name()) + "'s method " +
+                                       std::string(g.doc.name) + " has another method's name");
             reflect::MethodDoc doc = g.doc;
-            doc.module = module->name();
+            doc.module = module.name();
             methods.push_back({doc,
                                [fn = g.fn](Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
                                            JsonWriter& out) {
-                                   game::Call call{s.world};
+                                   ecs::Call call{s.world};
                                    const bool ok = fn(call, params, ctx, out);
                                    if (call.paramsFailed) s.paramsFailed = true;
                                    return ok;
                                },
                                g.mutates});
         }
+    };
+    for (const ecs::Module* m : ecs::installedModules(world)) addRows(*m, "module");
+    moduleRows = ecs::installedModules(world).size();
+    if (const game::Module* module = game ? game->module : nullptr) addRows(*module, "game");
     for (const Method& m : methods) docs.push_back(m.doc);
     catalogue.clear();
     schemaHash = reflect::schemaHash(types, docs, channels);
+}
+
+// A module installed on the World since the rows were taken (a host that installs one later) adds its rows, between
+// calls.
+void Session::Impl::takeModuleRows() {
+    if (ecs::installedModules(world).size() != moduleRows) setGame(game);
 }
 
 Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t, std::shared_ptr<const game::LoadedModule> game)
@@ -1297,6 +1295,7 @@ CallStatus run(Session::Impl& m, const Method& method, const JsonDocument& doc, 
 CallOutcome Session::call(std::string_view method, const JsonDocument& doc, const JsonNode& params,
                           const CallControl* control) {
     CallOutcome o;
+    m->takeModuleRows();
     const Method* found = findMethod(*m, method);
     if (!found) {
         o.status = CallStatus::UnknownMethod;
@@ -1322,6 +1321,7 @@ CallOutcome Session::call(std::string_view method, const JsonDocument& doc, cons
 }
 
 std::string Session::call(std::string_view method, std::string_view params) {
+    m->takeModuleRows();
     const Method* found = findMethod(*m, method);
     if (!found) {
         std::vector<Diagnostic> errs{unknownMethod(*m, method)};

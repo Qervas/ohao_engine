@@ -25,20 +25,25 @@ const Module* byName(std::span<const Module* const> modules, std::string_view na
 
 } // namespace
 
-std::vector<const Module*> moduleOrder(std::span<const Module* const> modules) {
-    for (const Module* m : modules)
-        for (const std::string_view d : m->dependencies())
-            if (!byName(modules, d))
-                throw std::logic_error("module '" + std::string(m->name()) + "' depends on '" + std::string(d) +
-                                       "', which is not among the modules given");
-    // Kahn's algorithm, the least name first among the ready.
+namespace {
+
+// Kahn's algorithm, the least name first among the ready. `strict`: a dependency outside `modules` throws; else it
+// is taken as met.
+std::vector<const Module*> orderOf(std::span<const Module* const> modules, bool strict) {
+    if (strict)
+        for (const Module* m : modules)
+            for (const std::string_view d : m->dependencies())
+                if (!byName(modules, d))
+                    throw std::logic_error("module '" + std::string(m->name()) + "' depends on '" + std::string(d) +
+                                           "', which is not among the modules given");
     std::vector<const Module*> left(modules.begin(), modules.end());
     std::sort(left.begin(), left.end(), [](const Module* a, const Module* b) { return a->name() < b->name(); });
     std::vector<const Module*> out;
     while (!left.empty()) {
         const auto ready = std::find_if(left.begin(), left.end(), [&](const Module* m) {
             const auto deps = m->dependencies();
-            return std::all_of(deps.begin(), deps.end(), [&](std::string_view d) { return byName(out, d) != nullptr; });
+            return std::all_of(deps.begin(), deps.end(),
+                               [&](std::string_view d) { return byName(out, d) || !byName(modules, d); });
         });
         if (ready == left.end()) {
             std::string names;
@@ -51,20 +56,9 @@ std::vector<const Module*> moduleOrder(std::span<const Module* const> modules) {
     return out;
 }
 
-std::vector<const Module*> withDependencies(std::span<const Module* const> all, std::span<const std::string_view> names) {
-    std::vector<const Module*> out;
-    std::vector<std::string_view> todo(names.begin(), names.end());
-    while (!todo.empty()) {
-        const std::string_view n = todo.back();
-        todo.pop_back();
-        if (byName(out, n)) continue;
-        const Module* m = byName(all, n);
-        if (!m) throw std::logic_error("no engine module is named '" + std::string(n) + "'");
-        out.push_back(m);
-        for (const std::string_view d : m->dependencies()) todo.push_back(d);
-    }
-    return out;
-}
+} // namespace
+
+std::vector<const Module*> moduleOrder(std::span<const Module* const> modules) { return orderOf(modules, true); }
 
 void registerModuleTypes(reflect::TypeRegistry& types, std::span<const Module* const> modules) {
     for (const Module* m : moduleOrder(modules)) {
@@ -79,13 +73,13 @@ void installModules(World& world, std::span<const Module* const> modules, const 
     InstalledModules& rec = ctx.contains<InstalledModules>() ? ctx.get<InstalledModules>() : ctx.emplace<InstalledModules>();
     rec.services.emplace(services);
     const auto installed = [&](std::string_view name) { return byName(rec.modules, name) != nullptr; };
-    for (const Module* m : moduleOrder(modules)) {
+    for (const Module* m : orderOf(modules, false)) {
         if (installed(m->name())) continue;
         const auto needs = m->needs();
         const auto deps = m->dependencies();
-        // It waits for its needs, and for a dependency that waits for its own.
+        // It waits for its needs, and for a dependency given here that waits for its own.
         if (!std::all_of(needs.begin(), needs.end(), [&](TypeKey k) { return services.has(k); }) ||
-            !std::all_of(deps.begin(), deps.end(), installed))
+            !std::all_of(deps.begin(), deps.end(), [&](std::string_view d) { return installed(d) || !byName(modules, d); }))
             continue;
         m->install(world, *rec.services);
         rec.modules.push_back(m);

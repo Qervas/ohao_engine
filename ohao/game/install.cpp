@@ -4,7 +4,6 @@
 
 #include "ecs/animation.hpp"
 #include "ecs/module.hpp"
-#include "ecs/physics_scene.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
@@ -19,19 +18,22 @@ namespace ohao::game {
 
 namespace {
 
+// What each installed engine module reports others added to it (Module::contributions).
+using Contributions = std::vector<std::pair<const Module*, std::vector<std::string>>>;
+
 // What a game's install added (installGame), in the World's context.
 struct InstalledGame {
     const Module* module{nullptr};
     std::vector<std::string> simulate, sync, hooks, drivers;
     std::vector<uint32_t> presenters;
-    bool inputControl{false};
+    Contributions contributions;
 };
 
 // Everything installGame watches, as it is now.
 struct Inventory {
     std::vector<std::string> simulate, sync, hooks, drivers;
     std::vector<uint32_t> presenters;
-    bool inputControl{false};
+    Contributions contributions;
 };
 
 Inventory inventory(ecs::World& world) {
@@ -41,7 +43,7 @@ Inventory inventory(ecs::World& world) {
     for (const std::string_view h : ecs::snapshotHookNames(world.registry())) v.hooks.emplace_back(h);
     if (const ecs::AnimationSystem* a = ecs::animationSystem(world)) v.drivers = a->driverNames();
     v.presenters = ecs::presenterIds(world);
-    if (const ecs::PhysicsScene* p = ecs::physicsScene(world)) v.inputControl = p->hasInputControl();
+    for (const Module* m : ecs::installedModules(world)) v.contributions.emplace_back(m, m->contributions(world));
     return v;
 }
 
@@ -61,7 +63,12 @@ InstalledGame diff(const Module& module, const Inventory& before, const Inventor
     g.hooks = added(before.hooks, after.hooks);
     g.drivers = added(before.drivers, after.drivers);
     g.presenters = added(before.presenters, after.presenters);
-    g.inputControl = after.inputControl && !before.inputControl;
+    for (const auto& [m, now] : after.contributions) {
+        const auto was = std::find_if(before.contributions.begin(), before.contributions.end(),
+                                      [&](const auto& c) { return c.first == m; });
+        std::vector<std::string> fresh = was == before.contributions.end() ? now : added(was->second, now);
+        if (!fresh.empty()) g.contributions.emplace_back(m, std::move(fresh));
+    }
     return g;
 }
 
@@ -72,8 +79,7 @@ void remove(ecs::World& world, const InstalledGame& g) {
     if (ecs::AnimationSystem* a = ecs::animationSystem(world))
         for (const std::string& d : g.drivers) a->removeDriver(d);
     for (const uint32_t id : g.presenters) ecs::removePresenter(world, id);
-    if (g.inputControl)
-        if (ecs::PhysicsScene* p = ecs::physicsScene(world)) p->setInputControl({});
+    for (const auto& [m, names] : g.contributions) m->removeContributions(world, names);
 }
 
 // What a reflected type is, as two builds must agree on it: its layout and, for an enum, its values.

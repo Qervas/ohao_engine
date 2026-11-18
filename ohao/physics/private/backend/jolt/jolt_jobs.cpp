@@ -2,7 +2,7 @@
 // build does not emit.
 #if !defined(OHAO_HAS_JOLT) || OHAO_HAS_JOLT
 
-#include "physics/backend/jolt/jolt_jobs.hpp"
+#include "physics/private/backend/jolt/jolt_jobs.hpp"
 
 #include "core/jobs/pool.hpp"
 #include "core/log.hpp"

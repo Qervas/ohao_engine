@@ -110,18 +110,27 @@ public:
     virtual void uninstall(World& world) const { (void)world; }
     // Its API methods, the session's catalogue rows.
     [[nodiscard]] virtual std::span<const Method> methods() const { return {}; }
+    // What other modules (a game) added to this one on `world`, by name (physics: the control rule), and their
+    // removal: what game::uninstallGame takes back.
+    [[nodiscard]] virtual std::vector<std::string> contributions(const World& world) const {
+        (void)world;
+        return {};
+    }
+    virtual void removeContributions(World& world, std::span<const std::string> names) const {
+        (void)world;
+        (void)names;
+    }
 };
 
 // Each module after its dependencies, ties to the lesser name. A dependency that is not among `modules`, or a cycle,
 // throws std::logic_error naming them.
 [[nodiscard]] std::vector<const Module*> moduleOrder(std::span<const Module* const> modules);
-// `modules` and every module they depend on, from `all` (by name); an unknown name throws std::logic_error.
-[[nodiscard]] std::vector<const Module*> withDependencies(std::span<const Module* const> all,
-                                                          std::span<const std::string_view> names);
 // Every module's types, in module order, each under TypeRegistry::setModule(its name).
 void registerModuleTypes(reflect::TypeRegistry& types, std::span<const Module* const> modules);
 // Installs, in module order, each module not yet installed on `world` whose needs `services` meets, and records it
-// and the services in the World (a game installed later gets them: game::installGame). Between steps.
+// and the services in the World (a game installed later gets them: game::installGame). A dependency outside
+// `modules` is taken as met: a module's systems never need another's to be installed (its types are registered by
+// every host), so a bench installs only what it measures. Between steps.
 void installModules(World& world, std::span<const Module* const> modules, const Services& services);
 // The modules installed on `world`, in the order installed.
 [[nodiscard]] std::span<const Module* const> installedModules(const World& world);

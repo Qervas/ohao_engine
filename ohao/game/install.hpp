@@ -31,7 +31,7 @@ void registerGameTypes(reflect::TypeRegistry& types, const Module& module);
 
 // Installs `module` on `world` (after engine::install, with the services the engine's modules were given), recording
 // what it added: simulate and sync systems, snapshot hooks, animation drivers, presenters (world_render/present.hpp)
-// and the physics control rule. If install throws, what it added so far is removed before the exception goes on; a
+// and what each engine module reports it added (Module::contributions: physics' control rule). If install throws, what it added so far is removed before the exception goes on; a
 // world with no engine module installed throws std::logic_error.
 void installGame(ecs::World& world, const Module& module);
 // Removes what installGame recorded, then calls the module's uninstall for its own. Between steps.

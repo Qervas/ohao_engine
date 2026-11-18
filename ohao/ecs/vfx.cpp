@@ -2,8 +2,9 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "physics/components.hpp"
 #include "visual/components.hpp"
-#include "ecs/player.hpp"
+#include "physics/player.hpp"
 #include "ecs/snapshot_hook.hpp"
 #include "ecs/world.hpp"
 #include "vfx/particle_math.hpp"

@@ -47,6 +47,7 @@ struct Method {
 struct Session::Impl {
     Impl(ecs::World& w, const reflect::TypeRegistry& t, std::shared_ptr<const game::LoadedModule> game);
     void setGame(std::shared_ptr<const game::LoadedModule> game);   // its method rows after the engine's
+    void takeModuleRows();   // the rows of modules installed since (Session::call, between calls)
 
     ecs::World& world;
     const reflect::TypeRegistry& types;
@@ -54,7 +55,8 @@ struct Session::Impl {
     Timeline ownTime;
     Timeline* time{&ownTime};
     uint64_t schemaHash{0};
-    std::vector<Method> methods;              // the engine's rows, then the game's
+    std::vector<Method> methods;              // the session's rows, the World's modules', then the game's
+    std::size_t moduleRows{0};                // the World's installed modules when they were taken
     std::vector<reflect::MethodDoc> docs;     // their docs, in that order
     std::shared_ptr<const game::LoadedModule> game;
     // game.reload's new build: its rows replace the old build's after the call (never while a row runs).
@@ -126,26 +128,16 @@ bool methodInputRecord(Session::Impl& s, const JsonDocument& doc, const JsonNode
                        JsonWriter& out);
 bool methodInputReplay(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
-// Levels and physics (level.cpp).
+// Levels (level.cpp).
 bool methodLevelInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                      JsonWriter& out);
 bool methodLevelReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
-bool methodPhysicsRaycast(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                          JsonWriter& out);
 // Assets (level.cpp).
 bool methodAssetInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                      JsonWriter& out);
 bool methodAssetReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
-bool methodPhysicsInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                       JsonWriter& out);
-bool methodPhysicsContacts(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                           JsonWriter& out);
-bool methodPlayerInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                      JsonWriter& out);
-bool methodPlayerTeleport(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                          JsonWriter& out);
 // The game module (step 3j; game.cpp).
 bool methodGameReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                       JsonWriter& out);

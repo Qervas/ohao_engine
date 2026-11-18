@@ -8,7 +8,7 @@
  * - NullPhysicsBackend: graceful fallback (no physics, but no crashes)
  * - JoltPhysicsBackend: production backend (Jolt Physics, MIT license)
  *
- * The ECS reaches it through ecs/physics_scene.hpp (PhysicsScene), which owns one.
+ * The physics module reaches it through physics/physics_scene.hpp (PhysicsScene), which owns one.
  *
  * Features:
  *   - Rigid body lifecycle, transform, velocity, forces, properties, sleep, shape

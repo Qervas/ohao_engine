@@ -2,8 +2,8 @@
 
 #if !defined(OHAO_HAS_JOLT) || OHAO_HAS_JOLT
 
-#include "physics/backend/physics_backend.hpp"
-#include "physics/backend/jolt/jolt_jobs.hpp"
+#include "physics/private/backend/physics_backend.hpp"
+#include "physics/private/backend/jolt/jolt_jobs.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <memory>

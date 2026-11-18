@@ -39,6 +39,7 @@
 #include "visual/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
+#include "ecs/module.hpp"
 #include "engine/install.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "gpu_calibration.hpp"
@@ -49,7 +50,7 @@
 #include "render/frame/pass_registry.hpp"
 #include "game/install.hpp"
 #include "slice/combat.hpp"
-#include "ecs/physics_scene.hpp"
+#include "physics/physics_scene.hpp"
 #include "ecs/vfx.hpp"
 #include "slice/module.hpp"
 #include "level/level_system.hpp"
@@ -766,7 +767,7 @@ struct Gpu {
         world = std::make_unique<ecs::World>();
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
-        ecs::installAnimation(*world, *assets);   // anim16's poses, as the CLI context installs it
+        engine::install(*world, {*assets, engineTypes()}, {"animation"});   // anim16's poses, as the CLI context has
         host->bind(*world);
         session->setHost(host.get());
     }
@@ -782,11 +783,10 @@ struct Gpu {
             // As the CLI context installs them (before the load: the level's nodes and colliders, the play
             // scene's bodies and records). Without the level the blockout renders empty, with no spawns: the
             // other blockout scenes (play_hud, play_anim) still measure that, as their budgets were set.
-            level::installLevels(*world, *assets, engineTypes());
-            ecs::installPhysics(*world, *assets);
+            engine::install(*world, {*assets, engineTypes()}, {"level", "physics"});
             slice::installCombat(*world);
             slice::installSlicePresentation(*world);
-            ecs::installVfx(*world, *assets);
+            engine::install(*world, {*assets, engineTypes()}, {"vfx"});
             vfxInstalled = true;
         }
         const std::string loaded =

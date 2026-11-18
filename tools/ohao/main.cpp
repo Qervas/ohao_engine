@@ -64,7 +64,7 @@
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
 #include "ecs/vfx.hpp"
-#include "ecs/physics_scene.hpp"
+#include "physics/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/world.hpp"
 #include "level/level_hints.hpp"

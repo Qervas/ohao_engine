@@ -11,10 +11,8 @@
 #include "ecs/animation.hpp"          // AnimationSystem::setDriver: animation drivers
 #include "ecs/audio_schedule.hpp"     // requestMixSnapshot: the mix a game asks for
 #include "ecs/components.hpp"         // the World's components (Transform, Parent, Spin, ...) and, until each module
-                                      // has its own, PlayerController, RigidBody, ...
+                                      // has its own, Animator, AudioMix, ...
 #include "ecs/events.hpp"             // channels: EventLog::writer (with its cue), reader, Cue
-#include "ecs/physics_scene.hpp"      // raycasts, players (playerInfo, turnPlayer), setInputControl
-#include "ecs/player.hpp"             // playerOf: the player of an input stream
 #include "ecs/scene_types.hpp"        // makeComponentOps<T>(): a component's registration
 #include "ecs/snapshot_hook.hpp"      // state a later step reads: save, restore, hash, layout
 #include "ecs/world.hpp"              // World: systems (SystemDecl, SystemContext, types<>), signals (onConstruct,
@@ -24,6 +22,10 @@
 #include "reflect/json_value.hpp"     // JsonNode
 #include "reflect/json_writer.hpp"    // a method's result (JsonWriter), hex16
 #include "reflect/registry.hpp"       // TypeRegistry: components and payloads registered
+#include "physics/components.hpp"     // colliders, bodies, joints, PlayerController
+#include "physics/events.hpp"         // its channels: contacts, triggers, footsteps, joint breaks
+#include "physics/physics_scene.hpp"  // raycasts, players (playerInfo, turnPlayer), setInputControl
+#include "physics/player.hpp"         // playerOf: the player of an input stream
 #include "render/hud/hud_list.hpp"    // a HUD's items
 #include "visual/components.hpp"      // what an entity looks like (MeshSource, Material, Light) and the Camera
 #include "visual/scene_view.hpp"      // the camera a frame is drawn from

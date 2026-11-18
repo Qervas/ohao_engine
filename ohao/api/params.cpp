@@ -272,12 +272,6 @@ void registerParams(reflect::TypeRegistry& r) {
     r.type<AssetInfoParams>("AssetInfoParams").doc("asset.info params");
     r.type<AssetReloadParams>("AssetReloadParams").doc("asset.reload params")
         .field("path", &AssetReloadParams::path).doc("A model file's project-relative path; absent: every file");
-    // max has no field limits: outside (0, 1e5] is E_PARAMS, as a zero dir is.
-    r.type<PhysicsRaycastParams>("PhysicsRaycastParams").doc("physics.raycast params")
-        .field("from", &PhysicsRaycastParams::from).doc("Ray origin [x, y, z]").unit("m").required()
-        .field("dir", &PhysicsRaycastParams::dir).doc("Direction [x, y, z], any nonzero length").unitless().required()
-        .field("max", &PhysicsRaycastParams::max).doc("Farthest hit, in (0, 100000]").unit("m");
-    r.type<PhysicsInfoParams>("PhysicsInfoParams").doc("physics.info params");
     r.type<EventsReadParams>("EventsReadParams").doc("events.read params")
         .field("since", &EventsReadParams::since)
             .doc("Events after this seq: 0 for all the history holds, else the previous reply's next").unitless().min(0)
@@ -285,18 +279,6 @@ void registerParams(reflect::TypeRegistry& r) {
             .min(0).max(64)
         .field("names", &EventsReadParams::names)
             .doc("Channels to read, exact (physics.footstep) or a prefix (physics.*); absent: every channel").maxItems(32);
-    r.type<PhysicsContactsParams>("PhysicsContactsParams").doc("physics.contacts params")
-        .field("entity", &PhysicsContactsParams::entity).doc("Only the pairs this entity (16 hex digits) is in")
-        .field("max", &PhysicsContactsParams::max).doc("Pairs in one reply").unitless().min(1).max(64);
-    r.type<PlayerInfoParams>("PlayerInfoParams").doc("player.info params")
-        .field("entity", &PlayerInfoParams::entity).doc("The player's id, 16 hex digits; absent: the only player");
-    r.type<PlayerTeleportParams>("PlayerTeleportParams").doc("player.teleport params")
-        .field("entity", &PlayerTeleportParams::entity).doc("The player's id, 16 hex digits; absent: the only player")
-        .field("pos", &PlayerTeleportParams::pos).doc("Where its feet go, world [x, y, z]").unit("m")
-            .min(-kMaxTeleport).max(kMaxTeleport).required()
-        .field("yawDeg", &PlayerTeleportParams::yawDeg)
-            .doc("Facing about +Y from -Z, counter-clockwise seen from above; absent: as it faced").unit("deg")
-            .min(-360.0).max(360.0);
 
     r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
         .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator");

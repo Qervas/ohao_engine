@@ -44,9 +44,11 @@
 #include "game/install.hpp"
 #include "slice/combat.hpp"
 #include "ecs/components.hpp"
-#include "ecs/physics_scene.hpp"
+#include "physics/components.hpp"
+#include "physics/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/module.hpp"
 #include "engine/install.hpp"
 #include "visual/scene_view.hpp"
 #include "slice/module.hpp"
@@ -282,12 +284,11 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World w;
     w.seedIds(7);
-    level::installLevels(w, files, engineTypes());
-    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio"});
+    ecs::PhysicsScene& physics = *ecs::physicsScene(w);
     ecs::installWorldSnapshots(w, engineTypes());
-    (void)ecs::installAnimation(w, files);
-    ecs::AudioSchedule& audio = ecs::installAudio(w, files);
-    slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
+    ecs::AudioSchedule& audio = *ecs::audioSchedule(w);
+    slice::module().install(w, *ecs::worldServices(w));   // combat, the animation drivers, its presentation
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) return out;
     for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
     entt::entity player = entt::null;
@@ -351,10 +352,11 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World w;
     w.seedIds(7);
-    level::installLevels(w, files, engineTypes());
-    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    engine::install(w, {files, engineTypes()}, {"level", "physics"});
+    ecs::PhysicsScene& physics = *ecs::physicsScene(w);
     (void)slice::installCombat(w);
-    ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    engine::install(w, {files, engineTypes()}, {"audio"});
+    ecs::AudioSchedule& audio = *ecs::audioSchedule(w);
     audio.setBank(bank);
     auto& reg = w.registry();
     const entt::entity lv = w.createWithId(0x1e7e1, "Level");
@@ -436,12 +438,11 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World w;
     w.seedIds(7);
-    level::installLevels(w, files, engineTypes());
-    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio"});
+    ecs::PhysicsScene& physics = *ecs::physicsScene(w);
     ecs::installWorldSnapshots(w, engineTypes());
-    (void)ecs::installAnimation(w, files);
-    ecs::AudioSchedule& audio = ecs::installAudio(w, files);
-    slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
+    ecs::AudioSchedule& audio = *ecs::audioSchedule(w);
+    slice::module().install(w, *ecs::worldServices(w));   // combat, the animation drivers, its presentation
     if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) {
         error = "grenade-spatial: the play scene did not load";
         return false;

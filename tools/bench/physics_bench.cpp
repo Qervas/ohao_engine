@@ -39,8 +39,10 @@
 #include "slice/combat.hpp"
 #include "slice/module.hpp"
 #include "ecs/components.hpp"
+#include "physics/events.hpp"
+#include "physics/components.hpp"
 #include "visual/components.hpp"
-#include "ecs/physics_scene.hpp"
+#include "physics/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
@@ -101,8 +103,8 @@ struct Blockout {
     ecs::PhysicsScene* physics{nullptr};
     Blockout() {
         world.seedIds(7);
-        level::installLevels(world, files, engineTypes());
-        physics = &ecs::installPhysics(world, files);
+        engine::install(world, {files, engineTypes()}, {"level", "physics"});
+        physics = ecs::physicsScene(world);
         const entt::entity lv = world.createWithId(0x1e7e1, "Level");
         world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/levels/blockout_room.glb", {}}});
         world.sync();
@@ -262,7 +264,8 @@ int main(int argc, char** argv) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(9);
-        ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+        engine::install(w, {files, engineTypes()}, {"physics"});
+        ecs::PhysicsScene& physics = *ecs::physicsScene(w);
         auto& reg = w.registry();
         const entt::entity floor = w.create("Floor", ecs::Transform{{0.0f, -0.5f, 0.0f}});
         reg.emplace<ecs::Collider>(floor, ecs::Collider{ecs::ColliderShape::Box, {40.0f, 0.5f, 40.0f}});
@@ -322,7 +325,8 @@ int main(int argc, char** argv) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(11);
-        ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+        engine::install(w, {files, engineTypes()}, {"physics"});
+        ecs::PhysicsScene& physics = *ecs::physicsScene(w);
         auto& reg = w.registry();
         const auto wall = [&](const char* name, glm::vec3 at, glm::vec3 half) {
             const entt::entity e = w.create(name, ecs::Transform{at});
@@ -591,7 +595,8 @@ int main(int argc, char** argv) {
     for (int r = 0; want("anim16") && r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
-        ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
+        engine::install(w, {files, engineTypes()}, {"animation"});
+        ecs::AnimationSystem& anim = *ecs::animationSystem(w);
         for (int i = 0; i < 16; ++i) {
             const entt::entity e = w.createWithId(0xa16a0000ull + static_cast<uint64_t>(i) + 1, "Rig",
                                                   ecs::Transform{glm::vec3(float(i % 4), 0.0f, float(i / 4))});
@@ -625,11 +630,10 @@ int main(int argc, char** argv) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
-        level::installLevels(w, files, engineTypes());
-        ecs::installPhysics(w, files);
+        engine::install(w, {files, engineTypes()}, {"level", "physics", "animation"});
         ecs::installWorldSnapshots(w, engineTypes());
-        ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
-        slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
+        ecs::AnimationSystem& anim = *ecs::animationSystem(w);
+        slice::module().install(w, *ecs::worldServices(w));   // combat, the animation drivers, its presentation
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("play scene: blockout_play.scene.json did not load");
@@ -664,13 +668,10 @@ int main(int argc, char** argv) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
-        level::installLevels(w, files, engineTypes());
-        ecs::installPhysics(w, files);
+        engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio", "vfx"});
         ecs::installWorldSnapshots(w, engineTypes());
-        ecs::installAnimation(w, files);
-        ecs::installAudio(w, files);
-        ecs::VfxSystem& vfx = ecs::installVfx(w, files);
-        slice::module().install(w, {files, engineTypes()});   // combat, the animation drivers, its presentation
+        ecs::VfxSystem& vfx = *ecs::vfxSystem(w);
+        slice::module().install(w, *ecs::worldServices(w));   // combat, the animation drivers, its presentation
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
                                 engineTypes())) {
             failures.push_back("vfx: blockout_play.scene.json did not load");
@@ -725,7 +726,8 @@ int main(int argc, char** argv) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
-        ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+        engine::install(w, {files, engineTypes()}, {"physics"});
+        ecs::PhysicsScene& physics = *ecs::physicsScene(w);
         if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/joints.scene.json", engineTypes())) {
             failures.push_back("joints: joints.scene.json did not load");
             jointsMoved = false;

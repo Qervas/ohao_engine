@@ -1,4 +1,4 @@
-#include "ecs/physics_scene_impl.hpp"
+#include "physics/private/physics_scene_impl.hpp"
 
 namespace ohao::ecs {
 

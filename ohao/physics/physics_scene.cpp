@@ -1,4 +1,4 @@
-#include "ecs/physics_scene_impl.hpp"
+#include "physics/private/physics_scene_impl.hpp"
 #include "visual/components.hpp"
 
 #include "core/jobs/graph.hpp"
@@ -898,11 +898,9 @@ uint64_t PhysicsScene::steps() const noexcept { return m->steps; }
 int PhysicsScene::lastSubsteps() const noexcept { return m->lastSubsteps; }
 PhysicsScene::StepTiming PhysicsScene::lastStepTiming() const noexcept { return m->timing; }
 
-physics::backend::IPhysicsBackend& PhysicsScene::backend() { return m->ensureBackend(); }
-
-physics::backend::BodyHandle PhysicsScene::bodyOf(entt::entity e) const {
+bool PhysicsScene::hasBody(entt::entity e) const {
     const auto it = m->bodies.find(e);
-    return it == m->bodies.end() ? pb::INVALID_BODY : it->second.handle;
+    return it != m->bodies.end() && it->second.handle != pb::INVALID_BODY;
 }
 
 const std::vector<PhysicsWarning>& PhysicsScene::warnings() const noexcept { return m->warnings; }

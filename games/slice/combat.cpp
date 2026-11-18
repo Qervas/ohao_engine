@@ -428,7 +428,7 @@ struct CombatSystem::Impl {
             world.defer([this, hook](World&) { roundStart = hook->save(); });
             return;
         }
-        // The player (ecs/player.hpp).
+        // The player (physics/player.hpp).
         const entt::entity player = playerOf(reg);
         const auto* playerHealth = player != entt::null ? reg.try_get<Health>(player) : nullptr;
         const bool playerDead = playerHealth && !(playerHealth->current > 0.0f);

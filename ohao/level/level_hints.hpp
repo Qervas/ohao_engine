@@ -16,6 +16,7 @@
 //
 // Load-time only: reflection reads the passed-through components.
 #include "ecs/components.hpp"
+#include "physics/components.hpp"
 #include "level/gltf_structure.hpp"
 #include "reflect/decode.hpp"
 

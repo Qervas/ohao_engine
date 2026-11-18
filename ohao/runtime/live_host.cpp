@@ -11,7 +11,7 @@
 #include "ecs/vfx.hpp"
 #include "world_render/present.hpp"
 #include "world_render/instantiate.hpp"
-#include "ecs/physics_scene.hpp"
+#include "physics/physics_scene.hpp"
 #include "world_render/render_extract.hpp"
 #include "world_render/vfx_draw.hpp"
 #include "visual/scene_view.hpp"

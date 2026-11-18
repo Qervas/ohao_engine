@@ -6,8 +6,8 @@
 //
 // A game calls the engine through the engine's own headers, never its internals:
 //   - the World (ecs/world.hpp): systems with their declarations (SystemDecl), events with their cues (EventLog::writer),
-//     defer, the clock (steps, stepDt), input per player; ecs/player.hpp's playerOf;
-//   - the physics scene (ecs/physics_scene.hpp): raycasts, players, turnPlayer, setInputControl;
+//     defer, the clock (steps, stepDt), input per player; physics/player.hpp's playerOf;
+//   - the physics scene (physics/physics_scene.hpp): raycasts, players, turnPlayer, setInputControl;
 //   - animation drivers (ecs/animation.hpp: AnimationSystem::setDriver), the audio mix (requestMixSnapshot);
 //   - state a step reads (ecs/snapshot_hook.hpp), the whole world kept and restored (ecs/world_snapshots.hpp);
 //   - what it presents (world_render/present.hpp: HUDs, spheres).

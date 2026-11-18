@@ -1,10 +1,10 @@
-#include "physics/backend/physics_backend.hpp"
+#include "physics/private/backend/physics_backend.hpp"
 #include "core/log.hpp"
 #include <exception>
 #include <string_view>
 
 #if OHAO_HAS_JOLT
-#include "physics/backend/jolt/jolt_backend.hpp"
+#include "physics/private/backend/jolt/jolt_backend.hpp"
 #endif
 
 namespace ohao {

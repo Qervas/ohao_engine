@@ -1,9 +1,10 @@
-// PhysicsScene::Impl: the physics scene's state and its member functions' declarations. Private to
-// ohao/ecs/physics_scene*.cpp: physics_scene.cpp (bodies, sync, snapshots, the public API),
-// physics_scene_joints.cpp, physics_scene_step.cpp, physics_scene_players.cpp.
+// PhysicsScene::Impl: the physics scene's state and its member functions' declarations. Private to the physics
+// module's physics_scene*.cpp: physics_scene.cpp (bodies, sync, snapshots, the public API),
+// physics_scene_joints.cpp, physics_scene_step.cpp, physics_scene_players.cpp; module.cpp installs it.
 #pragma once
 
-#include "ecs/physics_scene.hpp"
+#include "physics/physics_scene.hpp"
+#include "physics/private/backend/physics_backend.hpp"
 
 #include "core/log.hpp"
 #include "visual/primitive_mesh.hpp"
@@ -26,6 +27,12 @@
 namespace ohao::ecs {
 
 namespace pb = physics::backend;
+
+// Adds the sync systems "player_spawn" right before "transform", "physics" right after it and "interpolate" after
+// that (before "render_extract"), the "physics" simulate system, the move rule for bodies (tagMoves), and returns the
+// scene (once per World; a second call returns the first). The resolver must outlive the World. The physics
+// module's install (physics/module.cpp).
+PhysicsScene& installPhysics(World& world, AssetResolver& assets);
 
 // An event as the step finds it, before it is sorted and emitted into physics_scene.hpp's channels.
 struct PhysicsEvent {

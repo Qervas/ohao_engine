@@ -1,4 +1,5 @@
 #include "level/level_hints.hpp"
+#include "physics/components.hpp"
 
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"

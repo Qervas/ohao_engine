@@ -1,6 +1,6 @@
-#include "ecs/player.hpp"
+#include "physics/player.hpp"
 
-#include "ecs/components.hpp"
+#include "physics/components.hpp"
 #include "ecs/world.hpp"
 
 #include <cstdint>
