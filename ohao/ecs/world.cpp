@@ -411,9 +411,10 @@ void World::addEffect(ComponentType trigger, const void* owner, SignalEffect eff
     m_simulateDirty = m_syncDirty = true;
 }
 
-void World::addAccess(std::string_view system, std::vector<ComponentType> reads, std::vector<ComponentType> writes) {
+void World::addAccess(std::string_view system, std::vector<ComponentType> reads, std::vector<ComponentType> writes,
+                      std::vector<std::string> readsResources) {
     if (m_events.inStep()) throw std::logic_error("access added to system '" + std::string(system) + "' inside a step");
-    m_added.push_back({std::string(system), std::move(reads), std::move(writes)});
+    m_added.push_back({std::string(system), std::move(reads), std::move(writes), std::move(readsResources)});
     m_simulateDirty = m_syncDirty = true;
 }
 
@@ -483,6 +484,7 @@ void World::schedule(std::vector<S>& systems, std::vector<Wave>& waves, const ch
             if (x.system == systems[i].name) {
                 add(a.writes, x.writes);
                 add(a.reads, x.reads);
+                for (const std::string& r : x.readsResources) insertName(a.readsRes, r);
             }
         for (const std::string& r : d.writesResources) insertName(a.writesRes, r);
         for (const std::string& r : d.readsResources) insertName(a.readsRes, r);

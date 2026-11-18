@@ -2,8 +2,8 @@
 // The audio schedule (sub-project 11; docs/specs/2026-10-28-audio-design.md, "The step: the
 // schedule"): what the world sounds like, decided in the step from the step's state, as the `audio.*`
 // events of the World's log (ecs/events.hpp) that any host reads (a window's player plays them,
-// runtime/audio_player.hpp; agents compare them through events.read). The `audio_schedule` simulate system
-// is the step's last (installAudio, called after installAnimation).
+// runtime/audio_player.hpp; agents compare them through events.read). The `audio_schedule` simulate system (the
+// audio module's, audio/module.hpp) runs after the writers of the events it reads.
 //
 // Each step, in this order:
 //   1. Any restore since the last step (a round's restart too) writes `stop_world` and brings the device
@@ -14,13 +14,12 @@
 //   3. The snapshot the game asks for (requestMixSnapshot; the slice: `dead` while the player is dead,
 //      `won` once the room is cleared), else `default`; a change writes `snapshot` with the blend of the
 //      one entered (`inMs`), or of the one left (`outMs`) on the way back to `default`.
-//   4. The sounds the step's events name: physics footsteps and landings by surface, a game's events by
-//      the bank's `events` (their cues, in the order they happened), animation clip events by
-//      animSoundNames, round robin per sound; each placed at the ear or at its point on its curve, then
+//   4. The sounds the step's events name: what the sound sources other modules add ask for first (footsteps, its
+//      own module: SoundSource::beforeCues), a game's events by the bank's `events` (their cues, in the order they
+//      happened), then animation clip events, each by the first source that takes it (SoundSource::clip), else by
+//      animSoundNames; round robin per sound; each placed at the ear or at its point on its curve, then
 //      admitted against its bus's cap and the bank's global `voices`: a lower priority is stolen first,
 //      then the quieter at the listener, then the older; with no victim the new one is `dropped`.
-//      Enemies' footsteps come from their clip events (foot_l, foot_r); physics' footsteps stay for the
-//      player and for characters whose graph has none.
 //   5. Ducks: a `fire` (or any duck's sound) holds its buses down while it holds its voice, the
 //      deepest duck on a bus winning; a change of a bus's target writes `bus`.
 //   6. Graded occlusion re-casts: a voice holding past 100 ms is re-cast every 100 ms; a change of
@@ -31,6 +30,7 @@
 // World's snapshot hooks: a restore or a round restart resumes the same schedule, and world.hash covers it. It is
 // never saved to a file. Its events are history: a restore writes new ones. Plain data only: no
 // miniaudio, no reflection; the bank comes from ohao_audio_bank.
+#include "audio/events.hpp"
 #include "ecs/events.hpp"
 #include "ecs/snapshot_hook.hpp"
 
@@ -39,6 +39,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -55,6 +56,7 @@ namespace ohao::ecs {
 
 class World;
 class AssetResolver;
+class SystemContext;
 struct ClipEvent;
 
 constexpr uint32_t kRaysPerStep = 16;         // occlusion rays a step
@@ -78,70 +80,6 @@ struct Occlusion {
     uint8_t walls{0};
     float db{0.0f};
     double lowPassHz{0.0};
-};
-
-// What the schedule decided, as events of the World's log (ecs/events.hpp): a host's player plays them
-// (runtime/audio_player.hpp), agents read them (events.read). Sounds and buses by the bank's names.
-namespace audio_events {
-inline constexpr const char* kPlay = "audio.play";              // AudioPlay
-inline constexpr const char* kStop = "audio.stop";              // AudioStop
-inline constexpr const char* kBus = "audio.bus";                // AudioBus
-inline constexpr const char* kSnapshot = "audio.snapshot";      // AudioSnapshot
-inline constexpr const char* kZone = "audio.zone";              // AudioZone
-inline constexpr const char* kOcclusion = "audio.occlusion";    // AudioOcclusion
-inline constexpr const char* kStopWorld = "audio.stop_world";   // AudioStopWorld
-} // namespace audio_events
-
-enum class AudioOutcome : uint8_t { Played, Stole, Dropped };
-
-// A voice starts (or, dropped, does not). Its bus, priority and send are its sound's, in the bank.
-struct AudioPlay {
-    std::string sound;            // the bank's sound
-    uint32_t variant{0};          // the device takes it modulo its files
-    uint32_t voice{0};
-    std::optional<glm::vec3> pos; // where, on the sound's shape; none: at the ear
-    float gain{1.0f};             // the bank's volume times the event's scale
-    uint32_t walls{0};            // its occlusion at the start: walls (2: 2 or more), dB, low-pass (0: none)
-    float occlusionDb{0.0f};
-    float lowPassHz{0.0f};
-    AudioOutcome outcome{AudioOutcome::Played};
-    uint32_t victim{0};           // stole: the voice it took (the last, when it took more)
-};
-// A voice stops: a steal's 2 ms fade.
-struct AudioStop {
-    uint32_t voice{0};
-};
-// A bus's duck: its level from the deepest duck holding it.
-struct AudioBus {
-    std::string bus;
-    float db{0.0f};               // 0: none
-    uint32_t blendMs{0};
-    bool resync{false};           // resent to bring the device to the state a restore put back
-};
-// The mix snapshot.
-struct AudioSnapshot {
-    std::string snapshot;
-    uint32_t blendMs{0};
-    bool resync{false};
-};
-// The listener's reverb zone.
-struct AudioZone {
-    std::string zone;             // the preset ("" with no reverb at all)
-    std::string bed;              // its bed sound (may be empty)
-    uint32_t blendMs{0};
-    bool resync{false};
-};
-// A held voice's occlusion, re-cast.
-struct AudioOcclusion {
-    uint32_t voice{0};
-    uint32_t walls{0};
-    float occlusionDb{0.0f};
-    float lowPassHz{0.0f};
-    uint32_t blendMs{0};
-};
-// The world's voices fade: a restore (a round's restart too) put back another moment.
-struct AudioStopWorld {
-    uint32_t blendMs{0};
 };
 
 // The mix snapshot a game asks for (requestMixSnapshot; "default" until one asks).
@@ -194,20 +132,47 @@ struct SoundRequest {
 // ---- the rules (Feel's runtime players', sub-projects 6, 7, 9, 10; moved here unchanged) -----------
 // A game's events play by the bank's `events` (audio/audio_bank.hpp, EventSound): the cue's channel, its source
 // (the listener's player or not) and tag choose the sounds.
-// An animation event's: mag_out, mag_in, bolt and body_fall play their own name; foot_l and foot_r a
-// footstep ("footstep"; the surface is the character's ground's); nothing else.
+// An animation event's no source took: mag_out, mag_in, bolt and body_fall play their own name; nothing else.
 [[nodiscard]] std::vector<std::string> animSoundNames(const ClipEvent& e);
 // Whose an animated entity's sounds are: the player's when it is the player or below it (the arms).
 [[nodiscard]] uint64_t animSoundOwner(const World& world, uint64_t entityId, uint64_t playerId);
-// A footstep's or landing's gain by its speed: a walk (4 m/s) 0.65, a sprint (6.5) 0.9; a landing by
-// its impact.
-[[nodiscard]] float footstepScale(bool landing, float speed) noexcept;
-// The bank sound for a footstep on `surface`: "footstep_<surface>", else "footstep_default" ("" if
-// the bank has neither).
-[[nodiscard]] std::string footstepSound(const AudioBank& bank, std::string_view surface);
 // miniaudio's inverse distance model on a shape: full within min, min / (min + rolloff (d - min)) to
 // max, then held.
 [[nodiscard]] float distanceGain(float distance, const ShapeDesc& shape) noexcept;
+
+// What a sound source is given in the schedule's step: the World, the registry as the schedule reads it, the bank, the
+// listener's player, the schedule's helpers, and play(): a request admitted as the schedule's own are, in call order.
+class SoundStep {
+public:
+    World& world;
+    const SystemContext& reg;
+    const AudioBank& bank;
+    uint64_t playerId{0};   // the listener's player (0: none)
+
+    void play(const SoundRequest& request);
+    // Whose an animated entity's sounds are (animSoundOwner, through reg).
+    [[nodiscard]] uint64_t ownerOf(uint64_t entityId) const;
+    // The entity's world matrix at the step (its WorldTransform, else its Transform).
+    [[nodiscard]] glm::mat4 worldOf(entt::entity e) const;
+    // The character a body belongs to (the entity or an ancestor holding a PlayerController), or null.
+    [[nodiscard]] entt::entity characterOf(entt::entity e) const;
+
+private:
+    friend class AudioSchedule;
+    SoundStep(World& w, const SystemContext& r, const AudioBank& b, uint64_t player, void* impl)
+        : world(w), reg(r), bank(b), playerId(player), m_impl(impl) {}
+    void* m_impl;
+};
+
+// Sounds another module adds to the schedule's step (footsteps, its own module), by name. Its reads join the schedule's
+// declaration (World::addAccess) and its readers are the schedule's (the system's name, "audio_schedule").
+struct SoundSource {
+    std::string name;
+    // The step's part 4, before a game's cues.
+    std::function<void(SoundStep&)> beforeCues;
+    // A clip event's sounds, before animSoundNames: true when it took the event.
+    std::function<bool(SoundStep&, const ClipEvent&)> clip;
+};
 
 class AudioSchedule {
 public:
@@ -236,20 +201,24 @@ public:
     // The preset of the zone holding `p` ("" in none), fitted zones included.
     [[nodiscard]] std::string zoneAt(glm::vec3 p) const;
 
-    // The director's state a snapshot carries (installAudio's snapshot hook).
+    // Sources of sounds, in the order added (a name again replaces it): the audio module's contributions.
+    void addSource(SoundSource source);
+    void removeSource(std::string_view name);
+    [[nodiscard]] std::vector<std::string> sourceNames() const;
+
+    // The director's state a snapshot carries (the module's snapshot hook).
     [[nodiscard]] std::shared_ptr<const void> saveState() const;
     void restoreState(const std::shared_ptr<const void>& state);
     void hashState(StateHash& h) const;   // what saveState keeps (world.hash)
 
 private:
     friend AudioSchedule& installAudio(World& world, AssetResolver& assets);
+    friend class SoundStep;
     struct Impl;
     std::unique_ptr<Impl> m;
 };
 
-// Installs the `audio_schedule` simulate system (after the writers of what it reads) and its snapshot hook.
-// Returns the installed one if there is one.
-AudioSchedule& installAudio(World& world, AssetResolver& assets);
+// The World's schedule (null where the audio module is not installed).
 [[nodiscard]] AudioSchedule* audioSchedule(World& world);
 [[nodiscard]] const AudioSchedule* audioSchedule(const World& world);
 

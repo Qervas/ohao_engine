@@ -11,7 +11,7 @@
 set(OHAO_LAYERS_BELOW
     ohao_core=0
     ohao_gpu_vulkan=1 ohao_reflect=1 ohao_level=1 ohao_audio_bank=1 ohao_vfx=1
-    ohao_asset=2 ohao_audio=2
+    ohao_asset=2 ohao_audio_mixer=2
     ohao_cook=3
     ohao_renderer=4)
 # The modules (cmake/ohao_modules.cmake): the core, ecs, at 4 beside the renderer (neither reaches the other; world_render
@@ -26,11 +26,9 @@ set(OHAO_LAYERS_ABOVE
     "ohao_rpc ohao_runtime")
 
 # "from->to": allowed although it points sideways or up. Each has its end.
-#   ohao_ecs->ohao_visual, ohao_ecs->ohao_physics: the audio schedule and vfx, still in ohao_ecs, read the visual
-#   module's components and the physics scene; they end when vfx, the last of them, leaves ohao_ecs (step 4b-6b,
-#   commit 8). ohao_ecs->ohao_animation: the audio schedule reads the clip events and the Animator; it ends when the
-#   schedule leaves ohao_ecs (commit 7).
-set(OHAO_LAYER_EXCEPTIONS ohao_ecs->ohao_visual ohao_ecs->ohao_animation ohao_ecs->ohao_physics)
+#   ohao_ecs->ohao_visual, ohao_ecs->ohao_physics: vfx, still in ohao_ecs, reads the visual module's components and
+#   the physics scene; they end when vfx leaves ohao_ecs (step 4b-6b, commit 8).
+set(OHAO_LAYER_EXCEPTIONS ohao_ecs->ohao_visual ohao_ecs->ohao_physics)
 
 # Each module's level: OHAO_CORE_LEVEL without DEPENDS, else one above its highest dependency. A cycle never settles
 # (tools/check_layers.py prints it); the levels then stop after as many passes as there are modules.

@@ -184,9 +184,10 @@ public:
     void addSimulate(std::string name, SimulateSystem fn, SystemDecl decl);
     void addSync(std::string name, SyncSystem fn, SystemDecl decl);
     // What another module makes a system do joins its declaration (the transform system tagging what physics moves:
-    // ecs::tagMoves), as a signal's effect joins its writers': for the system of that name in either phase, installed
-    // now or later. Between steps.
-    void addAccess(std::string_view system, std::vector<ComponentType> reads, std::vector<ComponentType> writes);
+    // ecs::tagMoves; the audio schedule playing footsteps), components and the resources read, as a signal's effect
+    // joins its writers': for the system of that name in either phase, installed now or later. Between steps.
+    void addAccess(std::string_view system, std::vector<ComponentType> reads, std::vector<ComponentType> writes,
+                   std::vector<std::string> readsResources = {});
     // Removes a system (a game's, before its next build installs: game/reload.hpp); a simulate system also leaves the
     // event log (EventLog::forgetSystem). Between steps; a name not installed does nothing.
     void removeSimulate(std::string_view name);
@@ -302,6 +303,7 @@ private:
     struct AddedAccess {   // addAccess
         std::string system;
         std::vector<ComponentType> reads, writes;
+        std::vector<std::string> readsResources;
     };
     struct Wave {
         uint32_t begin{0}, end{0};   // the systems [begin, end) of the phase, in order

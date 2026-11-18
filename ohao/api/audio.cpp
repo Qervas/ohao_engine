@@ -1,7 +1,7 @@
 // audio.info and audio.mix (sub-project 11, step 4; docs/specs/2026-10-28-audio-design.md, "The
 // agent-facing surface").
 //
-// The session reaches the voice schedule through what installAudio left on the World
+// The session reaches the voice schedule through what the audio module's install left on the World
 // (ecs::audioSchedule); a World without it answers E_STATE. audio.info reads the schedule (every host
 // has it: what plays is decided in the step) and, from a window host, the device's half
 // (Host::audioDevice). audio.mix keeps its overrides here, beside the session, and hands them all to the
@@ -10,7 +10,7 @@
 #include "api/internal.hpp"
 
 #include "audio/audio_bank.hpp"
-#include "ecs/audio_schedule.hpp"
+#include "audio/audio_schedule.hpp"
 
 #include <glm/glm.hpp>
 

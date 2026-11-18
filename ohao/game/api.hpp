@@ -10,9 +10,9 @@
 #include "core/jobs/graph.hpp"         // jobs::parallelFor: a system's loop on the job pool
 #include "core/layout_key.hpp"        // layoutKey<T>(): a snapshot hook's state layout
 #include "core/log.hpp"               // OHAO_LOG
-#include "ecs/audio_schedule.hpp"     // requestMixSnapshot: the mix a game asks for
+#include "audio/audio_schedule.hpp"     // requestMixSnapshot: the mix a game asks for
 #include "ecs/components.hpp"         // the World's components (Transform, Parent, Spin, ...) and, until each module
-                                      // has its own, AudioMix, ...
+                                      // has its own, VfxSet, ...
 #include "ecs/events.hpp"             // channels: EventLog::writer (with its cue), reader, Cue
 #include "ecs/scene_types.hpp"        // makeComponentOps<T>(): a component's registration
 #include "ecs/snapshot_hook.hpp"      // state a later step reads: save, restore, hash, layout

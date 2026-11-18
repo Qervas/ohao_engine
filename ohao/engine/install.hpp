@@ -22,7 +22,7 @@ class Services;
 
 namespace ohao::engine {
 
-// Every engine module: ecs, visual, animation, physics, audio, vfx, level, world_render.
+// Every engine module: ecs, visual, animation, physics, audio, footsteps, vfx, level, world_render.
 [[nodiscard]] std::span<const ecs::Module* const> modules();
 
 // Every engine module's types, in module order, each under its name (TypeInfo::module). A game's follow

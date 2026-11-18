@@ -40,7 +40,7 @@
 #include "core/log.hpp"
 #include "animation/animation.hpp"
 #include "ecs/asset_resolver.hpp"
-#include "ecs/audio_schedule.hpp"
+#include "audio/audio_schedule.hpp"
 #include "game/install.hpp"
 #include "slice/combat.hpp"
 #include "ecs/components.hpp"
@@ -284,7 +284,7 @@ ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World w;
     w.seedIds(7);
-    engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio"});
+    engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio", "footsteps"});
     ecs::PhysicsScene& physics = *ecs::physicsScene(w);
     ecs::installWorldSnapshots(w, engineTypes());
     ecs::AudioSchedule& audio = *ecs::audioSchedule(w);
@@ -355,7 +355,7 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     engine::install(w, {files, engineTypes()}, {"level", "physics"});
     ecs::PhysicsScene& physics = *ecs::physicsScene(w);
     (void)slice::installCombat(w);
-    engine::install(w, {files, engineTypes()}, {"audio"});
+    engine::install(w, {files, engineTypes()}, {"audio", "footsteps"});
     ecs::AudioSchedule& audio = *ecs::audioSchedule(w);
     audio.setBank(bank);
     auto& reg = w.registry();
@@ -438,7 +438,7 @@ bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World w;
     w.seedIds(7);
-    engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio"});
+    engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio", "footsteps"});
     ecs::PhysicsScene& physics = *ecs::physicsScene(w);
     ecs::installWorldSnapshots(w, engineTypes());
     ecs::AudioSchedule& audio = *ecs::audioSchedule(w);

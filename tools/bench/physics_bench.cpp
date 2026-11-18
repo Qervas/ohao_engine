@@ -51,7 +51,7 @@
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
-#include "ecs/audio_schedule.hpp"
+#include "audio/audio_schedule.hpp"
 #include "ecs/world_hash.hpp"
 #include "ecs/module.hpp"
 #include "engine/install.hpp"
@@ -668,7 +668,7 @@ int main(int argc, char** argv) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
         ecs::World w;
         w.seedIds(7);
-        engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio", "vfx"});
+        engine::install(w, {files, engineTypes()}, {"level", "physics", "animation", "audio", "footsteps", "vfx"});
         ecs::installWorldSnapshots(w, engineTypes());
         ecs::VfxSystem& vfx = *ecs::vfxSystem(w);
         slice::module().install(w, *ecs::worldServices(w));   // combat, the animation drivers, its presentation

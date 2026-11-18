@@ -130,24 +130,6 @@ struct RenderPose {
     glm::mat4 prevWorld{1.0f};   // what the last frame drew (motion vectors)
 };
 
-// The world's sound bank and mix, one per world (sub-project 11): a `.audio.json` naming the buses,
-// sounds, ducks, snapshots and reverb presets (audio/audio_bank.hpp). Without one, hosts mix with
-// the default bank (master over sfx, music and ambient).
-struct AudioMix {
-    AssetRef asset;   // an .audio.json, project-relative
-};
-
-// A volume whose reverb preset (a name in the world's .audio.json) the listener hears while inside
-// it (sub-project 11; ecs/audio_schedule.hpp): a box of half extents `size` about the entity, in
-// its frame. size 0 fits the box to the entity's mesh (a level's `verb` node). Of the zones holding
-// the listener the highest priority wins, then the lowest id; outside them all, the bank's
-// defaultZone. A volume, not a body: the physics scene never sees it.
-struct ReverbZone {
-    std::string preset;
-    int32_t priority{0};
-    glm::vec3 size{0.0f};
-};
-
 // The world's effect set, one per world (sub-project 12): a `.vfx.json` naming the effects, decals
 // and tracers and which combat events spawn them (vfx/vfx_set.hpp). Without one, hosts use the
 // default set (today's muzzle, impact and dust presets as data).

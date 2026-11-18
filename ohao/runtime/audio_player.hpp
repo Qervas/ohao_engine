@@ -1,6 +1,6 @@
 #pragma once
 // The audio player (sub-project 11 step 3; docs/specs/2026-10-28-audio-design.md, "The frame: the
-// player"): a window host's bridge from the voice schedule (ecs/audio_schedule.hpp, decided in the
+// player"): a window host's bridge from the voice schedule (audio/audio_schedule.hpp, decided in the
 // step) to the device. Once a frame, after the frame's steps, it reads the schedule's `audio.*` events
 // since its cursor (the World's log) and drives AudioSystem. Headless hosts have none: the events are what
 // agents read (events.read).
@@ -20,7 +20,7 @@
 // (every voice on the world's buses faded over 3 steps). A bank sound without a file in any folder is
 // skipped with one warning per name. Nothing here opens a file after the bank loads.
 #include "audio/audio_system.hpp"
-#include "ecs/audio_schedule.hpp"
+#include "audio/audio_schedule.hpp"
 
 #include <cstddef>
 #include <cstdint>

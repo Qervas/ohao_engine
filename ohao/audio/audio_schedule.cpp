@@ -1,13 +1,11 @@
-#include "ecs/audio_schedule.hpp"
+#include "audio/audio_schedule.hpp"
 
-#include "animation/animation.hpp"
-#include "animation/components.hpp"
 #include "animation/events.hpp"
 #include "audio/audio_bank.hpp"
+#include "audio/components.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
-#include "physics/events.hpp"
 #include "physics/components.hpp"
 #include "visual/components.hpp"
 #include "physics/physics_scene.hpp"
@@ -208,23 +206,11 @@ std::string listenerZone(const World& world, glm::vec3 listener) {
 
 std::vector<std::string> animSoundNames(const ClipEvent& e) {
     if (e.name == "mag_out" || e.name == "mag_in" || e.name == "bolt" || e.name == "body_fall") return {e.name};
-    if (e.name == "foot_l" || e.name == "foot_r") return {"footstep"};
     return {};
 }
 
 uint64_t animSoundOwner(const World& world, uint64_t entityId, uint64_t playerId) {
     return animSoundOwnerIn(world, world.registry(), entityId, playerId);
-}
-
-float footstepScale(bool landing, float speed) noexcept {
-    return landing ? std::clamp(speed / 6.0f, 0.4f, 1.0f) : std::clamp(0.25f + 0.1f * speed, 0.2f, 1.0f);
-}
-
-std::string footstepSound(const AudioBank& bank, std::string_view surface) {
-    const std::string own = "footstep_" + std::string(surface.empty() ? std::string_view("default") : surface);
-    if (bank.sound(own) >= 0) return own;
-    if (bank.sound("footstep_default") >= 0) return "footstep_default";
-    return {};
 }
 
 float distanceGain(float distance, const ShapeDesc& shape) noexcept {
@@ -255,7 +241,7 @@ struct AudioSchedule::Impl {
         LocalBox box;
     };
     mutable std::map<entt::entity, Fitted> fitted;
-    std::map<std::string, bool> footGraphs;   // a graph path: has foot_l / foot_r events
+    std::vector<SoundSource> sources;   // what other modules add, in the order added
 
     // The director's state: what a snapshot carries.
     struct Voice {
@@ -302,7 +288,6 @@ struct AudioSchedule::Impl {
         EventWriter<AudioOcclusion> occlusion;
         EventWriter<AudioStopWorld> stopWorld;
     } out;
-    EventReader<FootEvent> footsteps, landings;
     EventReader<ClipEvent> clips;
     // A game's channels the bank binds (its `events`), by channel index: the bindings in the bank's order.
     std::vector<std::vector<const EventSound*>> bound;
@@ -323,8 +308,6 @@ struct AudioSchedule::Impl {
         out.zone = log.writer<AudioZone>(ae::kZone, "audio_schedule");
         out.occlusion = log.writer<AudioOcclusion>(ae::kOcclusion, "audio_schedule");
         out.stopWorld = log.writer<AudioStopWorld>(ae::kStopWorld, "audio_schedule");
-        footsteps = log.reader<FootEvent>(physics_events::kFootstep, "audio_schedule");
-        landings = log.reader<FootEvent>(physics_events::kLand, "audio_schedule");
         clips = log.reader<ClipEvent>(kClipEventChannel, "audio_schedule");
     }
 
@@ -448,18 +431,6 @@ struct AudioSchedule::Impl {
         ++raysThisStep;
         ++stats.raysCast;
         return occlusionIn(world, *sys, at, source);
-    }
-
-    // Whether a character's graph plays its footsteps from clip events (foot_l, foot_r).
-    bool footFromClips(entt::entity character) {
-        const auto* animator = sys->try_get<Animator>(character);
-        if (!animator || animator->graph.path.empty()) return false;
-        const auto it = footGraphs.find(animator->graph.path);
-        if (it != footGraphs.end()) return it->second;
-        static constexpr std::string_view kFeet[] = {"foot_l", "foot_r"};
-        const bool has = graphFires(world, animator->graph.path, kFeet);
-        footGraphs[animator->graph.path] = has;
-        return has;
     }
 
     // ---- the voice table ------------------------------------------------------------------
@@ -726,40 +697,22 @@ struct AudioSchedule::Impl {
         std::erase_if(s.voices, [&](const Voice& v) { return world.steps() >= v.end; });
         const uint64_t playerId = ears ? ears->playerId : 0;
         const SystemContext& reg = *sys;
-        // Footsteps and landings in the order physics emitted them (a restart in the step ended what came before).
-        {
-            const auto steps = footsteps.read(), lands = landings.read();
-            for (std::size_t i = 0, j = 0; i < steps.size() || j < lands.size();) {
-                const bool land = j < lands.size() && (i == steps.size() || lands[j].meta.seq < steps[i].meta.seq);
-                const FootEvent& e = land ? lands[j++].value : steps[i++].value;
-                if (!land) {
-                    const entt::entity who = world.findById(e.player);
-                    if (who != entt::null && footFromClips(who)) continue;   // its clip's feet play its steps
-                }
-                const std::string sound = footstepSound(bank, e.surface);
-                if (!sound.empty()) playRequest({sound, e.player, e.point, false, footstepScale(land, e.speed)});
+        SoundStep added(world, reg, bank, playerId, this);
+        for (const SoundSource& src : sources)
+            if (src.beforeCues) src.beforeCues(added);
+        playBound(playerId);
+        for (const auto& [meta, e] : clips.read()) {
+            if (std::any_of(sources.begin(), sources.end(), [&](const SoundSource& src) { return src.clip && src.clip(added, e); }))
+                continue;
+            for (const std::string& name : animSoundNames(e)) {
+                const entt::entity who = world.findById(e.entity);
+                if (who == entt::null) continue;
+                const uint64_t owner = animSoundOwnerIn(world, reg, e.entity, playerId);
+                glm::vec3 at = glm::vec3(worldOf(reg, who)[3]);
+                at.y += name == "body_fall" ? 0.2f : 1.1f;   // the floor, or the hands at the chest
+                playRequest({name, owner, at, playerId != 0 && owner == playerId});
             }
         }
-        playBound(playerId);
-        for (const auto& [meta, e] : clips.read())
-                for (const std::string& name : animSoundNames(e)) {
-                    const entt::entity who = world.findById(e.entity);
-                    if (who == entt::null) continue;
-                    const uint64_t owner = animSoundOwnerIn(world, reg, e.entity, playerId);
-                    glm::vec3 at = glm::vec3(worldOf(reg, who)[3]);
-                    if (name == "footstep") {
-                        const entt::entity character = characterOf(reg, who);
-                        const PhysicsScene* physics = physicsScene(world);
-                        const auto info = physics && character != entt::null ? physics->playerInfo(character) : std::nullopt;
-                        const glm::vec3 v = info ? info->velocity : glm::vec3(0.0f);
-                        const std::string sound = footstepSound(bank, info ? info->surface : std::string());
-                        if (!sound.empty())
-                            playRequest({sound, owner, at, false, footstepScale(false, std::sqrt(v.x * v.x + v.z * v.z))});
-                        continue;
-                    }
-                    at.y += name == "body_fall" ? 0.2f : 1.1f;   // the floor, or the hands at the chest
-                    playRequest({name, owner, at, playerId != 0 && owner == playerId});
-                }
 
         // 5. Ducks.
         updateDucks();
@@ -807,6 +760,30 @@ float AudioSchedule::busDuckDb(std::size_t bus) const noexcept {
 uint32_t AudioSchedule::snapshotBlendMs() const noexcept { return m->lastSnapshotBlend; }
 const std::vector<AudioWarning>& AudioSchedule::warnings() const noexcept { return m->warnings; }
 std::string AudioSchedule::zoneAt(glm::vec3 p) const { return m->zoneAt(p); }
+
+void AudioSchedule::addSource(SoundSource source) {
+    for (SoundSource& s : m->sources)
+        if (s.name == source.name) {
+            s = std::move(source);
+            return;
+        }
+    m->sources.push_back(std::move(source));
+}
+
+void AudioSchedule::removeSource(std::string_view name) {
+    std::erase_if(m->sources, [&](const SoundSource& s) { return s.name == name; });
+}
+
+std::vector<std::string> AudioSchedule::sourceNames() const {
+    std::vector<std::string> out;
+    for (const SoundSource& s : m->sources) out.push_back(s.name);
+    return out;
+}
+
+void SoundStep::play(const SoundRequest& request) { static_cast<AudioSchedule::Impl*>(m_impl)->playRequest(request); }
+uint64_t SoundStep::ownerOf(uint64_t entityId) const { return animSoundOwnerIn(world, reg, entityId, playerId); }
+glm::mat4 SoundStep::worldOf(entt::entity e) const { return ecs::worldOf(reg, e); }
+entt::entity SoundStep::characterOf(entt::entity e) const { return ecs::characterOf(reg, e); }
 
 std::vector<ScheduledVoice> AudioSchedule::voices() const {
     std::vector<ScheduledVoice> out;
@@ -863,13 +840,13 @@ AudioSchedule& installAudio(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<AudioInstalled>()) return *installed->system;
     auto system = std::make_shared<AudioSchedule>(world, assets);
     reg.ctx().emplace<AudioInstalled>(AudioInstalled{system.get()});
-    // Its typed readers order it after physics and animation; it plays the cues its bank binds. It reads the registry
-    // through its context, in its steps and between them.
+    // Its typed readers order it after animation (and its sources' after their writers: footsteps', physics); it plays
+    // the cues its bank binds. It reads the registry through its context, in its steps and between them.
     world.addSimulate("audio_schedule", [system](SystemContext&, float) { system->step(); },
                       {.readsCues = true,
-                       .reads = types<AudioMix, ReverbZone, CollisionMesh, MeshSource, Animator, PlayerController,
-                                      Transform, WorldTransform, Camera, Parent>(),
-                       .readsResources = {"physics.scene", "animation", "audio.mix"},
+                       .reads = types<AudioMix, ReverbZone, CollisionMesh, MeshSource, PlayerController, Transform,
+                                      WorldTransform, Camera, Parent>(),
+                       .readsResources = {"physics.scene", "audio.mix"},
                        .writesResources = {"audio.schedule"}});
     system->m->sys = world.systemContext("audio_schedule");
     requestMixSnapshot(world, "default");   // the request exists before any step asks for another

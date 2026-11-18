@@ -1,10 +1,11 @@
 #include "engine/install.hpp"
 
 #include "animation/module.hpp"
-#include "ecs/audio_schedule.hpp"
+#include "audio/module.hpp"
 #include "ecs/module.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/vfx.hpp"
+#include "footsteps/module.hpp"
 #include "level/level_system.hpp"
 #include "physics/module.hpp"
 #include "visual/module.hpp"
@@ -44,13 +45,10 @@ private:
     Install m_install;
 };
 
-constexpr std::array<std::string_view, 4> kAudioDeps{"ecs", "visual", "physics", "animation"};
 constexpr std::array<std::string_view, 3> kVfxDeps{"ecs", "visual", "physics"};
 constexpr std::array<std::string_view, 5> kLevelDeps{"ecs", "visual", "physics", "audio", "vfx"};
 constexpr std::array<std::string_view, 4> kWorldRenderDeps{"ecs", "visual", "animation", "vfx"};
 
-const StagedModule kAudio{"audio", kAudioDeps, &ecs::registerAudioTypes,
-                          [](ecs::World& w, const ecs::Services& s) { ecs::installAudio(w, s.assets); }};
 const StagedModule kVfx{"vfx", kVfxDeps, &ecs::registerVfxTypes,
                         [](ecs::World& w, const ecs::Services& s) { ecs::installVfx(w, s.assets); }};
 const StagedModule kLevel{"level", kLevelDeps, &ecs::registerLevelTypes,
@@ -61,8 +59,9 @@ const StagedModule kWorldRender{"world_render", kWorldRenderDeps, &ecs::register
 } // namespace
 
 std::span<const ecs::Module* const> modules() {
-    static const std::array<const ecs::Module*, 8> all{&ecs::coreModule(), &ecs::visualModule(), &ecs::animationModule(),
-                                                       &ecs::physicsModule(), &kAudio, &kVfx, &kLevel, &kWorldRender};
+    static const std::array<const ecs::Module*, 9> all{&ecs::coreModule(),    &ecs::visualModule(),    &ecs::animationModule(),
+                                                       &ecs::physicsModule(), &ecs::audioModule(),     &ecs::footstepsModule(),
+                                                       &kVfx,                 &kLevel,                 &kWorldRender};
     return all;
 }
 

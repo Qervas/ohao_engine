@@ -25,7 +25,8 @@ RULES: list[tuple[str, list[str]]] = [
     ("tests/golden/*", ["render_golden"]),
     # Gameplay: anything a world steps through, and the scenes it plays.
     ("ohao/ecs/*", ["replay_test"]), ("ohao/physics/*", ["replay_test"]), ("ohao/level/*", ["replay_test"]),
-    ("ohao/animation/*", ["replay_test", "render_golden"]), ("ohao/audio/*", ["replay_test"]), ("ohao/vfx/*", ["replay_test"]),
+    ("ohao/animation/*", ["replay_test", "render_golden"]), ("ohao/audio/*", ["replay_test"]),
+    ("ohao/footsteps/*", ["replay_test"]), ("ohao/vfx/*", ["replay_test"]),
     ("assets/*", ["replay_test", "label:gpu", "render_golden"]), ("tests/replay/*", ["replay_test"]),
     # The agent interface and the hosts: replays go through ohao serve; captures through the render host.
     ("ohao/api/*", ["replay_test"]), ("ohao/rpc/*", ["replay_test"]), ("ohao/engine/*", ["replay_test"]),
