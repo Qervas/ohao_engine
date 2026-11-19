@@ -37,3 +37,5 @@ assets/characters/** -text
 assets/vfx/*.gltf -text
 # Generated energy tables, compared byte for byte by openpbr_tables --check.
 ohao/render/material/openpbr_tables.hpp text eol=lf
+# Tidewall's levels (tools/level/build_level.py): byte for byte, so a Blender rebuild compares exactly.
+assets/tidewall/levels/** -text

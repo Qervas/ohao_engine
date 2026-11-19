@@ -1,0 +1,59 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "InputActions": 1,
+    "Level": 1,
+    "Light": 1,
+    "Name": 1,
+    "Parent": 1,
+    "PlayerController": 1,
+    "Transform": 1
+  },
+  "entities": [
+    { "id": "7d0a110000000001", "Name": { "value": "Player" }, "PlayerController": {} },
+    {
+      "id": "7d0a110000000002",
+      "Camera": { "fovDeg": 75, "nearPlane": 0.05 },
+      "Name": { "value": "Head" },
+      "Parent": { "entity": "7d0a110000000001" },
+      "Transform": { "position": [0, 1.62, 0] }
+    },
+    {
+      "id": "7d0a110000000003",
+      "InputActions": {
+        "actions": [
+          { "action": "jump", "key": "Space" },
+          { "action": "sprint", "key": "LeftShift" },
+          { "action": "release_mouse", "key": "Escape" }
+        ],
+        "axes": [
+          { "axis": "move_forward", "positive": "W", "negative": "S" },
+          { "axis": "move_right", "positive": "D", "negative": "A" }
+        ]
+      },
+      "Name": { "value": "Controls" }
+    },
+    {
+      "id": "7d0a110000000004",
+      "Environment": { "hdri": { "path": "assets/test_models/env_outdoor.hdr" } },
+      "Name": { "value": "Environment" }
+    },
+    {
+      "id": "7d0a110000000005",
+      "Light": { "type": "Directional", "color": [0.75, 0.82, 1], "intensity": 2 },
+      "Name": { "value": "Moon" },
+      "Transform": {
+        "position": [0, 30, 0],
+        "rotation": [-0.440377, -0.266729, -0.13885, 0.845957]
+      }
+    },
+    {
+      "id": "7d0a110000000006",
+      "Level": { "asset": { "path": "assets/tidewall/levels/yard.glb" } },
+      "Name": { "value": "Yard" }
+    }
+  ]
+}

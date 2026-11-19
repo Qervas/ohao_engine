@@ -1,0 +1,78 @@
+{
+  "format": "ohao.layout",
+  "version": 1,
+  "name": "yard",
+  "comment": "B1 and B2's pump yard (docs/specs/2026-11-18-tidewall-design.md, section 2): 60 x 40 m inside its walls, x east, z south, metres, Y up. Built by tools/level/build_level.py into assets/tidewall/levels/yard.glb.",
+  "pieces": [
+    { "kind": "slab", "name": "Ground", "lo": [-45, -0.3, -35], "hi": [45, 0, 35], "mat": "asphalt" },
+
+    { "kind": "wall", "name": "WallNorth", "from": [-30, -20], "to": [30, -20], "height": 3.0,
+      "openings": [ { "at": 30, "width": 6.0, "height": 3.0 } ] },
+    { "kind": "wall", "name": "WallSouth", "from": [-30, 20], "to": [30, 20], "height": 3.0,
+      "openings": [ { "at": 12, "width": 2.0, "height": 2.5 } ] },
+    { "kind": "wall", "name": "WallWest", "from": [-30, -20.15], "to": [-30, 20.15], "height": 3.0 },
+    { "kind": "wall", "name": "WallEast", "from": [30, -20.15], "to": [30, 20.15], "height": 3.0,
+      "openings": [ { "at": 28.15, "width": 1.2, "height": 2.2 } ] },
+    { "kind": "door", "name": "DoorEast", "at": [30, 0, 8], "yaw": 90, "width": 1.2, "height": 2.2 },
+
+    { "kind": "wall", "name": "PumpHouseSouth", "from": [16, -10], "to": [28, -10], "height": 3.2,
+      "openings": [ { "at": 4, "width": 1.2, "height": 2.2 } ] },
+    { "kind": "door", "name": "PumpHouseDoor", "at": [20, 0, -10], "yaw": 0, "width": 1.2, "height": 2.2 },
+    { "kind": "wall", "name": "PumpHouseWest", "from": [16, -18.15], "to": [16, -9.85], "height": 3.2,
+      "openings": [ { "at": 4.15, "width": 2.5, "height": 2.6 } ] },
+    { "kind": "wall", "name": "PumpHouseNorth", "from": [16, -18], "to": [28, -18], "height": 3.2 },
+    { "kind": "wall", "name": "PumpHouseEast", "from": [28, -18.15], "to": [28, -9.85], "height": 3.2 },
+    { "kind": "slab", "name": "PumpHouseRoof", "lo": [15.8, 3.2, -18.2], "hi": [28.2, 3.4, -9.8], "mat": "concrete" },
+    { "kind": "block", "name": "Pump", "at": [23, 0, -14.5], "size": [3.0, 2.0, 1.6], "mat": "metal" },
+
+    { "kind": "catwalk", "name": "Catwalk", "from": [-12, -17.5], "to": [10, -17.5], "height": 3.2, "width": 1.5 },
+    { "kind": "stairs", "name": "CatwalkStairs", "at": [14.8, 0, -17.5], "yaw": 90, "steps": 16, "rise": 3.2,
+      "width": 1.4 },
+
+    { "kind": "container", "name": "ContainerA", "at": [-8, 0, -6], "size": "20", "color": "blue" },
+    { "kind": "container", "name": "ContainerA2", "at": [-8, 2.59, -6], "size": "20", "color": "red" },
+    { "kind": "container", "name": "ContainerB", "at": [-14, 0, 4], "yaw": 90, "size": "40", "color": "green" },
+    { "kind": "container", "name": "ContainerC", "at": [4, 0, -2], "yaw": 15, "size": "20", "color": "orange" },
+    { "kind": "container", "name": "ContainerD", "at": [10, 0, 6], "size": "40", "color": "grey" },
+    { "kind": "container", "name": "ContainerE", "at": [10, 0, 10], "size": "20", "color": "blue" },
+    { "kind": "container", "name": "ContainerF", "at": [-2, 0, -8], "yaw": 90, "size": "20", "color": "red" },
+    { "kind": "container", "name": "ContainerG", "at": [-20, 0, -10], "size": "20", "color": "orange" },
+
+    { "kind": "pipe_rack", "name": "PipeRack", "from": [-25.5, -15], "to": [-25.5, 15], "height": 2.6, "width": 1.4,
+      "pipes": 3, "radius": 0.18 },
+    { "kind": "pipe_rack", "name": "PipeRun", "from": [-22, -12], "to": [-22, 12], "low": true, "pipes": 3,
+      "radius": 0.15, "width": 1.0, "bay": 4.0 },
+
+    { "kind": "cover_low", "name": "BarrierA", "at": [0, 0, 10], "length": 3.0 },
+    { "kind": "cover_low", "name": "BarrierB", "at": [-5, 0, 13], "yaw": 30, "length": 3.0 },
+    { "kind": "cover_low", "name": "BarrierC", "at": [6, 0, 14.5], "yaw": -20, "length": 3.0 },
+    { "kind": "cover_low", "name": "BarrierD", "at": [17, 0, 12], "length": 3.0 },
+    { "kind": "cover_low", "name": "BarrierE", "at": [-3, 0, -13], "length": 3.0 },
+    { "kind": "cover_low", "name": "BarrierF", "at": [6, 0, -12], "yaw": 10, "length": 3.0 },
+    { "kind": "cover_high", "name": "BlockA", "at": [0, 0, 4], "yaw": 90, "length": 2.0 },
+    { "kind": "cover_high", "name": "BlockB", "at": [15, 0, -4], "length": 2.5 },
+    { "kind": "cover_high", "name": "BlockC", "at": [-16, 0, 13], "length": 2.0 },
+
+    { "kind": "slab", "name": "Dock", "lo": [24, 0, -6], "hi": [29.85, 1.2, 6], "mat": "concrete" },
+    { "kind": "ramp", "name": "DockRamp", "at": [18, 0, 0], "yaw": -90, "width": 3.0, "length": 6.0, "rise": 1.2 },
+
+    { "kind": "spawn", "name": "SpawnPlayer", "at": [-18, 0, 23], "yaw": 0, "tag": "player" },
+    { "kind": "spawn", "name": "SpawnEnemy01", "at": [-6, 0, -14], "yaw": 180, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy02", "at": [2, 0, -15], "yaw": 180, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy03", "at": [8, 0, -8], "yaw": 180, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy04", "at": [14, 0, -7], "yaw": 160, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy05", "at": [22, 0, -4], "yaw": 150, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy06", "at": [-12, 0, -10], "yaw": 200, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy07", "at": [-18, 0, 0], "yaw": 180, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy08", "at": [-6, 0, 8], "yaw": 180, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy09", "at": [4, 0, 8], "yaw": 180, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy10", "at": [13, 0, 14], "yaw": 200, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy11", "at": [22, 0, 10], "yaw": 220, "tag": "enemy" },
+    { "kind": "spawn", "name": "SpawnEnemy12", "at": [-4, 3.2, -17.5], "yaw": 180, "tag": "enemy" },
+
+    { "kind": "trigger", "name": "TriggerYardSouth", "lo": [-20, 0, 18], "hi": [-16, 2.5, 21.5] },
+    { "kind": "trigger", "name": "TriggerGateNorth", "lo": [-3, 0, -21], "hi": [3, 3, -18] },
+
+    { "kind": "view", "name": "ViewYard", "at": [-18, 1.7, 17], "yaw": 20, "pitch": -5, "fov": 60 }
+  ]
+}

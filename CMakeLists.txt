@@ -117,6 +117,7 @@ add_subdirectory(ohao)
 include(cmake/ohao_games.cmake)
 add_subdirectory(games/slice)
 add_subdirectory(games/sample)
+add_subdirectory(games/tidewall)
 add_subdirectory(examples)
 
 # OpenPBR's energy-table generator.
