@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -260,6 +261,28 @@ struct RenderScene::Impl {
         }
         tlasStructural = false;
         stats.lastTlasOp = build ? RenderSceneStats::TlasOp::Build : RenderSceneStats::TlasOp::Refit;
+    }
+
+    // Every live slot of the TLAS input names a BLAS that is not retired: a retired one is destroyed
+    // MAX_FRAMES_IN_FLIGHT frames later, under a TLAS that would still trace it, and no pass declares it read
+    // (RTAccelerationStructure::traced). Checked after each frame's TLAS, only while a retired BLAS waits (the
+    // frames after a mesh's release): a slot that names one is a bug in the order of a release and its
+    // instances' destroys, and the process stops before the BLAS is destroyed.
+    std::vector<VkDeviceAddress> retiredBlas;
+    void checkTlasReferences() {
+        if (!rt() || !rtAccel->hasRetiredBlas()) return;
+        rtAccel->retiredBlasAddresses(retiredBlas);
+        const std::size_t n = std::min<std::size_t>(instances.highWater(), tlasHost.size());
+        for (std::size_t slot = 0; slot < n; ++slot) {
+            const VkDeviceAddress ref = tlasHost[slot].accelerationStructureReference;
+            if (ref == 0 || !std::binary_search(retiredBlas.begin(), retiredBlas.end(), ref)) continue;
+            OHAO_LOG(Error, render,
+                     "RenderScene: TLAS slot {} (live {}) names retired BLAS 0x{:x}, destroyed {} frames after its "
+                     "release: an instance outlived its mesh's release",
+                     slot, instances.live(static_cast<uint32_t>(slot)), ref, MAX_FRAMES_IN_FLIGHT);
+            log::flush();
+            std::abort();
+        }
     }
 
     [[nodiscard]] bool ensureStaging(uint32_t slot, VkDeviceSize bytes) {
@@ -980,6 +1003,7 @@ void RenderScene::recordUpdates(const Frame& frame) {
     // A failed upload keeps the TLAS input dirty: no build until it lands.
     m->stats.lastTlasOp = RenderSceneStats::TlasOp::None;
     if (tlasUploaded) m->recordTlas(frame, tlasChanged);
+    m->checkTlasReferences();
 
     m->stats.recordCpuMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();

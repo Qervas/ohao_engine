@@ -119,6 +119,10 @@ public:
             if (e.handle != VK_NULL_HANDLE) { ++m.count; m.bytes += e.bytes; }
         return m;
     }
+    // The addresses of the retired BLASes not yet destroyed, ascending (empty almost always: a mesh released waits
+    // MAX_FRAMES_IN_FLIGHT frames). No TLAS input may name one (RenderScene's check after each frame's TLAS).
+    [[nodiscard]] bool hasRetiredBlas() const noexcept { return m_retiredAlive != 0; }
+    void retiredBlasAddresses(std::vector<VkDeviceAddress>& out) const;
     // Device address of a live BLAS; 0 when the handle is unknown or destroyed.
     VkDeviceAddress getBlasAddress(BlasHandle handle) const {
         return handle < m_blasEntries.size() ? m_blasEntries[handle].deviceAddress : 0;
@@ -142,6 +146,7 @@ private:
 
     // BLAS storage
     std::vector<BlasEntry> m_blasEntries;
+    uint32_t m_retiredAlive = 0;   // entries retired and not yet destroyed
 
     // TLAS: its storage's size and the instance count of its last build (an UPDATE must use the same count).
     VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;

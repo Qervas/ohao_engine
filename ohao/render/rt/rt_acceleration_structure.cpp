@@ -228,13 +228,25 @@ BlasHandle RTAccelerationStructure::createBLAS(const render::Frame& frame, GpuBu
 }
 
 void RTAccelerationStructure::retireBLAS(BlasHandle handle) {
-    if (handle < m_blasEntries.size()) m_blasEntries[handle].retired = true;
+    if (handle >= m_blasEntries.size()) return;
+    BlasEntry& entry = m_blasEntries[handle];
+    if (!entry.retired && entry.handle != VK_NULL_HANDLE) ++m_retiredAlive;
+    entry.retired = true;
+}
+
+void RTAccelerationStructure::retiredBlasAddresses(std::vector<VkDeviceAddress>& out) const {
+    out.clear();
+    if (m_retiredAlive == 0) return;
+    for (const BlasEntry& e : m_blasEntries)
+        if (e.retired && e.handle != VK_NULL_HANDLE) out.push_back(e.deviceAddress);
+    std::sort(out.begin(), out.end());
 }
 
 void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
     if (handle >= m_blasEntries.size()) return;
     auto& entry = m_blasEntries[handle];
     if (entry.handle != VK_NULL_HANDLE) {
+        if (entry.retired) --m_retiredAlive;
         vkDestroyAccelerationStructureKHR(m_device, entry.handle, nullptr);
         entry.handle = VK_NULL_HANDLE;
     }
@@ -504,6 +516,7 @@ void RTAccelerationStructure::destroy() {
         m_allocator->destroyBuffer(entry.buffer);
     }
     m_blasEntries.clear();
+    m_retiredAlive = 0;
 
     m_supported = false;
     m_device = VK_NULL_HANDLE;
