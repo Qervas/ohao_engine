@@ -8,6 +8,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/fast_float.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vma.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/miniaudio.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/jolt.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/recast.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/assimp.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/glfw.cmake)
 
