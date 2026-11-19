@@ -11,7 +11,7 @@
 //   is --present fifo. --latency draws the measured latency and frame time top left (the same
 //   numbers render.stats reports; sub-project 9). --fps caps the frame rate (default: the display's
 //   refresh rate; 0 uncapped; off under fifo, which the display paces). --render-thread: a render thread records
-//   and presents each frame while the next one steps (render/render_thread.hpp; default on).
+//   and presents each frame while the next one steps (render/render_thread.hpp; default off).
 //   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
 //   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
 //   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits

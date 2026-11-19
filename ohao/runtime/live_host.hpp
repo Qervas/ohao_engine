@@ -110,8 +110,9 @@ struct LiveConfig {
     // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
     std::size_t frameLogCapacity{FrameLog::kCapacity};
     // A render thread records and presents each frame while the loop steps the next (render/render_thread.hpp);
-    // off: the loop renders each frame itself, by the same path.
-    bool renderThread{true};
+    // off, the default: the loop renders each frame itself, by the same path. A play window waits on the GPU, and
+    // with the thread on its look latency was not lower beyond off's spread (feel_bench, immediate; step 4b-8).
+    bool renderThread{false};
 };
 
 struct RunReport {

@@ -877,7 +877,7 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     if (intOpt(a, "--spp", 1, 65536, spp, err)) cfg.spp = static_cast<int>(spp);
     long long fps = -1;   // the frame-rate cap: the display's refresh rate unless --fps (0: none)
     if (has(a, "--fps") && intOpt(a, "--fps", 0, 1000, fps, err)) cfg.maxFps = static_cast<int>(fps);
-    cfg.renderThread = *onOff(a, "--render-thread", true);   // checked by cmdServe; a window's is on by default
+    cfg.renderThread = *onOff(a, "--render-thread", false);   // checked by cmdServe; off by default, as headless
     runtime::LiveHost host;
     if (!host.initialize(cfg, engineTypes())) {
         OHAO_LOG(Error, rpc, "serve: no window or no usable GPU");

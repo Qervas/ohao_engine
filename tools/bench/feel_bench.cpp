@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/feel_bench.json", csvDir = "build";
     double seconds = 60.0, warmup = 2.0;
     float renderScale = 1.0f;   // render.settings renderScale
-    bool renderThread = true;   // LiveConfig::renderThread
+    bool renderThread = false;   // LiveConfig::renderThread's default
     std::vector<PresentMode> modes{PresentMode::Immediate, PresentMode::Mailbox, PresentMode::Fifo};
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
