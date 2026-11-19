@@ -7,5 +7,5 @@ target_include_directories(ohao_game_api PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_game_api PUBLIC cxx_std_20)
 # install.cpp records and removes what a game adds to a World (its systems, hooks, and what each module reports it
 # added). It links the modules api.hpp exports (tools/check_layers.py, rule 6).
-target_link_libraries(ohao_game_api PUBLIC ohao_reflect ohao_ecs ohao_visual ohao_animation ohao_physics ohao_audio
+target_link_libraries(ohao_game_api PUBLIC ohao_reflect ohao_ecs ohao_visual ohao_animation ohao_physics ohao_navigation ohao_audio
     ohao_world_render ${CMAKE_DL_LIBS})

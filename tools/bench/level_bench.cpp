@@ -1,8 +1,8 @@
 // level_bench: the level pipeline's budgets (docs/specs/2026-10-26-level-pipeline-design.md,
 // "Performance budgets").
 //
-//   level_bench [--check budgets.json] [--out build/level_bench.json] [--only blockout|kit2k]
-//               [--rounds N] [--reference build/serve_bench_reference.json]
+//   level_bench [--check budgets.json] [--out build/level_bench.json] [--only blockout|kit2k|tidewall_nav]
+//               [--rounds N] [--reference build/serve_bench_reference.json] [--threads N]
 //
 // Step 4 measures blockout_load_ms: a cold load of assets/levels/blockout_room.glb into a
 // fresh World with the level and physics systems (structure, 13 meshes through a fresh asset
@@ -10,7 +10,9 @@
 // warm-ups. The OS file cache is warm after the warm-ups; the engine's caches are not.
 // level_info_bytes (step 5): the size of level.info's result on the blockout, through a Session
 // as an agent calls it; a size, so a noisy machine cannot excuse a miss. `--only kit2k` measures
-// the generated kit's four numbers instead (measureKit), one load after a warming one.
+// the generated kit's four numbers instead (measureKit), one load after a warming one. `--only tidewall_nav` measures
+// the navigation module on Tidewall's yard (runNav): its navmesh cooked cold and after one edited piece, loaded from
+// the cooked cache, a path query, an obstacle change, and 16 and 64 walkers' step, at --threads (else OHAO_THREADS).
 //
 // The machine is recorded as scene_bench records it (bench_env.hpp): a calibration loop before
 // and after against the reference, and every other process's CPU. A run >25% slower than the
@@ -29,6 +31,9 @@
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "level/components.hpp"
+#include "navigation/components.hpp"
+#include "navigation/navigation.hpp"
+#include "core/jobs/pool.hpp"
 #include "reflect/registry.hpp"
 
 #include <nlohmann/json.hpp>
@@ -191,6 +196,199 @@ int runKit(const nlohmann::json& budgets, int currentStep, const std::string& ou
     return failures.empty() ? 0 : 1;
 }
 
+// ---- tidewall_nav: the navigation module on Tidewall's yard (docs/plans/2026-11-18-tidewall.md, part N1) ----------
+
+struct NavWorld {
+    ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+    ecs::World world;
+    NavWorld() {
+        engine::install(world, {files, engineTypes()}, {"level", "physics", "navigation"});
+        const entt::entity lv = world.createWithId(0x1e7e1, "Yard");
+        world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/tidewall/levels/yard.glb", {}}});
+        world.sync();
+    }
+    entt::entity named(std::string_view name) {
+        for (auto [e, n] : world.registry().view<const ecs::Name>().each())
+            if (n.value == name) return e;
+        return entt::null;
+    }
+};
+
+// Removes every navmesh tile from the cooked cache: the next build cooks them all.
+std::size_t forgetNavTiles() {
+    std::size_t n = 0;
+    std::error_code ec;
+    for (const auto& f : std::filesystem::directory_iterator(std::filesystem::path(OHAO_SOURCE_DIR) / ".ohao/cooked", ec))
+        if (f.path().extension() == ".navtile" && std::filesystem::remove(f.path(), ec)) ++n;
+    return n;
+}
+
+int runNav(const nlohmann::json& budgets, int currentStep, const std::string& outPath, int rounds) {
+    log::setLevel(log::Level::Warn);
+    std::vector<std::string> failures;
+    nlohmann::json out;
+    const auto row = [&](const std::string& name, const Stats& st, const char* unit) {
+        std::string verdict = "reported";
+        if (budgets.contains(name)) {
+            const double max = budgets[name].value("max", 0.0);
+            verdict = currentStep < budgets[name].value("gatedFrom", 0) ? "pending" : st.p95 <= max ? "pass" : "fail";
+            if (verdict == "fail") {
+                char text[160];
+                std::snprintf(text, sizeof text, "%s: p95 %.3f %s over its budget of %.3f", name.c_str(), st.p95, unit, max);
+                failures.push_back(text);
+            }
+            std::printf("  %-30s median %9.3f  p95 %9.3f %s   budget %.3f: %s\n", name.c_str(), st.median, st.p95, unit, max,
+                        verdict.c_str());
+        } else {
+            std::printf("  %-30s median %9.3f  p95 %9.3f %s\n", name.c_str(), st.median, st.p95, unit);
+        }
+        out[name] = {{"median", st.median}, {"p95", st.p95}, {"min", st.min}, {"verdict", verdict}};
+    };
+
+    // Cold: no tile in the cooked cache.
+    std::vector<double> cold, coldCook;
+    ecs::NavInfo info;
+    for (int i = 0; i < 3; ++i) {
+        forgetNavTiles();
+        NavWorld w;
+        info = *ecs::navInfo(w.world);
+        cold.push_back(info.buildMs);
+        coldCook.push_back(info.cookMs);
+    }
+    std::printf("level_bench tidewall_nav (yard: %u tiles, %u layers, %u polygons from %u triangles, %u links; %d threads)\n",
+                info.tiles, info.layers, info.polys, info.triangles, info.links, jobs::threadCount());
+    if (info.cooked != info.tiles || info.tiles == 0)
+        failures.push_back("the cold build cooked " + std::to_string(info.cooked) + " of " + std::to_string(info.tiles) + " tiles");
+    row("tidewall_nav_cook_ms", stats(cold), "ms");
+    row("tidewall_nav_cook_tiles_ms", stats(coldCook), "ms");
+
+    // Warm: every tile from the cache (the load a session pays).
+    std::vector<double> warm;
+    for (int i = 0; i < rounds; ++i) {
+        NavWorld w;
+        const ecs::NavInfo n = *ecs::navInfo(w.world);
+        if (n.cached != n.tiles) failures.push_back("a warm build cooked " + std::to_string(n.cooked) + " tiles");
+        warm.push_back(n.buildMs);
+    }
+    row("tidewall_nav_load_ms", stats(warm), "ms");
+
+    // One edited piece: a barrier moved 1 m and back, its tiles cooked again (then read), the rest read.
+    {
+        NavWorld w;
+        (void)ecs::navInfo(w.world);
+        std::vector<double> edit;
+        uint32_t cooked = 0;
+        const entt::entity barrier = w.named("BarrierA");
+        for (int i = 0; i < 2 && barrier != entt::null; ++i) {
+            ecs::Transform t = w.world.registry().get<ecs::Transform>(barrier);
+            t.position.x += 1.0f;
+            w.world.setTransform(barrier, t);
+            w.world.sync();
+            const ecs::NavInfo n = *ecs::navInfo(w.world);
+            edit.push_back(n.buildMs);
+            if (i == 0) cooked = n.cooked;
+        }
+        if (barrier == entt::null) failures.push_back("the yard has no BarrierA");
+        std::printf("  a barrier moved 1 m cooks %u of %u tiles\n", cooked, info.tiles);
+        out["edit_cooked_tiles"] = cooked;
+        row("tidewall_nav_edit_ms", stats(edit), "ms");
+    }
+
+    // Paths between fixed pseudo-random points of the yard's ground.
+    {
+        NavWorld w;
+        (void)ecs::navInfo(w.world);
+        uint32_t seed = 0x9e3779b9u;
+        const auto next = [&] {
+            seed = seed * 1664525u + 1013904223u;
+            return static_cast<float>(seed >> 8) / 16777216.0f;
+        };
+        std::vector<glm::vec3> points;
+        for (int tries = 0; points.size() < 200 && tries < 10000; ++tries) {
+            const glm::vec3 p{(next() - 0.5f) * 58.0f, 0.0f, (next() - 0.5f) * 38.0f};
+            if (const auto at = ecs::navNearest(w.world, p, {0.5f, 0.5f, 0.5f})) points.push_back(*at);
+        }
+        std::vector<double> us;
+        uint32_t found = 0;
+        for (std::size_t i = 0; i < 2000 && !points.empty(); ++i) {
+            const glm::vec3 a = points[i % points.size()];
+            const glm::vec3 b = points[(i * 7 + 3) % points.size()];
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto r = ecs::navPath(w.world, a, b);
+            us.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
+            found += r && r->status == ecs::NavRoute::Status::Found ? 1u : 0u;
+        }
+        std::printf("  %u of 2000 paths found\n", found);
+        out["paths_found"] = found;
+        row("tidewall_nav_path_us", stats(us), "us");
+    }
+
+    // An obstacle change: the pump house door opened and closed, each applied to completion.
+    {
+        NavWorld w;
+        (void)ecs::navInfo(w.world);
+        const entt::entity door = w.named("PumpHouseDoor");
+        std::vector<double> ms;
+        for (int i = 0; i < 40 && door != entt::null; ++i) {
+            w.world.registry().patch<ecs::NavObstacle>(door, [&](ecs::NavObstacle& o) { o.active = i % 2 == 1; });
+            ms.push_back(ecs::navInfo(w.world)->obstaclesMs);
+        }
+        if (door == entt::null) failures.push_back("the yard has no PumpHouseDoor");
+        row("tidewall_nav_obstacle_ms", stats(ms), "ms");
+    }
+
+    // Walkers: N agents on a grid of the yard's ground walking to the south entry; the navigation system's step and
+    // the whole step, over 300 steps after 60.
+    for (const int n : {16, 64}) {
+        NavWorld w;
+        (void)ecs::navInfo(w.world);
+        auto& reg = w.world.registry();
+        int made = 0;
+        for (int z = -6; z <= 6 && made < n; ++z)
+            for (int x = -10; x <= 10 && made < n; ++x) {
+                const glm::vec3 p{static_cast<float>(x) * 2.5f, 0.0f, static_cast<float>(z) * 2.5f};
+                if (!ecs::navNearest(w.world, p, {0.05f, 0.3f, 0.05f})) continue;
+                const entt::entity e = w.world.createWithId(0x7a1c000000000100ull + static_cast<uint64_t>(made), "Walker");
+                w.world.setTransform(e, ecs::Transform{p});
+                ecs::PlayerController pc;
+                pc.input = false;
+                pc.spawn.clear();
+                pc.walkSpeed = 3.0f;
+                reg.emplace<ecs::PlayerController>(e, pc);
+                ecs::NavAgent a;
+                a.goal = {-18.0f, 0.0f, 23.0f};
+                a.active = true;
+                reg.emplace<ecs::NavAgent>(e, a);
+                ++made;
+            }
+        w.world.sync();
+        std::vector<double> navMs, stepMs;
+        for (int i = 0; i < 360; ++i) {
+            const auto t0 = std::chrono::steady_clock::now();
+            w.world.simulate(1.0f / 60.0f);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (i < 60) continue;
+            stepMs.push_back(ms);
+            navMs.push_back(ecs::navStepTiming(w.world).totalMs);
+        }
+        if (made != n) failures.push_back("only " + std::to_string(made) + " of " + std::to_string(n) + " walkers placed");
+        const std::string tag = "tidewall_walkers" + std::to_string(n);
+        row(tag + "_nav_ms", stats(navMs), "ms");
+        row(tag + "_step_ms", stats(stepMs), "ms");
+    }
+    log::setLevel(log::Level::Info);
+    out["threads"] = jobs::threadCount();
+    out["passed"] = failures.empty();
+    out["failures"] = failures;
+    std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
+    for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
+    std::string line = "{\"suite\":\"level_bench.tidewall_nav\",\"passed\":" + std::to_string(failures.empty() ? 1 : 0) +
+                       ",\"failed\":" + std::to_string(failures.size()) + ",\"failures\":[";
+    for (std::size_t i = 0; i < failures.size(); ++i) line += (i ? "," : "") + test::jsonString(failures[i]);
+    std::printf("%s]}\n", line.c_str());
+    return failures.empty() ? 0 : 1;
+}
+
 // level.info's result on the blockout, in bytes (the token budget agents pay), and the result.
 std::size_t levelInfoBytes(std::string& result) {
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
@@ -214,7 +412,7 @@ std::size_t levelInfoBytes(std::string& result) {
 int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/level_bench.json", refPath = "build/serve_bench_reference.json",
                 only = "blockout";
-    int rounds = 30;
+    int rounds = 30, threads = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
@@ -222,16 +420,19 @@ int main(int argc, char** argv) {
         else if (a == "--reference" && i + 1 < argc) refPath = argv[++i];
         else if (a == "--only" && i + 1 < argc) only = argv[++i];
         else if (a == "--rounds" && i + 1 < argc) rounds = std::max(1, std::atoi(argv[++i]));
+        else if (a == "--threads" && i + 1 < argc) threads = std::max(1, std::atoi(argv[++i]));
         else {
-            std::fprintf(stderr, "usage: level_bench [--check budgets.json] [--out file] [--only blockout] [--rounds N] "
+            std::fprintf(stderr, "usage: level_bench [--check budgets.json] [--out file] [--only blockout|kit2k|tidewall_nav] "
+                                 "[--rounds N] [--threads N] "
                                  "[--reference file]\n");
             return 2;
         }
     }
-    if (only != "blockout" && only != "kit2k") {
-        std::fprintf(stderr, "level_bench: --only is blockout or kit2k\n");
+    if (only != "blockout" && only != "kit2k" && only != "tidewall_nav") {
+        std::fprintf(stderr, "level_bench: --only is blockout, kit2k or tidewall_nav\n");
         return 2;
     }
+    jobs::configure(jobs::configFromEnvironment(threads));
 
     nlohmann::json budgets;
     int currentStep = 0;
@@ -255,6 +456,9 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (only == "tidewall_nav")
+        return runNav(budgets, currentStep, outPath == "build/level_bench.json" ? "build/level_bench_tidewall_nav.json" : outPath,
+                      std::min(rounds, 10));
     if (only == "kit2k") return runKit(budgets, currentStep, outPath == "build/level_bench.json" ? "build/level_bench_kit2k.json" : outPath);
 
     const double cal0 = bench::calibrationMs();

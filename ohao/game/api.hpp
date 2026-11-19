@@ -26,6 +26,8 @@
 #include "physics/events.hpp"         // its channels: contacts, triggers, footsteps, joint breaks
 #include "physics/physics_scene.hpp"  // raycasts, players (playerInfo, turnPlayer), setInputControl
 #include "physics/player.hpp"         // playerOf: the player of an input stream
+#include "navigation/components.hpp"  // NavAgent, NavPath, NavObstacle, NavLink: who walks the navmesh, and what blocks it
+#include "navigation/navigation.hpp"  // navPath, navNearest, navInfo: queries of the navmesh
 #include "render/hud/hud_list.hpp"    // a HUD's items
 #include "visual/components.hpp"      // what an entity looks like (MeshSource, Material, Light) and the Camera
 #include "visual/scene_view.hpp"      // the camera a frame is drawn from

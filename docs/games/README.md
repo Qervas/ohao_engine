@@ -37,6 +37,9 @@ engine: configure fails on any other engine header, naming the file. `game/api.h
 - physics: its components (colliders, bodies, joints, `PlayerController`), its channels, the physics scene
   (`raycastFrom`, `playerInfo`, `turnPlayer`, `setInputControl`), `playerOf`;
 - animation: `Animator`, `SkinnedMesh`, `JointAttach`, drivers (`AnimationSystem::setDriver`);
+- navigation: who walks the navmesh (`NavAgent`: a goal, the path it plans in `NavPath`), what blocks it while present
+  (`NavObstacle`), the links across what it cannot walk (`NavLink`), and its queries (`navPath`, `navNearest`,
+  `navInfo`); a game sets an agent's goal in a system declared `before navigation` (Tidewall's walkers);
 - audio: the mix a game asks for (`requestMixSnapshot`);
 - visual: what an entity looks like (`MeshSource`, `Material`, `Light`, `Camera`) and the scene view;
 - world_render: what a game presents (`addHud`, `addSpheres`);

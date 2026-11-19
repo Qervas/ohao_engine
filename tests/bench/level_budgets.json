@@ -7,7 +7,11 @@
     "kit2k_load_ms": { "max": 400, "gatedFrom": 6 },
     "kit2k_collision_build_ms": { "max": 150, "gatedFrom": 6 },
     "kit2k_raycast_us": { "max": 5, "gatedFrom": 6 },
-    "idle_sync_us": { "max": 10, "gatedFrom": 6 }
+    "idle_sync_us": { "max": 10, "gatedFrom": 6 },
+    "tidewall_nav_cook_ms": { "max": 250, "gatedFrom": 6, "comment": "p95, Tidewall's yard cold (level_bench --only tidewall_nav); 2026-11-19: p95 107-135 at 1 thread, 54-58 at 16" },
+    "tidewall_nav_load_ms": { "max": 20, "gatedFrom": 6, "comment": "p95, every tile from the cooked cache; 2026-11-19: 10.2-12.7" },
+    "tidewall_nav_path_us": { "max": 50, "gatedFrom": 6, "comment": "p95 of 2,000 paths between yard points; 2026-11-19: 45.4-47.7" },
+    "tidewall_nav_obstacle_ms": { "max": 2, "gatedFrom": 6, "comment": "p95, a door's obstacle applied to completion; 2026-11-19: 0.96-1.34" }
   },
   "noise": { "maxCalibrationSlowdown": 1.25, "maxExternalCorePct": 50 }
 }

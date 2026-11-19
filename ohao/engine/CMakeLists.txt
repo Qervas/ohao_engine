@@ -4,4 +4,4 @@ add_library(ohao_engine STATIC install.cpp install.hpp)
 target_include_directories(ohao_engine PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
 target_compile_features(ohao_engine PUBLIC cxx_std_20)
 target_link_libraries(ohao_engine PUBLIC ohao_ecs ohao_visual ohao_animation ohao_physics ohao_audio ohao_footsteps
-    ohao_vfx ohao_level ohao_world_render)
+    ohao_vfx ohao_level ohao_navigation ohao_world_render)
