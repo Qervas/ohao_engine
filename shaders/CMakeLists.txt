@@ -149,38 +149,31 @@ add_custom_command(
     COMMENT "Writing the shaders' binding headers"
 )
 
+# Each SPIR-V is copied into the runtime output directory (<build>/<config>/bin/shaders on a multi-config generator,
+# where the programs land) by a command of its own, run when that SPIR-V changed: a copy of the whole directory at
+# every build took 0.8 s. A copy is written after its SPIR-V, so it is newer than the sources `ohao doctor` compares
+# it with.
+get_property(OHAO_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(OHAO_IS_MULTI_CONFIG)
+    set(OHAO_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>/bin/shaders")
+else()
+    set(OHAO_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin/shaders")
+endif()
+set(OHAO_SHADER_RUNTIME_FILES "")
+foreach(SPIRV ${SHADER_BINARY_FILES})
+    get_filename_component(SPIRV_NAME ${SPIRV} NAME)
+    add_custom_command(
+        OUTPUT "${OHAO_SHADER_RUNTIME_DIR}/${SPIRV_NAME}"
+        COMMAND ${CMAKE_COMMAND} -E copy ${SPIRV} "${OHAO_SHADER_RUNTIME_DIR}/${SPIRV_NAME}"
+        DEPENDS ${SPIRV}
+        COMMENT "Copying ${SPIRV_NAME} to the runtime output directory"
+    )
+    list(APPEND OHAO_SHADER_RUNTIME_FILES "${OHAO_SHADER_RUNTIME_DIR}/${SPIRV_NAME}")
+endforeach()
+
 # The libraries that include a binding header depend on this target (ohao/gpu/vulkan, ohao/render), so even a
 # first build compiles them against these shaders' headers.
 add_custom_target(shaders
-    DEPENDS ${SHADER_BINARY_FILES} ${OHAO_SHADER_REFLECTION}/bindings.stamp
+    DEPENDS ${SHADER_BINARY_FILES} ${OHAO_SHADER_REFLECTION}/bindings.stamp ${OHAO_SHADER_RUNTIME_FILES}
     COMMENT "Compiling all shaders"
-)
-
-# Copy compiled SPVs into the runtime output directory ONCE, here, instead of
-# each consuming test target attaching its own POST_BUILD copy_directory into
-# the same destination.
-# Two independent copies into the same directory race under a parallel
-# (-j8) build and can fail with "Error copying directory ...
-# build/Release/bin/shaders". Test targets should add_dependencies(<tgt>
-# shaders) and rely on this copy instead of performing their own.
-#
-# Mirror CMake's own default per-config RUNTIME_OUTPUT_DIRECTORY behavior
-# (CMAKE_RUNTIME_OUTPUT_DIRECTORY is set to CMAKE_BINARY_DIR with no
-# per-config override in the top-level CMakeLists.txt) so this resolves to
-# the same directory executables actually land in, on both multi-config
-# generators (e.g. Visual Studio, where CMake appends /$<CONFIG>) and
-# single-config generators (e.g. Ninja/Makefiles, where it does not).
-get_property(OHAO_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-if(OHAO_IS_MULTI_CONFIG)
-    set(OHAO_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
-else()
-    set(OHAO_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}")
-endif()
-
-add_custom_command(TARGET shaders POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${OHAO_SHADER_RUNTIME_DIR}/bin/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_BINARY_DIR}/shaders"
-        "${OHAO_SHADER_RUNTIME_DIR}/bin/shaders"
-    COMMENT "Copying shader SPVs to runtime output directory"
 )
