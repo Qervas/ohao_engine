@@ -73,7 +73,7 @@ Visual Studio 2026 Community (the C++ workload: MSVC 14.52 and its bundled Ninja
 Two pinned slangc, each unpacked from Slang's own release into `%USERPROFILE%\.local\opt\slang-<version>`: 2026.20
 for SPIR-V (`shaders/slangc.version`, `SLANGC`) and 2025.11 for the CPU twins' C++ (`shaders/slangc_cpp.version`,
 `SLANGC_CPP`; 2026.20's C++ emitter miscompiles them, "Gotchas"). Python (numpy, Pillow, jsonschema) is a uv
-environment in the repo, `.venv`; name its interpreter at configure, or CTest runs the harnesses with the
+environment in the repo, `.venv`, made from `pyproject.toml` and `uv.lock` by `uv sync`; name its interpreter at configure, or CTest runs the harnesses with the
 system Python, which has none of them. The Ninja Multi-Config generator keeps the `build/Release/` layout every
 harness reads.
 
