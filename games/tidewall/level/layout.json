@@ -25,7 +25,8 @@
     { "kind": "slab", "name": "PumpHouseRoof", "lo": [15.8, 3.2, -18.2], "hi": [28.2, 3.4, -9.8], "mat": "concrete" },
     { "kind": "block", "name": "Pump", "at": [23, 0, -14.5], "size": [3.0, 2.0, 1.6], "mat": "metal" },
 
-    { "kind": "catwalk", "name": "Catwalk", "from": [-12, -17.5], "to": [10, -17.5], "height": 3.2, "width": 1.5 },
+    { "kind": "catwalk", "name": "Catwalk", "from": [-12, -17.5], "to": [10, -17.5], "height": 3.2, "width": 1.5,
+      "drops": ["from"] },
     { "kind": "stairs", "name": "CatwalkStairs", "at": [14.8, 0, -17.5], "yaw": 90, "steps": 16, "rise": 3.2,
       "width": 1.4 },
 

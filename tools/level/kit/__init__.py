@@ -245,7 +245,8 @@ def ramp(p):
 
 def catwalk(p):
     """A raised walkway from `from` to `to` ([x, z]) at `height` (the deck's top), `width` wide: a grate deck, rails
-    1.0 m high along both sides (its ends open: stairs or a drop meet them), posts every 3 m."""
+    1.0 m high along both sides (its ends open: stairs or a drop meet them), posts every 3 m, and a navmesh link down off
+    each end in `drops`."""
     (x0, z0), (x1, z1) = p['from'], p['to']
     height, width = p['height'], p.get('width', 1.5)
     length = math.hypot(x1 - x0, z1 - z0)
@@ -256,6 +257,12 @@ def catwalk(p):
     for side, sz in (('l', -1.0), ('r', 1.0)):
         placed_box(f'{name}_rail_{side}', at, yaw, (length / 2, height + 0.5, sz * (width / 2 - 0.025)),
                    (length / 2, 0.5, 0.025), 'metal')
+    # A drop off each open end named in `drops` ("from", "to"): a one-way navmesh link from the deck's edge to the
+    # ground 1 m out (NavLink, in the drop's frame: its local x points out of the end).
+    for end in p.get('drops', []):
+        x, out = (0.0, -1.0) if end == 'from' else (length, 1.0)
+        _empty(f'{name}_drop_{end}', add(at, turn((x - out * 0.3, height, 0.0), yaw)), yaw + (180.0 if out < 0 else 0.0),
+               NavLink={'end': [1.3, -height, 0.0]})
     posts = max(2, int(length // 3.0) + 1)
     for i in range(posts):
         x = length * i / (posts - 1)
@@ -301,10 +308,11 @@ def pipe_rack(p):
 
 
 def door(p):
-    """A closed door leaf (a box) `width` x `height`, in the opening at `at`, its width along local x."""
+    """A closed door leaf (a box) `width` x `height`, in the opening at `at`, its width along local x: a navmesh obstacle
+    (NavObstacle, its mesh's bounds), so the navmesh is baked without it and blocked while it is closed."""
     width, height, thick = p.get('width', 1.0), p.get('height', 2.1), p.get('thick', 0.06)
     placed_box(p['name'], tuple(p['at']), p.get('yaw', 0.0), (0.0, height / 2, 0.0),
-               (width / 2 - 0.01, height / 2, thick / 2), 'door')
+               (width / 2 - 0.01, height / 2, thick / 2), 'door', NavObstacle={'active': True})
 
 
 def _empty(name, at, yaw, **hints):

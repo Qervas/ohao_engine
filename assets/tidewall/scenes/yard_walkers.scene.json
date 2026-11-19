@@ -1,0 +1,334 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "InputActions": 1,
+    "Level": 1,
+    "Light": 1,
+    "MeshSource": 1,
+    "Name": 1,
+    "NavAgent": 1,
+    "Parent": 1,
+    "PlayerController": 1,
+    "Transform": 1,
+    "Walker": 1
+  },
+  "entities": [
+    { "id": "7d0a110000000001", "Name": { "value": "Player" }, "PlayerController": {} },
+    {
+      "id": "7d0a110000000002",
+      "Camera": { "fovDeg": 75, "nearPlane": 0.05 },
+      "Name": { "value": "Head" },
+      "Parent": { "entity": "7d0a110000000001" },
+      "Transform": { "position": [0, 1.62, 0] }
+    },
+    {
+      "id": "7d0a110000000003",
+      "InputActions": {
+        "actions": [
+          { "action": "jump", "key": "Space" },
+          { "action": "sprint", "key": "LeftShift" },
+          { "action": "release_mouse", "key": "Escape" }
+        ],
+        "axes": [
+          { "axis": "move_forward", "positive": "W", "negative": "S" },
+          { "axis": "move_right", "positive": "D", "negative": "A" }
+        ]
+      },
+      "Name": { "value": "Controls" }
+    },
+    {
+      "id": "7d0a110000000004",
+      "Environment": { "hdri": { "path": "assets/test_models/env_outdoor.hdr" } },
+      "Name": { "value": "Environment" }
+    },
+    {
+      "id": "7d0a110000000005",
+      "Light": { "type": "Directional", "color": [0.75, 0.82, 1], "intensity": 2 },
+      "Name": { "value": "Moon" },
+      "Transform": {
+        "position": [0, 30, 0],
+        "rotation": [-0.440377, -0.266729, -0.13885, 0.845957]
+      }
+    },
+    {
+      "id": "7d0a110000000006",
+      "Level": { "asset": { "path": "assets/tidewall/levels/yard.glb" } },
+      "Name": { "value": "Yard" }
+    },
+    {
+      "id": "7d0a110000000100",
+      "Name": { "value": "Walker00" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-25, 0, -15] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000200",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker00 Body" },
+      "Parent": { "entity": "7d0a110000000100" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000101",
+      "Name": { "value": "Walker01" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [5, 0, -15] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000201",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker01 Body" },
+      "Parent": { "entity": "7d0a110000000101" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000102",
+      "Name": { "value": "Walker02" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-10, 0, -12.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000202",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker02 Body" },
+      "Parent": { "entity": "7d0a110000000102" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000103",
+      "Name": { "value": "Walker03" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-15, 0, -10] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000203",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker03 Body" },
+      "Parent": { "entity": "7d0a110000000103" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000104",
+      "Name": { "value": "Walker04" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-20, 0, -7.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000204",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker04 Body" },
+      "Parent": { "entity": "7d0a110000000104" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000105",
+      "Name": { "value": "Walker05" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [22.5, 0, -7.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000205",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker05 Body" },
+      "Parent": { "entity": "7d0a110000000105" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000106",
+      "Name": { "value": "Walker06" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [15, 0, -5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000206",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker06 Body" },
+      "Parent": { "entity": "7d0a110000000106" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000107",
+      "Name": { "value": "Walker07" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [0, 0, -2.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000207",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker07 Body" },
+      "Parent": { "entity": "7d0a110000000107" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000108",
+      "Name": { "value": "Walker08" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-2.5, 0, 0] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000208",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker08 Body" },
+      "Parent": { "entity": "7d0a110000000108" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a110000000109",
+      "Name": { "value": "Walker09" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-20, 0, 2.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a110000000209",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker09 Body" },
+      "Parent": { "entity": "7d0a110000000109" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a11000000010a",
+      "Name": { "value": "Walker10" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [17.5, 0, 2.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a11000000020a",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker10 Body" },
+      "Parent": { "entity": "7d0a11000000010a" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a11000000010b",
+      "Name": { "value": "Walker11" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [22.5, 0, 5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a11000000020b",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker11 Body" },
+      "Parent": { "entity": "7d0a11000000010b" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a11000000010c",
+      "Name": { "value": "Walker12" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [25, 0, 7.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a11000000020c",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker12 Body" },
+      "Parent": { "entity": "7d0a11000000010c" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a11000000010d",
+      "Name": { "value": "Walker13" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [25, 0, 10] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a11000000020d",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker13 Body" },
+      "Parent": { "entity": "7d0a11000000010d" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a11000000010e",
+      "Name": { "value": "Walker14" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [7.5, 0, 12.5] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a11000000020e",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker14 Body" },
+      "Parent": { "entity": "7d0a11000000010e" },
+      "Transform": { "position": [0, 0.9, 0] }
+    },
+    {
+      "id": "7d0a11000000010f",
+      "Name": { "value": "Walker15" },
+      "NavAgent": {},
+      "PlayerController": { "walkSpeed": 3, "spawn": "", "input": false },
+      "Transform": { "position": [-7.5, 0, 15] },
+      "Walker": {}
+    },
+    {
+      "id": "7d0a11000000020f",
+      "MeshSource": {
+        "source": { "CylinderPrim": { "radius": 0.3, "height": 1.8, "segments": 16 } }
+      },
+      "Name": { "value": "Walker15 Body" },
+      "Parent": { "entity": "7d0a11000000010f" },
+      "Transform": { "position": [0, 0.9, 0] }
+    }
+  ]
+}
