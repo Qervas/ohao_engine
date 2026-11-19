@@ -10,7 +10,10 @@ an enemy, a reload, a grenade thrown and left to explode. Every command is recor
      world.hash, at every checkpoint;
   2. fresh: a new `ohao serve` process loads the scene and re-issues every command: the same hashes from
      the start. Both loads pass the same `seed`: entity ids are drawn from std::random_device otherwise
-     (ohao/ecs/world.hpp), and world.hash includes the id generator's state.
+     (ohao/ecs/world.hpp), and world.hash includes the id generator's state;
+  3. replaced: that process, its world played, loads the scene again (replace): the first load's world.hash. A
+     replace once kept what the played world left (the creation order, the systems' states, the physics backend's
+     handles, the contacts' ends), so a load's hash depended on what the process had held before.
 
 The two processes run the step two ways (step 4b-5): the first on one thread (OHAO_THREADS=1), the systems of each
 wave in order; the fresh one on every thread, each wave's systems reversed (OHAO_WAVE_ORDER=reverse), every system
@@ -265,6 +268,9 @@ def main():
         fresh = replay(s, r.commands)
         check(fresh == r.hashes, "in a new process: the same world.hash at all %d checkpoints%s"
               % (len(fresh), "" if fresh == r.hashes else " (got %s, want %s)" % (fresh, r.hashes)))
+        # 3. The played world replaced by the scene: as a new process's load.
+        s.tool("scene_load", {"path": SCENE, "replace": True, "seed": SEED})
+        check(hash_of(s) == start_hash, "a load over a played world has a new process's world.hash")
     except RuntimeError as e:
         failures.append(str(e))
         print("  FAIL  " + str(e))

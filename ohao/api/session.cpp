@@ -13,6 +13,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 namespace ohao::api {
 
@@ -154,6 +155,11 @@ bool sceneValidate(Session::Impl& s, const JsonDocument&, const JsonNode& params
     return true;
 }
 
+// The sync systems a load runs: levels expanded, characters spawned, transforms, bodies built.
+void settleLoad(ecs::World& world) {
+    for (const char* name : {"level", "player_spawn", "transform", "physics"}) world.runSync(name);
+}
+
 bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
     SceneLoadParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
@@ -167,11 +173,11 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
             reportAll(ctx, errors);
             return false;
         }
-        std::vector<entt::entity> roots;
-        const entt::registry& reg = s.world.registry();
-        for (auto [e, id] : reg.view<const ecs::EntityId>().each())
-            if (!reg.all_of<ecs::Parent>(e)) roots.push_back(e);
-        for (const entt::entity e : roots) s.world.destroy(e);   // each subtree
+        // Back to the world as installed, not only its entities gone: the systems' states, the input, the step, the
+        // next step's events and the creation order a played world leaves would otherwise reach the new one. The
+        // systems that restore lazily (physics) take the installed state now, on the empty world, not on the scene.
+        ecs::restoreSnapshot(s.world, s.installed);
+        settleLoad(s.world);
         if (s.assets) s.assets->forgetAll();   // the old scene's cooked files unmap; the new one reads its sources
         s.time->setFrame(0);
         dropInjected(s);
@@ -188,10 +194,7 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
     // to it replays exactly: a character standing on a slope stood one float off when the
     // bodies were built only after the snapshot). Nothing else of sync runs (instantiate and the
     // render extract are the next render's).
-    s.world.runSync("level");
-    s.world.runSync("player_spawn");
-    s.world.runSync("transform");
-    s.world.runSync("physics");
+    settleLoad(s.world);
     s.scenePath = p.path.value_or("");
     s.sceneSeed = p.seed;
     const ecs::LoadReport& rep = r.value();
@@ -1219,6 +1222,9 @@ Session::Session(ecs::World& world, const reflect::TypeRegistry& types, std::sha
     // A system keeps the whole world and goes back to it through these types (WorldSnapshots: the slice's round
     // start; ECS system code has no reflection of its own).
     ecs::installWorldSnapshots(world, types);
+    if (world.idCount() != 0 || world.registry().storage<entt::entity>().in_use() != 0)
+        throw std::logic_error("api::Session: a session starts on a world with no entity");
+    ecs::takeSnapshot(world, types, m->installed);
 }
 Session::~Session() = default;
 

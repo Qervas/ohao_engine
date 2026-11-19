@@ -239,6 +239,15 @@ auto PhysicsScene::Impl::bodyIdentity() const -> std::vector<std::pair<pb::BodyH
 void PhysicsScene::Impl::sync() {
     const std::size_t built = builds;
     syncBodies();
+    // A simulation with nothing in it is none: the next body starts a backend as a new world's first does, so a world
+    // emptied (a scene replaced) builds its bodies with the handles, and the state, a new process gives them.
+    if (backend && bodies.empty() && players.empty() && parked.empty() && joints.empty() && !savedPending) {
+        backend.reset();
+        entityOf.clear();
+        pairs.clear();
+        dormant = 0;
+        kinematicMoved.clear();
+    }
     if (builds != built && backend)
         for (auto& [e, p] : players) {
             if (!p.placed || !reg.valid(e)) continue;

@@ -72,6 +72,10 @@ struct Session::Impl {
     std::vector<const TypeInfo*> saved;          // the subset written to files
     std::vector<std::string_view> savedNames;    // for "did you mean"
     std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
+    // The world as its host installed it, before any scene: no entity, every system's state, the input, the step and
+    // the events as a new process has them. scene.load with replace goes back to it, so a scene loads to the same
+    // world.hash whatever the session held before.
+    ecs::Snapshot installed;
     ecs::Snapshot hashScratch;                                     // world.hash's capture, reused
     ecs::WorldDiff diffScratch;                                    // world.diff's result, reused
 

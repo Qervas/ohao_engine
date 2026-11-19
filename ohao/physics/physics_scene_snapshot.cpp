@@ -30,6 +30,11 @@ std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
 void PhysicsScene::Impl::restoreSimulation(const std::shared_ptr<const void>& state) {
     savedPending = std::static_pointer_cast<const SavedSimulation>(state);
     restoredSinceSpawn = true;
+    // The contacts of the world before the restore neither go on nor end in the restored one: the bodies the restore
+    // removed go without a contact or trigger end in the next step's events (the snapshot's own come back with its
+    // simulation).
+    pairs.clear();
+    dormant = 0;
 }
 
 void PhysicsScene::Impl::hashSimulation(StateHash& h) const {

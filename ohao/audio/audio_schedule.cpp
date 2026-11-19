@@ -797,6 +797,7 @@ std::shared_ptr<const void> AudioSchedule::saveState() const { return std::make_
 void AudioSchedule::restoreState(const std::shared_ptr<const void>& state) {
     if (!state) return;
     m->s = *static_cast<const Impl::State*>(state.get());
+    m->refreshBank();   // the restored world's bank (another scene's snapshot names another), which shapes the state
     m->shapeState();
     m->restored = true;
 }
