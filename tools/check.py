@@ -28,8 +28,10 @@ Steps (sub-project 4 spec, "One entry point"):
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
-  6. the kernel log read for NVIDIA GPU faults (Xid) during the tests: any fails the run
-     (gpuFaults lists them; "unknown" where the log cannot be read);
+  6. the driver's log read for NVIDIA GPU faults during the tests: any fails the run (gpuFaults lists them;
+     "unknown" where the log cannot be read). Linux: the kernel log's Xid lines (journalctl). Windows: the System
+     event log's events from the NVIDIA driver (nvlddmkm) and the display driver's timeout resets (Display, 4101)
+     (wevtutil);
   7. the verdict: <out>/check.json, also printed as the last line of stdout.
 
 check.json: {ok, labels, build: {ok, seconds, tail?}, doctor, tests: [{name, labels, ok,
@@ -41,6 +43,9 @@ Labels (cmake/ohao_tests.cmake): quick and gpu (the default set); --all adds gol
 
 Exit code: 0 when the build and every selected test pass, 1 otherwise, 2 on a usage or
 environment error (wrong cmake, missing module).
+
+With MSVC the build runs in the compiler's environment (vcvars64.bat of the Visual Studio that holds the cl.exe
+configure chose), read once and kept in <build>/check/msvc_env.json: the hooks run without it.
 Test-only Python (standard library only); never on an engine path.
 """
 import argparse
@@ -152,14 +157,48 @@ def suite_line(output):
 PROGRESS = re.compile(r"^\s*\d+/\d+ Test\s+#\d+:|^\d+% tests passed")
 
 
-def run_logged(cmd, log, echo):
+def msvc_env(build_dir):
+    """The environment cl.exe needs (INCLUDE, LIB, PATH), when the build is MSVC's and this process lacks it, else
+    None. From vcvars64.bat beside the configured compiler, cached by that file's path and time."""
+    if os.name != "nt" or os.environ.get("INCLUDE"):
+        return None
+    cl = cache_value(build_dir, "CMAKE_CXX_COMPILER")
+    if not cl or Path(cl).name.lower() != "cl.exe":
+        return None
+    vcvars = None
+    for parent in Path(cl).parents:
+        candidate = parent / "Auxiliary" / "Build" / "vcvars64.bat"
+        if candidate.is_file():
+            vcvars = candidate
+            break
+    if vcvars is None:
+        raise EnvError(f"no vcvars64.bat above {cl}: run from a Visual Studio developer prompt")
+    key = f"{vcvars}:{vcvars.stat().st_mtime_ns}"
+    kept = build_dir / "check" / "msvc_env.json"
+    if kept.is_file():
+        try:
+            saved = json.loads(kept.read_text(encoding="utf-8"))
+            if saved.get("key") == key:
+                return saved["env"]
+        except (ValueError, KeyError):
+            pass
+    r = subprocess.run(f'cmd /d /c ""{vcvars}" >nul && set"', capture_output=True, text=True, errors="replace")
+    env = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line and not line.startswith("="))
+    if r.returncode != 0 or "INCLUDE" not in {k.upper() for k in env}:
+        raise EnvError(f"{vcvars} did not set up the compiler's environment")
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_text(json.dumps({"key": key, "env": env}), encoding="utf-8")
+    return env
+
+
+def run_logged(cmd, log, echo, env=None):
     """Runs cmd, writing its output to `log`; returns (rc, text). With echo, CTest's
     one-line-per-test progress is copied to stdout (the failing tests' output stays in the
     log and their tail goes into check.json, so stdout stays short for an agent)."""
     chunks = []
     with open(log, "w", encoding="utf-8", errors="replace") as f:
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace")
+                                text=True, encoding="utf-8", errors="replace", env=env)
         for line in proc.stdout:
             f.write(line)
             chunks.append(line)
@@ -170,12 +209,12 @@ def run_logged(cmd, log, echo):
     return rc, "".join(chunks)
 
 
-def build(cmake, build_dir, config, jobs, out):
+def build(cmake, build_dir, config, jobs, out, env=None):
     t0 = time.perf_counter()
     # Shaders first: a green build must never run stale SPIR-V.
     for target, log in ((["--target", "shaders"], "build_shaders.log"), ([], "build.log")):
         rc, text = run_logged([str(cmake), "--build", str(build_dir), "--config", config,
-                               "--parallel", str(jobs)] + target, out / log, False)
+                               "--parallel", str(jobs)] + target, out / log, False, env)
         if rc != 0:
             return {"ok": False, "seconds": round(time.perf_counter() - t0, 1), "log": log, "tail": tail(text)}
     return {"ok": True, "seconds": round(time.perf_counter() - t0, 1)}
@@ -374,11 +413,47 @@ def summarize(junit, labels):
 OUTPUT_FLAGS = ["--output-on-failure", "--test-output-size-passed", "65536",
                 "--test-output-size-failed", "1048576", "--test-output-truncation", "head"]
 
+# Windows: what the NVIDIA driver logs (nvlddmkm: its Xid-like faults) and the display driver's timeout recovery
+# (TDR: Display, event 4101) in the System log.
+WINDOWS_FAULTS = "(System[Provider[@Name='nvlddmkm']] or System[Provider[@Name='Display'] and EventID=4101])"
+
+
+def windows_gpu_faults_since(t0):
+    """[one line per event] the System event log holds since t0, or None when it cannot be read."""
+    wevtutil = shutil.which("wevtutil")
+    if wevtutil is None:
+        return None
+    since = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t0))
+    query = f"*[{WINDOWS_FAULTS} and System[TimeCreated[@SystemTime>='{since}']]]"
+    cmd = [wevtutil, "qe", "System", f"/q:{query}", "/f:xml"]   # XML: the text format's labels are localized
+    if wevtutil.lower().endswith((".bat", ".cmd")):
+        cmd = ["cmd", "/d", "/c"] + cmd
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:
+        return None
+    try:
+        root = ET.fromstring("<Events>" + r.stdout + "</Events>")
+    except ET.ParseError:
+        return None
+    ns = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
+    events = []
+    for e in root.findall("e:Event", ns):
+        provider = e.find("e:System/e:Provider", ns)
+        when = e.find("e:System/e:TimeCreated", ns)
+        data = " ".join((d.text or "").strip() for d in e.findall("e:EventData/e:Data", ns) if d.text)
+        events.append(f"{when.get('SystemTime') if when is not None else '?'} "
+                      f"{provider.get('Name') if provider is not None else '?'} "
+                      f"{e.findtext('e:System/e:EventID', '?', ns)}: {data[:300]}")
+    return events
+
+
 def gpu_faults_since(t0):
-    """NVIDIA's GPU faults (Xid lines) the kernel logged since t0 (epoch seconds), or None when the
-    kernel log cannot be read (not Linux, no journalctl, no permission). A test can pass while the GPU
-    faults under it (a hung channel the driver recovered, a firmware error before a crash), so a run
-    with any fault fails whatever the tests said."""
+    """NVIDIA's GPU faults the driver logged since t0 (epoch seconds), or None when its log cannot be read (no
+    journalctl or wevtutil, no permission). Linux: the kernel's Xid lines; Windows: windows_gpu_faults_since. A test
+    can pass while the GPU faults under it (a hung channel the driver recovered, a firmware error before a crash), so
+    a run with any fault fails whatever the tests said."""
+    if os.name == "nt":
+        return windows_gpu_faults_since(t0)
     if not sys.platform.startswith("linux") or shutil.which("journalctl") is None:
         return None
     r = subprocess.run(["journalctl", "-k", "--no-pager", "-o", "short-iso", "--since", "@%d" % int(t0)],
@@ -434,6 +509,7 @@ def main(argv=None):
         python = (cache_value(build_dir, "Python3_EXECUTABLE") or cache_value(build_dir, "_Python3_EXECUTABLE")
                   or sys.executable)
         check_modules(python, labels)
+        compiler_env = None if args.no_build else msvc_env(build_dir)
     except EnvError as e:
         result["error"] = str(e)
         print(f"check: {e}", file=sys.stderr)
@@ -469,7 +545,7 @@ def main(argv=None):
         result["build"] = {"ok": True, "skipped": True}
     else:
         print(f"check: building ({args.config}, {jobs} jobs; shaders first) ...", flush=True)
-        result["build"] = build(cmake, build_dir, args.config, jobs, out)
+        result["build"] = build(cmake, build_dir, args.config, jobs, out, compiler_env)
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
@@ -529,9 +605,9 @@ def main(argv=None):
     passed = sum(1 for t in result["tests"] if t["ok"])
     result["counts"] = {"tests": n, "passed": passed, "failed": n - passed}
     faults = gpu_faults_since(started)
-    result["gpuFaults"] = faults if faults is not None else "unknown: the kernel log could not be read"
+    result["gpuFaults"] = faults if faults is not None else "unknown: the driver's log could not be read"
     if faults:
-        print(f"check: {len(faults)} GPU fault(s) in the kernel log during the run:", flush=True)
+        print(f"check: {len(faults)} GPU fault(s) in the driver's log during the run:", flush=True)
         for line in faults[:20]:
             print("  " + line, flush=True)
     result["ok"] = result["build"]["ok"] and n > 0 and passed == n and not faults

@@ -19,6 +19,16 @@
 #include <sched.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <cwchar>
 #endif
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -135,6 +145,12 @@ void pinTo(const std::vector<int>& cpus) {
     CPU_ZERO(&set);
     for (const int c : cpus) CPU_SET(c, &set);
     if (pthread_setaffinity_np(pthread_self(), sizeof set, &set) != 0)
+        OHAO_LOG(Warn, runtime, "jobs: could not pin a thread to {} CPUs", cpus.size());
+#elif defined(_WIN32)
+    if (cpus.empty()) return;
+    DWORD_PTR mask = 0;   // processor group 0's (core/jobs/topology.hpp)
+    for (const int c : cpus) mask |= DWORD_PTR{1} << c;
+    if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0)
         OHAO_LOG(Warn, runtime, "jobs: could not pin a thread to {} CPUs", cpus.size());
 #else
     (void)cpus;
@@ -265,6 +281,10 @@ void Pool::start() {
             char name[16];
             std::snprintf(name, sizeof name, "ohao-%c%d", w->group == kP ? 'p' : 'e', w->index);
             pthread_setname_np(pthread_self(), name);
+#elif defined(_WIN32)
+            wchar_t name[16];
+            std::swprintf(name, 16, L"ohao-%c%d", w->group == kP ? L'p' : L'e', w->index);
+            SetThreadDescription(GetCurrentThread(), name);
 #endif
             workerLoop(w);
         });

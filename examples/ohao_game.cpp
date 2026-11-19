@@ -90,7 +90,7 @@ const reflect::TypeRegistry& engineTypes() {
 
 int main(int argc, char** argv) {
     std::string gameError;
-    g_slice = ohao::game::loadModule(ohao::game::executableDir() / "libohao_slice.so", gameError);
+    g_slice = ohao::game::loadModule(ohao::game::builtModule("slice"), gameError);
     if (!g_slice) {
         std::cerr << "[ohao_game] " << gameError << std::endl;
         return 1;

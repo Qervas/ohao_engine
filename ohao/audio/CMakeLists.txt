@@ -12,7 +12,7 @@ target_compile_features(ohao_audio_mixer PUBLIC cxx_std_20)
 target_link_libraries(ohao_audio_mixer PUBLIC ohao_core ohao_audio_bank miniaudio glm)
 # miniaudio's platform backends.
 find_package(Threads REQUIRED)
-target_link_libraries(ohao_audio_mixer PUBLIC Threads::Threads dl m)
+target_link_libraries(ohao_audio_mixer PUBLIC Threads::Threads ${CMAKE_DL_LIBS} $<$<NOT:$<PLATFORM_ID:Windows>>:m>)
 
 ohao_add_module(audio DEPENDS ecs visual animation physics LINKS ohao_audio_bank
     SOURCES audio_schedule.cpp audio_schedule.hpp components.hpp events.hpp module.cpp module.hpp storage.cpp types.cpp

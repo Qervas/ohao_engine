@@ -159,6 +159,6 @@ const game::Module& module() {
 
 } // namespace ohao::sample
 
-extern "C" __attribute__((visibility("default"))) const ohao::game::Module* ohao_game_module() {
+OHAO_GAME_ENTRY const ohao::game::Module* ohao_game_module() {
     return &ohao::sample::module();
 }

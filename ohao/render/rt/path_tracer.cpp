@@ -236,7 +236,7 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
 
     // The images at the new resolution; the old ones are retired.
     destroyImages();
-    createImages();
+    if (!createImages()) OHAO_LOG(Error, render, "PathTracer: failed to create the images at {}x{}", m_width, m_height);
 
 #ifdef OHAO_DLSS_ENABLED
     // Render/output res changed → the DLSS feature (created for the old dims) is
@@ -315,7 +315,7 @@ void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
     // Render resolution changed (e.g. first switch into a DLSS upscaling preset).
     // Reallocate the render-target images at the new render res.
     destroyImages();
-    createImages();
+    if (!createImages()) OHAO_LOG(Error, render, "PathTracer: failed to create the images at {}x{}", m_width, m_height);
 
 #ifdef OHAO_DLSS_ENABLED
     // The DLSS feature (if any) was created for the old dims — force a fresh

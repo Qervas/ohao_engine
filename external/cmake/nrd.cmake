@@ -14,6 +14,11 @@ set(NRD_EMBEDS_DXBC_SHADERS        OFF CACHE BOOL "" FORCE)
 set(NRD_EMBEDS_DXIL_SHADERS        OFF CACHE BOOL "" FORCE)
 set(NRD_EMBEDS_SPIRV_SHADERS       ON  CACHE BOOL "" FORCE)
 set(NRD_STATIC_LIBRARY             ON  CACHE BOOL "" FORCE)
+# NRD's SPIR-V from ShaderMake's pinned DXC (v1.8.2505, downloaded), never a Vulkan SDK's: the SDK 1.4.363's DXC
+# emits SPV_KHR_compute_shader_derivatives for NRD's compute derivatives, a device extension the engine does not
+# enable (VUID-VkShaderModuleCreateInfo-pCode-08740/08742). The same DXC on every platform.
+set(SHADERMAKE_FIND_DXC_VK OFF CACHE BOOL "" FORCE)
+unset(SHADERMAKE_DXC_VK_PATH CACHE)
 
 # Pin NRD normal+roughness encoding to R10G10B10A2_UNORM (rotated oct + sign-in-roughness
 # + 2-bit materialID). This is NRD's upstream default, but making it explicit protects
@@ -57,19 +62,20 @@ endif()
 # knob to disable this, and simply appending -Wno-error is shadowed by the
 # later -Werror in NRI_Shared's PUBLIC INTERFACE. Surgically strip -Werror
 # out of NRI_Shared's compile options here — affects only NRI's own compiles,
-# leaves OHAO's own Werror policy (if any) untouched.
-foreach(nri_tgt NRI NRI_Shared NRI_VK NRI_Validation)
+# leaves OHAO's own Werror policy (if any) untouched. MSVC's /WX the same, and
+# NRD's own: MSVC 14.52 warns (C4834) on MathLib's discarded [[nodiscard]] results.
+foreach(nri_tgt NRD NRI NRI_Shared NRI_VK NRI_Validation)
     if(TARGET ${nri_tgt})
         get_target_property(_opts ${nri_tgt} COMPILE_OPTIONS)
         if(_opts)
             # -Werror lives inside a generator-expression list; filter it out
             # (works because CMake stores options as a ;-list internally).
-            list(REMOVE_ITEM _opts "-Werror")
+            list(REMOVE_ITEM _opts "-Werror" "/WX")
             set_target_properties(${nri_tgt} PROPERTIES COMPILE_OPTIONS "${_opts}")
         endif()
         get_target_property(_iopts ${nri_tgt} INTERFACE_COMPILE_OPTIONS)
         if(_iopts)
-            list(REMOVE_ITEM _iopts "-Werror")
+            list(REMOVE_ITEM _iopts "-Werror" "/WX")
             set_target_properties(${nri_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_iopts}")
         endif()
     endif()

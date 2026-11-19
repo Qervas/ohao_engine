@@ -21,6 +21,14 @@
 // follow the engine's in the catalogue.
 #include "ecs/module.hpp"
 
+// A game's entry, the one symbol a host looks up (game/loader.hpp), exported from its shared library:
+//   OHAO_GAME_ENTRY const ohao::game::Module* ohao_game_module() { return &module(); }
+#if defined(_WIN32)
+#define OHAO_GAME_ENTRY extern "C" __declspec(dllexport)
+#else
+#define OHAO_GAME_ENTRY extern "C" __attribute__((visibility("default")))
+#endif
+
 namespace ohao::game {
 
 using Module = ecs::Module;

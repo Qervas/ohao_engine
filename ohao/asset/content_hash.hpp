@@ -8,6 +8,10 @@
 #include <span>
 #include <string>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
 namespace ohao {
 
 struct ContentHash {
@@ -72,8 +76,14 @@ public:
 private:
     static constexpr uint64_t kA = 0x9E3779B97F4A7C15ull, kB = 0xD6E8FEB86659FD93ull, kC = 0xA0761D6478BD642Full;
     [[nodiscard]] static uint64_t fold(uint64_t x, uint64_t y) noexcept {
+#if defined(_MSC_VER) && !defined(__clang__)
+        uint64_t hi = 0;
+        const uint64_t lo = _umul128(x, y, &hi);   // the 128-bit product, as __int128's
+        return lo ^ hi;
+#else
         const unsigned __int128 r = static_cast<unsigned __int128>(x) * y;
         return static_cast<uint64_t>(r) ^ static_cast<uint64_t>(r >> 64);
+#endif
     }
     [[nodiscard]] static uint64_t rotl(uint64_t x, int k) noexcept { return (x << k) | (x >> (64 - k)); }
     [[nodiscard]] static uint64_t load(const unsigned char* p) noexcept {

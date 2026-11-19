@@ -113,9 +113,14 @@ void emit(Level level, Channel channel, std::format_string<Args...> fmt, Args&&.
 }
 } // namespace detail
 
+#if defined(_WIN32) && defined(OHAO_GAME_MODULE)
+// A game module on Windows has its own copy of every inline variable (game/loader.hpp): it asks the engine's level.
+[[nodiscard]] inline bool enabled(Level l) noexcept { return static_cast<uint8_t>(l) >= static_cast<uint8_t>(level()); }
+#else
 [[nodiscard]] inline bool enabled(Level level) noexcept {
     return static_cast<uint8_t>(level) >= detail::g_threshold.load(std::memory_order_relaxed);
 }
+#endif
 
 } // namespace ohao::log
 

@@ -41,7 +41,7 @@
 //                 created; 3 without a window or GPU.
 //   every command: [--root DIR]   the project root asset paths are relative to (default: .)
 //   every command: [--game slice|none|<module.so>]   the game after the engine's systems (default: the slice,
-//                 libohao_slice.so beside the executable, loaded at start: game/loader.hpp)
+//                 its module beside the executable, loaded at start: game/loader.hpp)
 //
 // Output: one JSON document on stdout, {"result": ...} or {"error": {code, message,
 // data}}. `run` without a script prints {"result": {method: result, ...}} for the
@@ -224,7 +224,7 @@ struct Args {
     std::string error;
 };
 
-// --game, for every command: `slice` (the default: libohao_slice.so beside the executable), a module's path, or
+// --game, for every command: `slice` (the default: the slice's module beside the executable, game::builtModule), a module's path, or
 // `none` (an engine-only world). Taken out of argv before the command reads its options. False with `error` set when
 // the module does not load.
 bool loadGame(std::vector<char*>& args, std::string& error) {
@@ -240,7 +240,7 @@ bool loadGame(std::vector<char*>& args, std::string& error) {
             break;
         }
     if (game == "none") return true;
-    const std::filesystem::path path = game == "slice" ? game::executableDir() / "libohao_slice.so" : std::filesystem::path(game);
+    const std::filesystem::path path = game == "slice" ? game::builtModule("slice") : std::filesystem::path(game);
     g_module = game::loadModule(path, error);
     g_game = g_module ? g_module->module : nullptr;
     return g_module != nullptr;

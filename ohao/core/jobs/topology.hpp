@@ -1,8 +1,9 @@
 #pragma once
 // The CPU the job pool is shaped to (step 4b, "The pool"): which CPUs are performance cores and which efficiency
-// cores, and which hardware threads share a physical core. Read once, from Linux's sysfs: a hybrid Intel CPU lists
-// its classes in /sys/devices/cpu_core/cpus and /sys/devices/cpu_atom/cpus. Without them the CPU is one class, all
-// performance. Only CPUs in the process's affinity are listed.
+// cores, and which hardware threads share a physical core. On Linux from sysfs: a hybrid Intel CPU lists its classes
+// in /sys/devices/cpu_core/cpus and /sys/devices/cpu_atom/cpus. On Windows from GetLogicalProcessorInformationEx:
+// each core's EfficiencyClass. Without them the CPU is one class, all performance. Only CPUs in the process's affinity
+// are listed.
 #include <string_view>
 #include <vector>
 

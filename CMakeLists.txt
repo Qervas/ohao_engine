@@ -25,7 +25,9 @@ if(MSVC)
     message(STATUS "MSVC ${MSVC_VERSION} toolset=${CMAKE_VS_PLATFORM_TOOLSET}")
 endif()
 
-# Use static CRT (/MT) for consistent linking
+# The static CRT (/MT), as DLSS's NGX loader is linked (nvsdk_ngx_s.lib). A game module has its own copy of it
+# (game/loader.hpp); the UCRT allocates from the process heap in every copy, so memory crosses between the host and a
+# game either way, and a game reaches no other CRT state (stdio, locale) through the engine.
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -103,7 +105,7 @@ target_include_directories(ohao_stb_image PUBLIC ${stb_SOURCE_DIR})
 add_library(ohao_bc7enc STATIC ${CMAKE_SOURCE_DIR}/external/bc7enc/bc7enc.cpp ${CMAKE_SOURCE_DIR}/external/bc7enc/rgbcx.cpp)
 target_include_directories(ohao_bc7enc PUBLIC ${CMAKE_SOURCE_DIR}/external/bc7enc)
 target_compile_definitions(ohao_bc7enc PRIVATE RGBCX_USE_SMALLER_TABLES=1)
-target_compile_options(ohao_bc7enc PRIVATE -w -fno-strict-aliasing)
+target_compile_options(ohao_bc7enc PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-strict-aliasing>)
 set_target_properties(ohao_bc7enc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(external)
@@ -135,6 +137,8 @@ endif()
 
 # The harnesses and gates that are not one suite's executable (needs every target above).
 ohao_register_harness_tests()
+# What the hosts export to the games (MSVC; needs every game and host above).
+ohao_link_games()
 
 # Dependencies point down only (system design 4.1): a link or include up a layer fails configure.
 include(cmake/ohao_layers.cmake)

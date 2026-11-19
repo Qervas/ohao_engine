@@ -16,8 +16,7 @@ target_compile_features(ohao PRIVATE cxx_std_20)
 target_link_libraries(ohao PRIVATE ohao_host ohao_rpc)
 # A game is a module loaded at run time (game/loader.hpp): the executable exports the engine's symbols for it, and
 # building ohao builds the slice beside it.
-set_target_properties(ohao PROPERTIES ENABLE_EXPORTS ON)
-add_dependencies(ohao ohao_slice)
+ohao_game_host(ohao)
 if(MSVC)
     target_link_options(ohao PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()

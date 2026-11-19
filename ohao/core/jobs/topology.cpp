@@ -8,12 +8,21 @@
 
 #if defined(__linux__)
 #include <sched.h>
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 namespace ohao::jobs {
 
 namespace {
 
+#if !defined(_WIN32)
 std::string readLine(const std::string& path) {
     std::ifstream f(path);
     std::string line;
@@ -35,6 +44,7 @@ std::vector<int> allowedCpus() {
     if (cpus.empty()) cpus.push_back(0);
     return cpus;
 }
+#endif
 
 std::vector<int> only(const std::vector<int>& cpus, const std::vector<int>& allowed) {
     std::vector<int> out;
@@ -72,6 +82,60 @@ std::vector<int> parseCpuList(std::string_view text) {
     return out;
 }
 
+#if defined(_WIN32)
+// Windows numbers a CPU by its bit in processor group 0 (the pool pins with SetThreadAffinityMask: a machine of up to
+// 64 hardware threads). GetLogicalProcessorInformationEx lists each physical core with its hardware threads and its
+// EfficiencyClass: the highest class is performance, any lower one efficiency (an Intel hybrid CPU: P 1, E 0).
+Topology readTopology() {
+    std::vector<int> allowed;
+    DWORD_PTR process = 0, system = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process, &system))
+        for (int c = 0; c < 64; ++c)
+            if (process & (DWORD_PTR{1} << c)) allowed.push_back(c);
+    if (allowed.empty()) allowed.push_back(0);
+
+    struct Core {
+        int cls;
+        std::vector<int> cpus;
+    };
+    std::vector<Core> cores;
+    DWORD bytes = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+    std::vector<char> buffer(bytes);
+    auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
+    if (bytes && GetLogicalProcessorInformationEx(RelationProcessorCore, info, &bytes)) {
+        for (DWORD at = 0; at < bytes;) {
+            const auto* item = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + at);
+            const PROCESSOR_RELATIONSHIP& core = item->Processor;
+            Core c{core.EfficiencyClass, {}};
+            for (WORD g = 0; g < core.GroupCount; ++g)
+                if (core.GroupMask[g].Group == 0)
+                    for (int bit = 0; bit < 64; ++bit)
+                        if (core.GroupMask[g].Mask & (KAFFINITY{1} << bit)) c.cpus.push_back(bit);
+            c.cpus = only(c.cpus, allowed);
+            if (!c.cpus.empty()) cores.push_back(std::move(c));
+            at += item->Size;
+        }
+    }
+    Topology t;
+    if (cores.empty()) {   // nothing listed: one class, every CPU, each its own core
+        t.pCpus = allowed;
+        t.pCoreFirsts = allowed;
+        return t;
+    }
+    int top = 0;
+    for (const Core& c : cores) top = std::max(top, c.cls);
+    for (const Core& c : cores) {
+        std::vector<int>& into = c.cls == top ? t.pCpus : t.eCpus;
+        into.insert(into.end(), c.cpus.begin(), c.cpus.end());
+        if (c.cls == top) t.pCoreFirsts.push_back(c.cpus.front());
+    }
+    std::sort(t.pCpus.begin(), t.pCpus.end());
+    std::sort(t.eCpus.begin(), t.eCpus.end());
+    std::sort(t.pCoreFirsts.begin(), t.pCoreFirsts.end());
+    return t;
+}
+#else
 Topology readTopology() {
     const std::vector<int> allowed = allowedCpus();
     Topology t;
@@ -93,5 +157,7 @@ Topology readTopology() {
     }
     return t;
 }
+
+#endif
 
 } // namespace ohao::jobs

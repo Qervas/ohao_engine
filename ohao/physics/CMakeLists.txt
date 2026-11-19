@@ -9,8 +9,10 @@ if(TARGET Jolt)
     # already (ohao_machine, cmake/ohao_machine.cmake).
     target_link_libraries(ohao_physics PRIVATE Jolt)
     target_compile_definitions(ohao_physics PRIVATE OHAO_HAS_JOLT=1)
-    # JoltJobs derives from a Jolt class, and Jolt is built without RTTI.
-    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/private/backend/jolt/jolt_jobs.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    # JoltJobs derives from a Jolt class, and Jolt is built without RTTI; the module's precompiled header is built with
+    # it, so this unit parses its own.
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/private/backend/jolt/jolt_jobs.cpp PROPERTIES COMPILE_OPTIONS
+        "$<IF:$<CXX_COMPILER_ID:MSVC>,/GR-,-fno-rtti>" SKIP_PRECOMPILE_HEADERS ON)
     message(STATUS "ohao_physics: Jolt Physics backend enabled")
 else()
     target_compile_definitions(ohao_physics PRIVATE OHAO_HAS_JOLT=0)

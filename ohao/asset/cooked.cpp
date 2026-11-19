@@ -6,10 +6,23 @@
 #include <cstring>
 #include <fstream>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <process.h>
+#include <windows.h>
+#define OHAO_PID() _getpid()
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#define OHAO_PID() ::getpid()
+#endif
 
 namespace ohao::cooked {
 
@@ -64,7 +77,7 @@ public:
     [[nodiscard]] VoidResult<> write(const std::filesystem::path& path) {
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
-        const std::filesystem::path temp = path.string() + "." + std::to_string(::getpid()) + ".tmp";
+        const std::filesystem::path temp = path.string() + "." + std::to_string(OHAO_PID()) + ".tmp";
         {
             std::ofstream out(temp, std::ios::binary | std::ios::trunc);
             out.write(reinterpret_cast<const char*>(m_bytes.data()), static_cast<std::streamsize>(m_bytes.size()));
@@ -102,6 +115,34 @@ template <class T> std::span<const T> arrayAt(std::span<const uint8_t> bytes, ui
 
 } // namespace
 
+#ifdef _WIN32
+// The view keeps the file mapped once its handles are closed. A mapped file cannot be replaced (a cooked file's name
+// is its content, so it never is).
+Result<std::shared_ptr<const Mapping>> Mapping::open(const std::filesystem::path& path) {
+    using R = Result<std::shared_ptr<const Mapping>>;
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return R::err("cannot open '" + path.string() + "'");
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) {
+        CloseHandle(file);
+        return R::err("'" + path.string() + "' is empty");
+    }
+    const HANDLE section = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    CloseHandle(file);
+    const void* p = section ? MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0) : nullptr;
+    if (section) CloseHandle(section);
+    if (!p) return R::err("cannot map '" + path.string() + "'");
+    std::shared_ptr<Mapping> m(new Mapping());
+    m->m_data = static_cast<const uint8_t*>(p);
+    m->m_size = static_cast<std::size_t>(size.QuadPart);
+    return R::ok(std::move(m));
+}
+
+Mapping::~Mapping() {
+    if (m_data) UnmapViewOfFile(m_data);
+}
+#else
 Result<std::shared_ptr<const Mapping>> Mapping::open(const std::filesystem::path& path) {
     using R = Result<std::shared_ptr<const Mapping>>;
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -123,6 +164,7 @@ Result<std::shared_ptr<const Mapping>> Mapping::open(const std::filesystem::path
 Mapping::~Mapping() {
     if (m_data) ::munmap(const_cast<uint8_t*>(m_data), m_size);
 }
+#endif
 
 VoidResult<> writeModel(const std::filesystem::path& path, std::span<const MeshSource> meshes) {
     Writer w;

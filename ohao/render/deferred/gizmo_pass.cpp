@@ -175,7 +175,7 @@ void GizmoPass::destroyVertexBuffers() {
 
 void GizmoPass::updateGizmoBuffers() {
     destroyVertexBuffers();
-    createVertexBuffers();
+    if (!createVertexBuffers()) OHAO_LOG(Error, render, "GizmoPass: Failed to create vertex buffers");
 }
 
 } // namespace ohao
