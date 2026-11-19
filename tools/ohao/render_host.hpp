@@ -14,6 +14,10 @@
 //
 // Declare the RenderHost before the World: the World's systems hold references into its RenderScene and
 // release their meshes and materials when it is destroyed, so the renderer must outlive it.
+//
+// With the render thread (setRenderThread(true), `--render-thread on`; render/render_thread.hpp) it starts with the
+// renderer; every capture, render.settings and render.stats then runs through RenderThread::run, and `ohao run
+// --uncapped` publishes its frames to it.
 #include "api/session.hpp"
 #include "ecs/world.hpp"
 
@@ -22,6 +26,7 @@
 #include <vector>
 
 namespace ohao { class VulkanRenderer; }
+namespace ohao::render { class RenderThread; }
 
 namespace ohao::host {
 
@@ -34,6 +39,8 @@ public:
 
     // The world captures render (once; before the first capture).
     void bind(ecs::World& world) noexcept { m_world = &world; }
+    // A render thread for the renderer, from its start (before the first capture).
+    void setRenderThread(bool on) noexcept { m_threaded = on; }
 
     [[nodiscard]] api::HostKind kind() const noexcept override { return m_kind; }
     // render.capture (api::Session::setHost). The default size is 1920x1080.
@@ -47,16 +54,24 @@ public:
     // engine.info's gpu, once the first capture started the renderer.
     [[nodiscard]] std::optional<GpuInfo> gpuInfo() override;
 
-    // The renderer, once started; null before the first capture or if it failed.
+    // The renderer, once started; null before the first capture or if it failed. Called through renderThread()'s
+    // run.
     [[nodiscard]] VulkanRenderer* renderer() noexcept { return m_renderer.get(); }
+    // Its render thread (running only with setRenderThread(true)); null with no renderer.
+    [[nodiscard]] render::RenderThread* renderThread() noexcept { return m_renderThread.get(); }
     // The last capture's whole frame, RGBA8 (before region and preview), as read back.
     [[nodiscard]] const std::vector<uint8_t>& lastPixels() const noexcept { return m_lastPixels; }
 
 private:
+    // capture() once the renderer runs, holding it.
+    [[nodiscard]] api::RenderOutcome captureHeld(const api::RenderRequest& request);
+
     std::vector<uint8_t> m_lastPixels;
     api::HostKind m_kind;
     ecs::World* m_world{nullptr};
     std::unique_ptr<VulkanRenderer> m_renderer;
+    std::unique_ptr<render::RenderThread> m_renderThread;   // after the renderer: stopped before it goes
+    bool m_threaded{false};
     bool m_failed{false};
     int m_captures{0};
     float m_defaultEv100{render::kDefaultEv100};   // read from the renderer at startup; a capture without one uses it

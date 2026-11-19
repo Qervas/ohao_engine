@@ -182,6 +182,7 @@ public:
     void resetStats();
     std::string describe() const;
     const Config& config() const noexcept { return m_config; }
+    [[nodiscard]] int renderCpu() const noexcept { return m_renderCpu; }
 
 private:
     Task* find(Thread* me);
@@ -196,6 +197,7 @@ private:
     Group m_groups[2];
     int m_workers{0};
     int m_gameCpu{-1};
+    int m_renderCpu{-1};
     std::mutex m_injectMutex;
     std::deque<Task*> m_injected[2];
     std::atomic<uint32_t> m_injectedCount{0};
@@ -243,6 +245,7 @@ Pool::Pool(const Config& config) : m_config(config) {
         OHAO_LOG(Warn, runtime, "jobs: {} threads asked, {} available (the game thread and {} workers)", config.threads,
                  available + 1, available);
     if (config.pin != Pin::None && !reserved.empty()) m_gameCpu = reserved.front();
+    if (config.pin != Pin::None && reserved.size() > 1) m_renderCpu = reserved[1];
 
     auto game = std::make_unique<Thread>();
     game->frame = true;
@@ -520,6 +523,7 @@ std::string Pool::describe() const {
     };
     std::string s = std::to_string(m_threads.size()) + " threads: the game thread on " +
                     (m_gameCpu >= 0 ? "CPU " + std::to_string(m_gameCpu) : std::string("any CPU"));
+    s += ", the render thread's " + (m_renderCpu >= 0 ? "CPU " + std::to_string(m_renderCpu) : std::string("any"));
     s += ", " + std::to_string(m_groups[kP].members) + " P-workers";
     if (m_groups[kP].members) s += " on " + list(m_threads[1]->cpus.size() > 1 || m_config.pin != Pin::Cpu ? m_threads[1]->cpus : std::vector<int>{});
     s += ", " + std::to_string(m_groups[kE].members) + " E-workers" + (m_config.eFrame ? "" : " (background only)");
@@ -625,5 +629,28 @@ void submit(Task* task) { pool().push(task); }
 void wait(Counter& counter) { pool().wait(counter); }
 
 Priority currentPriority() noexcept { return tlsPriority; }
+
+struct Dedicated::Impl {
+    std::thread thread;
+};
+
+Dedicated::Dedicated(const char* name, std::function<void()> body) : m(std::make_unique<Impl>()) {
+    const int cpu = pool().renderCpu();   // starts the pool on this thread first: it stays the game thread
+    m->thread = std::thread([cpu, name = std::string(name), body = std::move(body)] {
+        if (cpu >= 0) pinTo({cpu});
+#if defined(__linux__)
+        pthread_setname_np(pthread_self(), name.substr(0, 15).c_str());
+#elif defined(_WIN32)
+        SetThreadDescription(GetCurrentThread(), std::wstring(name.begin(), name.end()).c_str());
+#endif
+        body();
+    });
+}
+
+Dedicated::~Dedicated() { join(); }
+
+void Dedicated::join() {
+    if (m && m->thread.joinable()) m->thread.join();
+}
 
 } // namespace ohao::jobs

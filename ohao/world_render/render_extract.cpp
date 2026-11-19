@@ -1,3 +1,4 @@
+#include "world_render/private/scene_loads.hpp"
 #include "world_render/private/systems.hpp"
 #include "world_render/components.hpp"
 #include "world_render/private/components.hpp"
@@ -7,7 +8,6 @@
 #include "ecs/components.hpp"
 #include "visual/components.hpp"
 #include "visual/scene_view.hpp"
-#include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 
 #include <algorithm>
@@ -43,12 +43,14 @@ uint64_t creationSeq(const entt::registry& reg, entt::entity e) {
 
 // State shared by the system and the registry signals. Lives as long as the system
 // (World::m_systems is destroyed before World::m_registry, so the destructor can
-// still disconnect). Everything it gives the renderer goes into the world's frame packet; it reads the scene's
-// meshes and registers a skinned entity's own (a load).
+// still disconnect). Everything it gives the renderer goes into the world's frame packet; which meshes are live it
+// asks the world's loads (world_render/private/scene_loads.hpp), through which it registers a skinned entity's own
+// mesh (a load).
 class ExtractState {
 public:
-    ExtractState(World& world, render::RenderScene& rs, const AssetResolver& assets)
-        : m_world(world), m_reg(world.registry()), m_rs(rs), m_assets(assets), m_packet(framePacket(world)) {
+    ExtractState(World& world, std::shared_ptr<SceneLoads> loads, const AssetResolver& assets)
+        : m_world(world), m_reg(world.registry()), m_loads(std::move(loads)), m_assets(assets),
+          m_packet(framePacket(world)) {
         entt::registry& reg = m_reg;
         const SignalEffect dirty{.writes = types<RenderDirty>()};
         const SignalEffect released{.writesResources = {"render.releases"}};
@@ -156,11 +158,11 @@ private:
             if (it != m_skinned.end()) m_unskinned.push_back(e);   // released after the instance moves off it
             return mr.mesh;
         }
-        if (it != m_skinned.end() && it->second.base.index == mr.mesh.index && m_rs.meshInfo(it->second.mesh))
+        if (it != m_skinned.end() && it->second.base.index == mr.mesh.index && m_loads->live(it->second.mesh))
             return it->second.mesh;
-        if (it != m_skinned.end()) m_packet.releaseMesh(it->second.mesh);   // after the instance moves off it
-        const render::MeshHandle own = m_rs.registerSkinnedInstance(mr.mesh);
-        if (!m_rs.meshInfo(own)) {
+        if (it != m_skinned.end()) releaseLater(it->second.mesh);   // after the instance moves off it
+        const render::MeshHandle own = m_loads->registerSkinnedInstance(mr.mesh);
+        if (!own.valid()) {
             warnOnce(mr.mesh, "registerSkinnedInstance failed; drawn unskinned");
             m_skinned.erase(e);
             return mr.mesh;
@@ -171,8 +173,13 @@ private:
     void releaseSkinned(entt::entity e) {
         const auto it = m_skinned.find(e);
         if (it == m_skinned.end()) return;
-        m_packet.releaseMesh(it->second.mesh);
+        releaseLater(it->second.mesh);
         m_skinned.erase(it);
+    }
+    // Given back by the frame packet, after the instance changes before it.
+    void releaseLater(render::MeshHandle mesh) {
+        m_packet.releaseMesh(mesh);
+        m_loads->forget(mesh);
     }
 
     render::InstanceDesc describe(entt::entity e, const MeshRenderer& mr, const WorldTransform& wt) {
@@ -264,7 +271,7 @@ private:
     // registration, or default MeshRenderer{}). The entity is skipped -- no slot --
     // and each distinct handle is reported once.
     bool meshUsable(render::MeshHandle h) {
-        if (m_rs.meshInfo(h)) return true;
+        if (m_loads->live(h)) return true;
         warnOnce(h, "unknown or stale mesh handle");
         return false;
     }
@@ -293,7 +300,7 @@ private:
 
     World& m_world;
     entt::registry& m_reg;
-    render::RenderScene& m_rs;
+    std::shared_ptr<SceneLoads> m_loads;
     const AssetResolver& m_assets;
     render::FramePacket& m_packet;   // the world's (world_render/frame_packet.hpp)
     // Instance ids (RenderSlot::slot): the frame packet's, which the scene maps to its table slots.
@@ -315,14 +322,14 @@ private:
 
 } // namespace
 
-void installRenderExtract(World& world, render::RenderScene& scene, const AssetResolver& assets) {
+void installRenderExtract(World& world, std::shared_ptr<SceneLoads> loads, const AssetResolver& assets) {
     auto& reg = world.registry();
     if (reg.ctx().contains<RenderExtractInstalled>()) {
         OHAO_LOG(Warn, ecs, "installRenderExtract called twice on one World; ignored");
         return;
     }
     reg.ctx().emplace<RenderExtractInstalled>();
-    auto state = std::make_shared<ExtractState>(world, scene, assets);
+    auto state = std::make_shared<ExtractState>(world, std::move(loads), assets);
     // After every drawn pose (transforms, interpolation, skeletons, a game's view model before the pose) and the
     // meshes. Exclusive: it reads the registry itself, and emplaces and removes RenderSlot.
     world.addSync("render_extract", [state](SystemContext&) { state->run(); },

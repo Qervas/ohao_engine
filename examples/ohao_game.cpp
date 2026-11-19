@@ -4,13 +4,14 @@
 // Spin turns the cube, its PlayerController walks. No host code moves anything.
 //
 //   ohao_game [scene] [--present immediate|mailbox|fifo] [--vsync] [--latency] [--frames N] [--resize-at F]
-//             [--mode deferred|rt_realtime|rt_offline] [--mute] [--fps N]
+//             [--mode deferred|rt_realtime|rt_offline] [--mute] [--fps N] [--render-thread on|off]
 //
 //   --present: how the window presents (default mailbox; immediate tears for the least latency,
 //   fifo waits for the display; a surface without the mode falls back down that list); --vsync
 //   is --present fifo. --latency draws the measured latency and frame time top left (the same
 //   numbers render.stats reports; sub-project 9). --fps caps the frame rate (default: the display's
-//   refresh rate; 0 uncapped; off under fifo, which the display paces).
+//   refresh rate; 0 uncapped; off under fifo, which the display paces). --render-thread: a render thread records
+//   and presents each frame while the next one steps (render/render_thread.hpp; default on).
 //   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
 //   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
 //   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
@@ -68,7 +69,11 @@ bool argFlag(int argc, char** argv, const char* name) {
 std::string sceneArg(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--frames" || a == "--resize-at" || a == "--mode" || a == "--present" || a == "--fps") { ++i; continue; }
+        if (a == "--frames" || a == "--resize-at" || a == "--mode" || a == "--present" || a == "--fps" ||
+            a == "--render-thread") {
+            ++i;
+            continue;
+        }
         if (a.rfind("--", 0) == 0) continue;
         return a;
     }
@@ -112,6 +117,15 @@ int main(int argc, char** argv) {
     cfg.frameLimit = argInt(argc, argv, "--frames", 0);
     cfg.maxFps = argInt(argc, argv, "--fps", -1);
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--render-thread") != 0) continue;
+        const std::string v = argv[i + 1];
+        if (v != "on" && v != "off") {
+            std::cerr << "[ohao_game] --render-thread is on or off" << std::endl;
+            return 1;
+        }
+        cfg.renderThread = v == "on";
+    }
     cfg.timeMode = TimeMode::realtime;
     cfg.sound = !argFlag(argc, argv, "--mute");   // the world's sounds through the default audio device
     for (int i = 1; i + 1 < argc; ++i) {

@@ -145,4 +145,10 @@ void FramePacket::clear() {
     frameDt.reset();
 }
 
+void FramePacket::moveTo(FramePacket& to) {
+    const std::size_t spheres = m_spheres;
+    std::swap(*this, to);
+    m_spheres = spheres;
+}
+
 } // namespace ohao::render

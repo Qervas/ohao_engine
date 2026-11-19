@@ -43,6 +43,7 @@
 #include "render/deferred/gpu_culling.hpp"
 #include "render/deferred/env_prefilter.hpp"
 #include "render/hud/hud_list.hpp"
+#include "render/owner_thread.hpp"
 
 namespace ohao {
 
@@ -109,22 +110,28 @@ public:
     VulkanRenderer(uint32_t width, uint32_t height);
     ~VulkanRenderer();
 
+    // The thread that may call it now: its maker, until RenderThread (render/render_thread.hpp) moves it. Every
+    // public entry below checks it (render/owner_thread.hpp), but takePresentStamps and the validation counts,
+    // which any thread may read.
+    [[nodiscard]] render::OwnerThread& owner() noexcept { return m_owner; }
+
     // Lifecycle
     [[nodiscard]] bool initialize();
     // Windowed: present into a swapchain on `target`'s surface. Frames end with a
     // blit into the acquired swapchain image; nothing is read back to the CPU.
     [[nodiscard]] bool initialize(const PresentTarget& target);
-    [[nodiscard]] bool isPresenting() const noexcept { return m_swapchain != nullptr; }
+    [[nodiscard]] bool isPresenting() const noexcept { m_owner.check("isPresenting"); return m_swapchain != nullptr; }
     // Sub-project 9: the present mode the surface gave, whether presents are confirmed by the
     // presentation engine (VK_KHR_present_wait), and when each presented frame was presented
     // (gpu/vulkan/present_waiter.hpp), resolved since the last call, oldest first.
     [[nodiscard]] PresentMode presentMode() const noexcept {
+        m_owner.check("presentMode");
         return m_swapchain ? m_swapchain->presentMode() : PresentMode::Fifo;
     }
-    [[nodiscard]] bool presentWaitEnabled() const noexcept { return m_presentWaitEnabled; }
+    [[nodiscard]] bool presentWaitEnabled() const noexcept { m_owner.check("presentWaitEnabled"); return m_presentWaitEnabled; }
     [[nodiscard]] std::vector<PresentStamp> takePresentStamps() { return m_presentWaiter.take(); }
     // When the newest frame's command buffers were submitted (framesSubmitted()'s frame).
-    [[nodiscard]] std::chrono::steady_clock::time_point lastSubmitTime() const noexcept { return m_lastSubmitAt; }
+    [[nodiscard]] std::chrono::steady_clock::time_point lastSubmitTime() const noexcept { m_owner.check("lastSubmitTime"); return m_lastSubmitAt; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.
     void setPresentExtent(VkExtent2D extent);
     // The only way to read a frame. requestReadback() marks the next frame render()
@@ -136,6 +143,7 @@ public:
     // image. A path-traced frame with a CPU-side denoiser (OIDN, NRD) is denoised here,
     // from that frame's images.
     void requestReadback() noexcept {
+        m_owner.check("requestReadback");
         m_readbackRequested = true;
         m_previewRequest.reset();
     }
@@ -155,22 +163,24 @@ public:
         uint32_t height{0};
     };
     [[nodiscard]] bool previewOnGpu() const noexcept {
+        m_owner.check("previewOnGpu");
         return m_previewPass != nullptr && m_renderMode == RenderMode::Deferred;
     }
     void requestPreviewReadback(const PreviewRequest& request) noexcept {
+        m_owner.check("requestPreviewReadback");
         m_readbackRequested = true;
         m_previewRequest = request;
     }
     [[nodiscard]] Preview readbackPreview();
     // Frames that copied into their staging buffer: every one of them was requested.
-    [[nodiscard]] uint64_t requestedReadbackCount() const noexcept { return m_requestedReadbacks; }
+    [[nodiscard]] uint64_t requestedReadbackCount() const noexcept { m_owner.check("requestedReadbackCount"); return m_requestedReadbacks; }
     // Submitted frames whose fence has not signalled yet; asks the fences, never waits.
     [[nodiscard]] uint32_t framesInFlight();
     // Frames that reached the queue so far; waitForSubmitted(n) returns once the n-th has
     // finished on the GPU (at once for 0, or for a frame whose slot was reused since). A
     // capture waits so for the frames queued before the one it reads, then times that
     // frame's readback alone.
-    [[nodiscard]] uint64_t framesSubmitted() const noexcept { return m_framesSubmitted; }
+    [[nodiscard]] uint64_t framesSubmitted() const noexcept { m_owner.check("framesSubmitted"); return m_framesSubmitted; }
     void waitForSubmitted(uint64_t n);
     void shutdown();
 
@@ -180,7 +190,7 @@ public:
     void resize(uint32_t width, uint32_t height);
 
     // Camera
-    [[nodiscard]] Camera& getCamera() { return *m_camera; }
+    [[nodiscard]] Camera& getCamera() { m_owner.check("getCamera"); return *m_camera; }
     // The newest finished frame's GPU time in ms (first pass begin to last pass end); 0
     // when timing is unavailable or no frame has finished.
     [[nodiscard]] float gpuFrameMs() const noexcept;
@@ -204,48 +214,48 @@ public:
         mutable std::mutex mutex;
         std::vector<std::string> first;   // capped
     };
-    [[nodiscard]] const Camera& getCamera() const { return *m_camera; }
+    [[nodiscard]] const Camera& getCamera() const { m_owner.check("getCamera"); return *m_camera; }
 
 
     // Vulkan handles for out-of-tree consumers (render_bench's GPU calibration kernel). Work
     // submitted on the queue must finish before the next render() (the renderer does not
     // synchronize with it).
-    [[nodiscard]] VkDevice getDevice() const noexcept { return m_device; }
-    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return m_physicalDevice; }
+    [[nodiscard]] VkDevice getDevice() const noexcept { m_owner.check("getDevice"); return m_device; }
+    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { m_owner.check("getPhysicalDevice"); return m_physicalDevice; }
     // VK_EXT_mesh_shader is enabled (the meshlet path runs task and mesh shaders).
-    [[nodiscard]] bool meshShadersEnabled() const noexcept { return m_meshShaderEnabled; }
-    [[nodiscard]] VkQueue graphicsQueue() const noexcept { return m_graphicsQueue; }
-    [[nodiscard]] uint32_t graphicsQueueFamily() const noexcept { return m_graphicsQueueFamily; }
+    [[nodiscard]] bool meshShadersEnabled() const noexcept { m_owner.check("meshShadersEnabled"); return m_meshShaderEnabled; }
+    [[nodiscard]] VkQueue graphicsQueue() const noexcept { m_owner.check("graphicsQueue"); return m_graphicsQueue; }
+    [[nodiscard]] uint32_t graphicsQueueFamily() const noexcept { m_owner.check("graphicsQueueFamily"); return m_graphicsQueueFamily; }
 
     // Render mode
     void setRenderMode(RenderMode mode);
-    [[nodiscard]] RenderMode getRenderMode() const { return m_renderMode; }
+    [[nodiscard]] RenderMode getRenderMode() const { m_owner.check("getRenderMode"); return m_renderMode; }
     // Lazy-create the PathTracer for `mode` (avoids dual full-res OOM at 4K).
     [[nodiscard]] bool ensureRTRenderer(RenderMode mode);
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
-    [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
+    [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { m_owner.check("getRTRenderSettings"); return m_rtSettings; }
     // The environment's HDRI scale (the frame packet's view): written into the RT light header every RT frame.
-    [[nodiscard]] float getEnvIntensityScale() const noexcept { return m_envIntensityScale; }
+    [[nodiscard]] float getEnvIntensityScale() const noexcept { m_owner.check("getEnvIntensityScale"); return m_envIntensityScale; }
     void notifyCameraChanged();
     void resetAccumulation();
     /// The render's one seed: the path tracers' base sample index after an accumulation
     /// reset and the deferred path's RT direct light and GI sample seed (with the frame index
     /// since the reset). Kept, so renderers created later get it.
     void setRenderSeed(uint32_t seed);
-    [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
+    [[nodiscard]] uint32_t getRenderSeed() const noexcept { m_owner.check("getRenderSeed"); return m_renderSeed; }
     [[nodiscard]] uint32_t getPathTracerFrameIndex() const;
 
     // The hybrid deferred frame's quality (sub-project 2b spec, "Reference quality"):
     // realtime, or reference (RT shadows from every light, 8 rays a frame, averaged over the
     // frames since the last resetAccumulation). Captures reset; a live window does not
     // average a moving camera.
-    void setRenderQuality(RenderQuality quality) noexcept { m_renderQuality = quality; }
-    [[nodiscard]] RenderQuality renderQuality() const noexcept { return m_renderQuality; }
+    void setRenderQuality(RenderQuality quality) noexcept { m_owner.check("setRenderQuality"); m_renderQuality = quality; }
+    [[nodiscard]] RenderQuality renderQuality() const noexcept { m_owner.check("renderQuality"); return m_renderQuality; }
     // RT direct light in the deferred frame (when ray tracing is supported); off: lighting loops
     // over the lights and CSM shadows the sun.
-    void setRTDirectEnabled(bool on) noexcept { m_rtDirectWanted = on; }
-    [[nodiscard]] bool rtDirectEnabled() const noexcept { return m_rtDirectWanted; }
+    void setRTDirectEnabled(bool on) noexcept { m_owner.check("setRTDirectEnabled"); m_rtDirectWanted = on; }
+    [[nodiscard]] bool rtDirectEnabled() const noexcept { m_owner.check("rtDirectEnabled"); return m_rtDirectWanted; }
 
     // Every quality knob in one value (render/renderer/render_settings.hpp; render.settings). Set it between
     // frames; a GI resolution or CSM size change idles the device and rebuilds those images. renderSettings()
@@ -272,10 +282,10 @@ public:
     [[nodiscard]] std::vector<float> readbackLinear();
 
     // Deferred renderer access (for configuration)
-    [[nodiscard]] DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
+    [[nodiscard]] DeferredRenderer* getDeferredRenderer() { m_owner.check("getDeferredRenderer"); return m_deferredRenderer.get(); }
 
     // Texture manager access
-    [[nodiscard]] BindlessTextureManager* getTextureManager() { return m_textureManager.get(); }
+    [[nodiscard]] BindlessTextureManager* getTextureManager() { m_owner.check("getTextureManager"); return m_textureManager.get(); }
 
     // Ray tracing is available: the RenderScene built its acceleration structures.
     [[nodiscard]] bool isRTSupported() const;
@@ -283,36 +293,40 @@ public:
     // Persistent GPU render world (meshes, materials, instances, lights). Usable
     // between initialize() and shutdown(); after shutdown() the object stays alive
     // but inert (every edit is ignored) until the renderer is destroyed.
-    [[nodiscard]] render::RenderScene& renderScene() { return *m_renderScene; }
-    [[nodiscard]] const GpuAllocator& allocator() const { return m_allocator; }
+    [[nodiscard]] render::RenderScene& renderScene() { m_owner.check("renderScene"); return *m_renderScene; }
+    [[nodiscard]] const GpuAllocator& allocator() const { m_owner.check("allocator"); return m_allocator; }
 
     // Denoiser control
     void        setDenoiseMode(DenoiseMode mode);
-    [[nodiscard]] DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
+    [[nodiscard]] DenoiseMode getDenoiseMode() const { m_owner.check("getDenoiseMode"); return m_denoiseMode; }
 
     // The path tracer's bounces in place of its profile's (a capture's `bounces`); nullopt: the
     // profile's. Re-applied every frame, as the per-frame reset to the profile would drop it.
     void setMaxBouncesOverride(std::optional<uint32_t> bounces) {
+        m_owner.check("setMaxBouncesOverride");
         m_maxBouncesOverride = bounces;
         applyRTRenderSettings();
     }
-    [[nodiscard]] std::optional<uint32_t> maxBouncesOverride() const { return m_maxBouncesOverride; }
+    [[nodiscard]] std::optional<uint32_t> maxBouncesOverride() const { m_owner.check("maxBouncesOverride"); return m_maxBouncesOverride; }
     // Path guiding in place of the profile's (a capture's `guiding`); nullopt: the profile's.
     void setGuidingOverride(std::optional<bool> guiding) {
+        m_owner.check("setGuidingOverride");
         m_guidingOverride = guiding;
         applyRTRenderSettings();
     }
-    [[nodiscard]] std::optional<bool> guidingOverride() const { return m_guidingOverride; }
+    [[nodiscard]] std::optional<bool> guidingOverride() const { m_owner.check("guidingOverride"); return m_guidingOverride; }
     // Caustics in place of the profile's (a capture's `caustics`); nullopt: the profile's.
     void setCausticsOverride(std::optional<bool> caustics) {
+        m_owner.check("setCausticsOverride");
         m_causticsOverride = caustics;
         applyRTRenderSettings();
     }
-    [[nodiscard]] std::optional<bool> causticsOverride() const { return m_causticsOverride; }
+    [[nodiscard]] std::optional<bool> causticsOverride() const { m_owner.check("causticsOverride"); return m_causticsOverride; }
 
-    [[nodiscard]] uint32_t getWidth() const noexcept { return m_width; }
-    [[nodiscard]] uint32_t getHeight() const noexcept { return m_height; }
+    [[nodiscard]] uint32_t getWidth() const noexcept { m_owner.check("getWidth"); return m_width; }
+    [[nodiscard]] uint32_t getHeight() const noexcept { m_owner.check("getHeight"); return m_height; }
     [[nodiscard]] VkExtent2D getExtent() const noexcept {
+        m_owner.check("getExtent");
         return VkExtent2D{.width = m_width, .height = m_height};
     }
 
@@ -361,6 +375,8 @@ private:
     const IRTRendererProfile* getRTRenderer(RenderMode mode) const;
     void forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn);
 
+
+    render::OwnerThread m_owner;
 
     // Dimensions
     uint32_t m_width;

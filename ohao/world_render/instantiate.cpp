@@ -1,5 +1,6 @@
 #include "world_render/instantiate.hpp"
 #include "ecs/components.hpp"
+#include "world_render/private/scene_loads.hpp"
 #include "world_render/private/systems.hpp"
 #include "world_render/components.hpp"
 #include "world_render/private/components.hpp"
@@ -9,9 +10,7 @@
 
 #include "core/log.hpp"
 
-#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/model_upload.hpp"
-#include "render/scene/render_scene.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -112,8 +111,8 @@ render::MaterialDesc describe(const Material& o) {
 // State shared by the system and the registry signals (see render_extract.cpp).
 class InstantiateState {
 public:
-    InstantiateState(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets)
-        : m_world(world), m_reg(world.registry()), m_scene(scene), m_textures(textures), m_assets(assets) {
+    InstantiateState(World& world, std::shared_ptr<SceneLoads> loads, AssetResolver& assets)
+        : m_world(world), m_reg(world.registry()), m_loads(std::move(loads)), m_assets(assets) {
         const SignalEffect dirty{.writes = types<InstantiateDirty>()};
         const SignalEffect gone{.writesResources = {"instantiate.gone"}};
         world.onConstruct<MeshSource, &InstantiateState::markDirty>(this, dirty);
@@ -131,11 +130,20 @@ public:
         m_world.disconnect<MeshSource>(this);
         m_world.disconnect<Material>(this);
         // The World is going away: give back every mesh, material and texture it still holds.
-        for (auto& [key, entry] : m_meshes) release(entry);
-        for (auto& [key, shared] : m_materials) m_scene.releaseMaterial(shared.handle);
+        m_loads->run([&] {
+            for (auto& [key, entry] : m_meshes) release(entry);
+            for (auto& [key, shared] : m_materials) m_loads->releaseMaterial(shared.handle);
+        });
     }
 
     void run() {
+        // Nothing to do: the renderer is not asked for (with a render thread, holding it waits for its frame).
+        if (m_sourceGone.empty() && m_overrideGone.empty() && m_reg.view<InstantiateDirty>().empty()) return;
+        m_loads->run([&] { update(); });
+    }
+
+private:
+    void update() {
         // 1. MeshSource removed (or the entity destroyed): drop the user, and take away
         // what instantiate made from an entity that lives on.
         for (const entt::entity e : m_sourceGone) {
@@ -160,10 +168,9 @@ public:
             if (const auto* ms = m_reg.try_get<MeshSource>(e)) instantiate(e, *ms);
         m_reg.clear<InstantiateDirty>();
         // The textures the new materials name, in one batch.
-        if (m_textures) m_textures->flushUploads();
+        m_loads->flush();
     }
 
-private:
     struct MeshEntry {
         render::MeshHandle mesh;
         std::vector<render::MaterialHandle> modelMaterials;   // non-empty: the model has materials
@@ -173,10 +180,9 @@ private:
 
     // What a mesh entry holds in the renderer, given back.
     void release(const MeshEntry& entry) {
-        m_scene.releaseMesh(entry.mesh);
-        for (const render::MaterialHandle h : entry.modelMaterials) m_scene.releaseMaterial(h);
-        if (m_textures)
-            for (const uint32_t t : entry.textures) m_textures->releaseContent(BindlessTextureHandle{t});
+        m_loads->releaseMesh(entry.mesh);
+        for (const render::MaterialHandle h : entry.modelMaterials) m_loads->releaseMaterial(h);
+        for (const uint32_t t : entry.textures) m_loads->releaseTexture(t);
     }
 
     void instantiate(entt::entity e, const MeshSource& ms) {
@@ -194,13 +200,13 @@ private:
             if (mesh->vertices.empty() || mesh->indices.size() < 3)
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' has no triangles");
             MeshEntry entry;
-            entry.mesh = render::uploadMesh(m_scene, *mesh, debugName(ms));
+            entry.mesh = m_loads->uploadMesh(*mesh, debugName(ms));
             if (!entry.mesh.valid())
                 return fail(e, "E_MESH_INVALID", "'" + debugName(ms) + "' could not be uploaded to the render scene");
             // The mesh's own materials, their textures by content from the cooked cache.
-            render::MeshMaterials own = render::meshMaterials(
-                m_textures, *mesh, [this](const ContentHash& name) { return m_assets.texture(name); });
-            for (const render::MaterialDesc& d : own.descs) entry.modelMaterials.push_back(m_scene.registerMaterial(d));
+            render::MeshMaterials own =
+                m_loads->meshMaterials(*mesh, [this](const ContentHash& name) { return m_assets.texture(name); });
+            for (const render::MaterialDesc& d : own.descs) entry.modelMaterials.push_back(m_loads->registerMaterial(d));
             entry.textures = std::move(own.held);
             it = m_meshes.emplace(std::move(key), std::move(entry)).first;
         }
@@ -257,7 +263,7 @@ private:
 
     render::MaterialHandle hold(const MaterialKey& key, const render::MaterialDesc& d) {
         auto it = m_materials.find(key);
-        if (it == m_materials.end()) it = m_materials.emplace(key, SharedMaterial{m_scene.registerMaterial(d), 0}).first;
+        if (it == m_materials.end()) it = m_materials.emplace(key, SharedMaterial{m_loads->registerMaterial(d), 0}).first;
         ++it->second.users;
         return it->second.handle;
     }
@@ -268,7 +274,7 @@ private:
         const auto it = m_materials.find(of->second);
         m_materialOf.erase(of);
         if (it == m_materials.end() || --it->second.users > 0) return;
-        m_scene.releaseMaterial(it->second.handle);
+        m_loads->releaseMaterial(it->second.handle);
         m_materials.erase(it);
     }
 
@@ -305,8 +311,7 @@ private:
 
     World& m_world;
     entt::registry& m_reg;
-    render::RenderScene& m_scene;
-    BindlessTextureManager* m_textures;
+    std::shared_ptr<SceneLoads> m_loads;
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
@@ -323,15 +328,14 @@ private:
 
 } // namespace
 
-void installInstantiate(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
-                        AssetResolver& assets) {
+void installInstantiate(World& world, std::shared_ptr<SceneLoads> loads, AssetResolver& assets) {
     auto& reg = world.registry();
     if (reg.ctx().contains<InstantiateInstalled>()) {
         OHAO_LOG(Warn, ecs, "installInstantiate called twice on one World; ignored");
         return;
     }
     reg.ctx().emplace<InstantiateInstalled>();
-    auto state = std::make_shared<InstantiateState>(world, scene, textures, assets);
+    auto state = std::make_shared<InstantiateState>(world, std::move(loads), assets);
     // A level's MeshSources, once it expanded them.
     // Exclusive: it uploads meshes and reads the registry itself. Before the transforms: both tag RenderDirty (its
     // MeshRenderers through the extract's signal).

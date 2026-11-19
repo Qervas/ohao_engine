@@ -1,5 +1,6 @@
 #include "render/scene/render_scene.hpp"
 #include "render/frame_packet.hpp"
+#include "render/owner_thread.hpp"
 #include "render/scene/instance_table.hpp"
 #include "render/scene/light_table.hpp"
 #include "render/scene/material_table.hpp"
@@ -548,6 +549,7 @@ void RenderScene::shutdown() {
 }
 
 MeshHandle RenderScene::registerMesh(const MeshData& data) {
+    if (m->info.owner) m->info.owner->check("RenderScene::registerMesh");
     if (!m->initialized) return {};
     std::vector<GpuBuffer> retired;
     uint32_t grown = 0;
@@ -558,6 +560,7 @@ MeshHandle RenderScene::registerMesh(const MeshData& data) {
 }
 
 void RenderScene::releaseMesh(MeshHandle h) {
+    if (m->info.owner) m->info.owner->check("RenderScene::releaseMesh");
     if (!m->initialized) return;
     if (!m->meshes.info(h)) return;
     // Frames in flight may still trace the BLAS and draw the arenas' ranges: the BLAS is destroyed and the ranges
@@ -569,11 +572,13 @@ void RenderScene::releaseMesh(MeshHandle h) {
 }
 
 std::vector<Vertex> RenderScene::readMeshVertices(MeshHandle h) {
+    if (m->info.owner) m->info.owner->check("RenderScene::readMeshVertices");
     if (!m->initialized) return {};
     return m->meshes.readVertices(h);
 }
 
 MeshHandle RenderScene::registerSkinnedInstance(MeshHandle base) {
+    if (m->info.owner) m->info.owner->check("RenderScene::registerSkinnedInstance");
     if (!m->initialized) return {};
     if (!m->skinPassTried) {
         m->skinPassTried = true;
@@ -685,11 +690,13 @@ void RenderScene::recordSkinning(const Frame& frame) {
 }
 
 MaterialHandle RenderScene::registerMaterial(const MaterialDesc& desc) {
+    if (m->info.owner) m->info.owner->check("RenderScene::registerMaterial");
     if (!m->initialized) return {};
     return m->materials.add(desc);
 }
 
 void RenderScene::releaseMaterial(MaterialHandle h) {
+    if (m->info.owner) m->info.owner->check("RenderScene::releaseMaterial");
     if (m->initialized) m->materials.release(h);
 }
 
@@ -725,6 +732,7 @@ void RenderScene::destroyInstance(uint32_t slot) {
 }
 
 void RenderScene::apply(const FramePacket& packet) {
+    if (m->info.owner) m->info.owner->check("RenderScene::apply");
     if (!m->initialized) return;
     const auto slotOf = [&](uint32_t id) { return id < m->slotOfId.size() ? m->slotOfId[id] : kInvalidIndex; };
     for (const FramePacket::Op& op : packet.ops()) {

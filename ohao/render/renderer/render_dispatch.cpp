@@ -36,6 +36,7 @@ void VulkanRenderer::finishReadbackRequest(bool copied) noexcept {
 }
 
 uint32_t VulkanRenderer::framesInFlight() {
+    m_owner.check("framesInFlight");
     if (!m_initialized) return 0;
     uint32_t n = 0;
     for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s)
@@ -44,12 +45,14 @@ uint32_t VulkanRenderer::framesInFlight() {
 }
 
 void VulkanRenderer::waitForSubmitted(uint64_t n) {
+    m_owner.check("waitForSubmitted");
     if (n == 0 || !m_initialized) return;
     for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s)
         if (m_slotSubmitted[s] == n) m_frameResources.waitForFrame(s);
 }
 
 VulkanRenderer::Preview VulkanRenderer::readbackPreview() {
+    m_owner.check("readbackPreview");
     if (!m_readbackReady || m_previewWidth == 0) return {};
     const void* mapped = m_staging[m_readbackSlot].getMappedData();
     if (!mapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
@@ -73,6 +76,7 @@ bool VulkanRenderer::recordPreview(const render::Frame& frame, const PreviewRequ
 }
 
 std::span<const uint8_t> VulkanRenderer::readback() {
+    m_owner.check("readback");
     if (!m_readbackReady || m_previewWidth != 0) return {};
     const void* mapped = m_staging[m_readbackSlot].getMappedData();
     if (!mapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
@@ -435,6 +439,7 @@ bool VulkanRenderer::copyOutputToStaging(const render::Frame& frame, gpu::Image*
 }
 
 void VulkanRenderer::resize(uint32_t width, uint32_t height) {
+    m_owner.check("resize");
     if (width == 0 || height == 0) return;                 // minimized: keep the old targets
     if (width == m_width && height == m_height) return;
 
@@ -467,11 +472,13 @@ void VulkanRenderer::resize(uint32_t width, uint32_t height) {
 }
 
 bool VulkanRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& outRes) {
+    m_owner.check("readTerrainHeights");
     return false; // Terrain pass disabled
 }
 
 bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
                                         std::vector<float>& normal, uint32_t& w, uint32_t& h) {
+    m_owner.check("readbackHDRBuffers");
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer) return false;
     w = m_width; h = m_height;
@@ -484,6 +491,7 @@ bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<
 }
 
 std::vector<float> VulkanRenderer::readbackLinear() {
+    m_owner.check("readbackLinear");
     std::vector<float> out;
     vkDeviceWaitIdle(m_device);
     if (isRTRenderMode(m_renderMode)) {
@@ -497,6 +505,7 @@ std::vector<float> VulkanRenderer::readbackLinear() {
 }
 
 bool VulkanRenderer::readImage(gpu::Image& image, uint32_t texelBytes, void* out) {
+    m_owner.check("readImage");
     const VkExtent2D extent = image.extent();
     if (!image || m_width == 0 || m_height == 0 || extent.width != m_width || extent.height != m_height) return false;
     const VkDeviceSize size = static_cast<VkDeviceSize>(m_width) * m_height * texelBytes;
@@ -540,6 +549,7 @@ bool VulkanRenderer::readImage(gpu::Image& image, uint32_t texelBytes, void* out
 }
 
 bool VulkanRenderer::readImageRGBA(gpu::Image& image, std::vector<float>& out) {
+    m_owner.check("readImageRGBA");
     const std::size_t values = static_cast<std::size_t>(m_width) * m_height * 4;
     out.resize(values);
     if (image.desc.format != VK_FORMAT_R16G16B16A16_SFLOAT) return readImage(image, 4 * sizeof(float), out.data());

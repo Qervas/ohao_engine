@@ -1,6 +1,7 @@
 #include "world_render/module.hpp"
 
 #include "world_render/present.hpp"
+#include "world_render/private/scene_loads.hpp"
 #include "world_render/private/systems.hpp"
 
 #include "modules/world_render_dependencies.hpp"
@@ -23,11 +24,13 @@ public:
         return kNeeds;
     }
     void install(World& world, const Services& services) const override {
-        render::RenderScene& scene = *services.get<render::RenderScene>();
-        BindlessTextureManager* textures = services.get<BindlessTextureManager>();
-        installInstantiate(world, scene, textures, services.assets);
-        installRenderExtract(world, scene, services.assets);
-        installVfxDraw(world, textures, services.assets);
+        // The host's render thread, when it has one (render/render_thread.hpp): the loads go through it.
+        auto loads = std::make_shared<SceneLoads>(*services.get<render::RenderScene>(),
+                                                  services.get<BindlessTextureManager>(),
+                                                  services.get<render::RenderThread>());
+        installInstantiate(world, loads, services.assets);
+        installRenderExtract(world, loads, services.assets);
+        installVfxDraw(world, loads, services.assets);
     }
     // What a game adds to it: its presenters (HUDs, spheres), by id.
     [[nodiscard]] std::vector<std::string> contributions(const World& world) const override {

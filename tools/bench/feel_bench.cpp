@@ -6,7 +6,7 @@
 // and steps. A hidden window may never present, so the window is shown.
 //
 //   feel_bench [--check budgets.json] [--out build/feel_bench.json] [--seconds 60] [--warmup 2]
-//              [--modes immediate,mailbox,fifo] [--csv-dir build] [--render-scale S]
+//              [--modes immediate,mailbox,fifo] [--csv-dir build] [--render-scale S] [--render-thread on|off]
 //
 // Per mode, feel_bench_<mode>.csv (every frame: time, steps, phases, the latency of each movement it
 // showed) and feel_bench_<mode>_events.csv (the round's deaths, restarts, wins and reloads), on one
@@ -91,7 +91,7 @@ InputEvent action(const char* name, bool down) {
 }
 
 // One present mode's scripted minute.
-ModeRun run(PresentMode mode, double seconds, double warmup, float renderScale) {
+ModeRun run(PresentMode mode, double seconds, double warmup, float renderScale, bool renderThread) {
     ModeRun r;
     r.want = mode;
     LiveConfig cfg;
@@ -104,6 +104,7 @@ ModeRun run(PresentMode mode, double seconds, double warmup, float renderScale) 
     cfg.timeMode = TimeMode::realtime;
     cfg.root = OHAO_SOURCE_DIR;
     cfg.frameLogCapacity = 1u << 20;
+    cfg.renderThread = renderThread;   // render/render_thread.hpp
     LiveHost host;
     if (!host.initialize(cfg, engineTypes())) return r;
     const std::string scene = std::string(OHAO_SOURCE_DIR) + "/assets/scenes/blockout_play.scene.json";
@@ -279,6 +280,7 @@ int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/feel_bench.json", csvDir = "build";
     double seconds = 60.0, warmup = 2.0;
     float renderScale = 1.0f;   // render.settings renderScale
+    bool renderThread = true;   // LiveConfig::renderThread
     std::vector<PresentMode> modes{PresentMode::Immediate, PresentMode::Mailbox, PresentMode::Fifo};
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -286,6 +288,8 @@ int main(int argc, char** argv) {
         else if (a == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (a == "--csv-dir" && i + 1 < argc) csvDir = argv[++i];
         else if (a == "--render-scale" && i + 1 < argc) renderScale = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--render-thread" && i + 1 < argc && (std::string(argv[i + 1]) == "on" || std::string(argv[i + 1]) == "off"))
+            renderThread = std::string(argv[++i]) == "on";
         else if (a == "--seconds" && i + 1 < argc) seconds = std::max(1.0, std::atof(argv[++i]));
         else if (a == "--warmup" && i + 1 < argc) warmup = std::max(0.0, std::atof(argv[++i]));
         else if (a == "--modes" && i + 1 < argc) {
@@ -303,7 +307,7 @@ int main(int argc, char** argv) {
             }
         } else {
             std::fprintf(stderr, "usage: feel_bench [--check budgets.json] [--out file] [--seconds N] [--warmup N] "
-                                 "[--modes immediate,mailbox,fifo] [--csv-dir DIR] [--render-scale S]\n");
+                                 "[--modes immediate,mailbox,fifo] [--csv-dir DIR] [--render-scale S] [--render-thread on|off]\n");
             return 1;
         }
     }
@@ -328,7 +332,7 @@ int main(int argc, char** argv) {
     std::printf("feel_bench: the play scene, %.0f s a present mode after %.0f s of warm-up\n", seconds, warmup);
     std::vector<ModeRun> runs;
     for (const PresentMode m : modes) {
-        runs.push_back(run(m, seconds, warmup, renderScale));
+        runs.push_back(run(m, seconds, warmup, renderScale, renderThread));
         const ModeRun& r = runs.back();
         if (!r.ran) {
             std::printf("  %-9s did not run (no window or GPU)\n", std::string(presentModeName(m)).c_str());
@@ -405,6 +409,8 @@ int main(int argc, char** argv) {
     nlohmann::json out;
     out["seconds"] = seconds;
     out["warmup"] = warmup;
+    out["renderScale"] = renderScale;
+    out["renderThread"] = renderThread;
     nlohmann::json modesJson = nlohmann::json::array();
     for (const ModeRun& r : runs) {
         nlohmann::json m = {{"present", std::string(presentModeName(r.want))}, {"ran", r.ran}};

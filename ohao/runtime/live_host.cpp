@@ -65,6 +65,9 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
         return false;
     }
     m_renderer->setRenderMode(RenderMode::Deferred);
+    m_renderThread = std::make_unique<render::RenderThread>(*m_renderer);
+    m_viewWidth = m_renderer->getWidth();
+    m_viewHeight = m_renderer->getHeight();
     const int refresh = m_window.refreshRate() > 0 ? m_window.refreshRate() : 60;
     m_maxFps = cfg.maxFps < 0 ? refresh : cfg.maxFps;
     m_framePeriod = m_maxFps > 0 ? std::chrono::nanoseconds(1'000'000'000LL / m_maxFps) : std::chrono::nanoseconds(0);
@@ -89,6 +92,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     ecs::Services services{*m_assets, types};
     services.put(m_renderer->renderScene());   // world_render's: the window draws from the first frame
     if (BindlessTextureManager* textures = m_renderer->getTextureManager()) services.put(*textures);
+    services.put(*m_renderThread);             // its loads go through the render thread
     engine::install(*m_world, services);
     if (cfg.game) game::installGame(*m_world, *cfg.game->module);
     m_session = std::make_unique<api::Session>(*m_world, types, cfg.game);
@@ -109,27 +113,77 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     return true;
 }
 
-void LiveHost::renderFrame() {
+void LiveHost::renderFrame(PendingFrame frame) {
     const bool changed = m_needRender || m_session->changeCount() != m_renderedChange;
     m_world->sync();   // instantiate, transforms, the render extract (the view): never a simulation step
     m_frameView = Clock::now();   // the camera this frame draws is set
+    m_liveSamples = changed ? 1 : m_liveSamples + 1;
+    // The window always draws the game's HUDs (empty without one: no pass), at the size of the frame before.
+    render::FramePacket& packet = ecs::framePacket(*m_world);
+    packet.hud = ecs::drawHuds(*m_world, m_viewWidth, m_viewHeight);
+    if (m_cfg.latencyReadout) drawLatencyReadout(*packet.hud);
     // The path tracer restarts its accumulation when the view may have moved (it notices
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
-    if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
-    m_liveSamples = changed ? 1 : m_liveSamples + 1;
-    // The window always draws the game's HUDs (empty without one: no pass).
-    render::FramePacket& packet = ecs::framePacket(*m_world);
-    packet.hud = ecs::drawHuds(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
-    if (m_cfg.latencyReadout) drawLatencyReadout(*packet.hud);
-    m_renderer->render(packet);
+    frame.seq = m_renderThread->publish(packet, {.viewChanged = changed});
+    if (frame.realtime) {
+        // Which look this frame is the first to show in full, once it is submitted. With the lead, every movement
+        // polled before its view; without (no input-driven player), one a step consumed once the frame's
+        // interpolation starts at that step (the step after it has run).
+        FrameStamps& f = frame.stamps;
+        f.view = m_frameView;
+        const auto* physics = ecs::physicsScene(*m_world);
+        const bool lead = physics && physics->leadsLook();
+        const uint64_t step = m_session->frame();
+        for (LookInFlight& l : m_looks) {
+            if (l.shownSeq != 0 || l.shownFrame != 0) continue;
+            if (lead ? l.poll > f.view : !(l.consumed && l.consumedAtStep + 1 <= step)) continue;
+            l.shownSeq = frame.seq;
+            f.looks.push_back(LookSample{l.poll, l.consume, l.consumed});
+        }
+    }
+    m_pending.push_back(std::move(frame));
     ++m_rendered;
     m_renderedChange = m_session->changeCount();
     m_needRender = false;
 }
 
+void LiveHost::resolve(const render::RenderThread::FrameReport& report) {
+    while (!m_pending.empty() && m_pending.front().seq < report.seq) m_pending.pop_front();   // reports were dropped
+    if (m_pending.empty() || m_pending.front().seq != report.seq) return;
+    PendingFrame p = std::move(m_pending.front());
+    m_pending.pop_front();
+    // Whole frame time (input + simulation + render submit), so fps is the real frame rate; GPU time comes from
+    // the deferred timestamp queries.
+    m_stats.record(p.frameMs, report.gpuMs);
+    m_time.setFps(static_cast<float>(m_stats.fps()));
+    m_viewWidth = report.width;
+    m_viewHeight = report.height;
+    m_reportedFrame = std::max(m_reportedFrame, report.frame);
+    if (!p.realtime) return;
+    if (!report.submitted) {   // not shown: a later frame shows its looks
+        for (LookInFlight& l : m_looks)
+            if (l.shownSeq == report.seq) l.shownSeq = 0;
+        return;
+    }
+    FrameStamps f = std::move(p.stamps);
+    f.frame = report.frame;
+    f.submit = report.submit;
+    // Its looks, in the order they were claimed, as the steps since have consumed them.
+    std::size_t next = 0;
+    for (LookInFlight& l : m_looks) {
+        if (l.shownSeq != report.seq) continue;
+        l.shownSeq = 0;
+        l.shownFrame = f.frame;
+        if (next < f.looks.size()) f.looks[next++] = LookSample{l.poll, l.consume, l.consumed};
+    }
+    std::erase_if(m_looks, [](const LookInFlight& l) { return l.shownFrame != 0 && l.consumed; });
+    m_frameLog.record(std::move(f));
+}
+
 RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
     if (hooks.start) hooks.start(*this);
 
+    if (m_cfg.renderThread) m_renderThread->start();
     auto last = Clock::now();
     uint64_t frame = 0;
     std::string error;
@@ -148,7 +202,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         const FrameTime frameStart = Clock::now();
         // Late input sampling: a play window polls only once the GPU has finished the frame before, so the
         // input goes into a frame the GPU starts at once, never one queued behind another.
-        if (m_time.running() && pollsLate()) m_renderer->waitForSubmitted(m_renderer->framesSubmitted());
+        if (m_time.running() && pollsLate()) m_renderThread->waitForGpu();
         FrameTime polledAt{};
         {
             std::vector<InputEvent> polled;
@@ -166,7 +220,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them
         }
         if (m_window.consumeResized()) {
-            m_renderer->setPresentExtent(m_window.framebufferExtent());
+            m_renderThread->run([&] { m_renderer->setPresentExtent(m_window.framebufferExtent()); });
             m_needRender = true;
         }
 
@@ -231,37 +285,15 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         const bool due =
             m_time.running() || m_needRender || m_session->changeCount() != m_renderedChange || converging;
         if (ext.width != 0 && ext.height != 0 && due) {   // minimized: simulate, don't render
-            const uint64_t submittedBefore = m_renderer->framesSubmitted();
-            renderFrame();
-            // Whole frame time (input + simulation + render submit), so fps is the real
-            // frame rate; GPU time comes from the deferred timestamp queries.
-            m_stats.record(std::chrono::duration<double, std::milli>(tick.frameDt).count(), m_renderer->gpuFrameMs());
-            m_time.setFps(static_cast<float>(m_stats.fps()));
-            if (m_time.running() && m_renderer->framesSubmitted() != submittedBefore) {
-                FrameStamps f;
-                f.frame = m_renderer->framesSubmitted();
-                f.start = frameStart;
-                f.poll = polledAt;
-                f.view = m_frameView;
-                f.submit = m_renderer->lastSubmitTime();
-                f.frameMs = m_lastFrameStart == FrameTime{} ? 0.0 : std::chrono::duration<double, std::milli>(frameStart - m_lastFrameStart).count();
-                f.steps = tick.steps;
-                f.discardedSteps = static_cast<int>(tick.discarded / m_time.fixedStep());
-                // Which look this frame is the first to show in full. With the lead, every movement
-                // polled before its view; without (no input-driven player), one a step consumed once
-                // the frame's interpolation starts at that step (the step after it has run).
-                const auto* physics = ecs::physicsScene(*m_world);
-                const bool lead = physics && physics->leadsLook();
-                const uint64_t step = m_session->frame();
-                for (LookInFlight& l : m_looks) {
-                    if (l.shownFrame != 0) continue;
-                    if (lead ? l.poll > f.view : !(l.consumed && l.consumedAtStep + 1 <= step)) continue;
-                    l.shownFrame = f.frame;
-                    f.looks.push_back(LookSample{l.poll, l.consume, l.consumed});
-                }
-                std::erase_if(m_looks, [](const LookInFlight& l) { return l.shownFrame != 0 && l.consumed; });
-                m_frameLog.record(std::move(f));
-            }
+            PendingFrame p;
+            p.realtime = m_time.running();
+            p.frameMs = std::chrono::duration<double, std::milli>(tick.frameDt).count();
+            p.stamps.start = frameStart;
+            p.stamps.poll = polledAt;
+            p.stamps.frameMs = m_lastFrameStart == FrameTime{} ? 0.0 : std::chrono::duration<double, std::milli>(frameStart - m_lastFrameStart).count();
+            p.stamps.steps = tick.steps;
+            p.stamps.discardedSteps = static_cast<int>(tick.discarded / m_time.fixedStep());
+            renderFrame(std::move(p));
         }
         m_lastFrameStart = frameStart;
         collectPresents();
@@ -272,6 +304,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         error = e.what();
         OHAO_LOG(Error, runtime, "live host: frame {} ended the loop: {}", frame, error);
     }
+    m_renderThread->stop();   // after the frames published: the renderer is this thread's again
+    collectPresents();
     if (pump && pump->flush) pump->flush();
 
     RunReport r;
@@ -311,7 +345,16 @@ void LiveHost::lookConsumed(LookInFlight& l, FrameTime at) {
 }
 
 void LiveHost::collectPresents() {
-    for (const PresentStamp& s : m_renderer->takePresentStamps()) {
+    // The stamps first: a frame presented has been reported, or is about to be (the render thread reports a frame
+    // after its present), so a stamp waits here until its frame's report is in.
+    for (const PresentStamp& s : m_renderer->takePresentStamps()) m_presents.push_back(s);
+    for (const render::RenderThread::FrameReport& r : m_renderThread->takeReports()) resolve(r);
+    std::size_t kept = 0;
+    for (const PresentStamp& s : m_presents) {
+        if (s.frame > m_reportedFrame && !m_pending.empty()) {   // else a capture's frame, never reported
+            m_presents[kept++] = s;
+            continue;
+        }
         (void)m_frameLog.present(s.frame, s.at, s.waited);
         if (!s.waited || !m_refreshLocked) continue;
         if (m_refreshAt == FrameTime{}) {
@@ -323,6 +366,7 @@ void LiveHost::collectPresents() {
         const double whole = std::round(periods);
         m_refreshAt += std::chrono::duration_cast<Nanos>((whole + 0.1 * (periods - whole)) * m_framePeriod);
     }
+    m_presents.resize(kept);
 }
 
 FrameTime LiveHost::onRefreshGrid(FrameTime t) const {
@@ -342,7 +386,7 @@ void LiveHost::drawLatencyReadout(render::HudList& hud) const {
     };
     std::string text = "LAT " + (lat ? num(lat->medianMs) + " P95 " + num(lat->p95Ms) : std::string("/")) + "  FT " +
                        (pace ? num(pace->medianMs) + " P99 " + num(pace->p99Ms) : std::string("/"));
-    const float px = std::max(1.0f, std::round(2.0f * static_cast<float>(m_renderer->getHeight()) / 720.0f));
+    const float px = std::max(1.0f, std::round(2.0f * static_cast<float>(m_viewHeight) / 720.0f));
     const glm::vec2 at{std::round(12.0f * px / 2.0f), std::round(12.0f * px / 2.0f)};
     render::hudRect(hud, {at.x - px * 2, at.y - px * 2, at.x + render::hudTextWidth(text, px) + px * 2,
                           at.y + px * (render::kHudGlyphHeight + 2)},
@@ -352,7 +396,7 @@ void LiveHost::drawLatencyReadout(render::HudList& hud) const {
 
 std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
     if (!m_renderer) return std::nullopt;
-    std::optional<api::RenderStats> st = runtime::renderStats(*m_renderer, frames);
+    std::optional<api::RenderStats> st = m_renderThread->run([&] { return runtime::renderStats(*m_renderer, frames); });
     if (st && m_player && m_player->ready()) {   // a window with sound
         api::RenderStats::Audio a;
         a.mixMs = m_audio->mixMs().value_or(0.0);
@@ -373,7 +417,7 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
         out.pollToViewMs = l->pollToViewMs;
         out.viewToSubmitMs = l->viewToSubmitMs;
         out.submitToPresentMs = l->submitToPresentMs;
-        out.present = std::string(presentModeName(m_renderer->presentMode()));
+        out.present = std::string(presentModeName(m_renderThread->run([&] { return m_renderer->presentMode(); })));
         st->latency = out;
     }
     if (const auto p = m_frameLog.pacing(frames)) {
@@ -392,18 +436,18 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
 
 std::optional<api::RenderSettings> LiveHost::renderSettings() {
     if (!m_renderer) return std::nullopt;
-    return m_renderer->renderSettings();
+    return m_renderThread->run([&] { return m_renderer->renderSettings(); });
 }
 
 void LiveHost::setRenderSettings(const api::RenderSettings& settings) {
     if (!m_renderer) return;
-    m_renderer->setRenderSettings(settings);
+    m_renderThread->run([&] { m_renderer->setRenderSettings(settings); });
     m_needRender = true;
 }
 
 std::optional<api::Host::GpuInfo> LiveHost::gpuInfo() {
     if (!m_renderer) return std::nullopt;
-    return runtime::gpuInfo(*m_renderer);
+    return m_renderThread->run([&] { return runtime::gpuInfo(*m_renderer); });
 }
 
 std::optional<api::AudioDeviceState> LiveHost::audioDevice() {
@@ -431,6 +475,11 @@ void LiveHost::setAudioMix(const api::AudioMixOverrides& mix) {
 }
 
 api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
+    // The frames published before it first; then the window's renderer is this thread's until it returns.
+    return m_renderThread->run([&] { return captureHeld(r); });
+}
+
+api::RenderOutcome LiveHost::captureHeld(const api::RenderRequest& r) {
     api::RenderOutcome out;
     const VkExtent2D ext = m_window.framebufferExtent();
     if (ext.width == 0 || ext.height == 0) {
@@ -559,8 +608,10 @@ uint64_t LiveHost::shutdown() {
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
     m_player.reset();
     m_audio.reset();
+    if (m_renderThread) m_renderThread->stop();
     m_session.reset();
     m_world.reset();   // its systems release their meshes and materials while the RenderScene exists
+    m_renderThread.reset();
     if (m_renderer) {
         m_renderer->shutdown();   // device and surface go before the window
         validation = m_renderer->validationMessageCount();

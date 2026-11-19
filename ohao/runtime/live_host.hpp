@@ -17,6 +17,12 @@
 //                                          (Session::changeCount) or the window resized
 //   flush replies                       -> after the frame they caused was presented
 //
+// With the render thread (LiveConfig::renderThread, render/render_thread.hpp), "render + present" is the world's
+// sync and the publish of its frame packet: the render thread records and presents it while the loop goes on to
+// the next frame. Everything else the loop and the session ask of the renderer (a resize, a capture,
+// render.settings, render.stats, a load) runs through RenderThread::run, after the frames published before it. A
+// frame's stamps are kept until the render thread reports it submitted, then go into the frame log.
+//
 // While nothing steps (lockstep, paused) the window's device events are dropped, and the
 // first step after stepping resumes starts with a focus loss (everything released): input
 // reaches a lockstep world only through input.inject, and a key let go meanwhile is never
@@ -28,6 +34,7 @@
 #include "core/timeline.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
+#include "render/render_thread.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "runtime/audio_player.hpp"
 #include "runtime/click_capture.hpp"
@@ -37,6 +44,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <span>
@@ -101,6 +109,9 @@ struct LiveConfig {
     bool autoExposure{true};
     // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
     std::size_t frameLogCapacity{FrameLog::kCapacity};
+    // A render thread records and presents each frame while the loop steps the next (render/render_thread.hpp);
+    // off: the loop renders each frame itself, by the same path.
+    bool renderThread{true};
 };
 
 struct RunReport {
@@ -137,7 +148,9 @@ public:
 
     [[nodiscard]] api::Session& session() { return *m_session; }
     [[nodiscard]] ecs::World& world() { return *m_world; }
+    // Its own outside run() and between frames; inside run(), through renderThread().run(fn).
     [[nodiscard]] VulkanRenderer& renderer() { return *m_renderer; }
+    [[nodiscard]] render::RenderThread& renderThread() { return *m_renderThread; }
     [[nodiscard]] Window& window() { return m_window; }
     [[nodiscard]] Timeline& timeline() { return m_time; }
     // The world's input map, stepped once per simulation step.
@@ -166,13 +179,24 @@ public:
     void setAudioMix(const api::AudioMixOverrides& mix) override;
 
 private:
-    void renderFrame();   // world.sync, the world's view, render + present
-    // The present stamps the renderer resolved, into the frame log.
+    // A frame published and not yet reported (render/render_thread.hpp): what the loop stamped, its frame time and
+    // whether it was a realtime frame (only those go into the frame log).
+    struct PendingFrame {
+        uint64_t seq{0};
+        bool realtime{false};
+        double frameMs{0.0};
+        FrameStamps stamps;
+    };
+    void renderFrame(PendingFrame frame);   // world.sync, the world's view, the frame packet published
+    // The frames the render thread reported, and the present stamps the renderer resolved, into the frame log.
     void collectPresents();
+    void resolve(const render::RenderThread::FrameReport& report);
     // The world has a look-led player in control (a play window): a frame's input is polled late.
     [[nodiscard]] bool pollsLate() const;
     // `t` moved to the nearest frame start on the display's refreshes (unchanged until one is known).
     [[nodiscard]] FrameTime onRefreshGrid(FrameTime t) const;
+    // capture(), holding the renderer.
+    [[nodiscard]] api::RenderOutcome captureHeld(const api::RenderRequest& request);
     // ohao_game --latency: the measured numbers as HUD text, top left.
     void drawLatencyReadout(render::HudList& hud) const;
     // Readback copies the renderer made beyond the host's own requests (a bug if not 0).
@@ -181,6 +205,7 @@ private:
     LiveConfig m_cfg;
     Window m_window;
     std::unique_ptr<VulkanRenderer> m_renderer;
+    std::unique_ptr<render::RenderThread> m_renderThread;   // destroyed before the renderer, after the world
     std::unique_ptr<ecs::FileAssetResolver> m_assets;
     std::unique_ptr<ecs::World> m_world;       // destroyed before the renderer (it holds RenderScene slots)
     std::unique_ptr<api::Session> m_session;   // destroyed before the world
@@ -203,13 +228,18 @@ private:
         bool injected{false};
         bool consumed{false};
         uint64_t consumedAtStep{0};   // the session's frame right after the step that applied it
-        uint64_t shownFrame{0};       // the frame that first showed it in full (0: none yet)
+        uint64_t shownSeq{0};         // the published frame that first shows it in full, until reported (0: none)
+        uint64_t shownFrame{0};       // that frame, submitted (0: none yet)
     };
     static constexpr std::size_t kMaxLooksInFlight = 4096;
     void trackLook(FrameTime poll, bool injected);
     void lookConsumed(LookInFlight& l, FrameTime at);
     FrameLog m_frameLog;
     std::vector<LookInFlight> m_looks;
+    std::deque<PendingFrame> m_pending;            // published, not yet reported
+    std::vector<PresentStamp> m_presents;          // resolved, for frames not yet reported
+    uint64_t m_reportedFrame{0};                   // the newest submitted-frame number a report gave
+    uint32_t m_viewWidth{0}, m_viewHeight{0};      // the renderer's size after the newest reported frame
     FrameTime m_lastFrameStart{};
     // Frames at the display's rate start on its refreshes, not on a timer that drifts across them: the
     // compositor takes a frame at one point of each refresh, so a start that drifts shows up to a refresh

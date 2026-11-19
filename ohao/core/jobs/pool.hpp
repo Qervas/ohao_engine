@@ -20,6 +20,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <new>
 #include <string>
 #include <type_traits>
@@ -126,5 +128,23 @@ void submit(Task* task);
 void wait(Counter& counter);
 // The priority of the task this thread runs now (Frame outside any task): what work it forks takes by default.
 [[nodiscard]] Priority currentPriority() noexcept;
+
+// A thread of its own beside the pool, for a loop that blocks (on a condition, on a GPU fence) and so must never
+// hold a worker: the render thread (render/render_thread.hpp). It runs `body` pinned to the CPU the pool keeps for
+// the render thread (the first hardware thread of the second physical core; none when the pool pins nothing), runs
+// no task, and a wait of its on the pool sleeps. Made on the game thread: it starts the pool there.
+class Dedicated {
+public:
+    Dedicated(const char* name, std::function<void()> body);
+    ~Dedicated();   // join()
+    Dedicated(const Dedicated&) = delete;
+    Dedicated& operator=(const Dedicated&) = delete;
+    // Returns once `body` has returned.
+    void join();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m;
+};
 
 } // namespace ohao::jobs

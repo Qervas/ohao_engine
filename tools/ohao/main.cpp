@@ -15,10 +15,13 @@
 //                  [--denoise X] [--size WxH] [--post bloom,taa] [--ev100 EV] [--tonemap agx|neutral]
 //                  [--quality realtime|reference] [--hud] [--guiding] [--no-caustics] [--hdr out.pfm]]
 //                 [--save out.scene.json] [--frames K --uncapped [--size WxH] [--post bloom,taa]] [--threads N]
+//                 [--render-thread on|off]
 //                 --uncapped: after the steps and the script, K frames as fast as they go (headless, deferred), each
 //                 a fixed step, a sync and a render; prints {frames, frameMs, simulateMs, syncMs, recordMs, gpuMs,
 //                 hash}, each time {median, p95} (recordMs and gpuMs over the last 110 frames, the renderer's own).
 //                 --threads: the job pool's threads, the game thread and its workers (else OHAO_THREADS; all)
+//                 --render-thread: a render thread records each frame while the next steps (render/render_thread.hpp;
+//                 default off); with it a frame's frameMs is its step, sync and publish
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
 //   ohao doctor  [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
@@ -26,7 +29,7 @@
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
 //                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
 //                                [--mode deferred|rt_realtime|rt_offline] [--spp N]
-//                                [--present immediate|mailbox|fifo] [--sound] [--fps N]]
+//                                [--present immediate|mailbox|fifo] [--sound] [--fps N]] [--render-thread on|off]
 //                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
 //                 over newline-delimited JSON until stdin closes (ohao/rpc). --pipe NAME serves
 //                 \\.\pipe\ohao-NAME instead: one local client of the current user, until it
@@ -73,6 +76,7 @@
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
+#include "render/render_thread.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "world_render/frame_packet.hpp"
 #include "reflect/schema.hpp"
@@ -285,6 +289,14 @@ bool has(const Args& a, const char* name) { return a.options.count(name) != 0; }
 std::string opt(const Args& a, const char* name, std::string fallback = {}) {
     const auto it = a.options.find(name);
     return it == a.options.end() ? fallback : it->second;
+}
+// An on|off option: `fallback` when absent, none when it is neither.
+std::optional<bool> onOff(const Args& a, const char* name, bool fallback) {
+    if (!has(a, name)) return fallback;
+    const std::string v = opt(a, name, "");
+    if (v == "on") return true;
+    if (v == "off") return false;
+    return std::nullopt;
 }
 
 // An integer option, or a usage error.
@@ -623,7 +635,8 @@ std::string runUncapped(Context& c, int frames, uint32_t width, uint32_t height,
     const api::RenderOutcome o = c.render->capture(r);
     if (!o.errors.empty()) return errorDoc(o.errors.front().code, o.errors.front().message);
     VulkanRenderer* renderer = c.render->renderer();
-    if (!renderer) return errorDoc("E_GPU", "the renderer did not start");
+    render::RenderThread* thread = c.render->renderThread();
+    if (!renderer || !thread) return errorDoc("E_GPU", "the renderer did not start");
     std::vector<double> frame, simulate, sync;
     using clock = std::chrono::steady_clock;
     const auto ms = [](clock::time_point a, clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
@@ -633,18 +646,21 @@ std::string runUncapped(Context& c, int frames, uint32_t width, uint32_t height,
         const auto t1 = clock::now();
         c.world->sync();
         const auto t2 = clock::now();
-        renderer->render(ecs::framePacket(*c.world));
+        thread->publish(ecs::framePacket(*c.world));
+        (void)thread->takeReports();
         const auto t3 = clock::now();
         frame.push_back(ms(t0, t3));
         simulate.push_back(ms(t0, t1));
         sync.push_back(ms(t1, t2));
     }
-    renderer->waitForSubmitted(renderer->framesSubmitted());
+    thread->waitForGpu();
     std::vector<double> record, gpu;
-    for (const render::FrameTiming& t : renderer->frameTimings(static_cast<std::size_t>(std::min(frames, 110)))) {
-        record.push_back(t.cpuMs);
-        gpu.push_back(t.gpuMs);
-    }
+    thread->run([&] {
+        for (const render::FrameTiming& t : renderer->frameTimings(static_cast<std::size_t>(std::min(frames, 110)))) {
+            record.push_back(t.cpuMs);
+            gpu.push_back(t.gpuMs);
+        }
+    });
     const std::string hash = c.session->call("world.hash", "{}");
     if (isError(hash)) return hash;
     JsonWriter w;
@@ -690,6 +706,8 @@ int cmdRun(const Args& a) {
     long long threads = 0;
     if (!intOpt(a, "--threads", 1, 1024, threads, err)) return usage(err);
     jobs::configure(jobs::configFromEnvironment(static_cast<int>(threads)));
+    const std::optional<bool> renderThread = onOff(a, "--render-thread", false);
+    if (!renderThread) return usage("--render-thread is on or off");
     const bool render = has(a, "--render");
     const bool uncapped = has(a, "--uncapped");
     if (uncapped && (render || !has(a, "--frames"))) return usage("--uncapped needs --frames and no --render");
@@ -718,6 +736,7 @@ int cmdRun(const Args& a) {
     }
 
     Context c(opt(a, "--root", "."), api::HostKind::Cli, g_module);
+    c.render->setRenderThread(*renderThread);
     const bool lines = script.has_value();
     int worst = kOk;
     std::string combined;   // without a script: {"result": {method: result, ...}}
@@ -858,6 +877,7 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     if (intOpt(a, "--spp", 1, 65536, spp, err)) cfg.spp = static_cast<int>(spp);
     long long fps = -1;   // the frame-rate cap: the display's refresh rate unless --fps (0: none)
     if (has(a, "--fps") && intOpt(a, "--fps", 0, 1000, fps, err)) cfg.maxFps = static_cast<int>(fps);
+    cfg.renderThread = *onOff(a, "--render-thread", true);   // checked by cmdServe; a window's is on by default
     runtime::LiveHost host;
     if (!host.initialize(cfg, engineTypes())) {
         OHAO_LOG(Error, rpc, "serve: no window or no usable GPU");
@@ -913,6 +933,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     if (!intOpt(a, "--spp", 1, 65536, spp, err)) return usage(err);
     long long fps = -1;
     if (has(a, "--fps") && !intOpt(a, "--fps", 0, 1000, fps, err)) return usage(err);
+    if (!onOff(a, "--render-thread", false)) return usage("--render-thread is on or off");
     if (has(a, "--log-level")) {
         const auto level = log::parseLevel(opt(a, "--log-level"));
         if (!level) return usage("--log-level is one of: trace, debug, info, warn, error, off");
@@ -935,6 +956,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage), *transport);
     const std::string root = opt(a, "--root", ".");
     Context c(root, api::HostKind::Headless, g_module);
+    c.render->setRenderThread(*onOff(a, "--render-thread", false));   // headless: off by default
     api::PathPolicy policy;
     policy.root = root;
     policy.out = opt(a, "--out");
@@ -993,7 +1015,7 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden", "--sound"},
                                  {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp",
-                                  "--present", "--fps"});
+                                  "--present", "--fps", "--render-thread"});
         return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {
@@ -1025,7 +1047,7 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(argc, argv, 2, {"--hud", "--guiding", "--no-caustics", "--uncapped"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
                                   "--frames", "--denoise", "--size", "--post", "--ev100", "--tonemap", "--quality", "--hdr", "--save",
-                                  "--root", "--threads"});
+                                  "--root", "--threads", "--render-thread"});
         return a.error.empty() ? cmdRun(a) : usage(a.error);
     }
     if (cmd == "doctor") {

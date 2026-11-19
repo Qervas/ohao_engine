@@ -114,6 +114,10 @@ public:
 
     // Empties it, keeping its storage.
     void clear();
+    // Hands what was written since the last frame to `to`, an empty packet (one the renderer applied), and takes
+    // its storage: the render thread's double buffer (render/render_thread.hpp). What the writer keeps across frames
+    // (the presented spheres' count) stays here.
+    void moveTo(FramePacket& to);
 
 private:
     static constexpr uint32_t kNone = UINT32_MAX;

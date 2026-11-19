@@ -1,4 +1,5 @@
 #include "world_render/vfx_draw.hpp"
+#include "world_render/private/scene_loads.hpp"
 #include "world_render/private/systems.hpp"
 
 #include "ecs/asset_resolver.hpp"
@@ -140,7 +141,7 @@ namespace {
 
 struct VfxDraw {
     render::FramePacket& packet;   // the world's (world_render/frame_packet.hpp)
-    BindlessTextureManager* textureManager;
+    std::shared_ptr<SceneLoads> loads;
     AssetResolver& assets;
     uint64_t version{0};
     std::shared_ptr<const vfx::VfxSet> set;
@@ -153,13 +154,17 @@ struct VfxDraw {
         set = std::make_shared<const vfx::VfxSet>(system.set());
         textures.assign(set->textures.size(), gpu::shared::kVfxNoTexture);
         normals.assign(set->textures.size(), gpu::shared::kVfxNoTexture);
-        if (!textureManager) return;
+        if (!loads->textures()) return;
+        loads->run([&] { loadTextures(); });
+    }
+
+    void loadTextures() {
         for (std::size_t i = 0; i < set->textures.size(); ++i) {
             const auto path = assets.absolutePath(AssetRef{set->textures[i].file, {}});
             // Flipbook cells are sampled at mip 0 (a mip chain would bleed neighbouring cells).
             const BindlessTextureHandle h =
                 path.empty() ? kInvalidBindlessTexture
-                             : textureManager->loadTexture(path.string(), BindlessTextureType::Albedo, false);
+                             : loads->loadTexture(path.string(), BindlessTextureType::Albedo, false);
             if (h.valid()) textures[i] = h.index;
             else OHAO_LOG(Warn, vfx, "vfx: texture '{}' not loaded: its emitters draw a soft dot", set->textures[i].file);
             // A decal's normal map is linear data: loaded as one, never as sRGB albedo.
@@ -167,10 +172,11 @@ struct VfxDraw {
             const auto npath = assets.absolutePath(AssetRef{set->textures[i].normal, {}});
             const BindlessTextureHandle n =
                 npath.empty() ? kInvalidBindlessTexture
-                              : textureManager->loadTexture(npath.string(), BindlessTextureType::Normal, false);
+                              : loads->loadTexture(npath.string(), BindlessTextureType::Normal, false);
             if (n.valid()) normals[i] = n.index;
             else OHAO_LOG(Warn, vfx, "vfx: normal map '{}' not loaded: its decals keep the surface's normal", set->textures[i].normal);
         }
+        loads->flush();
     }
 
     void run(World& world) {
@@ -188,8 +194,8 @@ struct VfxDraw {
 
 } // namespace
 
-void installVfxDraw(World& world, BindlessTextureManager* textures, AssetResolver& assets) {
-    auto state = std::make_shared<VfxDraw>(VfxDraw{framePacket(world), textures, assets});
+void installVfxDraw(World& world, std::shared_ptr<SceneLoads> loads, AssetResolver& assets) {
+    auto state = std::make_shared<VfxDraw>(VfxDraw{framePacket(world), std::move(loads), assets});
     // The effects go into the frame the extract filled.
     // Exclusive: it loads the set's textures into the renderer and reads the registry through the World.
     world.addSync("vfx_draw", [state](SystemContext& c) { state->run(c.world()); },

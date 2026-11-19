@@ -58,11 +58,13 @@ VulkanRenderer::~VulkanRenderer() {
 }
 
 bool VulkanRenderer::initialize(const PresentTarget& target) {
+    m_owner.check("initialize");
     m_presentTarget = target;
     return initialize();
 }
 
 bool VulkanRenderer::initialize() {
+    m_owner.check("initialize");
     if (m_initialized) return true;
 
     try {
@@ -143,7 +145,7 @@ bool VulkanRenderer::initialize() {
         m_renderScene = std::make_unique<render::RenderScene>();
         if (!m_renderScene->initialize(render::RenderScene::InitInfo{
                 m_physicalDevice, m_device, &m_allocator, m_graphicsQueue, m_graphicsQueueFamily,
-                m_commandPool, /*rayTracing=*/true, m_rayQueryEnabled})) {
+                m_commandPool, /*rayTracing=*/true, m_rayQueryEnabled, &m_owner})) {
             OHAO_LOG(Error, gpu, "Failed to initialize RenderScene");
             m_renderScene.reset();
             return false;
@@ -177,6 +179,7 @@ bool VulkanRenderer::initialize() {
 }
 
 void VulkanRenderer::shutdown() {
+    m_owner.check("shutdown");
     if (!m_initialized) return;
 
     if (m_device != VK_NULL_HANDLE) {
@@ -281,6 +284,7 @@ void VulkanRenderer::applyPacket(const render::FramePacket& packet) {
 }
 
 void VulkanRenderer::render(render::FramePacket& packet) {
+    m_owner.check("render");
     if (!m_initialized) return;
     applyPacket(packet);
     packet.clear();
@@ -310,10 +314,12 @@ void VulkanRenderer::render(render::FramePacket& packet) {
 }
 
 bool VulkanRenderer::isRTSupported() const {
+    m_owner.check("isRTSupported");
     return m_renderScene && m_renderScene->rtSupported();
 }
 
 bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
+    m_owner.check("ensureRTRenderer");
     if (!isRTSupported()) {
         return false;
     }
@@ -358,6 +364,7 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
 }
 
 void VulkanRenderer::setRenderMode(RenderMode mode) {
+    m_owner.check("setRenderMode");
     if (const auto defaults = rtDefaults(mode)) {
         if (!ensureRTRenderer(mode)) {
             OHAO_LOG(Warn, gpu, "Path tracing not available, staying in current mode");
@@ -379,6 +386,7 @@ render::DisplayCurve displayCurve(render::Tonemap t) {
 } // namespace
 
 void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
+    m_owner.check("setRenderSettings");
     const auto clamp = [](int32_t v, int32_t lo, int32_t hi) { return static_cast<uint32_t>(std::clamp(v, lo, hi)); };
     m_renderQuality = s.quality == render::Quality::reference ? RenderQuality::Reference : RenderQuality::Realtime;
     m_rtDirectWanted = s.rtDirect.enabled;
@@ -418,6 +426,7 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
 }
 
 VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
+    m_owner.check("renderSettings");
     RenderSettings s;
     s.quality = m_renderQuality == RenderQuality::Reference ? render::Quality::reference : render::Quality::realtime;
     s.rtDirect.enabled = m_rtDirectWanted;
@@ -458,6 +467,7 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
 }
 
 void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
+    m_owner.check("setRTRenderSettings");
     m_rtSettings = settings;
     applyRTRenderSettings();
 
@@ -471,6 +481,7 @@ void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
 }
 
 void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
+    m_owner.check("setRTRenderProfile");
     setRTRenderSettings(profile == RTRenderProfile::Realtime ? kRealtimeRTSettings : kOfflineRTSettings);
 }
 
@@ -563,6 +574,7 @@ void VulkanRenderer::forEachRTRenderer(const std::function<void(IRTRendererProfi
 }
 
 void VulkanRenderer::resetAccumulation() {
+    m_owner.check("resetAccumulation");
     if (m_renderMode == RenderMode::Deferred) {
         // The deferred path accumulates too (RT shadow, RT GI and TAA history, TAA's jitter
         // index, a clock). The reset is state for the next frame to record: its passes start
@@ -578,18 +590,21 @@ void VulkanRenderer::resetAccumulation() {
 }
 
 void VulkanRenderer::setRenderSeed(uint32_t seed) {
+    m_owner.check("setRenderSeed");
     m_renderSeed = seed;
     forEachRTRenderer([&](IRTRendererProfile& r) { r.setRenderSeed(seed); });
     if (m_deferredRenderer) m_deferredRenderer->setRenderSeed(seed);   // RT direct light and GI
 }
 
 void VulkanRenderer::notifyCameraChanged() {
+    m_owner.check("notifyCameraChanged");
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->notifyViewChanged();
     }
 }
 
 uint32_t VulkanRenderer::getPathTracerFrameIndex() const {
+    m_owner.check("getPathTracerFrameIndex");
     if (const auto* renderer = getRTRenderer(m_renderMode)) {
         return renderer->getFrameIndex();
     }
@@ -650,17 +665,20 @@ bool VulkanRenderer::recreatePresentation() {
 }
 
 void VulkanRenderer::setPresentExtent(VkExtent2D extent) {
+    m_owner.check("setPresentExtent");
     if (!m_presentTarget) return;
     m_presentTarget->extent = extent;
     m_swapchainDirty = true;
 }
 
 float VulkanRenderer::gpuFrameMs() const noexcept {
+    m_owner.check("gpuFrameMs");
     const render::FrameTiming* f = m_passTimer.latest();
     return f ? f->gpuMs : 0.0f;
 }
 
 std::vector<render::FrameTiming> VulkanRenderer::frameTimings(std::size_t n) {
+    m_owner.check("frameTimings");
     if (m_device != VK_NULL_HANDLE && m_frameResources.isInitialized()) {
         m_passTimer.collectAll([&](uint32_t slot) {
             return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
@@ -670,6 +688,7 @@ std::vector<render::FrameTiming> VulkanRenderer::frameTimings(std::size_t n) {
 }
 
 std::optional<float> VulkanRenderer::meteredEv100() {
+    m_owner.check("meteredEv100");
     if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
     PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing();
     if (!pp || !pp->autoExposure()) return std::nullopt;
@@ -679,11 +698,13 @@ std::optional<float> VulkanRenderer::meteredEv100() {
 }
 
 std::optional<render::CausticsStats> VulkanRenderer::causticsStats() const {
+    m_owner.check("causticsStats");
     const IRTRendererProfile* offline = getRTRenderer(RenderMode::RTOffline);
     return offline ? offline->causticsStats() : std::nullopt;
 }
 
 std::optional<LightClusters::Overflow> VulkanRenderer::lightsOverflow() {
+    m_owner.check("lightsOverflow");
     if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
     LightClusters* clusters = m_deferredRenderer->lightClusters();
     if (!clusters) return std::nullopt;
@@ -724,6 +745,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
 }
 
 void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
+    m_owner.check("setDenoiseMode");
     m_denoiseModeOverridden = true;
     if (mode != m_denoiseMode) {
         m_denoiseMode = mode;

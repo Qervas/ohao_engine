@@ -13,6 +13,7 @@
 namespace ohao::render {
 
 class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; class Pass; struct Frame; class FramePacket;
+class OwnerThread;
 
 // The persistent GPU render world: mesh arenas (one BLAS per mesh), a material
 // table, an instance table and a light table. A world reaches it through the frame packet (apply; meshes, materials
@@ -33,6 +34,9 @@ public:
         // VK_KHR_ray_query's rayQuery feature is enabled: compute and fragment shaders
         // may read the TLAS (traced() declares it for them).
         bool rayQuery;
+        // The thread that may call it (the renderer's, render/owner_thread.hpp): the entries a world reaches
+        // (registration, release, apply) check it. Null: unchecked.
+        const OwnerThread* owner{nullptr};
     };
     RenderScene();
     ~RenderScene();
