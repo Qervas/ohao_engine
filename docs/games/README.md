@@ -7,10 +7,12 @@ is `games/sample/sample.cpp` (targets that spin until shot, then fall): read it 
 ## A game is a module
 
 - A directory `games/<name>/` whose `CMakeLists.txt` is `ohao_add_game(<name>)` (cmake/ohao_games.cmake), and a line
-  `add_subdirectory(games/<name>)` in the root `CMakeLists.txt`. It builds `build/Release/libohao_<name>.so`.
-- Every host plays one game: `ohao <command> --game build/Release/libohao_<name>.so` (the CLI, `ohao serve`),
+  `add_subdirectory(games/<name>)` in the root `CMakeLists.txt`. It builds `build/Release/ohao_<name>.dll`
+  (`libohao_<name>.so` on Linux).
+- Every host plays one game: `ohao <command> --game build/Release/ohao_<name>.dll` (the CLI, `ohao serve`),
   `--game slice` (the default), or `--game none` (an engine-only world).
-- The library exports one function, `ohao_game_module`, returning its `game::Module` (`game/module.hpp`):
+- The library exports one function, `OHAO_GAME_ENTRY const ohao::game::Module* ohao_game_module()`, returning its
+  `game::Module` (`game/module.hpp`):
 
 | | What it does |
 |---|---|

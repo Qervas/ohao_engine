@@ -21,8 +21,8 @@ since the doc checker was deleted (2026-11-08), so trust the code over a stale e
   each frame in flight the passes that began and finished and the last one that did, `deviceFault`: the driver's
   report). The process exits at once, without Vulkan teardown.
 - **One game, or none: `--game`** on every command. `slice` (the default) loads the slice, a module beside the
-  binary (`build/Release/libohao_slice.so`); a path loads that module; `none` is an engine-only world (a game's
-  components are then unknown and kept as written, `preserved`). A module that does not load is `E_INTERNAL` (exit 3)
+  binary (`build/Release/ohao_slice.dll`; `libohao_slice.so` on Linux); a path loads that module; `none` is an
+  engine-only world (a game's components are then unknown and kept as written, `preserved`). A module that does not load is `E_INTERNAL` (exit 3)
   with the reason, an engine symbol it needs by name included.
 - **No GPU unless something renders.** validate, fmt, apply, query, summary and run
   without `--render` never create a Vulkan device.

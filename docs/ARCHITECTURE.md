@@ -36,15 +36,17 @@ Games (`games/`, each `ohao_add_game(<name>)`, cmake/ohao_games.cmake; above eve
 engine header but `game/api.hpp`, the game API's one header, which is also its precompiled header). The catalogue
 (`ohao schema`, `schema.get`) names each type, enum, method and channel a game owns (`module`). `ohao_sample`
 (`games/sample`): the smallest game, targets that spin until shot and then fall, `sample.targets`, `sample.hit`;
-it is `--game build/Release/libohao_sample.so` with `assets/scenes/sample_targets.scene.json`. `ohao_slice`
+it is `--game build/Release/ohao_sample.dll` (`libohao_sample.so` on Linux) with
+`assets/scenes/sample_targets.scene.json`. `ohao_slice`
 (`games/slice`, namespace `ohao::slice`), the game the engine is built with: combat,
 the enemy AI, grenades and rounds, the view model, the arms and enemy drivers, its HUD, its 9 components and 7 event
 payloads (`types.cpp`), and `combat.info` and `combat.damage` (`methods.cpp`, params in its own registry);
 `slice::module()` is its `game::Module`, and `ohao_game_module` its entry. Its objects are compiled once
-(position independent) and linked two ways: `ohao_slice`, a module (`libohao_slice.so`) that `ohao` and `ohao_game`
-load at start (`game/loader.hpp`: read into a memfd, `dlopen` RTLD_NOW and RTLD_LOCAL) and that links no engine
-library, its references to the engine resolving against the host executable, which exports its symbols
-(`ENABLE_EXPORTS`), so the process holds one engine; and `ohao_slice_static`, for the benches that measure its
+(position independent) and linked two ways: `ohao_slice`, a module (`ohao_slice.dll`; `libohao_slice.so`) that `ohao`
+and `ohao_game` load at start (`game/loader.hpp`: a copy loaded, every import bound at load) and that links no engine
+library, its references to the engine resolving against the host executable, which exports them (Windows: the names
+the games import, `tools/gen_game_imports.py`, delay-loaded from `ohao_engine.exe` and bound to the host by the
+module's hook; Linux: every symbol, `ENABLE_EXPORTS`), so the process holds one engine; and `ohao_slice_static`, for the benches that measure its
 internals. A loaded module is never unloaded: EnTT keeps a pool for each component type, with no removal, and a
 module's pools run its code. `game/install.hpp` is a game's life on a World: `installGame` records what an install
 added (systems, snapshot hooks, drivers, presenters, the physics control rule) and `uninstallGame` removes it, then

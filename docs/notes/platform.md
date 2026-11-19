@@ -3,8 +3,48 @@
 Windows and Linux specifics, the build's traps, the GPU's failure modes on the reference laptop, and the frozen
 monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged.
 
-- On Windows conda's `cmake` shadows the real one; use the scoop shim (above). `tools/check.py`
-  refuses conda's.
+- **Windows, the platform in daily use since 2026-11-19** (Windows 11, Visual Studio 2026's MSVC 14.52, CMake 4.4, the
+  Vulkan SDK 1.4.363, driver 621.24; the commands: `AGENTS.md`, "Build"):
+  - **The machine flags:** `/arch:AVX2 /fp:contract /Zc:preprocessor` (`cmake/ohao_machine.cmake`). Without
+    `/fp:contract` MSVC does not contract `a * b + c` into FMA and GCC does: measured on the goldens, with it three of
+    five render byte for byte as GCC's build did, without it four of five drift. `/Zc:preprocessor`: the standard's
+    `__VA_ARGS__`, which `core/layout_key.hpp`'s macros need.
+  - **Per compiler in the code:** `typeKey`/`typeName` hash `__FUNCSIG__` (keys are per compiler; the game and the
+    host share one); `ContentHasher`'s 128-bit product is `_umul128`; Jolt's `jolt_jobs.cpp` is `/GR-` and parses no
+    precompiled header (the PCH has RTTI). NRD and NRI build without their `/WX` (MSVC 14.52 warns C4834 in MathLib).
+  - **Per platform:** cooked files are mapped with `MapViewOfFile` (a mapped file cannot be replaced; a cooked file's
+    name is its content, so it never is); the job pool reads the cores' `EfficiencyClass`
+    (`GetLogicalProcessorInformationEx`: P 0-15, E 16-31 on the i9-13900HX) and pins by `SetThreadAffinityMask`
+    (processor group 0, up to 64 hardware threads); the RPC reader is interrupted by `CancelSynchronousIo`.
+  - **A game module is a DLL** (`game/loader.hpp`). An executable exports only what a `.def` lists, at most 65535
+    names, and the engine's objects define about a thousand external names each (RTTI, inline and template copies),
+    so `tools/gen_game_imports.py` lists the names the games' objects take from the engine (89): the hosts link the
+    `.def` (`/DEF`), the games the import library `lib.exe` makes from it, the DLL named `ohao_engine.exe`,
+    delay-loaded (`/DELAYLOAD`); the module's notify hook answers that name with the executable that loaded it
+    (`game/module_imports_win.cpp`, node's `win_delay_load_hook` technique), and `ohao_game_bind` binds every import
+    at load, naming the first the host does not export. Each module has its own copy of every inline variable and
+    inline function's static: the generator fails the build on one a game would keep of engine state (it found
+    `log::detail::g_threshold`; a game module reads `log::level()`) and on engine data a game reads (a delay-loaded
+    import cannot be data). Copies it allows: RTTI, EnTT's type ids (EnTT compares types by their name's hash), a
+    log message's per-thread buffer, the C++ library's. The module is loaded from a copy in `<module>.loaded/`
+    (Windows locks a loaded DLL's file; stale copies of exited processes are removed). The CRT is the static one
+    (`/MT`, as DLSS's `nvsdk_ngx_s.lib`): each module has a copy, and the UCRT allocates from the process heap in
+    every copy, so memory crosses between host and game.
+  - **The GPU-fault gate** reads the System event log (`wevtutil`, XML: the text format's labels are localized) for
+    the NVIDIA driver's events (`nvlddmkm`) and the display driver's timeout recoveries (`Display`, 4101) logged
+    during the tests. None were logged on this machine before 2026-11-19.
+  - **NRD's SPIR-V comes from ShaderMake's pinned DXC** (v1.8.2505): the Vulkan SDK 1.4.363's DXC, which ShaderMake
+    takes when `VULKAN_SDK` is set, emits `SPV_KHR_compute_shader_derivatives`, a device extension the engine does
+    not enable (40 validation messages, VUID-VkShaderModuleCreateInfo-pCode-08740/08742).
+  - **The goldens and hashes are Windows's** (2026-11-19). Against the Linux ones: `blockout_play_deferred` 1677 px,
+    `glass_deferred` 78 px, scattered single pixels, almost all +-1 (the last bits of what the CPU computes with
+    another math library); the other three byte for byte. `physics_bench`'s hashes, equal at 1 and 31 threads and
+    run to run: events_1k `61f00ddf648cc4df`, boxes1k `08904e41be22d9f7`, the crowd `e51094a86046a6b5`.
+  - **The hooks** run under Git for Windows' `sh`, with `.venv/Scripts/python.exe`. No git identity is set on the
+    machine: commits name it (`git -c user.name=... -c user.email=...`).
+  - **Windows Defender** scans a freshly linked program at its first run: once 24 s for `replay_test` against
+    0.27 s after.
+- On Windows conda's `cmake` shadows the real one; `tools/check.py` refuses conda's (OHAO_CMAKE names another).
 - **Git Bash (Windows) rewrites arguments that start with `/`** into Windows paths. Write
   `ohao query --fields Transform/position`, not `/Transform/position`.
 - **Line endings:** `core.autocrlf` is on. Byte-compared files (goldens, scene files,
@@ -45,15 +85,19 @@ monograph. Moved from `AGENTS.md` (system design step 2h, 2026-11-09), unchanged
   descriptor that frames on the GPU were still reading. Validation cannot see this: the table's
   `UPDATE_UNUSED_WHILE_PENDING` makes it the application's promise. Fixed (an outside view's slot is retired after
   the frames in flight); the wait is back. A full power-off followed; the sequence ran clean three times after.
-- **Linux, found by the port (2026-11-05):**
+- **Linux, found by the port (2026-11-05).** Not built since 2026-11-19; its code paths stay. Fedora 45's packages
+  (RPM Fusion's `akmod-nvidia` for the driver): `sudo dnf install gcc-c++ cmake ninja-build vulkan-headers
+  vulkan-loader-devel vulkan-validation-layers spirv-tools tbb-devel wayland-devel wayland-protocols-devel
+  libxkbcommon-devel libX11-devel libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libXext-devel`;
+  configure with `-DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc -DSLANGC_CPP=... -DPython3_EXECUTABLE=$PWD/.venv/bin/python`.
   - A pipeline must not outlive its layout on NVIDIA's Linux driver, `maintenance4` or not (Windows tolerated it):
     binding one whose layout was destroyed segfaulted in the driver. Keep every pipeline's layout until teardown
     (`GpuCulling`, `RTDirectTechnique` keep their extra ones in `m_extraLayouts`, `ManifoldCasters` its
     `m_groupLayout`). It is not always a crash: the manifold gather's groups dispatch also ran writing nothing, or hung
     the GPU, run to run.
   - Physics is deterministic run to run on one compiler, not across: MSVC's and GCC's builds land the blockout's
-    crate one ulp apart, so `world.hash` and `tests/serve/expected` are recorded on the Linux build. The helmet's
-    merged model bytes differ too.
+    crate one ulp apart. The goldens were recorded on the Linux build until 2026-11-19, on Windows since. The
+    helmet's merged model bytes differ too.
   - `openpbr_tables --check` is byte for byte on the platform that wrote the tables; elsewhere every number within
     1e-5 (another math library's last digits: MSVC to GCC, at most 5.4e-6).
   - libstdc++ runs `std::execution::par` on oneTBB, linked where found (`TBB::tbb`).

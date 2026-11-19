@@ -5,9 +5,10 @@ The entry point for any agent (or person) building, testing or changing this rep
 OHAO is a C++20 game engine: a Vulkan 1.3 hybrid renderer (deferred raster with ray-traced
 direct light (ReSTIR DI) and GI, plus a path tracer), an EnTT world, reflection and canonical scene files, an
 API for agents (`ohao/api`), the headless `ohao` CLI and `ohao serve`, the same API as a
-JSON-RPC/MCP server on stdio (`ohao/rpc`). Fedora 45 (KDE, GCC 16, Ninja) on an RTX 4060 laptop is the
-platform in daily use since 2026-11-08 (Omarchy/Arch before, from 2026-11-05); Windows/MSVC builds were not
-tried since 2026-11-05.
+JSON-RPC/MCP server on stdio (`ohao/rpc`). Windows 11 (Visual Studio 2026's MSVC 14.52, Ninja) on an RTX 4060
+laptop is the platform in daily use since 2026-11-19, after the GSP firmware crashes on Linux (Fedora 45 and GCC 16
+from 2026-11-08, Omarchy/Arch from 2026-11-05). Linux is not built now; its code paths stay, per platform
+([docs/notes/platform.md](docs/notes/platform.md)).
 
 - **How work is done:** Musk's algorithm, in order (Frank, 2026-11-08): question the requirement, delete the
   part or process, simplify, speed up, automate. Nothing is added (a test, a feature, a doc section) without
@@ -67,38 +68,47 @@ and its reason where the work is planned or recorded, and reports it; it does no
 
 ## Build
 
-Fedora's packages (RPM Fusion's `akmod-nvidia` for the driver):
-
-```
-sudo dnf install gcc-c++ cmake ninja-build vulkan-headers vulkan-loader-devel vulkan-validation-layers spirv-tools \
-  tbb-devel wayland-devel wayland-protocols-devel libxkbcommon-devel libX11-devel libXrandr-devel \
-  libXinerama-devel libXcursor-devel libXi-devel libXext-devel
-```
-
-Two pinned slangc, each unpacked from Slang's own release into `~/.local/opt/slang-<version>`: 2026.20 for SPIR-V
-(`shaders/slangc.version`, `SLANGC`) and 2025.11 for the CPU twins' C++ (`shaders/slangc_cpp.version`,
+Visual Studio 2026 Community (the C++ workload: MSVC 14.52 and its bundled Ninja), CMake 4.4, the Vulkan SDK 1.4.363
+(its loader, headers and validation layer; never its slangc or its DXC), Git for Windows (its `sh` runs the hooks).
+Two pinned slangc, each unpacked from Slang's own release into `%USERPROFILE%\.local\opt\slang-<version>`: 2026.20
+for SPIR-V (`shaders/slangc.version`, `SLANGC`) and 2025.11 for the CPU twins' C++ (`shaders/slangc_cpp.version`,
 `SLANGC_CPP`; 2026.20's C++ emitter miscompiles them, "Gotchas"). Python (numpy, Pillow, jsonschema) is a uv
 environment in the repo, `.venv`; name its interpreter at configure, or CTest runs the harnesses with the
 system Python, which has none of them. The Ninja Multi-Config generator keeps the `build/Release/` layout every
 harness reads.
 
+Configure once from a shell with the compiler's environment (`vcvars64.bat`; cmd syntax):
+
 ```
-cmake -B build -S . -G "Ninja Multi-Config" -DSLANGC=$HOME/.local/opt/slang-2026.20/bin/slangc \
-  -DSLANGC_CPP=$HOME/.local/opt/slang-2025.11/bin/slangc -DPython3_EXECUTABLE=$PWD/.venv/bin/python
-cmake --build build --config Release -j16
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+set "PATH=C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
+cmake -B build -S . -G "Ninja Multi-Config" -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl ^
+  -DSLANGC=%USERPROFILE%/.local/opt/slang-2026.20/bin/slangc.exe ^
+  -DSLANGC_CPP=%USERPROFILE%/.local/opt/slang-2025.11/bin/slangc.exe -DPython3_EXECUTABLE=%CD%/.venv/Scripts/python.exe
+cmake --build build --config Release -j12
 git config core.hooksPath .githooks      # the light CI, once per clone ("Gates")
 ```
 
+After that `python tools/check.py` builds from any shell: it reads `vcvars64.bat`'s environment once (beside the
+`cl.exe` configure chose) and keeps it in `build/check/msvc_env.json`. A clean build takes 129 s at `-j12`.
+
 - **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a globbed directory is picked up
   by the next build. A new directory or target still needs a `CMakeLists.txt` edit.
-- **The edit loop is seconds** (2026-11-09): an unchanged tree builds in 0.06 s, a shader edit in about 1 s (CMake
-  reconfigures, 0.6 s, for the entry points; only that shader and those importing it are recompiled, from slangc's
-  `-depfile`), a renderer `.cpp` in about 2 s (mostly relinking 14 programs). The dependencies are re-checked only
+- **The edit loop is seconds** (Windows, 2026-11-19, `-j12`, two runs each): an unchanged tree builds in 0.6 to 0.9 s
+  (the glob re-check, NRD's ShaderMake and the SPIR-V copy run every build), a shader edit in 3.8 s (only that
+  shader and those importing it are recompiled, from slangc's `-depfile`), a system `.cpp` in 4.4 s, a renderer
+  `.cpp` in 5.5 to 6.1 s, a game `.cpp` in 4.8 s, a field in `animation/components.hpp` in 20 to 23 s and in
+  `physics/components.hpp` in 39 s. The first run of a freshly linked program can take seconds more (24 s once for
+  `replay_test`): Windows Defender scans it. The dependencies are re-checked only
   when their declarations change (`OHAO_DEPENDENCIES_POPULATED`), and NRD's config header keeps its time across
   configures, else every configure recompiles NRD and relinks everything.
-- **The game is a module** (step 3j): the slice builds as `build/Release/libohao_slice.so`, which `ohao` and
-  `ohao_game` load at start (`--game`, `game/loader.hpp`) and export the engine's symbols to (`ENABLE_EXPORTS`);
-  building either builds it. The benches link the same objects statically (`ohao_slice_static`).
+- **The game is a module** (step 3j): the slice builds as `build/Release/ohao_slice.dll` (`libohao_slice.so` on
+  Linux), which `ohao` and `ohao_game` load at start (`--game`, `game/loader.hpp`) and export the engine's symbols to;
+  building either builds it. An MSVC executable exports only what a `.def` lists, so `tools/gen_game_imports.py`
+  lists what the games' objects import from the engine (89 names); the hosts link it and the games its import
+  library, delay-loaded from `ohao_engine.exe`, a name the module's hook answers with the host
+  (`game/module_imports_win.cpp`). It fails the build on engine data a game reads or engine state (an inline
+  variable) a game would keep its own copy of. The benches link the same objects statically (`ohao_slice_static`).
 - **The `shaders` target is not in `ALL`**, but every target that loads SPIR-V depends on it, so building any of
   them builds the shaders. Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`.
 - **Every shader is Slang** (no GLSL, no glslc). A `.slang` with one `[shader(...)]` entry point gives
@@ -118,6 +128,8 @@ git config core.hooksPath .githooks      # the light CI, once per clone ("Gates"
   Its images and buffers come from the renderer's one `GpuAllocator`, named, and are retired, never destroyed under a
   frame in flight. `tools/check.py` fails the build on `vkCmdPipelineBarrier`, `vkCreateRenderPass`,
   `vkCreateFramebuffer`, `vkAllocateMemory` or `vkCreateImage` outside `render/graph` and `gpu/vulkan`.
+- **The machine flags** (`cmake/ohao_machine.cmake`): MSVC `/arch:AVX2 /fp:contract /Zc:preprocessor`; GCC's
+  `-mavx2 -mfma ...` contracts `a * b + c` into FMA by default, MSVC only with `/fp:contract`.
 - **`GLFW_INCLUDE_NONE`** before GLFW's header (`ohao/runtime/window.cpp`): without it GLFW includes `GL/gl.h`,
   which Fedora does not ship by default. The engine is Vulkan only.
 
@@ -128,7 +140,7 @@ is commit `7e7211cf`). A test is added back only when a real bug got through, ne
 
 | Requirement | Gate | Label | Time |
 |---|---|---|---|
-| 1. Never hurt the machine | every test has a time limit; `tools/check.py` fails a run during which the kernel logged an NVIDIA GPU fault (Xid); `check_validation`: the Vulkan validation layer over Cornell, the helmet, the animation rig, the play scene, caustics and smoke, deferred and path traced, and the teardown | gpu | 2 s |
+| 1. Never hurt the machine | every test has a time limit; `tools/check.py` fails a run during which the driver logged an NVIDIA GPU fault (Windows: the System event log's `nvlddmkm` events and display timeouts, `Display` 4101; Linux: the kernel's Xid lines); `check_validation`: the Vulkan validation layer over Cornell, the helmet, the animation rig, the play scene, caustics and smoke, deferred and path traced, and the teardown | gpu | 2 s |
 | 2. The renderer is right | `check_analytic` (both renderers against `albedo/π × irradiance` under one light; an emissive quad's form factor), `check_env_orientation` (a sky the right way up), `check_material` (the white furnace renders 1, the closed emitting box its closed form) | gpu | 6 s |
 | 3. No visual accident | `render_golden`: 5 scenes (Cornell deferred and path traced, the Damaged Helmet, the play scene, glass), rendered at 640x360 in one `ohao serve` | golden | 1 s |
 | 4. Gameplay replays exactly | `replay_test`: the play scene's fight restored from a midway snapshot, and in a new process, reaches the same `world.hash` at every checkpoint (headless, no GPU) | quick | 0.1 s |
@@ -158,7 +170,9 @@ output. Exit 0 = all passed, 1 = something failed (a GPU fault included), 2 = th
 - **Every test exits 0 on success** and nonzero on any failure, and ends with one JSON line `{"suite", "passed",
   "failed", "failures"}`. Register a new one with `ohao_add_python_test`/`ohao_add_test` (`cmake/ohao_tests.cmake`),
   with a `TIMEOUT` and, if it touches the GPU, `GPU` (GPU tests never run two at once).
-- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail. 2026-11-09, after the gates
+- **A kept gate is proven, not trusted:** plant a bug in what it covers and watch it fail. 2026-11-19, Windows: a
+  fake `wevtutil` on `PATH` reporting one `nvlddmkm` event (`check.py` fails the run, exit 1, `gpuFaults` lists it,
+  its test passed). 2026-11-09, after the gates
   became one process each: 64x sampler anisotropy (`check_validation`, the first case: the sampler is made once), a
   rough metal's multiple scattering x0.9 (`check_material`, furnace 0.934) and, with the goldens at 640x360, 1% brightness
   in `displayPixel` (all 5 goldens, 75 to 84% of the pixels), each caught. 2026-11-08, each caught:
@@ -260,8 +274,9 @@ What every change must respect. The build checks some of these; the rest are her
 - **The simulation** (`ohao/ecs/`, `ohao/level/`, `ohao/anim/`, `ohao/audio/`, `ohao/vfx/`, `ohao/runtime/`):
   [docs/notes/simulation.md](docs/notes/simulation.md): levels, physics in the step, combat, frame timing,
   animation, audio, VFX.
-- **Platforms and the machine**: [docs/notes/platform.md](docs/notes/platform.md): Windows (conda's cmake, Git
-  Bash, line endings, duplicate symbols), Linux (the port's findings), a wedged GPU and the GSP firmware faults, the
+- **Platforms and the machine**: [docs/notes/platform.md](docs/notes/platform.md): Windows (MSVC, game modules as
+  DLLs, the GPU-fault gate, Git Bash, line endings, duplicate symbols), Linux (not built now; the port's findings), a
+  wedged GPU and the GSP firmware faults, the
   frozen monograph.
 
 ## Conventions
