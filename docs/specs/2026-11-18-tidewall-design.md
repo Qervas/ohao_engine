@@ -103,7 +103,7 @@ the modules design's (its data, a pure core below where it has one, its systems 
 
 | Module | Depends on | Feature | Public surface (headers) | Data | Methods |
 |---|---|---|---|---|---|
-| `navigation` | ecs, physics, level | navmesh, paths, path following, local avoidance, obstacles | `navigation.hpp` (queries, `followPath`), `components.hpp` (`NavAgent`, `NavPath`, `NavObstacle`, `NavLink`) | the cooked `.nav` (per tile), level hints `nav`, `navlink`, `navobst` | `nav.info`, `nav.path`, `nav.nearest`, `nav.reach`, `nav.show` |
+| `navigation` | ecs, visual, physics (as built, N1) | navmesh, paths, path following, local avoidance, obstacles | `navigation.hpp` (queries), `components.hpp` (`NavAgent`, `NavPath`, `NavObstacle`, `NavLink`) | cooked tiles (`.navtile`), the components as level hints (`NavObstacle`, `NavLink`) | `nav.info`, `nav.path`, `nav.nearest`, `nav.reach`; `nav.show` in `nav_show` (ecs, navigation, world_render) |
 | `perception` | ecs, physics | sight, hearing, memory, teams | `perception.hpp`, `components.hpp` (`Senses`, `Team`, `Awareness`), `events.hpp` (`perception.noticed`, `perception.lost`) | a `.senses.json` (stimuli bound by channel name and cue, team hostility) | `perception.info` |
 | `tactics` | ecs, physics, navigation | cover points and scored position queries | `tactics.hpp` (`queryPositions`), `components.hpp` (`CoverPoint`, `Post`, `PostGroup`) | cover cooked with the navmesh; a `.tactics.json` (named queries) | `tactics.cover`, `tactics.query` |
 | `behavior` | ecs | behaviour trees as data | `behavior.hpp` (the runtime, `registerLeaf`), `components.hpp` (`Behavior`, `BehaviorState`, `Blackboard`) | `.bt.json` | `behavior.info` |
@@ -140,6 +140,23 @@ engines): voxelize the walkable collision, build regions and polygons per tile, 
 pulling (`findStraightPath`). Its dynamic parts: `dtTileCache` (compressed layers per tile, rebuilt in about a
 millisecond when a box or cylinder obstacle is added or removed) and `DetourCrowd` (corridors, local boundary,
 sampled-velocity avoidance, a serial update of every agent).
+
+**As built (part N1, 2026-11-19; the plan's N1 has the measurements).** Corrections to the decisions below:
+- *Where it is built:* when first needed (an active NavAgent, a method), from the World's static, non-trigger
+  colliders (box, mesh, hull; a sphere or capsule as its bounds) but NavObstacles', tile by tile from the cooked cache
+  (`<hash>.navtile`, named by the tile's triangles and the settings), cooked on the pool where missing: the cooker runs
+  no module, and the cache makes an unchanged level's build a load (10-13 ms for the yard). Again after a collider or
+  link changes (signals); a World without agents never builds one.
+- *Cells and tiles:* 0.12 m cells (at 0.16 m a 1.2 m door did not open) and 160-cell tiles of 19.2 m (the sweep in the
+  plan: 32 m tiles cost 2.8 ms an obstacle change, 19.2 m 0.94 ms with a path p95 of 46 us).
+- *The version* is a hash of the navmesh's input (the baked geometry and the active obstacles), not a count: a function
+  of saved state, so nothing about the navmesh is in a snapshot or in `world.hash` beyond the components.
+- *Hints:* the components themselves, passed through by name (`"NavObstacle": {...}`, `"NavLink": {...}` in a node's
+  extras, the level pipeline's rule for a capitalised key), so the level module is not edited; no `nav` hint (nothing
+  needs one yet).
+- *nav.show* is its own module, `nav_show`, through lines world_render presents and the gizmo pass draws.
+- *One agent class* of fixed settings (radius 0.35 m, height 1.8, step 0.35, slope 45 degrees), not read from a
+  PlayerController; avoidance steers around agents only (no `dtLocalBoundary` wall segments).
 
 **Decided.**
 - **Built at cook, from the level's static collision**, never at load: the cooker reads the level's collision
@@ -178,6 +195,8 @@ sampled-velocity avoidance, a serial update of every agent).
   connections, one-way or two-way; the leaf that crosses one plays its clip and moves the character along it.
 - **Cost** (*estimates*, measured in N1): the whole level's tiles (about 300 x 120 m, 40 tiles) cook in under 5 s cold
   on the pool; load under 20 ms; a path query under 50 us p95; an obstacle change under 2 ms of tile cache update.
+  *Measured on the yard (N1):* cold 54-58 ms p95 at 16 threads, load 10-13 ms, a path 45-48 us p95, an obstacle change
+  0.96-1.34 ms p95; budgets added with those numbers (`level_budgets.json`).
 
 **Authored and checked through MCP.**
 - `nav.info`: tiles, polygons, the obstacle set, the version, the build's time and settings, warnings (an island
