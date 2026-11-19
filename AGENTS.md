@@ -94,8 +94,9 @@ After that `python tools/check.py` builds from any shell: it reads `vcvars64.bat
 
 - **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a globbed directory is picked up
   by the next build. A new directory or target still needs a `CMakeLists.txt` edit.
-- **The edit loop is seconds** (Windows, 2026-11-19, `-j12`, two runs each): an unchanged tree builds in 0.6 to 0.9 s
-  (the glob re-check, NRD's ShaderMake and the SPIR-V copy run every build), a shader edit in 3.8 s (only that
+- **The edit loop is seconds** (Windows, 2026-11-19, `-j12`, two runs each): an unchanged tree builds in 0.29 to
+  0.30 s (three runs: Ninja parsing its manifests, 125 ms, and stating 3853 nodes, 64 ms, and CMake's glob re-check,
+  50 ms; each SPIR-V is copied, and NRD's shaders made, only when they changed), a shader edit in 3.8 s (only that
   shader and those importing it are recompiled, from slangc's `-depfile`), a system `.cpp` in 4.4 s, a renderer
   `.cpp` in 5.5 to 6.1 s, a game `.cpp` in 4.8 s, a field in `animation/components.hpp` in 20 to 23 s and in
   `physics/components.hpp` in 39 s. The first run of a freshly linked program can take seconds more (24 s once for
