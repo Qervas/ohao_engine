@@ -279,6 +279,7 @@ void VulkanRenderer::applyPacket(const render::FramePacket& packet) {
         m_envIntensityScale = std::max(0.0f, env.intensity);
     }
     if (packet.hud && m_deferredRenderer) m_deferredRenderer->setHud(packet.hud->items);
+    if (packet.lines && m_deferredRenderer) m_deferredRenderer->setLines(*packet.lines);
     if (packet.frameDt && m_deferredRenderer)
         if (PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing()) pp->setFrameDeltaTime(*packet.frameDt);
 }

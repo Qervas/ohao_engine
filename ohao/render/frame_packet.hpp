@@ -71,6 +71,8 @@ public:
     std::optional<View> view;
     // The HUD the deferred frames draw over their final image (empty: none).
     std::optional<HudList> hud;
+    // The lines the deferred frames draw over their final image, before the HUD (empty: none).
+    std::optional<std::vector<DebugLine>> lines;
     // The frame's wall time in seconds: auto exposure's adaptation.
     std::optional<float> frameDt;
 

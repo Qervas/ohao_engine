@@ -121,6 +121,7 @@ void LiveHost::renderFrame(PendingFrame frame) {
     // The window always draws the game's HUDs (empty without one: no pass), at the size of the frame before.
     render::FramePacket& packet = ecs::framePacket(*m_world);
     packet.hud = ecs::drawHuds(*m_world, m_viewWidth, m_viewHeight);
+    packet.lines = ecs::presentedLines(*m_world);
     if (m_cfg.latencyReadout) drawLatencyReadout(*packet.hud);
     // The path tracer restarts its accumulation when the view may have moved (it notices
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.

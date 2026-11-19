@@ -476,8 +476,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
     gpu::Image* const finalImage = finalOutput();
 
-    // 6. Gizmo pass (transform handles for selected objects)
-    if (m_gizmoPass && m_gizmoEnabled && finalImage) {
+    // 6. Gizmo pass (transform handles for selected objects, and the frame's lines)
+    if (m_gizmoPass && (m_gizmoEnabled || m_gizmoPass->hasLines()) && finalImage) {
         m_gizmoPass->setViewProjection(m_proj * m_view);
         m_gizmoPass->record(frame, *finalImage);
     }
@@ -618,6 +618,10 @@ void DeferredRenderer::setWireframeEnabled(bool enabled) {
     if (m_gbufferPass) {
         m_gbufferPass->setWireframeEnabled(enabled);
     }
+}
+
+void DeferredRenderer::setLines(std::span<const render::DebugLine> lines) {
+    if (m_gizmoPass) m_gizmoPass->setLines(lines);
 }
 
 void DeferredRenderer::setHud(std::span<const render::HudItem> items) {

@@ -152,6 +152,8 @@ public:
 
     // The HUD the next frames draw over the final image (sub-project 7; empty: none, no pass).
     void setHud(std::span<const render::HudItem> items);
+    // The lines the next frames draw over the final image through the gizmo pass (empty: none).
+    void setLines(std::span<const render::DebugLine> lines);
 
     // Gizmo controls
     void setGizmoEnabled(bool enabled);

@@ -1,5 +1,6 @@
 #include "gizmo_pass.hpp"
 #include "render/graph/pipeline.hpp"
+#include <algorithm>
 #include <array>
 #include <span>
 #include "core/log.hpp"
@@ -41,6 +42,7 @@ void GizmoPass::cleanup() {
     vkDeviceWaitIdle(m_device);
 
     destroyVertexBuffers();
+    m_allocator->retire(m_lineBuffer);
 
     if (m_pipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_pipeline, nullptr);
     if (m_pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
@@ -75,40 +77,67 @@ void GizmoPass::setViewProjection(const glm::mat4& viewProj) {
     m_viewProj = viewProj;
 }
 
+void GizmoPass::setLines(std::span<const render::DebugLine> lines) {
+    std::vector<GizmoVertex> v;
+    v.reserve(lines.size() * 2);
+    for (const render::DebugLine& l : lines) {
+        v.push_back({l.a, l.color});
+        v.push_back({l.b, l.color});
+    }
+    const bool same = v.size() == m_lines.size() &&
+                      std::equal(v.begin(), v.end(), m_lines.begin(), [](const GizmoVertex& a, const GizmoVertex& b) {
+                          return a.position == b.position && a.color == b.color;
+                      });
+    if (same) return;
+    m_lines = std::move(v);
+    m_linesDirty = true;
+}
+
 void GizmoPass::record(const render::Frame& frame, gpu::Image& target) {
-    if (!m_enabled || m_pipeline == VK_NULL_HANDLE || !target || target.desc.format != kTargetFormat) return;
+    if (m_pipeline == VK_NULL_HANDLE || !target || target.desc.format != kTargetFormat) return;
 
     // Update geometry buffers if needed
-    if (m_geometryDirty) {
+    if (m_enabled && m_geometryDirty) {
         updateGizmoBuffers();
     }
+    if (m_linesDirty) {
+        m_allocator->retire(m_lineBuffer);
+        if (!m_lines.empty())
+            m_lineBuffer = m_allocator->createBufferFromBytes(std::as_bytes(std::span(m_lines)), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        m_linesDirty = false;
+    }
 
-    if (m_indexCount == 0 || !m_vertexBuffer.isValid() || !m_indexBuffer.isValid()) return;
+    const bool handles = m_enabled && m_indexCount != 0 && m_vertexBuffer.isValid() && m_indexBuffer.isValid();
+    const bool lines = !m_lines.empty() && m_lineBuffer.isValid();
+    if (!handles && !lines) return;
 
     render::Pass pass(frame, "gizmo", render::Pass::Raster);
-    pass.read(m_vertexBuffer, render::BufferUse::Vertex).read(m_indexBuffer, render::BufferUse::Index);
+    if (handles) pass.read(m_vertexBuffer, render::BufferUse::Vertex).read(m_indexBuffer, render::BufferUse::Index);
+    if (lines) pass.read(m_lineBuffer, render::BufferUse::Vertex);
     pass.color(target, render::Load::Keep);   // composited over what is there
     pass.begin();
     const VkCommandBuffer cmd = frame.cmd;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
 
-    VkBuffer vertexBuffers[] = {m_vertexBuffer.buffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(cmd, m_indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-
-    // Push constants
     GizmoPushConstants pc{};
     pc.viewProj = m_viewProj;
-    pc.model = m_gizmoModel;
     pc.highlightColor = glm::vec4(GizmoMeshes::HIGHLIGHT_COLOR, 0.0f);
-
-    vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT,
-                       0, sizeof(GizmoPushConstants), &pc);
-
-    vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
+    VkDeviceSize offsets[] = {0};
+    if (lines) {   // world space
+        pc.model = glm::mat4(1.0f);
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GizmoPushConstants), &pc);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &m_lineBuffer.buffer, offsets);
+        vkCmdDraw(cmd, static_cast<uint32_t>(m_lines.size()), 1, 0, 0);
+    }
+    if (handles) {
+        VkBuffer vertexBuffers[] = {m_vertexBuffer.buffer};
+        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, m_indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        pc.model = m_gizmoModel;
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GizmoPushConstants), &pc);
+        vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
+    }
 }
 
 bool GizmoPass::createPipeline() {

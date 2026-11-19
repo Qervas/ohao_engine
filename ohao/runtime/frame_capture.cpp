@@ -249,6 +249,8 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world,
     // A game's HUDs only when asked (hud: true), so captures and goldens stay the scene's.
     packet.hud = r.hud && mode == RenderMode::Deferred ? ecs::drawHuds(world, renderer.getWidth(), renderer.getHeight())
                                                        : render::HudList{};
+    // The lines presented (nav.show), in deferred captures: none unless something presents them.
+    packet.lines = mode == RenderMode::Deferred ? ecs::presentedLines(world) : std::vector<render::DebugLine>{};
     const double setupMs = msSince(start);
     // A fresh renderer renders exactly as the examples do (the goldens); one that has
     // rendered starts its own accumulation, as a fresh one would.

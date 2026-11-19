@@ -17,10 +17,13 @@ class World;
 using HudFn = std::function<void(World&, render::HudList&, uint32_t width, uint32_t height)>;
 // Appends the spheres the frame draws, placed at the World's render alpha (the slice's grenades in flight).
 using SpheresFn = std::function<void(const World&, std::vector<render::PresentedSphere>&)>;
+// Appends the lines the frame draws over its final image (nav.show's navmesh), world space.
+using LinesFn = std::function<void(World&, std::vector<render::DebugLine>&)>;
 
 // Each returns the presenter's id (removePresenter).
 uint32_t addHud(World& world, HudFn fn);
 uint32_t addSpheres(World& world, SpheresFn fn);
+uint32_t addLines(World& world, LinesFn fn);
 void removePresenter(World& world, uint32_t id);
 [[nodiscard]] std::vector<uint32_t> presenterIds(const World& world);
 
@@ -28,5 +31,7 @@ void removePresenter(World& world, uint32_t id);
 [[nodiscard]] render::HudList drawHuds(World& world, uint32_t width, uint32_t height);
 // Every registered source's spheres, in registration order.
 [[nodiscard]] std::vector<render::PresentedSphere> presentedSpheres(const World& world);
+// Every registered source's lines, in registration order.
+[[nodiscard]] std::vector<render::DebugLine> presentedLines(World& world);
 
 } // namespace ohao::ecs

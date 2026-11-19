@@ -5,10 +5,13 @@
 #include "render/graph/pass.hpp"
 #include "render/shader_bindings/overlay_gizmo.hpp"
 #include "../gizmo/gizmo_meshes.hpp"
+#include "render/scene/render_scene_types.hpp"
+
+#include <span>
 
 namespace ohao {
 
-// Gizmo render pass - renders transform handles on top of the scene.
+// Gizmo render pass - renders transform handles on top of the scene, and the frame's lines (render::DebugLine).
 // Uses line list topology with depth test disabled (always visible).
 // Simple vertex color shader (no lighting).
 class GizmoPass : public RenderPassBase {
@@ -22,6 +25,10 @@ public:
     // The handles composited over `target` (the final RGBA8 image) in place, timed as gizmo.
     void record(const render::Frame& frame, gpu::Image& target);
     [[nodiscard]] const char* getName() const override { return "GizmoPass"; }
+
+    // The lines drawn with the handles, world space; their buffer is made again only when they change.
+    void setLines(std::span<const render::DebugLine> lines);
+    [[nodiscard]] bool hasLines() const noexcept { return !m_lines.empty(); }
 
     // Configure what to render
     void setEnabled(bool enabled) { m_enabled = enabled; }
@@ -53,6 +60,11 @@ private:
     GpuBuffer m_vertexBuffer;
     GpuBuffer m_indexBuffer;
     uint32_t m_indexCount{0};
+
+    // The lines: two vertices each.
+    std::vector<GizmoVertex> m_lines;
+    GpuBuffer m_lineBuffer;
+    bool m_linesDirty{false};
 
     // Cached geometry
     std::vector<GizmoVertex> m_vertices;

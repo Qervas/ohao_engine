@@ -155,6 +155,12 @@ struct InstanceDesc {
 
 // A sphere the frame draws that is not in the registry (sub-project 12: a test grenade in flight): a black sphere
 // of the light emitter mesh, an ordinary instance (it casts shadows, it emits nothing).
+// A line the frame draws over its final image, unlit and always in front (world space; nav.show's navmesh).
+struct DebugLine {
+    glm::vec3 a{0.0f}, b{0.0f};
+    glm::vec3 color{1.0f};
+};
+
 struct PresentedSphere {
     glm::vec3 centre{0.0f};
     float radius{0.05f};

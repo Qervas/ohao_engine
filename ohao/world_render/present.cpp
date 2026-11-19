@@ -9,6 +9,7 @@ namespace {
 struct Presenters {
     std::vector<std::pair<uint32_t, HudFn>> huds;
     std::vector<std::pair<uint32_t, SpheresFn>> spheres;
+    std::vector<std::pair<uint32_t, LinesFn>> lines;
     uint32_t next{1};
 };
 
@@ -32,10 +33,17 @@ uint32_t addSpheres(World& world, SpheresFn fn) {
     return p.next++;
 }
 
+uint32_t addLines(World& world, LinesFn fn) {
+    Presenters& p = presentersOf(world);
+    p.lines.emplace_back(p.next, std::move(fn));
+    return p.next++;
+}
+
 void removePresenter(World& world, uint32_t id) {
     Presenters& p = presentersOf(world);
     std::erase_if(p.huds, [&](const auto& h) { return h.first == id; });
     std::erase_if(p.spheres, [&](const auto& s) { return s.first == id; });
+    std::erase_if(p.lines, [&](const auto& l) { return l.first == id; });
 }
 
 std::vector<uint32_t> presenterIds(const World& world) {
@@ -43,6 +51,7 @@ std::vector<uint32_t> presenterIds(const World& world) {
     if (const auto* p = world.context().find<Presenters>()) {
         for (const auto& h : p->huds) out.push_back(h.first);
         for (const auto& s : p->spheres) out.push_back(s.first);
+        for (const auto& l : p->lines) out.push_back(l.first);
     }
     return out;
 }
@@ -58,6 +67,13 @@ std::vector<render::PresentedSphere> presentedSpheres(const World& world) {
     std::vector<render::PresentedSphere> out;
     if (const auto* p = world.context().find<Presenters>())
         for (const auto& [id, fn] : p->spheres) fn(world, out);
+    return out;
+}
+
+std::vector<render::DebugLine> presentedLines(World& world) {
+    std::vector<render::DebugLine> out;
+    if (auto* p = world.context().find<Presenters>())
+        for (const auto& [id, fn] : p->lines) fn(world, out);
     return out;
 }
 
