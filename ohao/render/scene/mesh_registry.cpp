@@ -3,9 +3,11 @@
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cstring>
 
+#include "core/jobs/graph.hpp"
 #include "core/log.hpp"
 
 namespace ohao::render {
@@ -284,12 +286,22 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     const auto indexCount = static_cast<uint32_t>(data.indices.size());
     const uint32_t triangleCount = indexCount / 3;
 
-    for (uint32_t idx : data.indices) {
-        if (idx >= vertexCount) {
-            OHAO_LOG(Error, render, "RenderScene: registerMesh '{}': index {} out of range ({} vertices)",
-                     data.debugName, idx, vertexCount);
-            return {};
-        }
+    // The first index out of range, and the bounds, on the pool: a chunk's result each, taken in chunk order. The
+    // arrays are mostly a cooked file's mapped pages, touched for the first time here.
+    constexpr std::size_t kIndicesPerChunk = 1 << 16, kVerticesPerChunk = 1 << 14;
+    std::vector<std::size_t> badAt((indexCount + kIndicesPerChunk - 1) / kIndicesPerChunk, SIZE_MAX);
+    jobs::parallelFor(0, indexCount, kIndicesPerChunk, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i)
+            if (data.indices[i] >= vertexCount) {
+                badAt[lo / kIndicesPerChunk] = i;
+                return;
+            }
+    }, "mesh.indices");
+    for (const std::size_t i : badAt) {
+        if (i == SIZE_MAX) continue;
+        OHAO_LOG(Error, render, "RenderScene: registerMesh '{}': index {} out of range ({} vertices)",
+                 data.debugName, data.indices[i], vertexCount);
+        return {};
     }
 
     MeshInfo mesh{};
@@ -317,10 +329,19 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         std::copy_n(data.triangleMaterialSlot.begin(), n, triangleSlots.begin());
     }
 
+    std::vector<std::array<glm::vec3, 2>> bounds((vertexCount + kVerticesPerChunk - 1) / kVerticesPerChunk,
+                                                 {glm::vec3(FLT_MAX), glm::vec3(-FLT_MAX)});
+    jobs::parallelFor(0, vertexCount, kVerticesPerChunk, [&](std::size_t lo, std::size_t hi) {
+        auto& [cmn, cmx] = bounds[lo / kVerticesPerChunk];
+        for (std::size_t i = lo; i < hi; ++i) {
+            cmn = glm::min(cmn, data.vertices[i].position);
+            cmx = glm::max(cmx, data.vertices[i].position);
+        }
+    }, "mesh.bounds");
     glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);
-    for (const Vertex& v : data.vertices) {
-        mn = glm::min(mn, v.position);
-        mx = glm::max(mx, v.position);
+    for (const auto& [cmn, cmx] : bounds) {
+        mn = glm::min(mn, cmn);
+        mx = glm::max(mx, cmx);
     }
     mesh.aabbMin = mn;
     mesh.aabbMax = mx;
@@ -400,10 +421,16 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         mesh.submeshMeshlets = std::move(submeshMeshlets);
 
         auto* dst = static_cast<std::byte*>(staging.getMappedData());
-        std::memcpy(dst, data.vertices.data(), static_cast<std::size_t>(vBytes));
-        std::memcpy(dst + vBytes, data.indices.data(), static_cast<std::size_t>(iBytes));
-        if (tBytes) std::memcpy(dst + vBytes + iBytes, triangleSlots.data(), static_cast<std::size_t>(tBytes));
-        std::memcpy(dst + vBytes + iBytes + tBytes, &entry, sizeof(entry));
+        // The arrays on the pool (jobs::copy), the meshlets' table here.
+        const jobs::Copy copies[] = {
+            {dst, data.vertices.data(), static_cast<std::size_t>(vBytes)},
+            {dst + vBytes, data.indices.data(), static_cast<std::size_t>(iBytes)},
+            {dst + vBytes + iBytes, triangleSlots.data(), static_cast<std::size_t>(tBytes)},
+            {dst + vBytes + iBytes + tBytes, &entry, sizeof(entry)},
+            {dst + meshletAt + mBytes, meshletVertices.data(), static_cast<std::size_t>(mvBytes)},
+            {dst + meshletAt + mBytes + mvBytes, meshletTriangles.data(), static_cast<std::size_t>(mtBytes)},
+        };
+        jobs::copy(copies, std::size_t{1} << 20, "mesh upload");
         // Meshlets with arena offsets; their vertices stay mesh-local (a draw adds its
         // vertex offset, as for the index arena).
         auto* gpuMeshlets = reinterpret_cast<gpu::shared::MeshletGpu*>(dst + meshletAt);
@@ -415,9 +442,6 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
             g.cone = {s.coneAxis.x, s.coneAxis.y, s.coneAxis.z, s.coneCutoff};
             std::memcpy(gpuMeshlets + i, &g, sizeof(g));
         }
-        if (mvBytes) std::memcpy(dst + meshletAt + mBytes, meshletVertices.data(), static_cast<std::size_t>(mvBytes));
-        if (mtBytes)
-            std::memcpy(dst + meshletAt + mBytes + mvBytes, meshletTriangles.data(), static_cast<std::size_t>(mtBytes));
         m_ctx.allocator->flushBuffer(staging);
 
         render::Pass pass(frame, nullptr, render::Pass::Transfer);

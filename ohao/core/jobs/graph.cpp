@@ -1,5 +1,7 @@
 #include "core/jobs/graph.hpp"
 
+#include <cstring>
+
 namespace ohao::jobs {
 
 Graph::~Graph() {
@@ -62,5 +64,17 @@ void parallelFor(const ForLoop& loop) {
 }
 
 } // namespace detail
+
+void copy(std::span<const Copy> copies, std::size_t piece, const char* name) {
+    piece = std::max<std::size_t>(piece, 1);
+    std::vector<Copy> pieces;
+    for (const Copy& c : copies)
+        for (std::size_t at = 0; at < c.bytes; at += piece)
+            pieces.push_back({static_cast<std::byte*>(c.dst) + at, static_cast<const std::byte*>(c.src) + at,
+                              std::min(piece, c.bytes - at)});
+    parallelFor(0, pieces.size(), 1, [&](std::size_t lo, std::size_t hi) {
+        for (std::size_t i = lo; i < hi; ++i) std::memcpy(pieces[i].dst, pieces[i].src, pieces[i].bytes);
+    }, name);
+}
 
 } // namespace ohao::jobs

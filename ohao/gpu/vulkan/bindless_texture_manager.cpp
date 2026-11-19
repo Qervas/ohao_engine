@@ -1,4 +1,5 @@
 #include "bindless_texture_manager.hpp"
+#include "core/jobs/graph.hpp"
 #include "gpu/vulkan/barriers.hpp"
 #include "gpu/vulkan/gpu_fault.hpp"
 #include "../../gpu/vulkan/gpu_allocator.hpp"
@@ -499,21 +500,25 @@ void BindlessTextureManager::uploadPending() {
         }
 
         auto* mapped = static_cast<uint8_t*>(staging.getMappedData());
+        // The copies are recorded here and made on the pool (jobs::copy): the pixels are mostly a cooked file's
+        // mapped pages, touched for the first time.
+        std::vector<jobs::Copy> copies;
         VkDeviceSize offset = 0;
         for (std::size_t i = first; i < last; ++i) {
             const PendingUpload& u = m_pending[i];
             if (u.pixels.levels.empty()) {
-                std::memcpy(mapped + offset, u.pixels.rgba8.data(), u.bytes);
+                copies.push_back({mapped + offset, u.pixels.rgba8.data(), u.bytes});
             } else {
                 VkDeviceSize at = offset;
                 for (const auto level : u.pixels.levels) {
-                    std::memcpy(mapped + at, level.data(), level.size());
+                    copies.push_back({mapped + at, level.data(), level.size()});
                     at += level.size();
                 }
             }
             recordUpload(cmd, staging.buffer, offset, m_textures[u.slot], !u.pixels.levels.empty());
             offset += bytesOf(u);
         }
+        jobs::copy(copies, std::size_t{1} << 20, "texture upload");
         m_allocator->flushBuffer(staging);
         // Not waited for: the queue runs it before any frame submitted afterwards, which is the first that can
         // sample these textures. The staging buffer goes when it has run.

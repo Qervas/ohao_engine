@@ -311,11 +311,24 @@ Result<ContentHash> modelKey(const fs::path& source, ModelKind kind) {
     for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     h.text(ext);
     if (ext == ".gltf" || ext == ".glb") {
-        for (const std::string& uri : gltfUris(bytes)) {
-            h.text(uri);
-            if (const auto named = cooked::Mapping::open(source.parent_path() / uri)) {   // a missing one is the importer's to report
-                h.value(static_cast<uint64_t>(named.value()->bytes().size()));
-                h.bytes(named.value()->bytes());
+        // The files it names are mapped and their pages brought in on the pool, a file a task (a page's first touch
+        // costs more than hashing it), then hashed here in the file's order.
+        const std::vector<std::string> uris = gltfUris(bytes);
+        std::vector<std::shared_ptr<const cooked::Mapping>> named(uris.size());
+        jobs::parallelFor(0, uris.size(), 1, [&](std::size_t lo, std::size_t hi) {
+            for (std::size_t i = lo; i < hi; ++i) {
+                auto file = cooked::Mapping::open(source.parent_path() / uris[i]);
+                if (!file) continue;   // a missing one is the importer's to report
+                const std::span<const uint8_t> pages = file.value()->bytes();
+                for (std::size_t at = 0; at < pages.size(); at += 4096) (void)*static_cast<const volatile uint8_t*>(&pages[at]);
+                named[i] = std::move(file.value());
+            }
+        }, "cook.name");
+        for (std::size_t i = 0; i < uris.size(); ++i) {
+            h.text(uris[i]);
+            if (named[i]) {
+                h.value(static_cast<uint64_t>(named[i]->bytes().size()));
+                h.bytes(named[i]->bytes());
             }
         }
     }

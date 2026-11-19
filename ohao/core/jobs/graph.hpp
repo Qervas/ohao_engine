@@ -8,6 +8,7 @@
 //   jobs::wait(g.run());
 //
 //   jobs::parallelFor(0, n, 64, [&](std::size_t lo, std::size_t hi) { ... });   // returns when all ran
+//   jobs::copy(copies);   // memcpy each, in pieces run as one parallelFor
 //
 // parallelFor's chunks run at the priority of the task that calls it (frame outside any task), or the one given: a
 // cook's chunks at background priority run on workers only, and a cook's own nested loops stay background.
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <type_traits>
 #include <vector>
 
@@ -73,6 +75,17 @@ void parallelFor(std::size_t begin, std::size_t end, std::size_t grain, F&& fn, 
                                begin, end, grain, static_cast<uint32_t>(chunks), name, priority};
     detail::parallelFor(loop);
 }
+
+// One memcpy: `bytes` from `src` to `dst`, which do not overlap.
+struct Copy {
+    void* dst;
+    const void* src;
+    std::size_t bytes;
+};
+// Every copy, cut into pieces of at most `piece` bytes that run as one parallelFor (at the caller's priority): the
+// bytes written are the serial copies'. For a load's copies out of mapped files into staging, where a page's first
+// touch costs more than its bytes (Sponza's 85 MB of textures: 55 ms on one thread).
+void copy(std::span<const Copy> copies, std::size_t piece = std::size_t{1} << 20, const char* name = "copy");
 
 // fn() on a worker, at background priority (at once on this thread when the pool has no workers). `done`, when
 // given, counts it.
