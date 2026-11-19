@@ -87,6 +87,12 @@ measurable.
 
 **Engine iteration items** (raised 2026-11-04, not yet ordered): a smaller path-tracer raygen (rarely used code such as the subsurface walk and glass in separate shaders; its cold compile is minutes, every golden bit-identical as the bar); CPU-GPU sync on a timeline semaphore instead of per-frame fences (the `vkResetFences` on a fence still in use seen once in validation); the ray-traced passes moved into the render graph so their barriers are derived, not written by hand (112 `vkCmdPipelineBarrier` calls in 32 files; the synchronization validation layer, `OHAO_VALIDATION=sync`, as the check); `RenderScene::analyticLightPower` sizing the sun's share from mesh-local draw bounds.
 
+**Order after step 4b** (2026-11-19): the system design's steps 1-5 (`specs/2026-11-08-system-design.md`) are built;
+step 4b (jobs, waves, Jolt on jobs, the engine modules, the frame packet and the render thread) closed on 2026-11-19
+([change record](changes/2026-11-19-step4b-jobs.md); what it still owes is in its plan's "Needs Frank"). Next:
+**Tidewall**, the mission demo as game code (Frank, 2026-11-18: rulings F1-F5) ([spec](specs/2026-11-18-tidewall-design.md)
+· [plan](plans/2026-11-18-tidewall.md)); what it pulls out of the engine is an engine module, one feature each.
+
 **Order after the frontier renderer** (Frank, 2026-11-02): 23 Path guiding first (ruled the same day, after the showcase render's dots), then 13 Joints and ragdoll, then 19 Destruction (it builds on 13's breakable joints and matters most to a shooter's play), 20 Cloth and soft bodies, 21 Simulated particles; 22 Fluids by need. Where 14 Game module and 15 Asset database fall among them is not ruled yet. Gameplay physics stays on the CPU and replays bit for bit; anything simulated on the GPU is presentation only.
 
 **Order:** 5–7 built (2b 2026-10-25, 6 and 7 2026-10-27). Next (Frank, 2026-10-27, adopting the

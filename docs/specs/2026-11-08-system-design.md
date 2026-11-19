@@ -136,7 +136,9 @@ added and removed, 74 tests built and cut to 10).
   (10 ms on bench10k); measured first, else generated at build.
 - **Methods:** one row each (name, params, result, doc, mutates) feeds dispatch, the CLI, `tools/list` and the docs.
 - **`RenderSettings`:** one reflected struct, shared by the API and the renderer, its defaults written once.
-- **Install:** one `installEngine(World&, EngineConfig)` for every host; hosts differ by config, never by sequence.
+- **Install:** one `engine::install(world, services, only)` for every host (as built in step 4b-6b: the engine's
+  modules in dependency order, `docs/specs/2026-11-18-engine-modules-design.md`); hosts differ by the modules and
+  services they give, never by sequence.
 
 ### 4.3 The world: scheduler, state, events
 
@@ -146,8 +148,20 @@ added and removed, 74 tests built and cut to 10).
   and the events it emits and reads. The scheduler builds a graph at install: a cycle, or two writers of one
   component without an order, fail there (a name not installed is no constraint: hosts install different sets).
   Systems whose accesses do not conflict share a wave; waves run in a fixed order, so the results are identical at
-  any thread count. Step 3 orders by the declared order and the events, serially (one total order, ties by name);
-  step 4 adds the accesses, their check and the waves, on jobs, where a wrong access is a race and is enforced.
+  any thread count.
+  - *As built in step 4b* (`docs/changes/2026-11-19-step4b-jobs.md`): a system's `SystemDecl` (`ecs/system.hpp`) names
+    `after`, `before`, `readsCues`, the component types it reads and writes (`ecs::types<...>()`), the resources it
+    reads and writes, and `exclusive`; it runs as `fn(SystemContext&, dt)`, and a signal's handler joins its writers'
+    access through its `SignalEffect` (`World::onConstruct`, `onUpdate`, `onDestroy`). Install throws on a cycle, on two
+    writers of one component or resource with no order between them, and on a system that declares nothing.
+  - A wave is a run of consecutive systems in the serial order that conflict in nothing; a wave of several runs on the
+    job pool, its events and defers staged per system and flushed in the serial order, so every seq is the one-thread
+    run's. An emplace or remove of a declared component is a write; only creating or destroying entities (or a
+    subsystem with its own registry use) makes a system exclusive. The check mode (`OHAO_ACCESS_CHECK=1`) throws on an
+    access outside the declaration; `OHAO_WAVE_ORDER=reverse` shows a dependency the declarations miss as a different
+    `world.hash`, and `replay_test` runs a leg so. Today's scenes gain nothing from waves (the play scene's and the
+    crowd's: one wave of two systems, run inline, the rest of one); the step's speed is in `parallelFor` inside systems
+    and Jolt on the pool (4.5).
 - **Complete state.** A system with private state registers it (save, restore, hash). The snapshot and `world.hash`
   cover components, every registered state (grenades in flight, the round timer, Jolt's bodies, the audio schedule,
   vfx records) and the step's events.
@@ -184,24 +198,29 @@ added and removed, 74 tests built and cut to 10).
 
 ![Game thread, render thread, GPU](2026-11-08-system-design/5-threads.svg)
 
-**Frank, 2026-11-17: 4b is built** ("it's too crucial"), after caustics step 2c and step 4's cleanup: the job system,
-the systems' declared accesses and parallel waves, Jolt on the jobs, the frame packet and the render thread, as the
-target above. A game written before it would assume one thread and be rewritten; built first, every system and game
-is written in its final shape. The measurement below is why it was deferred on 2026-11-11, kept as the baseline 4b is
-judged against.
+As built in step 4b (2026-11-18 to 2026-11-19; `docs/changes/2026-11-19-step4b-jobs.md`), which corrected this
+section. Frank ruled it built (2026-11-17: "it's too crucial") so that every system and game is written against
+several threads from the start; step 4 had measured the CPU with nothing to give (recording 0.07 to 0.8 ms, every
+system 0.0002 to 0.06 ms a step).
 
-Measured in step 4 (2026-11-11; `docs/changes/2026-11-17-step4-frame.md`): the CPU had nothing to give yet. Recording and submitting a frame is 0.07 to 0.8 ms (`render_bench`, 100,000 instances included);
-every simulation system is 0.0002 to 0.06 ms a step (`physics_bench`); the GPU frame is 2 to 37 ms. So, until a
-measurement asks:
-
-- **One thread steps, extracts and records**, as today. The target stays the picture above: the game thread ends
-  each frame with an immutable frame packet, a render thread records frame N while the game thread simulates N+1.
-  Built when recording is measured over a few milliseconds.
-- **No job system yet.** Systems declare an order (step 3), not their accesses; waves of non-conflicting systems on
-  jobs come when a game's step is measured over a millisecond in systems that could overlap.
-- **Jolt stays on the calling thread.** Measured on its own pool: 1,000 boxes piling up 2.50 ms at 0 workers, 0.85 at
-  7; every scene that exists slower (the blockout's step 0.009 to 0.034 ms). One flag
-  (`BackendConfig::enableMultithreading`) when a game piles bodies; its replay at N workers is checked first.
+- **One job pool** (`ohao/core/jobs`, our own, no new dependency): a Chase-Lev deque per thread and priority, workers
+  pinned by core class (P-threads and E-cores), frame and background priorities, waits that help. `jobs::parallelFor`
+  cuts chunks by the range and the grain alone, so a body that writes per index gives the same result at any thread
+  count; reductions are the caller's, in index order. The cooker, the meshlet normals, the PNG encoder, the RT
+  pipeline's compile and a load's copies run on it; the build refuses `std::thread`, `std::jthread` and `std::async`
+  outside the pool, the RPC reader and the present waiter.
+- **Jolt on the pool** (`JoltJobs`): the step's contact events sorted, so the hash is the same at any thread count; a
+  step under 100 active bodies runs on the calling thread. `enableMultithreading` and Jolt's own pool are deleted.
+  The 1,000-box pile 2.22 ms at one thread, 0.58 at 31; the crowd's step (the play scene, the pile and 64 enemies)
+  2.49 ms at one thread, 0.81 to 0.82 at 31 (Linux, 4b-6).
+- **The frame packet** (`render/frame_packet.hpp`) is everything the renderer reads of a world; world_render's sync
+  systems and the host fill it, `VulkanRenderer::render(packet)` applies it. The renderer reads no World.
+- **The render thread** (`render::RenderThread`) owns the renderer, its queue and its present and records frame N while
+  the game thread steps N+1; every other renderer call goes through `run(fn)`, and an owner check aborts on a call from
+  another thread. It is a switch, `--render-thread on|off`, **off by default** everywhere: a play window waits on the
+  GPU, and on did not lower its look latency beyond off's spread. It pays in a CPU-bound frame (the crowd uncapped at
+  320x180: 2.263 to 2.295 ms off, 1.677 to 1.689 on). Parallel recording and an RHI thread are not built (recording
+  is under a millisecond).
 - **RPC** keeps its reader thread and posts commands into the step's queue, as `input.inject` does.
 
 ### 4.6 The renderer
@@ -259,8 +278,9 @@ As built in step 5 (2026-11-11; `docs/changes/2026-11-11-step5-assets.md`), whic
   bytes. Assimp, the one glTF reader for meshes, is inside the cooker only. No `tools/cook` until a build ships
   without the cooker; no split vertex streams, BC6H, clips or audio until a measurement asks.
 - **Runtime:** consumers read cooked data in place. Textures are held by count, materials and mesh ranges are given
-  back, GPU memory after the frames in flight. A load is submitted and not waited for. Preparing a load on another
-  thread, a memory budget and loading by distance are 4b's (its jobs) and the first open level's.
+  back, GPU memory after the frames in flight. A load is submitted and not waited for. Its CPU work (copies into
+  staging, naming the source) runs on the job pool since step 4b, but the load still blocks the step; a load beside
+  the game, a memory budget and loading by distance are the first open level's.
 - **Hot reload:** `asset.reload` recooks an edited source and swaps it where it is used. No file watcher yet.
 - nlohmann is left in the GPU fault report, one renderer header and the benches. Whether simdjson or our own reader
   reads scenes was not settled here.
@@ -308,13 +328,14 @@ data; the world without the renderer; hot reload of the module.
 
 **Order (Frank, 2026-11-11):** step 5 is built before step 4. The play scene's CPU frame is 0.44 ms (record and
 submit, measured 2026-11-10), so 4b's jobs have nothing to speed up yet, and assets give results that are seen.
-Step 5's streamer then loads on threads of its own and uploads through the graphics queue until 4a and 4b bring the
-jobs and the transfer queue.
 
 **Step 4, the frame (large; built 2026-11-17).** Every pass declares what it touches and records through one pass
 type; one allocator; dynamic rendering; the build refuses a barrier outside the frame's owners. 4b (jobs, waves,
 Jolt on jobs, the frame packet, the render thread) was measured and deferred, then ruled to be built (Frank,
-2026-11-17; 4.5).
+2026-11-17) and built 2026-11-18 to 2026-11-19 (4.3, 4.5; `docs/changes/2026-11-19-step4b-jobs.md`), with the engine
+split into modules on the way (`docs/specs/2026-11-18-engine-modules-design.md`): the crowd's step 0.81 to 0.82 ms at
+31 threads against 2.49 at one, with the same `world.hash`, and `replay_test` holds at one thread in order and at
+every thread with the waves reversed.
 *Done when* no barrier is placed outside the pass type, `render_bench` is no slower on any scene, the goldens are
 unchanged and synchronization validation is silent, and a frame's memory is known by image. (This said `replay_test`
 identical at 1 and N threads and the play scene's CPU frame dropping with more cores: the CPU frame is under half a
