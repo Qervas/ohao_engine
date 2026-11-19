@@ -1,16 +1,24 @@
 # The simulation: levels, physics, combat, frame timing, animation, audio, VFX
 
-Design rules and findings for the World's systems (`ohao/ecs/`, `ohao/level/`, `ohao/anim/`, `ohao/audio/`,
-`ohao/vfx/`, `ohao/runtime/`): read the parts you touch before changing them. Moved from `AGENTS.md` (system design
-step 2h, 2026-11-09), unchanged.
+Design rules and findings for the World's systems, module by module (`ohao/ecs/`, `ohao/level/`, `ohao/physics/`,
+`ohao/animation/`, `ohao/audio/`, `ohao/footsteps/`, `ohao/vfx/`, `ohao/world_render/`, `ohao/runtime/`; the modules:
+`docs/ARCHITECTURE.md`, "Libraries and modules"): read the parts you touch before changing them.
 
-- Jolt: `dynamic_cast` on Jolt types crashes (no RTTI); `SetMotionQuality` lives on
-  `BodyInterface`. The engine's physics is `physics/backend` (Jolt) and `ecs/physics_scene`; bodies
-  need a shape.
+- **Systems and threads** (step 4b, `docs/changes/2026-11-19-step4b-jobs.md`): every system declares its access
+  (`ecs::SystemDecl`) and runs as `fn(SystemContext&, dt)`; a phase runs as waves of consecutive systems that
+  conflict in nothing, a wave of several on the job pool with its events staged and flushed in the serial order. Inside
+  a wave of several, `emit` returns 0 (the seq is taken at the flush). Per-entity work splits with `jobs::parallelFor`,
+  writing per index, reduced in index order: pose's evaluation (chunks of about 64 joints), the enemies' sight rays
+  (chunks of 4, flushed before each death), physics' write-back and `syncBodies`, the transforms' root matrices (chunks
+  of 256). The crowd's step, 2.49 ms at one thread, is 0.81 to 0.82 at 31, with the same `world.hash` (Linux, 4b-6);
+  `--threads N` or `OHAO_THREADS` sets the pool, 1 runs the same path on one thread.
+- Jolt: `dynamic_cast` on Jolt types crashes (no RTTI; `jolt_jobs.cpp`, which derives from a Jolt class, is compiled
+  `-fno-rtti` or `/GR-`); `SetMotionQuality` lives on `BodyInterface`. The engine's physics is the physics module:
+  `physics/physics_scene.hpp` over its private backend (`physics/private/backend`, Jolt); bodies need a shape.
 - `ohao::physics::math::AABB` is (center, halfExtents); render bounds (`MeshInfo`,
   `DrawRecord`) are (min, max). A box passed between them needs converting.
 - **Events** (step 3c, `ecs/events.hpp`): the World's one log. A channel is a name and a payload struct (reflected
-  in `ecs/event_types.cpp`, entities by id); a system takes its writers and readers at install. A reader's `read()`
+  in its module's `types.cpp`, entities by id); a system takes its writers and readers at install. A reader's `read()`
   is the step's events of its channel, so writers run before readers (the system order); an event emitted between
   steps is the next step's, carried by snapshots and hashed until that step runs. History is the last 8,192 by
   `seq`, never rewound or hashed: `events.read`, the HUD, the view model and the audio player read it by cursor.
@@ -43,28 +51,32 @@ step 2h, 2026-11-09), unchanged.
     before the first step costs what one after it does (`level_bench --only kit2k`). A glTF's node tree,
     `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
   - A `Level` component is a level file in the world: the `level` sync system
-    (`ohao_level_world`, `level/level_system.hpp`, before `instantiate`) makes one entity per
+    (the level module, `level/level_system.hpp`, before `instantiate`) makes one entity per
     node with `LevelNode`, ids `levelNodeId(level id, node index)`, and `MeshSource`
     `#<mesh index>`, `Light`, `Camera`, `SpawnPoint`, `Socket` and passed-through components
     from the node and its `extras` (`level/level_hints.hpp`; `vis: 0` and `UCX_` hulls get no
-    mesh). A host must call `level::installLevels` (the CLI context and `LiveHost` do);
+    mesh). Every host installs the level module (`engine::install`);
     `scene.load` expands levels at once (`World::runSync("level")`). Node entities are never
     saved, and a changed `Level` re-expands in place (same entities, the file's state back),
     so an unchanged file keeps `world.hash`.
-  - Collision (`ecs/physics_scene.hpp`): `Collider` and `RigidBody` are saved components; the
-    `physics` sync system (right after `transform`, installed by `ecs::installPhysics`, which
-    the CLI context and `LiveHost` call next to `installLevels`) builds one Jolt body per
+  - Collision (`physics/physics_scene.hpp`): `Collider` and `RigidBody` are saved components; the
+    `physics` sync system (right after `transform`, installed by the physics module's
+    `installPhysics`) builds one Jolt body per
     entity with a `Collider`, fitted to its mesh at its world scale, plus `UCX_` hulls
     (`ColliderPart`) as one compound body on their target. It works from dirty state (signals
     and the transform system's `PhysicsMoved` tag), so a still world builds nothing; a moved
     body is moved, a rescaled one rebuilt (stepping: "Physics in the step", below). The
-    backend runs without worker threads and room for 65,536 bodies; Jolt
-    takes each step's contact buffer (sized by that cap) from the temp allocator, which falls
-    back to the heap past 10 MB (a fixed 10 MB block aborted the process on the first step).
+    backend has room for 65,536 bodies and runs Jolt's jobs on the engine's pool (`JoltJobs`,
+    `private/backend/jolt/jolt_jobs.hpp`), inline on the calling thread for a step under 100 active bodies (landing
+    boxes at 31 threads: 50 take 0.064 ms inline against 0.086 on the pool, 200 take 0.486 against 0.199). Jolt takes
+    each step's contact buffer (1 KB a contact at that cap, 57 MB at 864 bytes each) from `StepTempAllocator`: 10 MB
+    and the buffer reserved, a page backed only once a step writes it, grown between steps if one ever needs more. A
+    smaller block sent the buffer to the heap every step, an mmap whose pages faulted in again (the crowd: 2.7 M page
+    faults in 1,800 steps).
   - Agents read levels through `level.info`, `level.reload`, `physics.raycast`,
     `physics.info`, `physics.contacts`, `player.info` and `player.teleport` (its events: `events.read`)
     (`ohao/api/level.cpp`), which reach the level system and the physics
-    scene through what `installLevels` and `installPhysics` leave on the World
+    scene through what the level and physics modules leave on the World
     (`level::levelSummary`/`levelDiagnostics`/`reloadLevel`, `ecs::physicsScene`); a World
     without them answers `E_STATE`. They run the `level`, `transform` and `physics` sync
     systems first (never instantiate or the render extract), so they answer right after
@@ -104,8 +116,11 @@ step 2h, 2026-11-09), unchanged.
     teleported character finds its ground at once (`RefreshContacts`).
   - Events (the World's log: `physics.*`, `events.read`): `physics.contact_begin`/`contact_end` per body
     pair (Jolt's per-sub-shape callbacks counted per pair), `physics.trigger_enter`/`trigger_exit` for a
-    `Collider.trigger` sensor (hint `"trig": 1`). Jolt's callbacks only queue (thread-safe);
-    the scene drains them on the simulating thread after the step and sorts them. Jolt removes
+    `Collider.trigger` sensor (hint `"trig": 1`). Jolt's callbacks come from any job thread in any order and only
+    queue; after the step the backend sorts them by (body 1, body 2, sub-shape 1, sub-shape 2, type), so a pair's first
+    manifold, which gives its begin point and normal, is the same at any thread count, and the scene drains them on the
+    simulating thread. Planted, the sort removed: the raw sequence differed in 11 of 11 steps at 30 threads (a pair of
+    several manifolds, a compound's or a mesh's sub-shapes, needs it; a sphere on a floor has one). Jolt removes
     a sleeping body's contacts: the scene keeps such a pair (dormant) and ends it only if the
     bodies wake apart. Removing a body ends its pairs at once: between steps, they are the next step's.
   - Jolt's penetration slop is 5 mm (its 2 cm default left dropped crates visibly in the
@@ -165,7 +180,7 @@ step 2h, 2026-11-09), unchanged.
     for local listening only, never committed) else `assets/audio/footsteps/` (ours,
     `tools/audio/make_footsteps.py`).
 - **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`), the slice's (`games/slice`, a `game::Module`:
-  the CLI context and `LiveHost` install it after `installEngine`, unless `--game none`), with the view model, the
+  every host installs it after the engine's modules, unless `--game none`), with the view model, the
   animation drivers, its HUD and its methods. `installCombat` adds a `combat` simulate system
   after `physics`: every `Weapon`, in id order, reads its trigger (a player's from the World's
   input, `fire`/`reload`; anything else's from `WeaponTrigger`), advances cooldown, reload, bloom
@@ -263,8 +278,17 @@ step 2h, 2026-11-09), unchanged.
     `Transform`, `world.hash`, a file or a snapshot; no lead in lockstep (alpha 1, nothing pending),
     for the dead, or for characters moved by their `MoveIntent`.
   - **Late input sampling:** while a player leads its look, a realtime frame polls only once the GPU has
-    finished the frame before (`LiveHost::pollsLate`, the frame's fence): its input goes into a frame the
-    GPU starts at once. No wait otherwise.
+    finished the frame before (`LiveHost::pollsLate`, then `RenderThread::waitForGpu`: the frame's fence, behind the
+    2 s fault wrapper): its input goes into a frame the GPU starts at once. No wait otherwise.
+  - **The render thread** (step 4b-8, `render/render_thread.hpp`; `--render-thread on|off`, **off by default** in
+    every host): with it on, the loop ends a frame by publishing the World's frame packet (double-buffered, at most one
+    frame waiting) and steps the next while a `jobs::Dedicated` thread records and presents it; the frames it reports
+    submitted carry the stamps the frame log needs. Off, the same `publish()` renders at once on the loop's thread.
+    Off is the default because a play window waits on the GPU anyway: `feel_bench` (immediate, scale 1) measured the
+    look latency's median at 6.79, 6.86 and 6.89 ms off against 6.85 and 6.96 on (and a 21.04 outlier), no better
+    beyond the spread. On pays in a CPU-bound frame: the crowd uncapped at 320x180 2.263-2.295 ms off, 1.677-1.689 on
+    (the larger of simulation and recording 1.672-1.687, their sum 2.149-2.166). Open: at 1080p, GPU-bound, the frame
+    is unchanged but the step reads 2.68 -> 3.90 ms with the thread on, not explained yet.
   - **Frames start on the display's refreshes** (`LiveHost::onRefreshGrid`): at the display's rate (the
     default cap, fifo included) a frame starts 0.45 ms before a refresh, placed by the present stamps, not
     on a timer that drifts across them. The measurements: `docs/notes/platform.md`, "A window's latency".
@@ -291,11 +315,11 @@ step 2h, 2026-11-09), unchanged.
   - **Effects** are the world's (sub-project 12, "VFX" below): drawn from the step's records in every
     host, windows, captures and `ohao run` alike, so a window's lockstep capture equals a headless one
     with its effects. There is no `--fx`/`--no-fx`.
-- **Animation** (sub-project 10, `docs/specs/2026-10-28-animation-design.md`). `ohao/anim` (no ECS,
-  no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
+- **Animation** (sub-project 10, `docs/specs/2026-10-28-animation-design.md`). The animation module's pure core (`gltf_anim`,
+  `skeleton`, `anim_graph`: no World, no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
   import is not used), binds clips to skeletons by joint name, and parses and validates
-  `.animgraph.json` (every error with its JSON pointer). `installAnimation(world, assets)` (`installEngine`;
-  a game registers its drivers when it installs, the slice's `arms` and `enemy`) adds the `animation` simulate system and the
+  `.animgraph.json` (every error with its JSON pointer). The animation module's `installAnimation(world, assets)`
+  (a game registers its drivers when it installs, the slice's `arms` and `enemy`) adds the `animation` simulate system and the
   `pose` sync system (before `render_extract`).
   - **A pose is presentation; animator state is saved integers.** The saved `Animator` holds
     integers only: each layer's state, its steps, the state faded from and
@@ -376,8 +400,8 @@ step 2h, 2026-11-09), unchanged.
     extents about the entity, 0 fitted to its mesh. Physics never sees a scene zone, so it adds no
     contacts or trigger events; a level node's `verb` hint makes a `ReverbZone` on a trigger box. An
     unknown preset is `W_AUDIO_PRESET` and counts as the bank's `defaultZone`.
-  - **The schedule** (`ecs/audio_schedule.hpp`, `installAudio(world, assets)`, which the CLI context
-    and `LiveHost` call after `installAnimation`) is the step's last simulate system. From step 2 it
+  - **The schedule** (`audio/audio_schedule.hpp`, the audio module's `installAudio(world, assets)`; footsteps and
+    landings are the footsteps module's, a `SoundSource` it adds) is the step's last simulate system. From step 2 it
     writes `zone` commands (the listener's zone changed: preset, bed, a 500 ms blend) and
     `occlusion` commands (a held voice's wall count changed on a re-cast every 100 ms). Every duration is
     time, not steps (step 3e): the bank's `holdMs`, a duck's `attackMs`/`releaseMs`, a snapshot's
@@ -424,8 +448,8 @@ step 2h, 2026-11-09), unchanged.
     when a player has a device.
 - **VFX** (sub-project 12, `docs/specs/2026-10-28-vfx-design.md`; steps 1–3 built, step 4 in progress). A world's
   effects are one `.vfx.json` set (`ohao/vfx/vfx_set.*`, errors at JSON pointers, `ohao schema
-  vfx-set`), named by the saved singleton `VfxSet`; without one, the default set. `installVfx` (the
-  CLI context and `LiveHost`, after `installAudio`) adds the `vfx` simulate system before
+  vfx-set`), named by the saved singleton `VfxSet`; without one, the default set. The vfx module's `installVfx`
+  adds the `vfx` simulate system before
   `audio_schedule`: it writes **spawn records** (effect, tracer, decal, light) from the step's
   events of the channels its set binds (`events`, by name: the slice's `slice.shot` with `ahead` 0.5 m to the
   muzzle and a tracer to where the round stopped, `slice.hit` with `{tag}` its surface, `slice.explode`), read as
@@ -436,9 +460,9 @@ step 2h, 2026-11-09), unchanged.
   of (record, index, age) (`vfx/particle_math.hpp`), never integrated. Agents read them through
   `vfx.info {since, max}`.
   - **The frame** (step 2, `render/vfx/vfx_renderer.*`): the `vfx_draw` sync system (`world_render/vfx_draw.*`,
-    after `render_extract`; the CLI's render host and `LiveHost` install it) hands the RenderScene the
-    live effect records with their age, `(steps - spawnStep - 1 + alpha) * dt` (`RenderScene::setVfx`,
-    `render/scene/vfx_frame.hpp`). `vfx.expand` (after the sky) evaluates every particle slot in
+    after `render_extract`; world_render, installed once a host gives its renderer) puts the
+    live effect records with their age, `(steps - spawnStep - 1 + alpha) * dt`, into the frame packet
+    (`FramePacket::setEffects`, `render/scene/vfx_frame.hpp`). `vfx.expand` (after the sky) evaluates every particle slot in
     closed form, as `vfx/particle_math.hpp` does, and lights a `lit` one at its centre: the clustered
     lights through its froxel (every light when it is off screen), one shadow ray to the first
     directional light, RT GI's radiance at its pixel, else the environment's irradiance, else nothing.
@@ -467,7 +491,7 @@ step 2h, 2026-11-09), unchanged.
     the emitter's pose plus up to 0.6 R of offset: a cloud placed on a wall plane is half outside it.
   - **Decals are raster only** (no RT decal); tracers and particles are sorted back to front by integer
     keys (distance bits, then id).
-  - **A GPU test that loads a level must install what the CLI installs** (`level::installLevels`, then
-    `installPhysics`, as `tools/ohao/main.cpp` does). Without it the blockout is never expanded, the
+  - **A GPU test that loads a level must install what the CLI installs** (`engine::install`, every module, as
+    `tools/ohao/main.cpp` does). Without the level and physics modules the blockout is never expanded, the
     scene has no instances, `scene.upload` builds no TLAS, and RT direct light and RT GI silently do not run
     (the frame is the sky, the passes list has no `rt.gi`).

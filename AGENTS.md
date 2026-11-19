@@ -210,25 +210,54 @@ What every change must respect. The build checks some of these; the rest are her
   directory under `build/`, a file in `%TEMP%`) races another copy of itself. Give it a
   per-process name or a `LOCKS` entry in its registration.
 - ECS writes: `Transform`, `MeshRenderer` and `Light` reach the
-  renderer only through `registry.patch<T>()` /
-  `replace<T>()` (or emplace/remove). A write through `get<T>()` is never seen.
-- **Systems are installed by `engine::installEngine` and `engine::installRendering`** (`ohao/engine/install.hpp`) in
-  every host, then the game's (`game::Module::install`: the slice, `games/slice`, unless `--game none`). No engine
+  renderer only through `patch<T>()` / `replace<T>()` (or emplace/remove), the registry's or a system's
+  `SystemContext`'s. A write through `get<T>()` is never seen.
+- **One feature, one module** (Frank, 2026-11-18; `docs/specs/2026-11-18-engine-modules-design.md`). The engine is
+  the modules `engine::modules()` lists (`ohao/engine/install.hpp`): ecs, visual, animation, physics, audio, footsteps,
+  vfx, level, world_render. Each is one directory and one library (`ohao_add_module(<m> DEPENDS ...)`), an
+  `ecs::Module` (`ecs/module.hpp`: `registerTypes`, `install(World&, const Services&)`, `methods`). Every host calls
+  `engine::install(world, services)`, which installs them in dependency order (world_render once the host gives its
+  renderer), then the game's (`game::installGame`: the slice, `games/slice`, unless `--game none`). A module includes
+  only its declared dependencies' headers; `private/` is its own; between modules there are only components and
+  events. `tools/check_layers.py` (configure and every `check.py`) refuses any other include, link or call of a
+  module's install, so each module stays deletable: its directory and its line in the list. A feature that spans
+  modules is a module of its own (footsteps), never code added to one of them. No engine
   library names a game: `cmake/ohao_layers.cmake` puts games above every one, and configure fails on a link or an
   include of one; a game includes the engine through `game/api.hpp` only (configure fails on any other engine
-  header). The guide for game developers: `docs/games/README.md`. Each phase's order is computed from what
-  the systems declare (`ecs::SystemOrder`: `after`, `before`, `readsCues`) and the event handles they hold (a
+  header). The guide for game developers: `docs/games/README.md`.
+- **A system declares its access** (`ecs::SystemDecl`, `ecs/system.hpp`): `after`, `before`, `readsCues`, the
+  component types it reads and writes (`ecs::types<A, B>()`), the resources it reads and writes, or `exclusive` (it
+  creates or destroys entities, or calls a subsystem with registry use of its own). It runs as `fn(SystemContext&,
+  dt)` and reaches components through the context (`get`, `try_get`, `view<const A, B>`, `patch`, `emplace`,
+  `remove`; `get_mut`/`try_get_mut` to mutate); a signal's handler is `World::onConstruct`/`onUpdate`/`onDestroy` with
+  its `SignalEffect` (`check.py` refuses a raw EnTT `on_*<` outside `ecs/world.hpp`). Install throws on a cycle, on two
+  writers of one component or resource with no order between them, and on a system that declares nothing.
+  Consecutive systems that conflict in nothing run as one wave on the job pool, their events staged and flushed in
+  the serial order, so `world.hash` is the same at any thread count. `OHAO_ACCESS_CHECK=1` throws on an access outside
+  the declaration; `OHAO_WAVE_ORDER=reverse` shows an undeclared dependency as a different hash (`replay_test` runs a
+  leg so). Each phase's order is computed from the declarations and the event handles the systems hold (a
   channel's writers before its typed readers; a channel with a cue before every system that reads cues), ties to the
-  lesser name: never from who installs them, when, or what data binds; a cycle throws at install. A new system
+  lesser name: never from who installs them, when, or what data binds. A new system
   declares what it must follow and precede; a game's names the engine's, never the reverse. The
   engine names no game event or component: it reads a game's events only as cues its data binds by channel name
   (an audio bank's and a vfx set's `events`). A system with state a later step reads registers `ecs::addSnapshotHook`
   under its name, with save, restore and hash: the snapshot and `world.hash` cover it; a game's hook also declares its
-  state's `layout` (`layoutKey<State>()`), which `game.reload` checks before the state crosses to a new build. A game
-  is installed with `game::installGame`, which records what it adds and removes it again; its `Module::uninstall`
-  undoes only what the engine cannot see (its context entries, its registry signals). What a system tells
+  state's `layout` (`layoutKey<State>()`), which `game.reload` checks before the state crosses to a new build.
+  `game::installGame` records what a game adds and `uninstallGame` removes it; its `Module::uninstall` undoes only
+  what the engine cannot see (its context entries, its registry signals). What a system tells
   others is an event in the World's log (`ecs/events.hpp`): a channel it writes, read by the systems after it in the
   step, never a log of its own; an event's `seq` is history, never state.
+- **Threads are the job pool's** (`ohao/core/jobs`): `jobs::parallelFor`, `jobs::Graph`, `jobs::background`,
+  `jobs::copy`; a loop that blocks (on a fence, a condition) is a `jobs::Dedicated` (the render thread). `check.py` refuses
+  `std::thread`, `std::jthread` and `std::async` outside the pool, the RPC reader and the present waiter. A
+  `parallelFor`'s chunks are cut by the range and the grain alone: a body writes per index, a reduction runs in index
+  order afterwards, and no float is added atomically, so the result is the same at any thread count (`--threads N`,
+  `OHAO_THREADS`; 1 runs the same path on one thread).
+- **The render thread owns the renderer, its queue and its present** while it runs (`render::RenderThread`,
+  `--render-thread on|off`, off by default): the world reaches the renderer only through the frame packet
+  (`render/frame_packet.hpp`, filled by world_render's sync systems and the host); any other call (a load, a capture,
+  `render.settings`, `render.stats`) goes through `RenderThread::run(fn)`. Every public entry of `VulkanRenderer` checks
+  its owner thread and aborts on another, in every build.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
   `addSync` (derived state, no dt). Time is the World's clock (`World::steps`, `World::stepDt`): no code assumes
   1/60 s but the default clock, durations in data are seconds or milliseconds, and state counts whole steps of the
@@ -272,8 +301,8 @@ What every change must respect. The build checks some of these; the rest are her
 - **The renderer** (`ohao/render/`, `shaders/`): [docs/notes/renderer.md](docs/notes/renderer.md): alpha, the
   G-buffer, glass, subsurface, OpenPBR's layers, the path tracer and its costs, caustics, path guiding, emission,
   the radiance cache, RT GI, RT direct light, lights, the sky, exposure, denoisers. Read the parts you touch first.
-- **The simulation** (`ohao/ecs/`, `ohao/level/`, `ohao/anim/`, `ohao/audio/`, `ohao/vfx/`, `ohao/runtime/`):
-  [docs/notes/simulation.md](docs/notes/simulation.md): levels, physics in the step, combat, frame timing,
+- **The simulation** (`ohao/ecs/`, `ohao/level/`, `ohao/physics/`, `ohao/animation/`, `ohao/audio/`, `ohao/vfx/`,
+  `ohao/runtime/`): [docs/notes/simulation.md](docs/notes/simulation.md): levels, physics in the step, combat, frame timing,
   animation, audio, VFX.
 - **Platforms and the machine**: [docs/notes/platform.md](docs/notes/platform.md): Windows (MSVC, game modules as
   DLLs, the GPU-fault gate, Git Bash, line endings, duplicate symbols), Linux (not built now; the port's findings), a

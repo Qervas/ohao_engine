@@ -6,30 +6,57 @@ was followed once, end to end, when it was written (sub-project 3, step 10: the 
 component, the spin system and `entity.duplicate`; sub-project 4, step
 11: an API method, a render pass and its shader, a golden scene).
 
-## Libraries
+## Libraries and modules
 
 All under `ohao/`, each a static library with its own `CMakeLists.txt`, and the games under `games/`. Sources are
 globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 
+**The engine's modules** (step 4b-6b, `docs/specs/2026-11-18-engine-modules-design.md`): one feature each, one
+directory and one library, `ohao_add_module(<m> DEPENDS <modules> LINKS <libraries below>)` (`cmake/ohao_modules.cmake`),
+and one `ecs::Module` (`ecs/module.hpp`): `registerTypes` (its `types.cpp`), `install(World&, const Services&)` (its
+systems with their `SystemDecl`, snapshot hooks, signal effects, channels), `methods` (its `methods.cpp`, params in
+its own registry). Public headers sit at the module's root (`components.hpp`, `events.hpp`, its API, `module.hpp`),
+private ones under `private/`; each component's EnTT storage is compiled once, in the module's `storage.cpp`.
+`engine::modules()` (`ohao/engine/install.hpp`) lists them; `engine::install(world, services, only)` installs them in
+dependency order, ties to the lesser name (a bench installs only what it measures, with its dependencies).
+
+| Module | Depends on | What it owns |
+|---|---|---|
+| `ecs`, the core | (links `ohao_core`, `ohao_asset`, `ohao_cook`, `ohao_reflect`, EnTT) | `World` (`world.hpp`: the phases and their waves, signals with their effects, the clock, input per stream, `defer`), `SystemDecl` and `SignalEffect` (`system.hpp`), the event log (`events.hpp`), snapshots and snapshot hooks, the scene codec (`scene_io`), `world.hash` and diff, the asset resolver, the module interface; its components (ids, names, the hierarchy, `Transform`, input bindings, `SpawnPoint`, `Spin`, `FlyController`) and systems (`transform`, `spin`, `fly_controller`: `core.cpp`) |
+| `visual` | ecs | what an entity looks like and how the world is seen: `MeshSource`, `Material`, `Light`, `Camera`, `Environment`, the primitives; the scene view (`scene_view.hpp`) |
+| `animation` | ecs, visual | skeletal animation: glTF skins and clips (`gltf_anim`, its own reader), `.animgraph.json` graphs, poses and the skinning palette; the `animation` simulate and `pose` sync systems; drivers (`AnimationSystem::setDriver`); `animation.info` |
+| `physics` | ecs, visual | the physics scene (`physics_scene.hpp`) over Jolt (`private/backend`; Jolt on the job pool, `JoltJobs`): colliders, bodies, joints, the players; the `physics` simulate system, the `player_spawn`, `physics` and `interpolate` sync systems; `physics.*` and `player.*` |
+| `audio` | ecs, visual, animation, physics | the voice schedule (`audio_schedule.hpp`: the step's sounds as `audio.*` events), reverb zones; below it in its directory `ohao_audio_bank` (the `.audio.json` reader) and `ohao_audio_mixer` (miniaudio, the reverb), which a window's `runtime::AudioPlayer` plays through |
+| `footsteps` | ecs, animation, physics, audio | footsteps and landings into the schedule, through its `SoundSource` |
+| `vfx` | ecs, visual, physics | the `vfx` simulate system (spawn records from cues and emitters); below it `ohao_vfx_effects` (`effects/`: the set, the closed forms the renderer draws with) |
+| `level` | ecs, visual, physics, audio, vfx | level files in the world: hints (`level_hints`), the `level` sync system, `level.info` and `level.reload` |
+| `world_render` | ecs, visual, animation, vfx | the world into the renderer: `instantiate`, `render_extract` and `vfx_draw` (sync), the World's frame packet (`frame_packet.hpp`), `MeshRenderer`, what a game presents (`present.hpp`: HUDs, spheres); installed once the host gives its `RenderScene` |
+
+Below the modules:
+
 | Library | Directory | Depends on | What it owns |
 |---|---|---|---|
-| `ohao_core` | `core/` | glm | the logger (`OHAO_LOG`, the ring, sinks), the time model (`Timeline`, `FixedStepClock`: lockstep or realtime, paused, the frame number), input (`InputMap`: actions, axes, the virtual device injection uses; the `Key` name table), the render handles a component holds (`render_handles.hpp`), `Result`, concepts, small shared types |
+| `ohao_core` | `core/` | glm | the logger (`OHAO_LOG`, the ring, sinks), the job pool (`core/jobs`: `parallelFor`, `Graph`, `background`, `copy`, `Dedicated`), the time model (`Timeline`, `FixedStepClock`), input (`InputMap`, the `Key` name table), the render handles a component holds (`render_handles.hpp`), `Result`, type keys, small shared types |
 | `ohao_reflect` | `reflect/` | glm (fast_float privately) | the type registry, schema/catalogue export, the JSON writer, reader and layout, typed decode/encode. Knows nothing of ECS or GPU. |
-| `ohao_asset` | `asset/` | `ohao_core`, glm | what the engine loads: the cooked formats (`cooked.hpp`: a model file's meshes and a texture, read in place from a mapping; `cooked::Mesh` is the mesh every consumer reads), `Vertex` (`vertex.hpp`), the content hash, the primitives made in code. It reads no source format. No Vulkan: a raster pipeline reads `Vertex` through `render/scene/vertex_input.hpp` |
-| `ohao_cook` | `cook/` | `ohao_asset` (privately `ohao_level`, Assimp, stb_image, simdjson, `external/bc7enc`) | the cooker (step 5), the only code that reads a model's source (the importer, `model_loader.cpp`: glTF and GLB through Assimp): a source file into cooked assets (`asset/cooked.hpp`: a model file per source, a texture file per image and use: BC7 or BC5 with its mips) in `<root>/.ohao/cooked/`, each named by a hash of the content it was made from (`asset/content_hash.hpp`), cooked when a host asks for one the cache does not hold. `FileAssetResolver` loads meshes only through it (`loadMesh`: a `cooked::Mesh` whose pointer keeps the file mapped; `texture`: a cooked texture by its content's name) |
-| `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_core`, Vulkan, VMA | the Vulkan layer under the renderer: the swapchain and present waiting, bindless textures, the allocator, `vk_utils` |
-| `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_asset`, `ohao_core` (NRD, OIDN, NGX optional) | `VulkanRenderer` (`render/renderer/`: the facade, device and queues, frame dispatch, environment upload), `RenderScene` (the persistent GPU scene), deferred passes, the path tracer, denoisers, the render graph |
-| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_asset`, `ohao_cook`, `ohao_reflect`, `ohao_physics`, EnTT (simdjson privately); never the renderer (one layer: the layer check holds it) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components (`MeshRenderer` holds `core/render_handles.hpp`'s ids), systems (spin, fly controller, transform, physics), the scene codec, snapshots, the world hash and diff, the scene view. The physics system (`physics_scene`, installed by `installPhysics`) builds Jolt bodies from `Collider`/`RigidBody`; `physicsScene(world)` reaches it. |
-| `ohao_anim` | `anim/` | `ohao_core`, glm (simdjson privately) | skeletal animation without ECS or Vulkan: glTF skins and clips (`gltf_anim`), binding clips to skeletons by joint name, sampling, `.animgraph.json` graphs (parse, bind, validate with JSON pointers), one layer's step (`stepLayer`) and a pose (`evaluatePose`), the skinning palette |
-| `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
-| `ohao_world_render` | `world_render/` | `ohao_ecs`, `ohao_renderer` | the world into the renderer: instantiate (MeshSources into meshes, `installInstantiate`), the render extract, the effects' draw (`vfx_draw`), what a game presents (`present.hpp`: its HUDs, drawn by the hosts, and its presented spheres, by `vfx_draw`). `engine::installRendering` installs it. |
-| `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
-| `ohao_game_api` | `game/` | `ohao_reflect` | the game API (step 3i): `game::Module` (`registerTypes`, `install`, `methods`) and a game's method row (`game::Method`, `game::Call`, `decodeParams`). A host plays one module or none. |
-| `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect`, `ohao_game_api` | `Session`: the method table (the engine's rows, then the game's) and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
+| `ohao_asset` | `asset/` | `ohao_core`, glm | what the engine loads: the cooked formats (`cooked.hpp`: a model file's meshes and a texture, read in place from a mapping; `cooked::Mesh` is the mesh every consumer reads), `Vertex` (`vertex.hpp`), the content hash, the primitives made in code, the meshlets. It reads no source format. No Vulkan: a raster pipeline reads `Vertex` through `render/scene/vertex_input.hpp` |
+| `ohao_cook` | `cook/` | `ohao_asset` (privately Assimp, stb_image, simdjson, `external/bc7enc`) | the cooker (step 5), the only code that reads a model's source (`model_loader.cpp`: glTF and GLB through Assimp; `gltf_structure`: a glTF's node tree, `extras`, lights and cameras from its JSON): a source file into cooked assets in `<root>/.ohao/cooked/`, each named by a hash of the content it was made from (`asset/content_hash.hpp`), cooked when a host asks for one the cache does not hold |
+| `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_core`, Vulkan, VMA | the Vulkan layer under the renderer: the swapchain and present waiting, bindless textures, the allocator and barriers, the GPU-fault path, `vk_utils` |
+| `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_asset`, `ohao_core` (NRD, OIDN, NGX optional) | `VulkanRenderer` (`render/renderer/`: the facade, device and queues, frame dispatch, environment upload), `RenderScene` (the persistent GPU scene), the frame packet it applies (`frame_packet.hpp`), the render thread (`render_thread.hpp`), deferred passes, the path tracer, denoisers, the pass type (`render/graph`) |
+
+Above the modules:
+
+| Library | Directory | Depends on | What it owns |
+|---|---|---|---|
+| `ohao_engine` | `engine/` | every module | the module list and its install (`engine::modules`, `registerTypes`, `install`) |
+| `ohao_game_api` | `game/` | `ohao_reflect` and the modules `game/api.hpp` exports | the game API: `game::Module` (`ecs::Module`), `game/api.hpp` (the one header a game includes), the loader (`loader.hpp`) and a game's life on a World (`install.hpp`: `installGame`, `uninstallGame`, `reloadGame`) |
+| `ohao_api` | `api/` | `ohao_ecs`, `ohao_engine`, `ohao_game_api`, `ohao_reflect`, the modules it reads | `Session`: the method table (the session's rows, then every module's, then the game's) and its params structs, edit commands, queries, the path sandbox. GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header. |
-| `ohao_runtime` | `runtime/` | `ohao_api`, `ohao_core`, `ohao_ecs`, `ohao_world_render`, `ohao_renderer`, glfw | `LiveHost`, the window host (window, renderer, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); `applySceneView`; frame statistics |
-| `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (`physics/backend`: the `IPhysicsBackend` over Jolt that the ECS's physics scene builds, steps and joins bodies through) and audio (the mixer, the bank and the reverb; what plays is the ECS's voice schedule, played by a window's `runtime::AudioPlayer`) |
-| `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
+| `ohao_runtime` | `runtime/` | `ohao_engine`, `ohao_api`, the modules, `ohao_renderer`, `ohao_audio_mixer`, glfw | `LiveHost`, the window host (window, renderer and its render thread, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); the frame log; the audio player |
+| `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
+
+The levels (`cmake/ohao_layers.cmake`): the libraries below at 0 (`ohao_core`) to 4 (`ohao_renderer`); the core module
+at 4 beside the renderer, each other module one above its highest dependency (computed from DEPENDS at configure,
+never typed); the libraries above, a tier each, after the highest module; the games above all.
 
 Games (`games/`, each `ohao_add_game(<name>)`, cmake/ohao_games.cmake; above every engine library:
 `cmake/ohao_layers.cmake` fails configure when an engine library links or includes one, or when a game includes any
@@ -56,8 +83,8 @@ new build reads the components, channels and hook states in place, so their layo
 the executable, the module and a later build of it agree on every type.
 
 Programs: the windowed game host (`examples/ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,
-`render_bench`, `level_bench`, `physics_bench` and `feel_bench` (`tools/bench`; they share the bench10k builder,
-`bench_world.hpp`, and the calibration and load record, `bench_env.hpp`).
+`render_bench`, `level_bench`, `physics_bench`, `audio_bench`, `feel_bench` and `job_bench` (`tools/bench`; they share
+the bench10k and crowd builders, `bench_world.hpp`, and the calibration and load record, `bench_env.hpp`).
 
 Dependency rules:
 
@@ -65,8 +92,16 @@ Dependency rules:
   (`VulkanRenderer` owns the deferred renderer and the path tracers) but does not link
   `ohao_renderer`; executables link both and the linker resolves the cycle. Do not add
   new edges from `gpu/` into `render/`.
-- **The renderer never sees EnTT.** `render/` and `gpu/` know nothing of `ecs/`; the
-  render extract and instantiate are the only bridges, and they write `RenderScene`.
+- **Modules meet through the World.** A module includes only the headers of the modules its DEPENDS names, never
+  another's `private/`; everything else between modules is components and events. `tools/check_layers.py` (at
+  configure and in every `check.py`) refuses any other include or link, and any call of a module's install outside
+  the module list, so each module is deletable: its directory and its line in `engine::modules()`. A feature that
+  spans modules is its own module depending on them (footsteps), never code added to one of them.
+- **The renderer never sees EnTT.** `render/` and `gpu/` know nothing of `ecs/`; world_render is the only bridge:
+  instantiate registers meshes and materials (`SceneLoads`, through the render thread's `run` when there is one), and
+  everything else the renderer reads of a world is the frame packet (`render/frame_packet.hpp`).
+- **Threads are the job pool's** (`core/jobs`): `check.py` refuses `std::thread`, `std::jthread` and `std::async`
+  outside the pool, the RPC reader and the present waiter.
 - **Reflection stays off the frame.** `render/`, `gpu/` and the per-frame ECS system
   sources (`transform_system`, `render_extract`, `instantiate`, `spin_system`) include
   nothing from `reflect/` or `api/`. No test enforces it since the cut (2026-11-08): keep it by hand.
@@ -83,11 +118,18 @@ Dependency rules:
 ## One frame
 
 The same `World` runs headless (CLI, tests, examples) and windowed (`ohao_game`). Its
-systems come in two phases. Each phase's order is computed (`World::addSimulate`/`addSync`, step 3h) from what its
-systems declare (`ecs::SystemOrder`: `after`, `before`, `readsCues`) and, in simulate, the event handles they hold:
-a channel's writers before its typed readers, a channel with a cue before every system that reads cues. Ties go to
-the lesser name (Kahn's algorithm), so the order is a function of the systems installed, not of the host; a cycle
-throws at install, naming it. `OHAO_LOG_LEVEL=debug` logs each phase's order. Below, the play scene's:
+systems come in two phases. Each phase's order is computed (`World::addSimulate`/`addSync`) from what its
+systems declare (`ecs::SystemDecl`, `ecs/system.hpp`: `after`, `before`, `readsCues`, the components and resources
+read and written, `exclusive`) and, in simulate, the event handles they hold: a channel's writers before its typed
+readers, a channel with a cue before every system that reads cues. Ties go to the lesser name (Kahn's algorithm), so
+the order is a function of the systems installed, not of the host. Install throws on a cycle, on two unordered
+writers of one component or resource, and on a system that declares nothing. The order is cut into **waves**, runs of
+consecutive systems that conflict in nothing: a wave of several runs on the job pool (the longest on the calling
+thread, any other of at least `World::kInlineUs` on a worker), each system's events and defers staged and flushed in
+the serial order, so the step is the one-thread run's at any thread count. A system reaches components through its
+`SystemContext`; `OHAO_ACCESS_CHECK=1` throws on an access outside its declaration, `OHAO_WAVE_ORDER=reverse` runs
+each wave backwards. `OHAO_LOG_LEVEL=debug` logs each phase's order and waves. Below, the play scene's (simulate's
+waves: `[fly_controller] [spin] [physics] [combat] [animation] [audio_schedule, vfx]`; sync's, one system each):
 
 ```
 the timeline (core/timeline.hpp) decides the steps: lockstep, on request (world.step);
@@ -96,16 +138,17 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
   World::stepInput(events)   device events since the last step, then injected ones
                              (InputActions rebinds the map first)
   World::simulate(fixedDt)
-    fly_controller  engine-provided: input + FlyController -> Transform   every World (before physics)
-    spin            engine-provided: Spin -> Transform (patch)        every World (before physics)
-    physics         propagateTransforms (dirty subtrees; prevWorld kept   installed with the physics
-                    at the frame's start), PhysicsScene::sync (bodies     scene (installPhysics);
+    fly_controller  the core's: input + FlyController -> Transform      the ecs module (before physics)
+    spin            the core's: Spin -> Transform (patch)               the ecs module (before physics)
+    physics         propagateTransforms (dirty subtrees; prevWorld kept   the physics module
+                    at the frame's start), PhysicsScene::sync (bodies     (installPhysics);
                     for changed colliders, moved entities move bodies,    nothing for a world
                     an edited dynamic body teleports at rest, a moved     without a collider
                     kinematic one by MoveKinematic), the players          or a player
                     (PlayerController: input -> CharacterVirtual ->
                     Transform, PlayerState), Jolt in
-                    substeps <= 1/60 s, awake dynamic bodies ->
+                    substeps <= 1/60 s (on the job pool from 100 active
+                    bodies; contact events sorted), awake dynamic bodies ->
                     Transform (patch) and BodyMotion, the step's contact/trigger events
                     and the players' footsteps and landings (with the
                     ground's Collider.surface) into the World's event log
@@ -114,7 +157,7 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     ray, Idle/Chase/Attack/Dead, MoveIntent for the next
                     step, WeaponTrigger for this one); then
                     every Weapon in id order: trigger (a player's input
-                    fire/reload, else WeaponTrigger), cooldown, reload,  (after installPhysics);
+                    fire/reload, else WeaponTrigger), cooldown, reload,  (after physics);
                     bloom and recoil recovery, at most one round: a ray  nothing for a world
                     from the eye (PhysicsScene::raycastFrom: not the     without a Weapon
                     shooter, not triggers) -> Health of what it hit or
@@ -131,21 +174,21 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     dead -> win, then waits for `restart`; within each
                     weapon, a round lights its Muzzle light for
                     Muzzle.time (WeaponState.flash), then intensity 0
-    animation       every Animator in id order: its graph's driver        installed by installAnimation
-                    (enemy, arms: the slice's) writes AnimParams from     (installEngine)
+    animation       every Animator in id order: its graph's driver        the animation module
+                    (enemy, arms: the slice's) writes AnimParams from     (installAnimation)
                     saved state and the step's slice events;
                     each layer takes its first holding transition (a
                     parameter, an event, its clip's end), advances its
                     integer steps and fade, and emits the clip events it
                     crossed (anim.clip_event)
-    audio_schedule  the step's physics, combat and animation events      installed by installAudio
-                    -> audio.* events (play with a voice, variant,       (after its typed readers'
-                    occlusion and outcome; stop for a stolen voice; bus  writers and every cue
-                    ducks; the round's snapshot; the listener's zone and channel's: readsCues)
+    audio_schedule  the step's physics, combat and animation events      the audio module (installAudio;
+                    -> audio.* events (play with a voice, variant,       footsteps' SoundSource joins it;
+                    occlusion and outcome; stop for a stolen voice; bus  after its typed readers' writers
+                    ducks; the round's snapshot; the listener's zone and and every cue channel's: readsCues)
                     bed; occlusion re-casts; stop_world on a restart or
                     restore), by the bank's priorities, caps and holdMs;
                     its state rides the World's snapshot and world.hash
-    vfx             the step's cues the vfx set binds (tracers, impacts,  installed by installVfx
+    vfx             the step's cues the vfx set binds (tracers, impacts,  the vfx module (installVfx)
                     decals) and VfxEmitters -> effect records; its state  (after animation; readsCues)
                     rides the World's snapshot and world.hash
     then the step's events become history (ecs/events.hpp): each system reads its channels'
@@ -165,19 +208,19 @@ after the frame's steps (LiveHost):
                       never the world, the schedule or a snapshot)
 once per batch of steps and before each render:
 World::sync()
-  level           Level components -> the entities they expand         installed by installLevels
+  level           Level components -> the entities they expand         the level module (installLevels)
                                                                        (before transform)
-  instantiate     MeshSource/Material -> MeshRenderer,        installed by a host with
-                  meshes and materials registered in the RenderScene   a renderer (after level)
-  player_spawn    new or changed PlayerControllers -> characters, at  installed by installPhysics
+  instantiate     MeshSource/Material -> MeshRenderer,        world_render, once the host
+                  meshes and materials registered in the RenderScene   gives its renderer (after level)
+  player_spawn    new or changed PlayerControllers -> characters, at  the physics module
                   the player spawn (so a play scene's first frame is   (after level, before
                   the spawn's view)                                    transform)
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
-  physics         dirty colliders -> Jolt bodies; moved entities move     installed by installPhysics
+  physics         dirty colliders -> Jolt bodies; moved entities move     the physics module
                   their bodies (no step: that is the simulate system);    (after transform)
                   after a restore, the snapshot's simulation back in
                   place (Jolt's state, characters, players)
-  interpolate     World::renderAlpha < 1: what the last step moved    installed by installPhysics
+  interpolate     World::renderAlpha < 1: what the last step moved    the physics module
                   (players, heads, dynamic bodies) and its subtree ->  (after physics)
                   RenderPose between its last two step poses; at 1
                   none (Transform, the hash, saved files untouched);
@@ -192,26 +235,31 @@ World::sync()
                   rest pose); drawn as kDrawViewModel (no CSM cascade,
                   TLAS mask 4: camera rays only); aiming, in realtime
                   frames only, a DrawnFov on the camera (75 -> 55)
-  pose            every Animator: layers sampled at (steps - 1 +        installed by installAnimation
+  pose            every Animator: layers sampled at (steps - 1 +        the animation module
                   alpha), blended by mask and mode -> AnimPose (runtime: (after interpolate)
                   model matrices, the palette and last sync's palette,
                   a posed box); JointAttach children -> RenderPose at
                   their joint, subtree included
-  render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
-                  (at RenderPose when there is one)                    a renderer (after transform,
-                                                                       interpolate, pose, instantiate)
-                  and the light list; a SkinnedMesh entity first gets
+  render_extract  MeshRenderer/Light -> the frame packet's instance   world_render (after transform,
+                  changes by id (at RenderPose when there is one),     interpolate, pose, instantiate)
+                  the light list and the view (the first active
+                  Camera, the Environment: visual/scene_view.hpp);
+                  a SkinnedMesh entity first gets
                   its own mesh (registerSkinnedInstance), then each
-                  frame its palette; setLights gives each point,
+                  frame its palette; the scene's light list gives each point,
                   spot and area light an emitter instance (its
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
                   setViewerPosition)
-  vfx_draw        the effect records -> the frame's particles,         installed by a host with
-                  tracers and decals                                   a renderer (after render_extract)
-host: applySceneView (the first active Camera, at its RenderPose if  runtime/scene_view_apply.hpp
-      any; Environment -> renderer camera, HDRI)
-VulkanRenderer::render()
+  vfx_draw        the effect records -> the frame packet's particles,  world_render (after render_extract)
+                  tracers, decals, flashes and presented spheres
+host: the HUD and the frame's dt into the packet, then RenderThread::publish(packet): with the render
+      thread on (--render-thread on; off by default) the render thread records and presents it while
+      the loop steps the next frame; off, the same call renders it at once on this thread.
+      Any other renderer call (a load, a capture, render.settings) goes through RenderThread::run
+VulkanRenderer::render(packet)
+  FramePacket applied, then emptied: instance creates, updates and destroys by id onto table slots,
+                               mesh releases, the light list, the effects, the palettes, the view
   RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit;
                                the draw table (one DrawRecord an instance's submesh) when
                                the instances change
@@ -246,7 +294,7 @@ VulkanRenderer::render()
   (runtime/frame_log.hpp): render.stats' latency and pacing, ohao_game --latency, feel_bench;
   a frame at the display's rate starts on the display's refreshes (LiveHost::onRefreshGrid);
   with a look-led player it polls only once the GPU has finished the frame before
-  (VulkanRenderer::waitForSubmitted), and before
+  (RenderThread::waitForGpu, VulkanRenderer::waitForSubmitted), and before
   sync it sets World::setPendingLook to the look no step has consumed yet
 ```
 
@@ -312,41 +360,46 @@ give the same pixels for the same world; it checks the call's cancel flag betwee
 - **Change tracking is by signal.** `patch`/`replace`/`emplace` fire EnTT signals that
   set `TransformDirty`, `InstantiateDirty` and `RenderDirty`; each system works only on
   what is tagged, and per-frame upload cost follows what changed (`RenderScene::stats()`).
-- **Simulate systems** (today: spin) change the world, once per fixed step, with the
+  A handler is connected with `World::onConstruct`/`onUpdate`/`onDestroy` and the `SignalEffect` it writes, which
+  joins the access of every system that writes its component.
+- **Simulate systems** (spin, physics, combat, animation, ...) change the world, once per fixed step, with the
   fixed dt. **Sync systems** derive state from it, with no dt: rendering a frame calls
   `World::sync()` only, so it never advances the simulation, and a realtime run and a
   lockstep run of the same steps reach the same state (the same `world.hash`).
   `World::update(dt)` is one `simulate(dt)` and one `sync()`, for tests and tools.
 - **The fixed `dt` is the only clock** a system may read. `world.step` in the API,
   `ohao run --steps` and `LiveHost`'s timeline pass it.
-- **Teardown order:** the `World` before the renderer. Its systems release their
-  `RenderScene` slots when it is destroyed.
+- **Teardown order:** the render thread stopped (after the frames published), then the `World` (its systems release
+  their meshes and materials while the `RenderScene` exists), then the renderer (`LiveHost::shutdown`).
 
 Scene files, snapshots and the API sit beside the frame, not in it: load/save
 (`ecs/scene_io`), snapshot/restore (`ecs/snapshot`) and commands (`api/commands`)
 change components through the same signals, and the next update carries them through. A
-system with state outside components that a replay needs puts a `SnapshotHook`
-(`ecs/snapshot_hook.hpp`) in the registry's context; the physics scene does, so a snapshot
+system with state outside components that a replay needs registers a `SnapshotHook`
+(`ecs::addSnapshotHook`, `ecs/snapshot_hook.hpp`); the physics scene does, so a snapshot
 carries the simulation and a restore replays bit for bit.
 
 ## Recipe: add a component
 
-Followed for `Spin`. Files, in order:
+Followed for `Spin` (now the core module's). Files, in order, all in the module that owns the feature:
 
-1. **The struct** in `ohao/ecs/components.hpp`: a plain aggregate. Default member
+1. **The struct** in `ohao/<module>/components.hpp`: a plain aggregate. Default member
    initializers are the defaults, and files omit fields equal to them.
-2. **Register it** in `registerSceneTypes` (`ohao/ecs/scene_types.cpp`):
+2. **Its storage** in the module's `storage.cpp`: `OHAO_STORAGE_INSTANCE(ohao::ecs::T);` (`ecs/storage.hpp`), so EnTT's
+   storage for it is compiled once.
+3. **Register it** in the module's `types.cpp` (`register<Module>Types`):
    `r.type<T>("T").component().host(makeComponentOps<T>())`, a `.doc()` on the type and
    on every field, a `.unit()` from `knownUnits()` or `.unitless()`, and `.min()`/
    `.max()`/`.uiRange()` where values are bounded. `.singleton()` for one per world,
-   `.runtime()` for derived state that is never saved. A unit not in the vocabulary goes
-   into `kUnits` in `ohao/reflect/registry.cpp` (that changes both catalogue goldens).
-3. **Nothing else for the file form:** the scene save is the generic reflection writer, so the
-   registration is the component's only definition in a file.
-4. **Check it by hand:** `ohao schema -o build/schema` shows the type with its docs and units; a
+   `.runtime()` for derived state that is never saved, `.asset(kind)` on a field naming a file. A unit not in the
+   vocabulary goes into `kUnits` in `ohao/reflect/registry.cpp` (that changes both catalogue goldens).
+4. **Nothing else for the file form:** the scene save is the generic reflection writer, so the
+   registration is the component's only definition in a file. Saved types hash their names, so a new saved component
+   moves every `world.hash`.
+5. **Check it by hand:** `ohao schema -o build/schema` shows the type with its docs, units and `module`; a
    scene that uses it saves, reloads and keeps its `world.hash`. `replay_test` holds gameplay replays with it in
    the hash.
-5. **Docs:** the component table in `docs/agents/ohao-cli.md`.
+6. **Docs:** the component table in `docs/agents/ohao-cli.md`.
 
 Changing an existing saved component later: bump `.version(n)` in its registration and add an
 `.upgrade()` from the previous version; load a file the old version wrote (`tests/scenes/v1/`) to
@@ -354,25 +407,46 @@ see it upgrade.
 
 ## Recipe: add a system
 
-Followed for the spin system.
+Followed for the spin system (`ecs/spin_system.cpp`, installed by the core, `ecs/core.cpp`).
 
-- **Engine-provided gameplay system** (no GPU; every world runs it):
-  1. `ohao/ecs/<name>_system.hpp/.cpp` with a free function
-     `void update<Name>(entt::registry&, float dt)`. Iterate a view; write components
-     through `patch`/`replace` so the sync systems see the change. Read time only from
-     `dt` (it runs once per fixed step); do nothing when `dt` is 0.
-  2. Install it in `World::World()` (`ohao/ecs/world.cpp`) with `addSimulate(name, fn, {.after, .before})`,
-     naming the systems whose results it reads and those that read its own (its events order themselves).
-  3. Its files include nothing from `reflect/` or `api/`. What it tells other systems or agents is an event:
-     a payload struct registered in `ecs/event_types.cpp` (`.event()`, entities by id with `.entity()`), a
-     writer taken at install (`world.events().writer<T>("<system>.<what>", "<system>")`), and readers taking
-     theirs the same way; never a log of its own.
-  4. Check it by hand through the API (`world.step`, then the entities' values; still entities
-     untouched); `replay_test` holds its determinism if the play scene runs it.
-- **Host system** (needs a renderer; a sync system, no dt): an `install<Name>(World&, …)`
-  that adds it with `addSync(name, fn, {.after = {…}, .before = {…}})`, guarded against a
-  second install (see `installInstantiate`). It must pick up entities that existed
-  before it was installed.
+1. **The function**, in its module: `void update<Name>(SystemContext& reg, float dt)` (a sync system takes no dt).
+   Iterate `reg.view<const A, B>()` (A read, B written); write components through `reg.patch`/`replace`/`emplace`
+   so the sync systems see the change; `get_mut`/`try_get_mut` for an in-place write. Read time only from `dt` (it
+   runs once per fixed step); do nothing when `dt` is 0. Per-entity work over many entities is a
+   `jobs::parallelFor` writing per index (`core/jobs/graph.hpp`), any reduction in index order after it.
+2. **Install it** in its module's `install` with `world.addSimulate(name, fn, decl)` (or `addSync`), its
+   `ecs::SystemDecl`: `.after`/`.before` the systems whose results it reads and that read its own (its events order
+   themselves), `.reads`/`.writes` (`ecs::types<A, B>()`), `.readsResources`/`.writesResources` for named state that
+   is not a component (`"physics.scene"`), or `.exclusive = true` when it creates or destroys entities or calls a
+   subsystem with registry use of its own. A declaration of nothing, a cycle or two unordered writers throws at
+   install. `World::World()` installs nothing. A host system (needs a renderer) belongs to world_render, which is
+   installed once the host gives its renderer, and picks up entities that existed before it.
+3. Its files include nothing from `reflect/` or `api/`. What it tells other systems or agents is an event:
+   a payload struct registered in its module's `types.cpp` (`.event()`, entities by id with `.entity()`), a
+   writer taken at install (`world.events().writer<T>("<module>.<what>", "<system>")`), and readers taking
+   theirs the same way; never a log of its own. A signal handler is `world.onConstruct<C, &fn>(instance, effect)`
+   (or `onUpdate`, `onDestroy`) with the `SignalEffect` it writes.
+4. **Check it** by hand through the API (`world.step`, then the entities' values; still entities
+   untouched), and `OHAO_ACCESS_CHECK=1 OHAO_WAVE_ORDER=reverse` with `--threads 1` against the default: the same
+   `world.hash`. `replay_test` holds its determinism if the play scene runs it.
+
+## Recipe: add a module
+
+Followed for footsteps (step 4b-6b, `ohao/footsteps`), the smallest: a feature that spans modules.
+
+1. **The directory** `ohao/<m>/` with `CMakeLists.txt`: `ohao_add_module(<m> DEPENDS <modules it reads> LINKS
+   <libraries below>)`, and `add_subdirectory(<m>)` in `ohao/CMakeLists.txt` after its dependencies. DEPENDS is the one
+   source of the graph: it generates `modules/<m>_dependencies.hpp` (`k<M>Dependencies`) and sets the module's level.
+2. **`module.hpp`** declares `const ecs::Module& <m>Module()`; **`module.cpp`** defines the `ecs::Module`: `name()`,
+   `dependencies()` returning `k<M>Dependencies`, `registerTypes`, `install(World&, const Services&)` (once per World),
+   `methods()` if it has any (`methods.cpp`, params in its own `reflect::TypeRegistry`), `needs()` for services beyond
+   the assets and types. Components in `components.hpp`, `storage.cpp` and `types.cpp` as above; private headers under
+   `private/`.
+3. **Its line** in `engine::modules()` (`ohao/engine/install.cpp`) and a link in `ohao/engine/CMakeLists.txt`; a library
+   above the modules that uses its headers links it.
+4. **Check it:** configure and `python tools/check.py` (`check_layers.py`: an include of a module it does not declare,
+   a cycle, or its install named outside the list are refused, with the file and line); `ohao schema` lists its types
+   under its name.
 
 ## Recipe: add an API command
 
@@ -400,6 +474,12 @@ Followed for `world.hash` and `world.diff` (sub-project 4, step 7) and the four 
 methods (step 8). One definition makes a method everywhere at once: the native JSON-RPC
 method, the MCP tool (`.` becomes `_`), the catalogue entry and its JSON Schema, the CLI's
 `run --script` line.
+
+A method that reads or changes one module's state alone is that module's (`physics.*`, `level.*`,
+`animation.info`): a row in its `methods()` (`ohao/<module>/methods.cpp`, an `ecs::Method`: the doc row with its
+params type from the module's own `reflect::TypeRegistry`, a handler `bool(Call&, params, ctx, out)` that decodes with
+`ecs::decodeParams`, `mutates`), listed after the session's and only where the module is installed. A method that
+needs the host or several modules is the session's, below.
 
 1. **Its params struct** in `ohao/api/params.hpp`, registered in `params.cpp` with a doc
    on every field, limits, units and `.required()` where a member must be given;
@@ -633,9 +713,9 @@ renders it, so a sound is tested on the schedule, without a device.
    curve, from `shapes`), `holdMs` (how long it holds its voice), and optionally `volume`,
    `send` (to the reverb return) and `occlude`. Every error names its JSON pointer; `ohao
    schema audio-bank [-o FILE]` writes the schema. Files are decoded when the bank loads, never on a play.
-3. **The event:** the schedule (`ecs/audio_schedule.cpp`) names the sound for a step's event:
+3. **The event:** the schedule (`audio/audio_schedule.cpp`) names the sound for a step's event:
    the bank's `events` for a game's channels (`{"on": "slice.hit", "play": "impact_{tag}"}`), `animSoundNames` for `anim.clip_event`,
-   `footstepSound` for `physics.footstep` and `physics.land` by surface. A clip event of a new name
+   the footsteps module's `footstepSound` (`footsteps/footsteps.cpp`) for `physics.footstep` and `physics.land` by surface. A clip event of a new name
    needs a line there; a new surface needs only its `footstep_<surface>` sound.
 4. **Check it on the schedule:** in a session, `events.read {names: ["audio.*"]}` lists the step's
    commands (the play, its voice, variant, occlusion and outcome); `audio.mix` solos its bus to listen in a window
