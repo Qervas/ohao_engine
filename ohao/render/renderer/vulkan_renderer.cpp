@@ -8,6 +8,7 @@
 #include "render/deferred/capture_preview_pass.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/scene/render_scene.hpp"
+#include "render/frame_packet.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "core/log.hpp"
 
@@ -259,8 +260,30 @@ void VulkanRenderer::shutdown() {
     m_initialized = false;
 }
 
-void VulkanRenderer::render() {
+void VulkanRenderer::applyPacket(const render::FramePacket& packet) {
+    if (m_renderScene) m_renderScene->apply(packet);
+    if (packet.view) {
+        // The camera keeps its aspect ratio (the render target's); a world without an active camera leaves it.
+        if (const auto& c = packet.view->camera) {
+            m_camera->setPosition(c->position);
+            m_camera->setPerspectiveProjection(c->fovDeg, m_camera->getAspectRatio(), c->nearPlane, c->farPlane);
+            m_camera->setRotation(c->pitchDeg, c->yawDeg);
+        }
+        // An hdri gone unloads it: the environment is reloaded when what its key says changes (below).
+        const render::FramePacket::Environment& env = packet.view->environment;
+        m_envMapPath = env.hdri;
+        m_envSky = env.sky;
+        m_envIntensityScale = std::max(0.0f, env.intensity);
+    }
+    if (packet.hud && m_deferredRenderer) m_deferredRenderer->setHud(packet.hud->items);
+    if (packet.frameDt && m_deferredRenderer)
+        if (PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing()) pp->setFrameDeltaTime(*packet.frameDt);
+}
+
+void VulkanRenderer::render(render::FramePacket& packet) {
     if (!m_initialized) return;
+    applyPacket(packet);
+    packet.clear();
 
     // The environment (and the dummy CDF buffer without one), again whenever what it is changes:
     // another HDRI, a directional light come or gone (while there is one, it stands for the HDRI's
@@ -626,10 +649,6 @@ bool VulkanRenderer::recreatePresentation() {
     return true;
 }
 
-void VulkanRenderer::setHud(const render::HudList& hud) {
-    if (m_deferredRenderer) m_deferredRenderer->setHud(hud.items);
-}
-
 void VulkanRenderer::setPresentExtent(VkExtent2D extent) {
     if (!m_presentTarget) return;
     m_presentTarget->extent = extent;
@@ -657,11 +676,6 @@ std::optional<float> VulkanRenderer::meteredEv100() {
     return pp->meteredEv100([&](uint32_t slot) {
         return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
     });
-}
-
-void VulkanRenderer::setFrameDeltaTime(float dt) {
-    if (m_deferredRenderer)
-        if (PostProcessingPipeline* pp = m_deferredRenderer->getPostProcessing()) pp->setFrameDeltaTime(dt);
 }
 
 std::optional<render::CausticsStats> VulkanRenderer::causticsStats() const {

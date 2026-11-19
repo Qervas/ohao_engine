@@ -7,6 +7,7 @@
 #include "ecs/world.hpp"
 #include "game/install.hpp"
 #include "game/module.hpp"
+#include "render/frame_packet.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "reflect/json_writer.hpp"
 
@@ -205,7 +206,8 @@ void gpuCheck(std::vector<Check>& out) {
     renderer.setRenderMode(RenderMode::Deferred);
     const auto t1 = Clock::now();
     renderer.requestReadback();
-    renderer.render();
+    render::FramePacket none;   // no world
+    renderer.render(none);
     // Read back: the frame is timed to its fence, so a hung GPU cannot pass by submitting.
     const bool image = renderer.readback().size() == std::size_t{64} * 64 * 4;
     const auto t2 = Clock::now();

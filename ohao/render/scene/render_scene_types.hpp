@@ -153,6 +153,13 @@ struct InstanceDesc {
     glm::vec4 emitterLight{0.0f};   // see InstanceGpu
 };
 
+// A sphere the frame draws that is not in the registry (sub-project 12: a test grenade in flight): a black sphere
+// of the light emitter mesh, an ordinary instance (it casts shadows, it emits nothing).
+struct PresentedSphere {
+    glm::vec3 centre{0.0f};
+    float radius{0.05f};
+};
+
 // Flash: an effect's light (vfx_draw's flashes): a point in the raster table only, with no emitter mesh
 // and no shadow, its range its radius x 10; neither the path tracer nor RT GI sees it.
 enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, Flash };

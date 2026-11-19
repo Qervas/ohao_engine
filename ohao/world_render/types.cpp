@@ -26,7 +26,7 @@ void registerWorldRenderTypes(reflect::TypeRegistry& r) {
         .field("visible", &MeshRenderer::visible).doc("Whether the entity is drawn");
     r.type<RenderSlot>("RenderSlot").component().runtime().host(makeComponentOps<RenderSlot>())
         .doc("The entity's instance slot in the GPU render scene. Owned by the render extract.")
-        .field("slot", &RenderSlot::slot).doc("Instance slot index").unitless();
+        .field("slot", &RenderSlot::slot).doc("The instance's id in the frame packet").unitless();
     r.type<InstantiateDirty>("InstantiateDirty").component().runtime()
         .doc("Tag: MeshSource or Material changed; instantiate rebuilds the mesh renderer this frame.");
 }

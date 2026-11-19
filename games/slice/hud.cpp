@@ -189,7 +189,7 @@ void installSlicePresentation(World& world) {
         out.items.insert(out.items.end(), list.items.begin(), list.items.end());
     });
     // The test grenades in flight, between the last two steps.
-    addSpheres(world, [](const World& w, std::vector<render::RenderScene::PresentedSphere>& out) {
+    addSpheres(world, [](const World& w, std::vector<render::PresentedSphere>& out) {
         if (const CombatSystem* combat = combatSystem(w))
             for (const CombatGrenade& g : combat->grenadesInFlight())
                 out.push_back({g.prev + (g.pos - g.prev) * w.renderAlpha(), combat::kGrenadeRadius});

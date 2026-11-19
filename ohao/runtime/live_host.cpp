@@ -10,12 +10,11 @@
 #include "audio/audio_schedule.hpp"
 #include "vfx/vfx.hpp"
 #include "world_render/present.hpp"
+#include "world_render/frame_packet.hpp"
 #include "physics/physics_scene.hpp"
-#include "visual/scene_view.hpp"
 #include "level/level_system.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"
-#include "runtime/scene_view_apply.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -112,19 +111,17 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
 
 void LiveHost::renderFrame() {
     const bool changed = m_needRender || m_session->changeCount() != m_renderedChange;
-    m_world->sync();   // instantiate, transforms, the render extract: never a simulation step
-    for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
-        OHAO_LOG(Warn, runtime, "live host: {}", w);
+    m_world->sync();   // instantiate, transforms, the render extract (the view): never a simulation step
     m_frameView = Clock::now();   // the camera this frame draws is set
     // The path tracer restarts its accumulation when the view may have moved (it notices
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
     if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
     m_liveSamples = changed ? 1 : m_liveSamples + 1;
     // The window always draws the game's HUDs (empty without one: no pass).
-    render::HudList hud = ecs::drawHuds(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
-    if (m_cfg.latencyReadout) drawLatencyReadout(hud);
-    m_renderer->setHud(hud);
-    m_renderer->render();
+    render::FramePacket& packet = ecs::framePacket(*m_world);
+    packet.hud = ecs::drawHuds(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
+    if (m_cfg.latencyReadout) drawLatencyReadout(*packet.hud);
+    m_renderer->render(packet);
     ++m_rendered;
     m_renderedChange = m_session->changeCount();
     m_needRender = false;
@@ -225,7 +222,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         m_world->setRenderAlpha(m_time.running() ? tick.alpha : 1.0f);
         // The gun's sway, bob and kick move at render rate in realtime; lockstep draws them at rest.
         m_world->setPresentationDt(m_time.running() ? std::clamp(frameDt, 0.0f, 0.1f) : 0.0f);
-        m_renderer->setFrameDeltaTime(std::clamp(frameDt, 1.0f / 1000.0f, 0.1f));   // auto exposure's adaptation
+        ecs::framePacket(*m_world).frameDt = std::clamp(frameDt, 1.0f / 1000.0f, 0.1f);   // auto exposure's adaptation
         if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
 
         const VkExtent2D ext = m_window.framebufferExtent();
@@ -472,8 +469,6 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         }
         const auto start = Clock::now();
         m_world->sync();
-        for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
-            OHAO_LOG(Warn, runtime, "live host: {}", w);
         // The renderer's size before the frame: a pending resize applies in render(), and a
         // region checked against the old size could leave the new frame.
         out.width = ext.width;
@@ -485,7 +480,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         ++m_readbackRequests;
         const uint64_t framesBefore = m_renderer->framesSubmitted();
         const bool previewOnly = requestCaptureReadback(*m_renderer, r, false);
-        m_renderer->render();
+        m_renderer->render(ecs::framePacket(*m_world));
         ++m_rendered;
         if (m_renderer->getWidth() != out.width || m_renderer->getHeight() != out.height) {
             out.errors.push_back(error("E_STATE", "the window did not present a frame (minimized or resizing)"));
@@ -513,7 +508,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         m_world->setPresentationDt(0.0f);           // the gun at rest, as headless
         if (m_renderer->getWidth() != ext.width || m_renderer->getHeight() != ext.height) {
             m_world->sync();
-            m_renderer->render();
+            m_renderer->render(ecs::framePacket(*m_world));
             ++m_rendered;
         }
         PostState live;
@@ -527,7 +522,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         settings.defaultEv100 = m_defaultEv100;
         settings.defaultCurve = m_defaultCurve;
         // Every frame is presented: a path-traced capture's sample passes converge on screen.
-        out = captureFrame(*m_renderer, *m_world, *m_assets, r, settings);
+        out = captureFrame(*m_renderer, *m_world, r, settings);
         if (!out.cancelled) ++m_readbackRequests;   // its last frame was requested (at most one)
         m_rendered += static_cast<uint64_t>(std::max(0, out.frames));
         if (pp) {
@@ -565,7 +560,7 @@ uint64_t LiveHost::shutdown() {
     m_player.reset();
     m_audio.reset();
     m_session.reset();
-    m_world.reset();   // releases its RenderScene slots while the RenderScene exists
+    m_world.reset();   // its systems release their meshes and materials while the RenderScene exists
     if (m_renderer) {
         m_renderer->shutdown();   // device and surface go before the window
         validation = m_renderer->validationMessageCount();

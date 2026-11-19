@@ -42,6 +42,7 @@
 #include "ecs/module.hpp"
 #include "engine/install.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
+#include "world_render/frame_packet.hpp"
 #include "gpu_calibration.hpp"
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
@@ -763,7 +764,7 @@ struct Gpu {
     bool vfxInstalled{false};
     Gpu() {
         assets = std::make_unique<ecs::FileAssetResolver>(".");
-        host = std::make_unique<host::RenderHost>(*assets, api::HostKind::Headless);
+        host = std::make_unique<host::RenderHost>(api::HostKind::Headless);
         world = std::make_unique<ecs::World>();
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
@@ -773,7 +774,7 @@ struct Gpu {
     }
     ~Gpu() {
         session.reset();
-        world.reset();   // releases its RenderScene slots while the renderer is alive
+        world.reset();   // its systems release their meshes and materials while the renderer is alive
         host.reset();
     }
 
@@ -839,7 +840,7 @@ struct Gpu {
             for (int f = 0; f < frames; ++f) {
                 world->simulate(1.0f / 60.0f);
                 world->sync();
-                renderer->render();
+                renderer->render(ecs::framePacket(*world));
             }
             renderer->waitForSubmitted(renderer->framesSubmitted());
         }

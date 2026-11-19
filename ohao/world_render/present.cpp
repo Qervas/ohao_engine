@@ -54,8 +54,8 @@ render::HudList drawHuds(World& world, uint32_t width, uint32_t height) {
     return out;
 }
 
-std::vector<render::RenderScene::PresentedSphere> presentedSpheres(const World& world) {
-    std::vector<render::RenderScene::PresentedSphere> out;
+std::vector<render::PresentedSphere> presentedSpheres(const World& world) {
+    std::vector<render::PresentedSphere> out;
     if (const auto* p = world.context().find<Presenters>())
         for (const auto& [id, fn] : p->spheres) fn(world, out);
     return out;

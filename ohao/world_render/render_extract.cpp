@@ -1,10 +1,12 @@
 #include "world_render/private/systems.hpp"
 #include "world_render/components.hpp"
 #include "world_render/private/components.hpp"
+#include "world_render/frame_packet.hpp"
 #include "animation/animation.hpp"
 #include "animation/components.hpp"
 #include "ecs/components.hpp"
 #include "visual/components.hpp"
+#include "visual/scene_view.hpp"
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 
@@ -13,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -40,10 +43,12 @@ uint64_t creationSeq(const entt::registry& reg, entt::entity e) {
 
 // State shared by the system and the registry signals. Lives as long as the system
 // (World::m_systems is destroyed before World::m_registry, so the destructor can
-// still disconnect and release).
+// still disconnect). Everything it gives the renderer goes into the world's frame packet; it reads the scene's
+// meshes and registers a skinned entity's own (a load).
 class ExtractState {
 public:
-    ExtractState(World& world, render::RenderScene& rs) : m_world(world), m_reg(world.registry()), m_rs(rs) {
+    ExtractState(World& world, render::RenderScene& rs, const AssetResolver& assets)
+        : m_world(world), m_reg(world.registry()), m_rs(rs), m_assets(assets), m_packet(framePacket(world)) {
         entt::registry& reg = m_reg;
         const SignalEffect dirty{.writes = types<RenderDirty>()};
         const SignalEffect released{.writesResources = {"render.releases"}};
@@ -61,22 +66,18 @@ public:
         m_lightsDirty = !reg.view<Light>().empty();
     }
 
+    // The World is going away, and its instances with it: the host destroys the renderer after it.
     ~ExtractState() {
         m_world.disconnect<MeshRenderer>(this);
         m_world.disconnect<RenderSlot>(this);
         m_world.disconnect<Light>(this);
-        // The World is going away: take its instances and lights out of the scene.
-        for (uint32_t slot = 0; slot < m_owner.size(); ++slot)
-            if (m_owner[slot] != entt::null) m_rs.destroyInstance(slot);
-        for (const auto& [e, slot] : m_releaseQueue) m_rs.destroyInstance(slot);
-        for (const auto& [e, s] : m_skinned) m_rs.releaseMesh(s.mesh);
-        if (m_lightsSet) m_rs.setLights({});
     }
 
     void run() {
         // 1. Releases queued by the destroy signals.
         for (const auto& [e, slot] : m_releaseQueue) {
-            m_rs.destroyInstance(slot);
+            m_packet.destroyInstance(slot);
+            m_freeIds.push_back(slot);
             releaseSkinned(e);
             if (!m_reg.valid(e)) continue;
             // MeshRenderer was removed (entity alive): drop the stale RenderSlot. Its
@@ -101,20 +102,22 @@ public:
             if (const auto* rs = m_reg.try_get<RenderSlot>(e)) {
                 // Only touch slots this extract handed out to this entity.
                 if (rs->slot < m_owner.size() && m_owner[rs->slot] == e)
-                    m_rs.updateInstance(rs->slot, describe(e, *mr, *wt));
+                    m_packet.updateInstance(rs->slot, describe(e, *mr, *wt));
             } else {
                 m_pending.emplace_back(creationSeq(m_reg, e), e);
             }
         }
-        // Slots in creation order, independent of pool iteration order.
+        // Created in creation order, independent of pool iteration order: the scene gives them its table slots in
+        // that order.
         std::sort(m_pending.begin(), m_pending.end());
         for (const auto& [seq, e] : m_pending) {
             const auto& mr = m_reg.get<MeshRenderer>(e);
-            const uint32_t slot = m_rs.createInstance(describe(e, mr, m_reg.get<WorldTransform>(e)));
-            if (slot == render::kInvalidIndex) {   // e.g. the scene was shut down
-                warnOnce(mr.mesh, "createInstance failed");
-                continue;
+            uint32_t slot = static_cast<uint32_t>(m_owner.size());   // the instance's id
+            if (!m_freeIds.empty()) {
+                slot = m_freeIds.back();
+                m_freeIds.pop_back();
             }
+            m_packet.createInstance(slot, describe(e, mr, m_reg.get<WorldTransform>(e)));
             if (slot >= m_owner.size()) m_owner.resize(std::size_t{slot} + 1, entt::null);
             m_owner[slot] = e;
             m_reg.emplace<RenderSlot>(e, RenderSlot{slot});
@@ -130,7 +133,7 @@ public:
         for (const auto& [e, s] : m_skinned) {
             const auto* pose = m_reg.valid(e) ? m_reg.try_get<AnimPose>(e) : nullptr;
             if (!pose || pose->palette.empty() || pose->palette.size() != pose->prevPalette.size()) continue;
-            m_rs.setSkinPalette(s.mesh, pose->palette, pose->prevPalette, pose->boundsMin, pose->boundsMax);
+            m_packet.setSkinPalette(s.mesh, pose->palette, pose->prevPalette, pose->boundsMin, pose->boundsMax);
         }
 
         // 5. Lights.
@@ -139,6 +142,9 @@ public:
             rebuildLights();
             m_lightsDirty = false;
         }
+
+        // 6. The view: the world's Camera and Environment, as the frame draws them (after every drawn pose).
+        writeView();
     }
 
 private:
@@ -152,7 +158,7 @@ private:
         }
         if (it != m_skinned.end() && it->second.base.index == mr.mesh.index && m_rs.meshInfo(it->second.mesh))
             return it->second.mesh;
-        if (it != m_skinned.end()) m_rs.releaseMesh(it->second.mesh);
+        if (it != m_skinned.end()) m_packet.releaseMesh(it->second.mesh);   // after the instance moves off it
         const render::MeshHandle own = m_rs.registerSkinnedInstance(mr.mesh);
         if (!m_rs.meshInfo(own)) {
             warnOnce(mr.mesh, "registerSkinnedInstance failed; drawn unskinned");
@@ -165,7 +171,7 @@ private:
     void releaseSkinned(entt::entity e) {
         const auto it = m_skinned.find(e);
         if (it == m_skinned.end()) return;
-        m_rs.releaseMesh(it->second.mesh);
+        m_packet.releaseMesh(it->second.mesh);
         m_skinned.erase(it);
     }
 
@@ -227,8 +233,31 @@ private:
             d.order = creationSeq(m_reg, e);
             m_lights.push_back(d);
         }
-        m_rs.setLights(m_lights);
-        m_lightsSet = true;
+        m_packet.setLights(m_lights);
+    }
+
+    void writeView() {
+        const SceneView view = resolveSceneView(m_world);
+        render::FramePacket::View out;
+        if (const auto& c = view.camera)
+            out.camera = render::FramePacket::Camera{c->position, c->pitchDeg, c->yawDeg, c->fovDeg, c->nearPlane,
+                                                     c->farPlane};
+        // A world without an Environment has the default's: the physical sky lit by the scene's sun.
+        const EnvironmentView env = view.environment.value_or(EnvironmentView{});
+        out.environment.sky = env.sky;
+        out.environment.intensity = env.intensity;
+        if (env.hdri) {
+            if (env.hdri->path != m_hdriPath) {   // resolved once per path
+                m_hdriPath = env.hdri->path;
+                const auto path = m_assets.absolutePath(*env.hdri);
+                m_hdri = path.empty() ? std::string{} : path.string();
+                if (path.empty())
+                    OHAO_LOG(Warn, render,
+                             "environment hdri '{}' is not a relative path inside the project; not loaded", m_hdriPath);
+            }
+            out.environment.hdri = m_hdri;
+        }
+        m_packet.view = std::move(out);
     }
 
     // A mesh handle the scene does not know (never registered, rejected at
@@ -265,12 +294,17 @@ private:
     World& m_world;
     entt::registry& m_reg;
     render::RenderScene& m_rs;
-    std::vector<entt::entity> m_owner;                              // slot -> entity
+    const AssetResolver& m_assets;
+    render::FramePacket& m_packet;   // the world's (world_render/frame_packet.hpp)
+    // Instance ids (RenderSlot::slot): the frame packet's, which the scene maps to its table slots.
+    std::vector<entt::entity> m_owner;                              // id -> entity
+    std::vector<uint32_t> m_freeIds;                                // released ids, reused last first
     std::vector<std::pair<entt::entity, uint32_t>> m_releaseQueue;
     std::vector<std::pair<uint64_t, entt::entity>> m_pending;
     std::vector<render::LightDesc> m_lights;
     bool m_lightsDirty{false};
-    bool m_lightsSet{false};
+    std::string m_hdriPath;   // the environment's hdri as written, and as resolved (empty: refused)
+    std::string m_hdri;
     std::unordered_set<uint64_t> m_warned;   // mesh handles already reported
     struct Skinned {
         render::MeshHandle base, mesh;
@@ -281,19 +315,20 @@ private:
 
 } // namespace
 
-void installRenderExtract(World& world, render::RenderScene& scene) {
+void installRenderExtract(World& world, render::RenderScene& scene, const AssetResolver& assets) {
     auto& reg = world.registry();
     if (reg.ctx().contains<RenderExtractInstalled>()) {
         OHAO_LOG(Warn, ecs, "installRenderExtract called twice on one World; ignored");
         return;
     }
     reg.ctx().emplace<RenderExtractInstalled>();
-    auto state = std::make_shared<ExtractState>(world, scene);
+    auto state = std::make_shared<ExtractState>(world, scene, assets);
     // After every drawn pose (transforms, interpolation, skeletons, a game's view model before the pose) and the
     // meshes. Exclusive: it reads the registry itself, and emplaces and removes RenderSlot.
     world.addSync("render_extract", [state](SystemContext&) { state->run(); },
                   {.after = {"transform", "interpolate", "pose", "instantiate"},
-                   .reads = types<MeshRenderer, WorldTransform, RenderPose, AnimPose, SkinnedMesh, Light, CreationOrder>(),
+                   .reads = types<MeshRenderer, WorldTransform, RenderPose, AnimPose, SkinnedMesh, Light, CreationOrder,
+                                  Camera, Environment, DrawnFov, Transform, Parent>(),
                    .writes = types<RenderSlot, RenderDirty, MovedLastFrame>(),
                    .writesResources = {"render.scene", "render.releases", "render.lights"}, .exclusive = true});
 }

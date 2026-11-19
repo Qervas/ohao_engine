@@ -74,6 +74,7 @@
 #include "reflect/json_writer.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
+#include "world_render/frame_packet.hpp"
 #include "reflect/schema.hpp"
 #include "rpc/server.hpp"
 #include "rpc/transport.hpp"
@@ -331,7 +332,7 @@ struct Context {
     explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli,
                      std::shared_ptr<const game::LoadedModule> game = g_module) {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
-        render = std::make_unique<host::RenderHost>(*assets, kind);
+        render = std::make_unique<host::RenderHost>(kind);
         world = std::make_unique<ecs::World>();
         engine::install(*world, {*assets, engineTypes()});
         if (game) game::installGame(*world, *game->module);
@@ -342,7 +343,7 @@ struct Context {
     }
     ~Context() {
         session.reset();
-        world.reset();   // releases its RenderScene slots while the renderer is alive
+        world.reset();   // its systems release their meshes and materials while the renderer is alive
         render.reset();
     }
 };
@@ -632,7 +633,7 @@ std::string runUncapped(Context& c, int frames, uint32_t width, uint32_t height,
         const auto t1 = clock::now();
         c.world->sync();
         const auto t2 = clock::now();
-        renderer->render();
+        renderer->render(ecs::framePacket(*c.world));
         const auto t3 = clock::now();
         frame.push_back(ms(t0, t3));
         simulate.push_back(ms(t0, t1));

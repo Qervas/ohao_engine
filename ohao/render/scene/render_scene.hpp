@@ -12,10 +12,11 @@
 
 namespace ohao::render {
 
-class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; class Pass; struct Frame;
+class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; class Pass; struct Frame; class FramePacket;
 
 // The persistent GPU render world: mesh arenas (one BLAS per mesh), a material
-// table, an instance table and a light table. Host edits mark entries dirty; the
+// table, an instance table and a light table. A world reaches it through the frame packet (apply; meshes, materials
+// and skinned instances are registered directly, at load time). Host edits mark entries dirty; the
 // device-local tables are only ever written by copies recorded in recordUpdates,
 // from a staging buffer owned by the frame slot, so a host write can never race a
 // frame still in flight. Replaced buffers wait in a retire queue for
@@ -51,11 +52,6 @@ public:
     // shared, its meshlets copied, an updatable BLAS. An instance using it is skinned by
     // recordSkinning. Released with releaseMesh like any mesh. Blocking (load time).
     MeshHandle registerSkinnedInstance(MeshHandle base);
-    // The skinned mesh's palette this frame and last frame's (in the mesh's bone order), and a
-    // local box around its posed vertices (the draws' culling box). A palette equal to what the
-    // mesh already shows skips the skin, bounds and refit work.
-    void setSkinPalette(MeshHandle skinned, std::span<const glm::mat4> current, std::span<const glm::mat4> previous,
-                        const glm::vec3& boundsMin, const glm::vec3& boundsMax);
     // Before recordUpdates (its TLAS build reads the refit BLASes): the skin, skin.bounds and
     // rt.blas.refit passes for the skinned meshes whose pose changed, each timed when the frame
     // has a timer. Nothing is recorded when none changed.
@@ -65,25 +61,10 @@ public:
     MaterialHandle registerMaterial(const MaterialDesc& desc);
     // Gives the material's table row back for the next registerMaterial. No instance may still use it.
     void releaseMaterial(MaterialHandle h);
-    uint32_t createInstance(const InstanceDesc& desc);        // returns slot
-    void updateInstance(uint32_t slot, const InstanceDesc& desc);
-    void destroyInstance(uint32_t slot);
-    // Sorted by order inside. Each point, spot and area light also gets an emitter instance
-    // (lightEmitter(): a sphere or its rectangle, kInstanceEmitter) that the camera sees as the
-    // light's own radiance; it shadows nothing and lights nothing (the light does).
-    void setLights(std::span<const LightDesc> lights);
-    // Lights of this frame that are not in the scene: an effect's flash (sub-project 12, the vfx_draw
-    // sync system). They join the raster table after setLights' lights, every frame they are given
-    // (an empty list clears them); they have no emitter mesh and no shadow (Flash kind).
-    void setTransientLights(std::span<const LightDesc> lights);
-    // Spheres the frame draws that are not in the registry (sub-project 12: a test grenade in flight): a
-    // black sphere of the emitter mesh, an ordinary instance (it casts shadows, it emits nothing). Every
-    // frame they are given; an empty list removes them.
-    struct PresentedSphere {
-        glm::vec3 centre{0.0f};
-        float radius{0.05f};
-    };
-    void setPresentedSpheres(std::span<const PresentedSphere> spheres);
+    // A frame packet's world (render/frame_packet.hpp), in its order: the instances by the packet's ids (each
+    // mapped to a table slot here), the meshes released, the light list, the effects; then the skinning palettes.
+    // At the frame's start (VulkanRenderer::render).
+    void apply(const FramePacket& packet);
     // The instances whose triangles the path tracer samples as lights (render/rt/emissive_lights.hpp):
     // live, visible, with an emissive material, neither a light's emitter mesh nor a view model; in
     // slot order, with their meshes' triangle counts. `emissiveVersion` changes when the set does.
@@ -193,9 +174,8 @@ public:
     [[nodiscard]] VkBuffer meshletVertexArena() const;
     [[nodiscard]] VkBuffer meshletTriangleArena() const;
 
-    // The effects the next frames draw (sub-project 12: the ECS's vfx_draw sync system writes them,
-    // the deferred renderer's transparent pass draws them). Replaced whole each sync.
-    void setVfx(VfxFrame frame);
+    // The effects the frames draw (sub-project 12: the frame packet's, from the world's vfx_draw sync system; the
+    // deferred renderer's transparent pass draws them).
     [[nodiscard]] const VfxFrame& vfx() const noexcept;
 
     [[nodiscard]] const RenderSceneStats& stats() const noexcept;
@@ -216,6 +196,27 @@ public:
     [[nodiscard]] bool empty() const noexcept;
 
 private:
+    // What apply does with each of a packet's changes.
+    uint32_t createInstance(const InstanceDesc& desc);   // returns the slot
+    void updateInstance(uint32_t slot, const InstanceDesc& desc);
+    void destroyInstance(uint32_t slot);
+    // Sorted by order inside. Each point, spot and area light also gets an emitter instance
+    // (lightEmitter(): a sphere or its rectangle, kInstanceEmitter) that the camera sees as the
+    // light's own radiance; it shadows nothing and lights nothing (the light does).
+    void setLights(std::span<const LightDesc> lights);
+    // Lights of this frame that are not in the scene: an effect's flash (sub-project 12, the vfx_draw
+    // sync system). They join the raster table after setLights' lights, every frame they are given
+    // (an empty list clears them); they have no emitter mesh and no shadow (Flash kind).
+    void setTransientLights(std::span<const LightDesc> lights);
+    // Spheres the frame draws that are not in the registry (PresentedSphere), every frame they are given; an empty
+    // list removes them.
+    void setPresentedSpheres(std::span<const PresentedSphere> spheres);
+    // The skinned mesh's palette this frame and last frame's (in the mesh's bone order), and a
+    // local box around its posed vertices (the draws' culling box). A palette equal to what the
+    // mesh already shows skips the skin, bounds and refit work.
+    void setSkinPalette(MeshHandle skinned, std::span<const glm::mat4> current, std::span<const glm::mat4> previous,
+                        const glm::vec3& boundsMin, const glm::vec3& boundsMax);
+
     struct Impl;
     std::unique_ptr<Impl> m;
 };

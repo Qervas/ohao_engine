@@ -46,7 +46,7 @@
 
 namespace ohao {
 
-namespace render { class RenderScene; }
+namespace render { class RenderScene; class FramePacket; }
 
 class Camera;
 class CapturePreviewPass;
@@ -92,15 +92,16 @@ constexpr uint32_t SHADOW_MAP_SIZE = 2048;
  * VulkanRenderer - Renders OHAO scenes headless into a pixel buffer, or to a window
  * when initialized with a PresentTarget (see ohao/runtime/LiveHost).
  *
- * The scene is renderScene(): an ecs::World with the world_render module installed feeds it
- * (engine/install.hpp). Headless usage:
+ * The scene is renderScene(): an ecs::World with the world_render module installed feeds it through the
+ * frame packet its sync systems fill (render/frame_packet.hpp, world_render/frame_packet.hpp), which render()
+ * applies at the frame's start. Headless usage:
  *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
  *   ecs::Services services{assets, types};
  *   services.put(renderer.renderScene());
  *   engine::install(world, services);
  *   world.sync();
- *   renderer.requestReadback(); renderer.render();
+ *   renderer.requestReadback(); renderer.render(ecs::framePacket(world));
  *   std::span<const uint8_t> pixels = renderer.readback();   // that frame, RGBA8
  */
 class VulkanRenderer {
@@ -126,9 +127,6 @@ public:
     [[nodiscard]] std::chrono::steady_clock::time_point lastSubmitTime() const noexcept { return m_lastSubmitAt; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.
     void setPresentExtent(VkExtent2D extent);
-    // The HUD the next deferred frames draw over their final image, before present and readback
-    // (sub-project 7, the `hud` pass); an empty list draws none. Path-traced frames draw no HUD.
-    void setHud(const render::HudList& hud);
     // The only way to read a frame. requestReadback() marks the next frame render()
     // records: it alone copies its final RGBA8 image into its slot's persistently mapped
     // staging buffer (no other frame, headless or windowed, copies anything). readback()
@@ -176,8 +174,9 @@ public:
     void waitForSubmitted(uint64_t n);
     void shutdown();
 
-    // Rendering
-    void render();
+    // Rendering: applies `packet` (the world's changes, view, HUD and dt since the last frame; render/frame_packet.hpp)
+    // at the frame's start, empties it, then records and submits the frame. A frame of no world passes an empty one.
+    void render(render::FramePacket& packet);
     void resize(uint32_t width, uint32_t height);
 
     // Camera
@@ -226,17 +225,7 @@ public:
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
     [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
-    /// HDRI for the path tracer and deferred reflections, loaded at the start of the
-    /// next render() when the path changed.
-    // The environment: an HDRI (a path), else the physical sky (render/sky/atmosphere.hpp) lit by
-    // the scene's sun when `sky` is on and there is a directional light, else none (black).
-    void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
-    void setEnvironmentSky(bool sky) noexcept { m_envSky = sky; }
-    /// Scale HDRI contribution (inverse / relight). Default 1.0. Written into the
-    /// RT light header (offset 8) every RT frame — no env re-load.
-    void setEnvIntensityScale(float s) noexcept {
-        m_envIntensityScale = std::max(0.0f, s);
-    }
+    // The environment's HDRI scale (the frame packet's view): written into the RT light header every RT frame.
     [[nodiscard]] float getEnvIntensityScale() const noexcept { return m_envIntensityScale; }
     void notifyCameraChanged();
     void resetAccumulation();
@@ -272,8 +261,6 @@ public:
     [[nodiscard]] std::optional<render::CausticsStats> causticsStats() const;
     // Auto exposure: the newest finished frame's metered EV100, if it metered.
     [[nodiscard]] std::optional<float> meteredEv100();
-    // Seconds since the last frame (a window's), for auto exposure's adaptation speed.
-    void setFrameDeltaTime(float dt);
 
     // Read back HDR buffers for OIDN denoising
     [[nodiscard]] bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
@@ -340,6 +327,9 @@ public:
     [[nodiscard]] bool readImageRGBA(gpu::Image& image, std::vector<float>& out);
 
 private:
+    // A frame packet's view, HUD and dt, then its scene changes (render()).
+    void applyPacket(const render::FramePacket& packet);
+
     // Vulkan setup (no window required)
     [[nodiscard]] bool createInstance();
     [[nodiscard]] bool pickPhysicalDevice();

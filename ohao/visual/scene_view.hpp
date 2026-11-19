@@ -1,7 +1,7 @@
 #pragma once
 // The scene view: what a world says about how it is looked at (its Camera) and lit by
-// an image (its Environment), resolved into plain values a host applies to its
-// renderer (runtime/scene_view_apply.hpp). The visual module knows nothing of the renderer camera.
+// an image (its Environment), resolved into plain values for the renderer (world_render's render extract writes
+// them into the frame packet). The visual module knows nothing of the renderer camera.
 #include "visual/components.hpp"
 #include "ecs/world.hpp"
 

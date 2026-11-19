@@ -26,8 +26,8 @@ public:
         render::RenderScene& scene = *services.get<render::RenderScene>();
         BindlessTextureManager* textures = services.get<BindlessTextureManager>();
         installInstantiate(world, scene, textures, services.assets);
-        installRenderExtract(world, scene);
-        installVfxDraw(world, scene, textures, services.assets);
+        installRenderExtract(world, scene, services.assets);
+        installVfxDraw(world, textures, services.assets);
     }
     // What a game adds to it: its presenters (HUDs, spheres), by id.
     [[nodiscard]] std::vector<std::string> contributions(const World& world) const override {

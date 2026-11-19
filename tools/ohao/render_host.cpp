@@ -19,7 +19,7 @@ reflect::Diagnostic renderError(std::string message) {
 
 } // namespace
 
-RenderHost::RenderHost(ecs::AssetResolver& assets, api::HostKind kind) : m_assets(assets), m_kind(kind) {}
+RenderHost::RenderHost(api::HostKind kind) : m_kind(kind) {}
 
 // The World's systems hold references into the renderer's RenderScene; the World is
 // destroyed first (see the header), so the renderer can go now.
@@ -92,7 +92,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
     settings.keepPixels = &m_lastPixels;
     m_lastPixels.clear();
     ++m_captures;
-    return runtime::captureFrame(*m_renderer, *m_world, m_assets, r, settings);
+    return runtime::captureFrame(*m_renderer, *m_world, r, settings);
 }
 
 } // namespace ohao::host

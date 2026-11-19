@@ -1,4 +1,5 @@
 #include "render/scene/render_scene.hpp"
+#include "render/frame_packet.hpp"
 #include "render/scene/instance_table.hpp"
 #include "render/scene/light_table.hpp"
 #include "render/scene/material_table.hpp"
@@ -92,6 +93,7 @@ struct RenderScene::Impl {
     bool emittersEnabled{true};
     std::vector<uint32_t> emitterSlots;
     std::vector<uint32_t> presentedSlots;   // setPresentedSpheres: the emitter sphere mesh, not an emitter
+    std::vector<uint32_t> slotOfId;         // a frame packet's instance id -> its slot (kInvalidIndex: none)
     MeshHandle emitterSphere{}, emitterQuad{};
     MaterialHandle emitterMaterial{};
     bool emitterAssetsReady{false};
@@ -540,6 +542,7 @@ void RenderScene::shutdown() {
     m->draws.clear();
     m->emitterSlots.clear();
     m->presentedSlots.clear();
+    m->slotOfId.clear();
     m->emitterAssetsReady = false;
     m->initialized = false;
 }
@@ -719,6 +722,51 @@ void RenderScene::destroyInstance(uint32_t slot) {
     if (!m->initialized || !m->instances.live(slot)) return;
     m->instances.destroy(slot);
     m->stageTlasInstance(slot, true);
+}
+
+void RenderScene::apply(const FramePacket& packet) {
+    if (!m->initialized) return;
+    const auto slotOf = [&](uint32_t id) { return id < m->slotOfId.size() ? m->slotOfId[id] : kInvalidIndex; };
+    for (const FramePacket::Op& op : packet.ops()) {
+        switch (op.kind) {
+        case FramePacket::OpKind::Create:
+        case FramePacket::OpKind::Update: {
+            const FramePacket::Instance& i = packet.instance(op.index);
+            if (i.id >= m->slotOfId.size()) m->slotOfId.resize(std::size_t{i.id} + 1, kInvalidIndex);
+            uint32_t& slot = m->slotOfId[i.id];
+            if (op.kind == FramePacket::OpKind::Create && slot != kInvalidIndex) {   // a writer's bug: replaced
+                destroyInstance(slot);
+                slot = kInvalidIndex;
+            }
+            // The writer checked the mesh when it wrote the change. One released since (instantiate releases a mesh
+            // at once when its last user goes, while that user's destroy waits here) has the destroy after it.
+            if (!m->meshes.info(i.mesh)) break;
+            // An update of an id with no slot creates it: its create found its mesh gone, and a later change has one.
+            if (slot == kInvalidIndex) slot = createInstance(packet.desc(i));
+            else updateInstance(slot, packet.desc(i));
+            break;
+        }
+        case FramePacket::OpKind::Destroy: {
+            const uint32_t id = packet.instance(op.index).id;
+            if (const uint32_t slot = slotOf(id); slot != kInvalidIndex) {
+                destroyInstance(slot);
+                m->slotOfId[id] = kInvalidIndex;
+            }
+            break;
+        }
+        case FramePacket::OpKind::ReleaseMesh: releaseMesh(packet.release(op.index)); break;
+        case FramePacket::OpKind::Lights: setLights(packet.lightSet(op.index)); break;
+        case FramePacket::OpKind::Effects: {
+            const FramePacket::Effects& e = packet.effects(op.index);
+            setPresentedSpheres(e.spheres);
+            m->vfx = e.vfx;
+            setTransientLights(e.flashes);
+            break;
+        }
+        }
+    }
+    for (const FramePacket::Skin& s : packet.skins())
+        setSkinPalette(s.mesh, packet.current(s), packet.previous(s), s.boundsMin, s.boundsMax);
 }
 
 void RenderScene::setLights(std::span<const LightDesc> lights) {
@@ -1004,7 +1052,6 @@ uint64_t RenderScene::rasterLightsVersion() const { return m->lights.rasterVersi
 VkBuffer RenderScene::rtLightBuffer() const { return m->lights.rtBuffer(); }
 uint32_t RenderScene::rtLightCount() const { return m->lights.rtCount(); }
 
-void RenderScene::setVfx(VfxFrame frame) { m->vfx = std::move(frame); }
 const VfxFrame& RenderScene::vfx() const noexcept { return m->vfx; }
 
 std::span<const RenderScene::Draw> RenderScene::draws() const {

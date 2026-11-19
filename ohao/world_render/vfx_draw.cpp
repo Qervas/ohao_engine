@@ -3,16 +3,17 @@
 
 #include "ecs/asset_resolver.hpp"
 #include "world_render/present.hpp"
+#include "world_render/frame_packet.hpp"
 #include "ecs/components.hpp"
 #include "vfx/vfx.hpp"
 #include "ecs/world.hpp"
 #include "gpu/shared_layout.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
-#include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 namespace ohao::ecs {
 
@@ -138,7 +139,7 @@ render::VfxFrame vfxFrameOf(const World& world, std::shared_ptr<const vfx::VfxSe
 namespace {
 
 struct VfxDraw {
-    render::RenderScene& scene;
+    render::FramePacket& packet;   // the world's (world_render/frame_packet.hpp)
     BindlessTextureManager* textureManager;
     AssetResolver& assets;
     uint64_t version{0};
@@ -173,25 +174,22 @@ struct VfxDraw {
     }
 
     void run(World& world) {
+        render::FramePacket::Effects effects;
         // A game's presented spheres (world_render/present.hpp), at the frame's render alpha.
-        scene.setPresentedSpheres(presentedSpheres(world));
-        const VfxSystem* system = vfxSystem(world);
-        if (!system) {
-            if (!scene.vfx().effects.empty() || scene.vfx().set) scene.setVfx({});
-            scene.setTransientLights({});
-            return;
+        effects.spheres = presentedSpheres(world);
+        if (const VfxSystem* system = vfxSystem(world)) {
+            refresh(*system);
+            effects.vfx = vfxFrameOf(world, set, textures, normals);
+            effects.flashes = flashLights(effects.vfx);
         }
-        refresh(*system);
-        scene.setVfx(vfxFrameOf(world, set, textures, normals));
-        const std::vector<render::LightDesc> flashes = flashLights(scene.vfx());
-        scene.setTransientLights(flashes);
+        packet.setEffects(std::move(effects));
     }
 };
 
 } // namespace
 
-void installVfxDraw(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets) {
-    auto state = std::make_shared<VfxDraw>(VfxDraw{scene, textures, assets});
+void installVfxDraw(World& world, BindlessTextureManager* textures, AssetResolver& assets) {
+    auto state = std::make_shared<VfxDraw>(VfxDraw{framePacket(world), textures, assets});
     // The effects go into the frame the extract filled.
     // Exclusive: it loads the set's textures into the renderer and reads the registry through the World.
     world.addSync("vfx_draw", [state](SystemContext& c) { state->run(c.world()); },

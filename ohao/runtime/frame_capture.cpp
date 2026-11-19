@@ -5,14 +5,13 @@
 #include "ecs/components.hpp"
 #include "visual/components.hpp"
 #include "world_render/instantiate.hpp"
-#include "visual/scene_view.hpp"
+#include "world_render/frame_packet.hpp"
 #include "render/renderer/vulkan_renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/scene/render_scene.hpp"
 #include "render/vfx/vfx_renderer.hpp"
 #include "runtime/image.hpp"
-#include "runtime/scene_view_apply.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -180,7 +179,7 @@ void writeCaptureOutputs(std::span<const uint8_t> pixels, uint32_t width, uint32
     out.encodeMs = msSince(start);
 }
 
-api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, const ecs::AssetResolver& assets,
+api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world,
                                 const api::RenderRequest& r, const CaptureSettings& settings) {
     api::RenderOutcome out;
     const auto start = Clock::now();
@@ -191,11 +190,10 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
         return out;
     }
 
-    // As the examples: the view first, then the mode, the denoiser and post effects. The view is
-    // the synced world's (a player spawns in sync, and its head is the camera).
+    // The view is the synced world's (a player spawns in sync, and its head is the camera), in the frame packet;
+    // then the mode, the denoiser and post effects.
     world.sync();
-    for (const auto& w : applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
-        OHAO_LOG(Warn, render, "capture: {}", w);
+    render::FramePacket& packet = ecs::framePacket(world);
     const RenderMode mode = r.mode == "rt_realtime" ? RenderMode::RTRealtime
                             : r.mode == "rt_offline" ? RenderMode::RTOffline
                                                      : RenderMode::Deferred;
@@ -249,8 +247,8 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
                                                        : settings.defaultCurve);
         }
     // A game's HUDs only when asked (hud: true), so captures and goldens stay the scene's.
-    renderer.setHud(r.hud && mode == RenderMode::Deferred ? ecs::drawHuds(world, renderer.getWidth(), renderer.getHeight())
-                                                          : render::HudList{});
+    packet.hud = r.hud && mode == RenderMode::Deferred ? ecs::drawHuds(world, renderer.getWidth(), renderer.getHeight())
+                                                       : render::HudList{};
     const double setupMs = msSince(start);
     // A fresh renderer renders exactly as the examples do (the goldens); one that has
     // rendered starts its own accumulation, as a fresh one would.
@@ -284,7 +282,7 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
             framesBefore = renderer.framesSubmitted();
             previewOnly = requestCaptureReadback(renderer, r, settings.keepPixels != nullptr);
         }
-        renderer.render();
+        renderer.render(packet);
         if (control && control->progress) control->progress(static_cast<uint64_t>(i) + 1, static_cast<uint64_t>(frames));
     }
     // The last frame, exactly.

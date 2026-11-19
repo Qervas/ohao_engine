@@ -12,10 +12,9 @@
 // frame), so `ohao run` reproduces their golden images from the scene files. It never runs
 // the simulate phase: capturing does not change the world.
 //
-// Declare the RenderHost before the World: the World's systems release their RenderScene
-// slots when it is destroyed, so the renderer must outlive it.
+// Declare the RenderHost before the World: the World's systems hold references into its RenderScene and
+// release their meshes and materials when it is destroyed, so the renderer must outlive it.
 #include "api/session.hpp"
-#include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 
 #include <cstdint>
@@ -28,7 +27,7 @@ namespace ohao::host {
 
 class RenderHost final : public api::Host {
 public:
-    explicit RenderHost(ecs::AssetResolver& assets, api::HostKind kind = api::HostKind::Cli);
+    explicit RenderHost(api::HostKind kind = api::HostKind::Cli);
     ~RenderHost() override;
     RenderHost(const RenderHost&) = delete;
     RenderHost& operator=(const RenderHost&) = delete;
@@ -55,7 +54,6 @@ public:
 
 private:
     std::vector<uint8_t> m_lastPixels;
-    ecs::AssetResolver& m_assets;
     api::HostKind m_kind;
     ecs::World* m_world{nullptr};
     std::unique_ptr<VulkanRenderer> m_renderer;

@@ -4,7 +4,7 @@
 // render.capture's one procedure, shared by the headless RenderHost (tools/ohao) and the
 // window's LiveHost, so a lockstep window capture and a headless capture of the same world
 // at the same size are the same pixels by construction:
-//   the world's Camera and Environment -> mode, denoiser, post effects, exposure
+//   World::sync() (the world's Camera and Environment into its frame packet) -> mode, denoiser, post effects, exposure
 //   -> a temporal reset (unless the renderer is fresh) -> `frames` frames, each after
 //   World::sync() (never a simulation step) -> the last frame read back on request (its
 //   fence only) -> region, PNG file, preview. A request for an inline image and nothing
@@ -12,7 +12,6 @@
 // The renderer must already have the request's size; the caller checks the request against
 // what its host allows.
 #include "api/session.hpp"
-#include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
 
@@ -34,8 +33,7 @@ struct CaptureSettings {
 // tracer spp.
 [[nodiscard]] int captureFrames(const api::RenderRequest& r) noexcept;
 
-[[nodiscard]] api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world,
-                                              const ecs::AssetResolver& assets, const api::RenderRequest& r,
+[[nodiscard]] api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, const api::RenderRequest& r,
                                               const CaptureSettings& settings);
 
 // The capture's outputs from a frame's pixels: the region, the PNG file (r.path) and the
