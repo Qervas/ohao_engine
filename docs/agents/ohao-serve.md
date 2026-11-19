@@ -370,6 +370,12 @@ capture is the window's next presented frame, in the mode the window presents: s
 with `--mode rt_offline` or `rt_realtime` (`--spp N`: the samples an `rt_offline` window
 accumulates after each change, default 64) to watch path-traced frames live.
 
+`nav_show {on = true}` draws the navmesh into the deferred frames a session renders (captures and a window): polygon
+edges green, links yellow, active obstacles red, over the image; it returns `{on, edges, links, obstacles}` and
+changes nothing a step reads (`world.hash` stays). It is a row of the catalogue once the session renders: a window
+session from its start, a headless one after its first `render_capture` (the `nav_show` module waits for the
+renderer, as `world_render` does), so it is not in `ohao schema`'s headless catalogue.
+
 ## Measure the frame
 
 `render_stats {frames}` says what the host's last frames cost on the GPU, pass by pass:

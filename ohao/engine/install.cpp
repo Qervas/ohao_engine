@@ -5,6 +5,7 @@
 #include "ecs/module.hpp"
 #include "footsteps/module.hpp"
 #include "level/module.hpp"
+#include "nav_show/module.hpp"
 #include "navigation/module.hpp"
 #include "physics/module.hpp"
 #include "vfx/module.hpp"
@@ -20,10 +21,10 @@
 namespace ohao::engine {
 
 std::span<const ecs::Module* const> modules() {
-    static const std::array<const ecs::Module*, 10> all{&ecs::coreModule(),    &ecs::visualModule(), &ecs::animationModule(),
+    static const std::array<const ecs::Module*, 11> all{&ecs::coreModule(),    &ecs::visualModule(), &ecs::animationModule(),
                                                        &ecs::physicsModule(), &ecs::audioModule(),  &ecs::footstepsModule(),
                                                        &ecs::vfxModule(),     &ecs::levelModule(),  &ecs::navigationModule(),
-                                                       &ecs::worldRenderModule()};
+                                                       &ecs::worldRenderModule(), &ecs::navShowModule()};
     return all;
 }
 
